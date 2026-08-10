@@ -14,7 +14,7 @@ import logging
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import IO, Any, List, Optional, Protocol
+from typing import IO, Any, Callable, List, Optional, Protocol
 
 try:
     import fcntl
@@ -31,6 +31,8 @@ from .config import AgentConfig
 from .journal import JournalLLMService
 
 logger = logging.getLogger(__name__)
+
+WORKING_CONTEXT_FAILURE_COOLDOWN_SECONDS = 60.0
 
 
 @dataclass
@@ -186,6 +188,8 @@ class WorkingContextSummarizer:
             user_prompt=user_prompt,
         )
         normalized = JournalLLMService._normalize_content(content)
+        if not normalized:
+            raise ValueError("Working context summarizer returned empty text")
         if len(normalized) > self.summary_max_chars:
             normalized = normalized[: self.summary_max_chars].rstrip() + "…"
         return normalized
@@ -237,6 +241,7 @@ class WorkingContextCompactor:
         summarizer: WorkingContextSummarizer,
         hot_window: int,
         roll_slack: int | None = None,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.store = store
         self.message_storage = message_storage
@@ -247,15 +252,56 @@ class WorkingContextCompactor:
         else:
             self.roll_slack = max(0, int(roll_slack))
         self._lock = asyncio.Lock()
+        self._refresh_task: asyncio.Task[WorkingContextView] | None = None
+        self._retry_not_before = 0.0
+        self._clock = clock
 
     async def ensure_fresh(self) -> WorkingContextView:
         """Roll summary if needed; return prompt-facing summary + coverage."""
+        if not self._retry_ready():
+            return await self.current_view()
         async with self._lock:
+            if not self._retry_ready():
+                return await self.current_view()
             lock_file = await asyncio.to_thread(self.store.acquire_lock)
             try:
                 return await self._ensure_fresh_locked()
             finally:
                 await asyncio.to_thread(self.store.release_lock, lock_file)
+
+    async def view_for_turn(self) -> WorkingContextView:
+        """Return one consistent snapshot and request a non-blocking refresh."""
+        view = await self.current_view()
+        self.request_refresh()
+        return view
+
+    def request_refresh(self) -> None:
+        """Start at most one background refresh when the cooldown allows it."""
+        task = self._refresh_task
+        if task is not None and not task.done():
+            return
+        if not self._retry_ready():
+            return
+        task = asyncio.create_task(
+            self.ensure_fresh(),
+            name="xagent-working-context-refresh",
+        )
+        self._refresh_task = task
+        task.add_done_callback(self._refresh_finished)
+
+    async def wait_for_refresh(self) -> None:
+        """Wait for the current refresh, if any, without cancelling it."""
+        task = self._refresh_task
+        if task is not None:
+            await asyncio.shield(task)
+
+    async def cancel_refresh(self) -> None:
+        """Cancel the in-process maintenance task without changing stored state."""
+        task = self._refresh_task
+        if task is None or task.done():
+            return
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
     async def current_view(self) -> WorkingContextView:
         state = await asyncio.to_thread(self.store.read)
@@ -272,7 +318,7 @@ class WorkingContextCompactor:
         try:
             latest = int(await self.message_storage.get_latest_message_cursor())
         except Exception as exc:
-            logger.warning("Working context cursor read failed: %s", exc)
+            self._defer_retry("cursor read", exc)
             return WorkingContextView(
                 summary=state.summary.strip(),
                 covers_through_cursor=max(0, int(state.covers_through_cursor)),
@@ -283,6 +329,7 @@ class WorkingContextCompactor:
         pending = latest - covers
         threshold = self.hot_window + self.roll_slack
         if pending <= threshold:
+            self._clear_retry()
             return WorkingContextView(
                 summary=state.summary.strip(),
                 covers_through_cursor=covers,
@@ -290,6 +337,7 @@ class WorkingContextCompactor:
 
         roll_end = latest - self.hot_window
         if roll_end <= covers:
+            self._clear_retry()
             return WorkingContextView(
                 summary=state.summary.strip(),
                 covers_through_cursor=covers,
@@ -301,7 +349,7 @@ class WorkingContextCompactor:
                 end_inclusive=roll_end,
             )
         except Exception as exc:
-            logger.warning("Working context message load failed: %s", exc)
+            self._defer_retry("message load", exc)
             return WorkingContextView(
                 summary=state.summary.strip(),
                 covers_through_cursor=covers,
@@ -321,6 +369,7 @@ class WorkingContextCompactor:
                 summary=state.summary,
             )
             await asyncio.to_thread(self.store.write, new_state)
+            self._clear_retry()
             return WorkingContextView(summary="", covers_through_cursor=roll_end)
 
         try:
@@ -328,8 +377,11 @@ class WorkingContextCompactor:
                 previous_summary=state.summary,
                 records=records,
             )
+            summary = str(summary or "").strip()
+            if not summary:
+                raise ValueError("Working context summarizer returned empty text")
         except Exception as exc:
-            logger.warning("Working context summarize failed: %s", exc)
+            self._defer_retry("summarize", exc)
             return WorkingContextView(
                 summary=state.summary.strip(),
                 covers_through_cursor=covers,
@@ -338,13 +390,41 @@ class WorkingContextCompactor:
         new_state = WorkingContextState(
             covers_through_cursor=roll_end,
             updated_at=time.time(),
-            summary=summary.strip(),
+            summary=summary,
         )
         await asyncio.to_thread(self.store.write, new_state)
+        self._clear_retry()
         return WorkingContextView(
             summary=new_state.summary,
             covers_through_cursor=roll_end,
         )
+
+    def _retry_ready(self) -> bool:
+        return self._clock() >= self._retry_not_before
+
+    def _clear_retry(self) -> None:
+        self._retry_not_before = 0.0
+
+    def _defer_retry(self, stage: str, exc: BaseException) -> None:
+        self._retry_not_before = (
+            self._clock() + WORKING_CONTEXT_FAILURE_COOLDOWN_SECONDS
+        )
+        logger.warning(
+            "Working context %s failed: %s; retrying after %.0fs",
+            stage,
+            exc,
+            WORKING_CONTEXT_FAILURE_COOLDOWN_SECONDS,
+        )
+
+    def _refresh_finished(self, task: asyncio.Task[WorkingContextView]) -> None:
+        if self._refresh_task is task:
+            self._refresh_task = None
+        if task.cancelled():
+            return
+        try:
+            task.result()
+        except Exception as exc:
+            self._defer_retry("background refresh", exc)
 
     @staticmethod
     def _experience_record(message: Message) -> dict:

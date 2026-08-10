@@ -9,8 +9,8 @@ from typing import Any
 from ...core.providers import provider_model_api
 from ...core.runtime import list_task_records
 from ...tools.search_tool import is_placeholder_api_key, normalize_search_provider
-from ..voice.config import VoiceChannelConfig
 from ..base import BaseAgentConfig, BaseAgentRunner
+from ..voice.config import VoiceChannelConfig
 from .channels import (
     CHANNEL_API,
     CHANNEL_FEISHU,
@@ -22,9 +22,8 @@ from .channels import (
     voice_config,
     weixin_config,
 )
-from .web_client import DEFAULT_WEB_CLIENT_PORT, web_client_config, web_client_paths
 from .processes import managed_paths, running_pid
-
+from .web_client import DEFAULT_WEB_CLIENT_PORT, web_client_config, web_client_paths
 
 STATUS_OK = "ok"
 STATUS_IDLE = "idle"
@@ -190,26 +189,21 @@ def _image_item(config: dict[str, Any]) -> OverviewItem:
 
 def _voice_item(config_dir: Path, config: dict[str, Any]) -> OverviewItem:
     raw_voice = voice_config(config)
-    if not raw_voice or raw_voice.get("enabled") is False:
+    if not raw_voice:
         return OverviewItem("Voice", "not set", STATUS_DISABLED)
     try:
         voice = VoiceChannelConfig.from_dict(raw_voice)
     except Exception as exc:
         return OverviewItem("Voice", "invalid", STATUS_ERROR, _friendly_overview_error(str(exc)))
-    provider = voice.provider or "custom"
-    provider_detail = provider
-    if voice.stt.provider != voice.tts.provider or provider == "custom":
-        provider_detail = f"{voice.stt.provider} / {voice.tts.provider}"
     try:
-        voice.resolved_stt_api_key()
-        voice.resolved_tts_api_key()
+        voice.resolved_api_key()
     except ValueError as exc:
-        return OverviewItem("Voice", provider, STATUS_ERROR, _friendly_overview_error(str(exc), fallback="Setup"))
+        return OverviewItem("Voice", "soniox", STATUS_ERROR, _friendly_overview_error(str(exc), fallback="Setup"))
 
     pid = running_pid(managed_paths(config_dir, CHANNEL_VOICE).pid_path)
     if pid is None:
-        return OverviewItem("Voice", "stopped", STATUS_IDLE, provider_detail)
-    return OverviewItem("Voice", "running", STATUS_OK, f"{provider_detail} pid {pid}")
+        return OverviewItem("Voice", "stopped", STATUS_IDLE, "soniox half-duplex")
+    return OverviewItem("Voice", "running", STATUS_OK, f"soniox half-duplex pid {pid}")
 
 
 def _api_service_url(config: dict[str, Any]) -> str:

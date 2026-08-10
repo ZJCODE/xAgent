@@ -105,6 +105,15 @@ class ReasoningConfig:
         return data
 
 
+def maintenance_reasoning_config(
+    reasoning: Optional[ReasoningConfig],
+) -> Optional[ReasoningConfig]:
+    """Disable configured reasoning for bounded maintenance generations."""
+    if reasoning is None:
+        return None
+    return ReasoningConfig(enabled=False)
+
+
 @dataclass(frozen=True)
 class ReasoningCapability:
     """Static controls known to work for a provider/API combination."""

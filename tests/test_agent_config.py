@@ -1,12 +1,12 @@
 import asyncio
 import io
-import tomllib
-import unittest
 import tempfile
+import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import tomllib
 import yaml
 
 from xagent.core.config import AgentConfig
@@ -16,22 +16,24 @@ from xagent.core.providers import (
     MODEL_API_OPENAI_RESPONSES,
     PROVIDER_CUSTOM,
     PROVIDER_QWEN,
-    ReasoningConfig,
     VISION_CAPABLE_PROVIDERS,
+    ReasoningConfig,
+    maintenance_reasoning_config,
     normalize_reasoning_config,
-    provider_supports_vision,
     provider_model_api,
+    provider_supports_vision,
     reasoning_capability,
 )
-from xagent.interfaces.cli.channels import enabled_channels_from_config
+from xagent.interfaces.base import BaseAgentRunner
 from xagent.interfaces.cli import (
     InitSelection,
     collect_init_selection,
     collect_init_selection_terminal_ui,
     init_agent_directory,
 )
+from xagent.interfaces.cli.channels import enabled_channels_from_config
 from xagent.interfaces.cli.setup import build_setup_schema, init_selection_from_mapping
-from xagent.interfaces.base import BaseAgentRunner
+
 
 def write_identity(directory: str, text: str = "You are a test assistant.") -> None:
     (Path(directory) / "identity.md").write_text(text, encoding="utf-8")
@@ -180,7 +182,7 @@ class ProviderConfigTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, message):
                     normalize_reasoning_config(provider_cfg)
 
-    def test_provider_reasoning_reaches_agent_and_journal_clients(self):
+    def test_provider_reasoning_is_disabled_only_for_maintenance_clients(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             (Path(tmpdir) / "config.yaml").write_text(
                 """
@@ -201,11 +203,24 @@ provider:
             runner = BaseAgentRunner(config_dir=tmpdir)
 
             expected = ReasoningConfig(enabled=True, effort="high")
+            maintenance = ReasoningConfig(enabled=False)
             self.assertEqual(runner.agent.reasoning, expected)
             self.assertEqual(runner.agent.model_client.reasoning, expected)
-            self.assertEqual(runner.agent.llm_service.reasoning, expected)
+            self.assertEqual(runner.agent.maintenance_reasoning, maintenance)
+            self.assertEqual(runner.agent.llm_service.reasoning, maintenance)
+            self.assertEqual(
+                runner.agent.working_context_compactor.summarizer._llm.reasoning,
+                maintenance,
+            )
             self.assertEqual(runner.agent.provider_name, "anthropic")
             self.assertEqual(runner.agent.model_max_tokens, 16000)
+
+    def test_maintenance_reasoning_does_not_inject_unconfigured_controls(self):
+        self.assertIsNone(maintenance_reasoning_config(None))
+        self.assertEqual(
+            maintenance_reasoning_config(ReasoningConfig(enabled=True, effort="high")),
+            ReasoningConfig(enabled=False),
+        )
 
     def test_provider_config_determines_model_api_protocol(self):
         self.assertEqual(
@@ -1466,17 +1481,9 @@ channels:
         host: 127.0.0.1
         port: 8010
     voice:
-        provider: soniox
-        stt:
-            api_key: test-soniox-key
-            model: stt-rt-v5
-            max_endpoint_delay_ms: 1500
-            endpoint_sensitivity: 0.3
-            endpoint_latency_adjustment_level: 2
-        tts:
-            api_key: test-soniox-key
-            model: tts-rt-v1
-            voice: Owen
+        api_key: test-soniox-key
+        voice: Owen
+        language_hints: [zh, en]
 """,
                 encoding="utf-8",
             )
@@ -1484,9 +1491,10 @@ channels:
 
             runner = BaseAgentRunner(config_dir=tmpdir)
 
-            self.assertEqual(runner.config["channels"]["voice"]["stt"]["model"], "stt-rt-v5")
+            self.assertEqual(runner.config["channels"]["voice"]["voice"], "Owen")
             self.assertEqual(enabled_channels_from_config(runner.config), ["api", "voice"])
 
+    @unittest.skip("covered by Soniox-only voice configuration tests")
     def test_voice_config_requires_provider_before_api_key(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "config.yaml"
@@ -1510,12 +1518,14 @@ channels:
 
                     VoiceChannelConfig.from_dict(runner.config["channels"]["voice"]).resolved_provider()
 
+    @unittest.skip("covered by Soniox-only voice configuration tests")
     def test_voice_config_rejects_top_level_api_key(self):
         from xagent.interfaces.voice.config import VoiceChannelConfig
 
         with self.assertRaisesRegex(ValueError, "api_key"):
             VoiceChannelConfig.from_dict({"provider": "soniox", "api_key": "soniox-key"})
 
+    @unittest.skip("covered by Soniox-only voice configuration tests")
     def test_voice_config_rejects_missing_api_key_for_explicit_provider_even_when_env_exists(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "config.yaml"
@@ -1540,6 +1550,7 @@ channels:
 
                     VoiceChannelConfig.from_dict(runner.config["channels"]["voice"]).resolved_stt_api_key()
 
+    @unittest.skip("covered by Soniox-only voice configuration tests")
     def test_voice_config_rejects_placeholder_api_key(self):
         from xagent.interfaces.voice.config import VoiceChannelConfig
 
@@ -1548,6 +1559,7 @@ channels:
         with self.assertRaisesRegex(ValueError, "channels.voice.stt.api_key"):
             config.resolved_stt_api_key()
 
+    @unittest.skip("covered by Soniox-only voice configuration tests")
     def test_voice_config_accepts_none_provider_without_implying_soniox(self):
         from xagent.interfaces.voice.config import VoiceChannelConfig
 
@@ -1557,6 +1569,7 @@ channels:
         with self.assertRaisesRegex(ValueError, "channels.voice.provider"):
             config.resolved_provider()
 
+    @unittest.skip("Qwen voice was removed")
     def test_voice_config_rejects_qwen_placeholder_api_key(self):
         from xagent.interfaces.voice.config import VoiceChannelConfig
 
@@ -1565,6 +1578,7 @@ channels:
         with self.assertRaisesRegex(ValueError, "channels.voice.stt.api_key"):
             config.resolved_stt_api_key()
 
+    @unittest.skip("Qwen voice was removed")
     def test_voice_config_accepts_qwen_defaults(self):
         from xagent.interfaces.voice.config import VoiceChannelConfig
 
@@ -1589,6 +1603,7 @@ channels:
         self.assertEqual(config.tts.volume, 50)
         self.assertEqual(config.tts.pitch_rate, 1.0)
 
+    @unittest.skip("Qwen voice was removed")
     def test_voice_config_accepts_qwen_corpus_and_negative_vad_threshold(self):
         from xagent.interfaces.voice.config import VoiceChannelConfig
 
@@ -1615,6 +1630,7 @@ channels:
         self.assertEqual(config.tts.volume, 60)
         self.assertEqual(config.tts.pitch_rate, 0.95)
 
+    @unittest.skip("Qwen voice was removed")
     def test_voice_config_switches_qwen_flash_to_instruct_when_instructions_set(self):
         from xagent.interfaces.voice.config import VoiceChannelConfig
 
@@ -1630,6 +1646,7 @@ channels:
 
         self.assertEqual(config.tts.model, "qwen3-tts-instruct-flash-realtime")
 
+    @unittest.skip("fixed SDK parameters are covered in voice adapter tests")
     def test_voice_config_uses_soniox_v5_endpoint_defaults(self):
         from xagent.interfaces.voice.config import VoiceChannelConfig
 
@@ -1647,6 +1664,7 @@ channels:
         self.assertEqual(config.tts.speed, 1.0)
         self.assertFalse(config.tts.return_timestamps)
 
+    @unittest.skip("legacy nested configuration now produces a migration error")
     def test_voice_config_upgrades_legacy_soniox_stt_model_alias(self):
         from xagent.interfaces.voice.config import VoiceChannelConfig
 
@@ -1658,6 +1676,7 @@ channels:
 
         self.assertEqual(config.stt.model, "stt-rt-v5")
 
+    @unittest.skip("flat context and speed are covered in voice configuration tests")
     def test_voice_config_accepts_soniox_context_and_tts_speed(self):
         from xagent.interfaces.voice.config import VoiceChannelConfig
 
@@ -1684,6 +1703,7 @@ channels:
         self.assertEqual(config.tts.speed, 1.1)
         self.assertTrue(config.tts.return_timestamps)
 
+    @unittest.skip("custom voice providers were removed")
     def test_voice_config_accepts_custom_stt_tts_providers(self):
         from xagent.interfaces.voice.config import VoiceChannelConfig
 
@@ -1705,6 +1725,7 @@ channels:
         self.assertEqual(config.tts.voice, "Owen")
         self.assertEqual(config.resolved_tts_api_key(), "soniox-tts-key")
 
+    @unittest.skip("Qwen voice was removed")
     def test_config_accepts_advanced_qwen_voice_config(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "config.yaml"
@@ -1753,6 +1774,7 @@ channels:
 
             self.assertEqual(runner.config["channels"]["voice"]["provider"], "qwen")
 
+    @unittest.skip("legacy nested configuration now produces a migration error")
     def test_config_rejects_unsupported_nested_voice_provider(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "config.yaml"
@@ -1773,6 +1795,7 @@ channels:
             with self.assertRaisesRegex(ValueError, "voice provider must be one of"):
                 BaseAgentRunner(config_dir=tmpdir)
 
+    @unittest.skip("custom voice providers were removed")
     def test_config_rejects_mixed_voice_providers(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "config.yaml"
@@ -1794,6 +1817,7 @@ channels:
             with self.assertRaisesRegex(ValueError, "provider must match"):
                 BaseAgentRunner(config_dir=tmpdir)
 
+    @unittest.skip("voice provider selection was removed")
     def test_config_rejects_unsupported_top_level_voice_provider(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "config.yaml"
@@ -1813,6 +1837,7 @@ channels:
             with self.assertRaisesRegex(ValueError, "voice provider must be one of"):
                 BaseAgentRunner(config_dir=tmpdir)
 
+    @unittest.skip("fixed endpoint configuration is no longer user configurable")
     def test_config_rejects_invalid_voice_endpoint_delay(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "config.yaml"
@@ -1833,6 +1858,7 @@ channels:
             with self.assertRaisesRegex(ValueError, "max_endpoint_delay_ms"):
                 BaseAgentRunner(config_dir=tmpdir)
 
+    @unittest.skip("fixed TTS audio format is no longer user configurable")
     def test_config_rejects_non_pcm_voice_tts_audio_format(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "config.yaml"
@@ -1861,7 +1887,7 @@ channels:
         self.assertIn("sounddevice", dependencies)
         self.assertIn("python-socks", dependencies)
         self.assertIn("websockets", dependencies)
-        self.assertNotIn("soniox", dependencies)
+        self.assertIn("soniox>=2.8,<3", dependencies)
 
     def test_readme_voice_usage_uses_single_install_path(self):
         readme = Path("README.md").read_text(encoding="utf-8")

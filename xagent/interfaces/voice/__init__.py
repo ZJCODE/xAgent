@@ -1,13 +1,7 @@
-"""Local voice runtime for xAgent."""
+"""Local Soniox voice runtime for xAgent."""
 from __future__ import annotations
 
-from .config import (
-    SonioxSTTContextConfig,
-    VoiceAudioConfig,
-    VoiceChannelConfig,
-    VoiceSTTConfig,
-    VoiceTTSConfig,
-)
+from .config import SonioxSTTContextConfig, VoiceAudioConfig, VoiceChannelConfig
 from .runtime import VoiceRuntime, VoiceRuntimeOptions, VoiceUtterance
 
 __all__ = [
@@ -16,7 +10,5 @@ __all__ = [
     "VoiceAudioConfig",
     "VoiceRuntime",
     "VoiceRuntimeOptions",
-    "VoiceSTTConfig",
-    "VoiceTTSConfig",
     "VoiceUtterance",
 ]

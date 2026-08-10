@@ -27,16 +27,17 @@ from ...core.providers import (
     PROVIDER_OPENAI,
     PROVIDER_QWEN,
     ReasoningConfig,
-    normalize_reasoning_config,
     normalize_provider_name,
+    normalize_reasoning_config,
     provider_base_url,
     reasoning_capability,
 )
 from ..base import BaseAgentConfig
 from .agents import allocate_api_port
-from .paths import config_path as _config_path, runtime_dir as _runtime_dir, setup_runtime_dir as _setup_runtime_dir
+from .paths import config_path as _config_path
+from .paths import runtime_dir as _runtime_dir
+from .paths import setup_runtime_dir as _setup_runtime_dir
 from .terminal_ui import MenuOption, ReturnToLauncherHome, SetupCancelled, TerminalUI
-
 
 SETUP_EXIT_CANCELLED = 130
 
@@ -99,16 +100,8 @@ class WeixinInitSelection:
 class VoiceInitSelection:
     """Interactive choices used to configure the local voice channel."""
 
-    voice_provider: str
+    voice_enabled: bool = True
     voice_api_key: str = ""
-    voice_stt_provider: str = ""
-    voice_stt_api_key: str = ""
-    voice_tts_provider: str = ""
-    voice_tts_api_key: str = ""
-    voice_enable_interruptions: bool = False
-    voice_wake_enabled: bool = False
-    voice_wake_phrases: Tuple[str, ...] = ()
-    voice_exit_phrases: Tuple[str, ...] = ()
 
 
 OPENAI_BASE_URL = provider_base_url(PROVIDER_OPENAI)
@@ -119,7 +112,6 @@ CUSTOM_OPENAI_BASE_URL_PLACEHOLDER = provider_base_url(PROVIDER_CUSTOM, MODEL_AP
 CUSTOM_ANTHROPIC_BASE_URL_PLACEHOLDER = provider_base_url(PROVIDER_CUSTOM, MODEL_API_ANTHROPIC_MESSAGES)
 API_KEY_PLACEHOLDER = "your_api_key_here"
 SONIOX_KEY_PLACEHOLDER = "your_soniox_api_key_here"
-QWEN_KEY_PLACEHOLDER = "your_qwen_api_key_here"
 MODEL_PLACEHOLDER = "your_model_here"
 LANGFUSE_BASE_URL = "https://cloud.langfuse.com"
 LANGFUSE_PUBLIC_KEY_PLACEHOLDER = "pk-lf-..."
@@ -161,18 +153,6 @@ IMAGE_GENERATION_PROVIDERS = (
     "minimax",
     "qwen",
 )
-VOICE_PROVIDERS = (
-    "none",
-    "soniox",
-    "qwen",
-    "custom",
-)
-VOICE_CUSTOM_PROVIDERS = (
-    "soniox",
-    "qwen",
-)
-DEFAULT_WAKE_PHRASES = ("xAgent",)
-DEFAULT_EXIT_PHRASES = ("exit", "stop", "goodbye", "that's all", "never mind")
 
 _PROVIDER_DESCRIPTIONS = {
     PROVIDER_OPENAI: "GPT family via the OpenAI platform.",
@@ -189,22 +169,6 @@ _PROVIDER_LABELS = {
     PROVIDER_ANTHROPIC: "Anthropic",
     PROVIDER_CUSTOM: "Custom",
 }
-
-_VOICE_PROVIDER_DESCRIPTIONS = {
-    "none": "Disable voice features.",
-    "soniox": "Use Soniox voice runtime defaults.",
-    "qwen": "Use Qwen voice runtime defaults.",
-    "custom": "Pick separate STT and TTS providers.",
-}
-
-
-def _phrase_tuple(value: Any) -> Tuple[str, ...]:
-    if isinstance(value, str):
-        return tuple(part.strip() for part in value.split(",") if part.strip())
-    if isinstance(value, (list, tuple)):
-        return tuple(str(part).strip() for part in value if str(part).strip())
-    return ()
-
 
 def init_selection_from_mapping(data: Mapping[str, Any]) -> InitSelection:
     """Build an ``InitSelection`` from API/JSON input."""
@@ -321,7 +285,7 @@ def _channel_configured(config: dict[str, Any], channel: str) -> bool:
     if not isinstance(data, dict):
         return False
     if channel == "voice":
-        return bool(data) and data.get("enabled") is not False
+        return bool(data)
     if channel == "feishu":
         return bool(data.get("app_id") and data.get("app_secret"))
     if channel == "weixin":
@@ -331,37 +295,9 @@ def _channel_configured(config: dict[str, Any], channel: str) -> bool:
 
 def build_voice_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
     """Return wizard metadata for the web voice channel setup client."""
-    model_provider = _config_provider_name(config)
-    model_api_key = _config_provider_api_key(config)
-    can_inherit_qwen_key = (
-        model_provider == PROVIDER_QWEN
-        and model_api_key
-        and model_api_key != API_KEY_PLACEHOLDER
-    )
     return {
-        "voice_providers": [
-            {"id": provider, "description": _VOICE_PROVIDER_DESCRIPTIONS.get(provider, "")}
-            for provider in VOICE_PROVIDERS
-            if provider != "none"
-        ],
-        "voice_custom_providers": list(VOICE_CUSTOM_PROVIDERS),
-        "defaults": {
-            "voice_provider": "soniox",
-            "voice_stt_provider": VOICE_CUSTOM_PROVIDERS[0],
-            "voice_tts_provider": VOICE_CUSTOM_PROVIDERS[0],
-            "wake_phrases": list(DEFAULT_WAKE_PHRASES),
-            "exit_phrases": list(DEFAULT_EXIT_PHRASES),
-            "voice_wake_enabled": False,
-            "voice_enable_interruptions": False,
-        },
-        "placeholders": {
-            "soniox_api_key": SONIOX_KEY_PLACEHOLDER,
-            "qwen_voice_api_key": QWEN_KEY_PLACEHOLDER,
-        },
-        "inherit_api_key_from": {
-            "provider": model_provider,
-            "can_inherit_qwen_key": can_inherit_qwen_key,
-        },
+        "defaults": {"voice_enabled": True, "voice_api_key": ""},
+        "placeholders": {"soniox_api_key": SONIOX_KEY_PLACEHOLDER},
         "configured": _channel_configured(config, "voice"),
         "can_force": True,
     }
@@ -427,85 +363,32 @@ def build_channel_setup_schema(channel: str, config: dict[str, Any]) -> dict[str
     raise ChannelSetupError(f"Unknown channel: {channel}")
 
 
-def _resolve_voice_api_key(
-    voice_provider: str,
-    *,
-    explicit_api_key: str,
-    model_provider: str,
-    model_api_key: str,
-) -> str:
-    configured = explicit_api_key.strip()
-    if configured:
-        return configured
-    if voice_provider == "qwen" and normalize_provider_name(model_provider) == PROVIDER_QWEN:
-        return model_api_key if model_api_key != API_KEY_PLACEHOLDER else QWEN_KEY_PLACEHOLDER
-    return _voice_api_key_placeholder(voice_provider)
-
-
 def voice_init_selection_from_mapping(
     data: Mapping[str, Any],
     *,
     config: dict[str, Any],
 ) -> VoiceInitSelection:
     """Build a ``VoiceInitSelection`` from API/JSON input."""
-    model_provider = _config_provider_name(config)
-    model_api_key = _config_provider_api_key(config)
-
-    voice_provider = str(data.get("voice_provider") or "soniox").strip() or "soniox"
-    if voice_provider not in {"soniox", "qwen", "custom"}:
-        raise ChannelSetupError("voice_provider must be one of: soniox, qwen, custom")
-
-    voice_api_key = str(data.get("voice_api_key") or "").strip()
-    voice_stt_provider = str(data.get("voice_stt_provider") or VOICE_CUSTOM_PROVIDERS[0]).strip()
-    voice_stt_api_key = str(data.get("voice_stt_api_key") or "").strip()
-    voice_tts_provider = str(data.get("voice_tts_provider") or VOICE_CUSTOM_PROVIDERS[0]).strip()
-    voice_tts_api_key = str(data.get("voice_tts_api_key") or "").strip()
-
-    if voice_provider == "custom":
-        if voice_stt_provider not in VOICE_CUSTOM_PROVIDERS:
-            raise ChannelSetupError("voice_stt_provider must be one of: soniox, qwen")
-        if voice_tts_provider not in VOICE_CUSTOM_PROVIDERS:
-            raise ChannelSetupError("voice_tts_provider must be one of: soniox, qwen")
-        voice_stt_api_key = _resolve_voice_api_key(
-            voice_stt_provider,
-            explicit_api_key=voice_stt_api_key,
-            model_provider=model_provider,
-            model_api_key=model_api_key,
+    _ = config
+    removed_fields = {
+        "voice_provider",
+        "voice_stt_provider",
+        "voice_stt_api_key",
+        "voice_tts_provider",
+        "voice_tts_api_key",
+        "voice_enable_interruptions",
+        "voice_wake_enabled",
+        "voice_wake_phrases",
+        "voice_exit_phrases",
+    }.intersection(data)
+    if removed_fields:
+        fields = ", ".join(sorted(removed_fields))
+        raise ChannelSetupError(
+            f"Voice setup is Soniox-only; removed fields are not accepted: {fields}"
         )
-        voice_tts_api_key = _resolve_voice_api_key(
-            voice_tts_provider,
-            explicit_api_key=voice_tts_api_key,
-            model_provider=model_provider,
-            model_api_key=model_api_key,
-        )
-    else:
-        voice_api_key = _resolve_voice_api_key(
-            voice_provider,
-            explicit_api_key=voice_api_key,
-            model_provider=model_provider,
-            model_api_key=model_api_key,
-        )
-
-    voice_wake_enabled = bool(data.get("voice_wake_enabled", False))
-    voice_wake_phrases = _phrase_tuple(data.get("voice_wake_phrases"))
-    voice_exit_phrases = _phrase_tuple(data.get("voice_exit_phrases"))
-    if voice_wake_enabled:
-        if not voice_wake_phrases:
-            voice_wake_phrases = DEFAULT_WAKE_PHRASES
-        if not voice_exit_phrases:
-            voice_exit_phrases = DEFAULT_EXIT_PHRASES
-
     return VoiceInitSelection(
-        voice_provider=voice_provider,
-        voice_api_key=voice_api_key,
-        voice_stt_provider=voice_stt_provider,
-        voice_stt_api_key=voice_stt_api_key,
-        voice_tts_provider=voice_tts_provider,
-        voice_tts_api_key=voice_tts_api_key,
-        voice_enable_interruptions=bool(data.get("voice_enable_interruptions", False)),
-        voice_wake_enabled=voice_wake_enabled,
-        voice_wake_phrases=voice_wake_phrases,
-        voice_exit_phrases=voice_exit_phrases,
+        voice_enabled=bool(data.get("voice_enabled", True)),
+        voice_api_key=str(data.get("voice_api_key") or "").strip(),
     )
 
 
@@ -599,7 +482,14 @@ def apply_channel_setup(
 
     if normalized == "voice":
         selection = voice_init_selection_from_mapping(selection_data, config=config)
-        channels_cfg["voice"] = _voice_channel_config(selection)
+        if not selection.voice_enabled:
+            channels_cfg.pop("voice", None)
+        else:
+            existing_voice = channels_cfg.get("voice")
+            channels_cfg["voice"] = _voice_channel_config(
+                selection,
+                existing=existing_voice if isinstance(existing_voice, dict) else None,
+            )
     elif normalized == "feishu":
         selection = feishu_init_selection_from_mapping(selection_data)
         _ensure_api_port(channels_cfg)
@@ -623,40 +513,6 @@ def apply_channel_setup(
     }
 
 
-def _voice_api_key_placeholder(provider: str) -> str:
-    if provider == "qwen":
-        return QWEN_KEY_PLACEHOLDER
-    return SONIOX_KEY_PLACEHOLDER
-
-
-
-def _voice_defaults_for_provider(provider: str) -> dict[str, dict[str, Any]]:
-    if provider == "qwen":
-        return {
-            "stt": {
-                "model": "qwen3-asr-flash-realtime",
-                "vad_threshold": 0.0,
-                "silence_duration_ms": 400,
-            },
-            "tts": {
-                "model": "qwen3-tts-flash-realtime",
-                "voice": "Cherry",
-            },
-        }
-    return {
-        "stt": {
-            "model": "stt-rt-v5",
-            "max_endpoint_delay_ms": 1500,
-            "endpoint_sensitivity": 0.3,
-            "endpoint_latency_adjustment_level": 2,
-        },
-        "tts": {
-            "model": "tts-rt-v1",
-            "voice": "Owen",
-        },
-    }
-
-
 def _default_init_selection() -> InitSelection:
     return InitSelection(
         provider="openai",
@@ -667,52 +523,29 @@ def _default_init_selection() -> InitSelection:
     )
 
 
-def _voice_channel_config(selection: VoiceInitSelection) -> dict[str, Any]:
-    voice_provider = selection.voice_provider or "soniox"
-    wake_phrases = list(selection.voice_wake_phrases) or list(DEFAULT_WAKE_PHRASES)
-    exit_phrases = list(selection.voice_exit_phrases) or list(DEFAULT_EXIT_PHRASES)
-    voice_config: dict[str, Any] = {
-        "provider": voice_provider,
-        "enable_interruptions": selection.voice_enable_interruptions,
-        "audio": {
-            "input": "auto",
-            "output": "auto",
-        },
-        "wake": {
-            "enabled": selection.voice_wake_enabled,
-            "wake_phrases": wake_phrases,
-            "exit_phrases": exit_phrases,
-            "match_mode": "prefix",
-            "idle_timeout_seconds": 60,
-        },
+def _voice_channel_config(
+    selection: VoiceInitSelection,
+    *,
+    existing: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Update credentials while preserving valid hand-written flat options."""
+    preserved_keys = {
+        "voice",
+        "language_hints",
+        "fallback_language",
+        "speed",
+        "context",
+        "audio",
     }
-    if voice_provider == "custom":
-        stt_provider = selection.voice_stt_provider or "soniox"
-        tts_provider = selection.voice_tts_provider or "qwen"
-        stt_defaults = _voice_defaults_for_provider(stt_provider)["stt"]
-        tts_defaults = _voice_defaults_for_provider(tts_provider)["tts"]
-        voice_config["stt"] = {
-            "provider": stt_provider,
-            "api_key": selection.voice_stt_api_key.strip() or _voice_api_key_placeholder(stt_provider),
-            **stt_defaults,
-        }
-        voice_config["tts"] = {
-            "provider": tts_provider,
-            "api_key": selection.voice_tts_api_key.strip() or _voice_api_key_placeholder(tts_provider),
-            **tts_defaults,
-        }
-    else:
-        voice_api_key = selection.voice_api_key.strip() or _voice_api_key_placeholder(voice_provider)
-        voice_defaults = _voice_defaults_for_provider(voice_provider)
-        voice_config["stt"] = {
-            "api_key": voice_api_key,
-            **voice_defaults["stt"],
-        }
-        voice_config["tts"] = {
-            "api_key": voice_api_key,
-            **voice_defaults["tts"],
-        }
-    return voice_config
+    voice_config = {
+        key: value
+        for key, value in (existing or {}).items()
+        if key in preserved_keys
+    }
+    return {
+        "api_key": selection.voice_api_key.strip() or SONIOX_KEY_PLACEHOLDER,
+        **voice_config,
+    }
 
 
 def _config_yaml(selection: InitSelection, port: int) -> str:
@@ -871,46 +704,13 @@ def _resolve_selected_model(
 
 
 def _prompt_voice_api_key(
-    voice_provider: str,
     *,
-    provider: str,
-    main_api_key: str,
-    purpose: str = "voice",
     secret_input_func: Callable[[str], str] = getpass.getpass,
 ) -> str:
-    if voice_provider == "qwen" and provider == PROVIDER_QWEN:
-        return main_api_key if main_api_key != API_KEY_PLACEHOLDER else QWEN_KEY_PLACEHOLDER
-
-    prompt_name = "Qwen" if voice_provider == "qwen" else "Soniox"
     api_key = secret_input_func(
-        f"{prompt_name} API key for {purpose} (leave blank to fill in later): "
+        "Soniox API key for voice (leave blank to fill in later): "
     ).strip()
-    return api_key or _voice_api_key_placeholder(voice_provider)
-
-
-def _phrase_prompt_default(values: Sequence[str]) -> str:
-    return ", ".join(str(value).strip() for value in values if str(value).strip())
-
-
-def _collect_voice_startup_preferences(
-    *,
-    prompt_yes_no: Callable[[str], bool],
-    prompt_text: Callable[[str, str], str],
-) -> tuple[bool, tuple[str, ...], tuple[str, ...], bool]:
-    wake_enabled = prompt_yes_no("Enable wake phrases for voice?")
-    wake_phrases: tuple[str, ...] = ()
-    exit_phrases: tuple[str, ...] = ()
-    if wake_enabled:
-        wake_phrases = tuple(
-            _phrase_list(prompt_text("Wake Phrases", _phrase_prompt_default(DEFAULT_WAKE_PHRASES)))
-            or DEFAULT_WAKE_PHRASES
-        )
-        exit_phrases = tuple(
-            _phrase_list(prompt_text("Exit Phrases", _phrase_prompt_default(DEFAULT_EXIT_PHRASES)))
-            or DEFAULT_EXIT_PHRASES
-        )
-    interruptions_enabled = prompt_yes_no("Enable voice interruptions?")
-    return wake_enabled, wake_phrases, exit_phrases, interruptions_enabled
+    return api_key or SONIOX_KEY_PLACEHOLDER
 
 
 def _select_custom_model_api(
@@ -1516,20 +1316,6 @@ def handle_init(args: argparse.Namespace) -> int:
     return 0 if result.wrote_files else 1
 
 
-def _config_provider_name(config: dict[str, Any]) -> str:
-    provider_cfg = config.get("provider")
-    if isinstance(provider_cfg, dict):
-        return str(provider_cfg.get("name") or "").strip()
-    return ""
-
-
-def _config_provider_api_key(config: dict[str, Any]) -> str:
-    provider_cfg = config.get("provider")
-    if isinstance(provider_cfg, dict):
-        return str(provider_cfg.get("api_key") or "").strip()
-    return ""
-
-
 def _arg_text(args: argparse.Namespace, name: str) -> str:
     return str(getattr(args, name, "") or "").strip()
 
@@ -1543,134 +1329,17 @@ def collect_voice_init_selection_terminal_ui(
 ) -> VoiceInitSelection:
     wizard_ui = ui or TerminalUI()
     ask_secret = wizard_ui.ask_secret if wizard_ui.interactive else secret_input_func
-    model_provider = _config_provider_name(config)
-    model_api_key = _config_provider_api_key(config)
-
-    voice_provider = _arg_text(args, "provider")
-    if voice_provider:
-        if voice_provider not in {"soniox", "qwen", "custom"}:
-            raise ValueError("--provider must be one of: soniox, qwen, custom")
-        if wizard_ui.interactive:
-            wizard_ui.record("Voice Provider", voice_provider)
-    else:
-        voice_provider = _terminal_select_option(
-            wizard_ui,
-            "Voice Provider",
-            ("soniox", "qwen", "custom"),
-            descriptions={
-                "soniox": "Use Soniox voice runtime defaults.",
-                "qwen": "Use Qwen voice runtime defaults.",
-                "custom": "Pick separate STT and TTS providers.",
-            },
-            default_index=0,
-            subtitle="Choose the voice runtime to configure.",
-        )
-
-    voice_api_key = _arg_text(args, "api_key")
-    voice_stt_provider = _arg_text(args, "stt_provider")
-    voice_stt_api_key = _arg_text(args, "stt_api_key")
-    voice_tts_provider = _arg_text(args, "tts_provider")
-    voice_tts_api_key = _arg_text(args, "tts_api_key")
-
-    if voice_provider == "custom":
-        if voice_stt_provider:
-            if voice_stt_provider not in VOICE_CUSTOM_PROVIDERS:
-                raise ValueError("--stt-provider must be one of: soniox, qwen")
-            if wizard_ui.interactive:
-                wizard_ui.record("STT Provider", voice_stt_provider)
-        else:
-            voice_stt_provider = _terminal_select_option(
-                wizard_ui,
-                "STT Provider",
-                VOICE_CUSTOM_PROVIDERS,
-                default_index=0,
-            )
-        if not voice_stt_api_key:
-            voice_stt_api_key = _prompt_voice_api_key(
-                voice_stt_provider,
-                provider=model_provider,
-                main_api_key=model_api_key,
-                purpose="STT",
-                secret_input_func=ask_secret,
-            )
-
-        if voice_tts_provider:
-            if voice_tts_provider not in VOICE_CUSTOM_PROVIDERS:
-                raise ValueError("--tts-provider must be one of: soniox, qwen")
-            if wizard_ui.interactive:
-                wizard_ui.record("TTS Provider", voice_tts_provider)
-        else:
-            voice_tts_provider = _terminal_select_option(
-                wizard_ui,
-                "TTS Provider",
-                VOICE_CUSTOM_PROVIDERS,
-                default_index=0,
-            )
-        if not voice_tts_api_key:
-            voice_tts_api_key = _prompt_voice_api_key(
-                voice_tts_provider,
-                provider=model_provider,
-                main_api_key=model_api_key,
-                purpose="TTS",
-                secret_input_func=ask_secret,
-            )
-    elif not voice_api_key:
-        voice_api_key = _prompt_voice_api_key(
-            voice_provider,
-            provider=model_provider,
-            main_api_key=model_api_key,
-            secret_input_func=ask_secret,
-        )
-
-    wake_enabled_arg = getattr(args, "wake", None)
-    if wake_enabled_arg is None:
-        voice_wake_enabled = _terminal_prompt_yes_no(wizard_ui, "Enable wake phrases for voice?", default=False)
-    else:
-        voice_wake_enabled = bool(wake_enabled_arg)
-    voice_wake_phrases = tuple(_phrase_list(_arg_text(args, "wake_phrases")))
-    voice_exit_phrases = tuple(_phrase_list(_arg_text(args, "exit_phrases")))
-    if voice_wake_enabled:
-        if not voice_wake_phrases:
-            voice_wake_phrases = tuple(
-                _phrase_list(
-                    _terminal_prompt_text(
-                        wizard_ui,
-                        "Wake Phrases",
-                        default=_phrase_prompt_default(DEFAULT_WAKE_PHRASES),
-                    )
-                )
-                or DEFAULT_WAKE_PHRASES
-            )
-        if not voice_exit_phrases:
-            voice_exit_phrases = tuple(
-                _phrase_list(
-                    _terminal_prompt_text(
-                        wizard_ui,
-                        "Exit Phrases",
-                        default=_phrase_prompt_default(DEFAULT_EXIT_PHRASES),
-                    )
-                )
-                or DEFAULT_EXIT_PHRASES
-            )
-
-    interruptions_arg = getattr(args, "interruptions", None)
-    if interruptions_arg is None:
-        voice_enable_interruptions = _terminal_prompt_yes_no(wizard_ui, "Enable voice interruptions?", default=False)
-    else:
-        voice_enable_interruptions = bool(interruptions_arg)
-
-    return VoiceInitSelection(
-        voice_provider=voice_provider,
-        voice_api_key=voice_api_key,
-        voice_stt_provider=voice_stt_provider,
-        voice_stt_api_key=voice_stt_api_key,
-        voice_tts_provider=voice_tts_provider,
-        voice_tts_api_key=voice_tts_api_key,
-        voice_enable_interruptions=voice_enable_interruptions,
-        voice_wake_enabled=voice_wake_enabled,
-        voice_wake_phrases=voice_wake_phrases,
-        voice_exit_phrases=voice_exit_phrases,
+    _ = config
+    enabled_arg = getattr(args, "enabled", None)
+    voice_enabled = (
+        _terminal_prompt_yes_no(wizard_ui, "Enable voice?", default=True)
+        if enabled_arg is None
+        else bool(enabled_arg)
     )
+    voice_api_key = _arg_text(args, "api_key")
+    if voice_enabled and not voice_api_key:
+        voice_api_key = _prompt_voice_api_key(secret_input_func=ask_secret)
+    return VoiceInitSelection(voice_enabled=voice_enabled, voice_api_key=voice_api_key)
 
 
 def _print_voice_post_setup(
@@ -1684,9 +1353,11 @@ def _print_voice_post_setup(
     summary = Text()
     summary.append(f"Voice channel updated in {config_path}\n\n")
     summary.append("Configured behavior:\n")
-    summary.append(f"- Provider: {selection.voice_provider}\n")
-    summary.append(f"- Wake phrases: {'Enabled' if selection.voice_wake_enabled else 'Disabled'}\n")
-    summary.append(f"- Interruptions: {'Enabled' if selection.voice_enable_interruptions else 'Disabled'}\n")
+    if selection.voice_enabled:
+        summary.append("- Provider: Soniox\n")
+        summary.append("- Mode: Half-duplex\n")
+    else:
+        summary.append("- Voice: Disabled\n")
     ui.print_panel(summary, title="Voice Ready", leading_blank_line=True)
 
     start = _format_init_command("xagent voice start", config_dir=config_dir, agent_name=agent_name)
@@ -2448,7 +2119,3 @@ def handle_init_weixin(args: argparse.Namespace) -> int:
         show_next_steps=getattr(args, "show_next_steps", True),
     )
     return 0
-
-
-def _phrase_list(raw_value: str) -> list[str]:
-    return [item.strip() for item in raw_value.split(",") if item.strip()]

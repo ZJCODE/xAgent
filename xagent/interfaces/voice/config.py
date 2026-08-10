@@ -1,110 +1,88 @@
-"""Configuration models for the local voice channel."""
+"""Configuration for the Soniox-only local voice channel."""
 from __future__ import annotations
 
-from typing import Any, Literal
+import os
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
-
-VOICE_PROVIDER_SONIOX = "soniox"
-VOICE_PROVIDER_QWEN = "qwen"
-VOICE_PROVIDER_CUSTOM = "custom"
-VOICE_PROVIDERS = {VOICE_PROVIDER_SONIOX, VOICE_PROVIDER_QWEN}
-VOICE_CHANNEL_PROVIDERS = VOICE_PROVIDERS | {VOICE_PROVIDER_CUSTOM}
 SONIOX_KEY_PLACEHOLDER = "your_soniox_api_key_here"
-QWEN_KEY_PLACEHOLDER = "your_qwen_api_key_here"
-GENERIC_KEY_PLACEHOLDER = "your_api_key_here"
-_VALID_TTS_SAMPLE_RATES = {8000, 16000, 24000, 44100, 48000}
-_VALID_STT_AUDIO_FORMATS = {"pcm", "pcm_s16le"}
-_VALID_TTS_AUDIO_FORMATS = {"pcm", "pcm_s16le"}
-_QWEN_VAD_THRESHOLD_DEFAULT = 0.0
-_QWEN_SILENCE_DURATION_MS_DEFAULT = 400
-_QWEN_TTS_INSTRUCT_MODEL = "qwen3-tts-instruct-flash-realtime"
-_QWEN_TTS_FLASH_MODELS = frozenset({
-    "qwen3-tts-flash-realtime",
-    "qwen3-tts-flash-realtime-2025-11-27",
-    "qwen3-tts-flash-realtime-2025-09-18",
-})
+SONIOX_STT_MODEL = "stt-rt-v5"
+SONIOX_STT_SAMPLE_RATE = 16_000
+SONIOX_STT_CHANNELS = 1
+SONIOX_TTS_MODEL = "tts-rt-v1"
+SONIOX_TTS_SAMPLE_RATE = 24_000
+SONIOX_TTS_CHANNELS = 1
+SONIOX_AUDIO_FORMAT = "pcm_s16le"
+SONIOX_ENDPOINT_LATENCY_LEVEL = 2
+SONIOX_ENDPOINT_SENSITIVITY = 0.3
+SONIOX_MAX_ENDPOINT_DELAY_MS = 1_500
+SONIOX_TTS_MAX_TEXT_CHARS = 5_000
+
 _VOICE_KEY_PLACEHOLDERS = {
     SONIOX_KEY_PLACEHOLDER,
-    QWEN_KEY_PLACEHOLDER,
-    GENERIC_KEY_PLACEHOLDER,
+    "your_qwen_api_key_here",
+    "your_api_key_here",
+}
+_LEGACY_VOICE_KEYS = {
+    "enabled",
+    "provider",
+    "stt",
+    "tts",
+    "websocket_base_url",
+    "enable_interruptions",
+    "wake",
+    "return_timestamps",
 }
 
-
-def _validate_optional_key(value: str | None) -> str | None:
-    """Shared api_key validator for STT/TTS config — strip or None."""
-    if value is None:
-        return None
-    return value.strip() or None
-
-
-_DEFAULT_STT_MODELS = {
-    VOICE_PROVIDER_SONIOX: "stt-rt-v5",
-    VOICE_PROVIDER_QWEN: "qwen3-asr-flash-realtime",
-}
-_DEFAULT_TTS_MODELS = {
-    VOICE_PROVIDER_SONIOX: "tts-rt-v1",
-    VOICE_PROVIDER_QWEN: "qwen3-tts-flash-realtime",
-}
-_DEFAULT_TTS_VOICES = {
-    VOICE_PROVIDER_SONIOX: "Owen",
-    VOICE_PROVIDER_QWEN: "Cherry",
-}
-_SONIOX_STT_MODEL_ALIASES = {
-    "stt-rt-v3": "stt-rt-v5",
-    "stt-rt-v4": "stt-rt-v5",
-}
-_SONIOX_ENDPOINT_DELAY_MS_DEFAULT = 1500
-_SONIOX_ENDPOINT_SENSITIVITY_DEFAULT = 0.3
-_SONIOX_ENDPOINT_LATENCY_LEVEL_DEFAULT = 2
+VOICE_CONFIG_EXAMPLE = """channels:
+  voice:
+    api_key: your_soniox_api_key_here
+    voice: Owen
+    language_hints: [zh, en]
+    fallback_language: zh
+    speed: 1.0
+    context:
+      general: []
+      text:
+      terms: []
+    audio:
+      input: auto
+      output: auto"""
 
 
-def _resolve_voice_provider(value: str | None, *, allow_custom: bool = True) -> str | None:
-    if value is None:
-        return None
-    normalized = str(value).strip().lower()
-    if not normalized or normalized == "none":
-        return None
-    allowed = VOICE_CHANNEL_PROVIDERS if allow_custom else VOICE_PROVIDERS
-    if normalized not in allowed:
-        raise ValueError(f"voice provider must be one of: {', '.join(sorted(allowed))}")
-    return normalized
-
-
-def _voice_provider(value: str | None) -> str:
-    normalized = _resolve_voice_provider(value, allow_custom=False)
-    if normalized is None:
-        return VOICE_PROVIDER_SONIOX
-    return normalized
-
-
-def _normalize_provider_audio_format(provider: str, value: str) -> str:
-    normalized = value.strip().lower()
-    if provider == VOICE_PROVIDER_QWEN and normalized == "pcm_s16le":
-        return "pcm"
-    if provider == VOICE_PROVIDER_SONIOX and normalized == "pcm":
-        return "pcm_s16le"
-    return normalized
+def _migration_error(keys: set[str]) -> ValueError:
+    fields = ", ".join(sorted(keys))
+    return ValueError(
+        "Legacy or Qwen voice configuration is no longer supported "
+        f"(found: {fields}). Voice is now Soniox-only and uses a flat configuration. "
+        "Replace channels.voice with:\n\n"
+        f"{VOICE_CONFIG_EXAMPLE}"
+    )
 
 
 class SonioxSTTContextConfig(BaseModel):
-    """Structured context accepted by Soniox realtime STT."""
+    """Structured context passed directly to Soniox realtime STT."""
 
     model_config = ConfigDict(extra="forbid")
 
     general: list[dict[str, str]] = Field(default_factory=list)
     text: str | None = None
     terms: list[str] = Field(default_factory=list)
-    translation_terms: list[dict[str, str]] = Field(default_factory=list)
 
     @field_validator("text")
     @classmethod
     def _validate_text(cls, value: str | None) -> str | None:
         if value is None:
             return None
-        normalized = value.strip()
-        return normalized or None
+        return value.strip() or None
 
     @field_validator("general")
     @classmethod
@@ -114,28 +92,14 @@ class SonioxSTTContextConfig(BaseModel):
             key = str(item.get("key") or "").strip()
             item_value = str(item.get("value") or "").strip()
             if not key or not item_value:
-                raise ValueError("voice.stt.context.general entries require non-empty key and value")
+                raise ValueError("voice.context.general entries require non-empty key and value")
             cleaned.append({"key": key, "value": item_value})
         return cleaned
 
     @field_validator("terms")
     @classmethod
     def _validate_terms(cls, value: list[str]) -> list[str]:
-        return [item.strip() for item in value if item.strip()]
-
-    @field_validator("translation_terms")
-    @classmethod
-    def _validate_translation_terms(cls, value: list[dict[str, str]]) -> list[dict[str, str]]:
-        cleaned: list[dict[str, str]] = []
-        for item in value:
-            source = str(item.get("source") or "").strip()
-            target = str(item.get("target") or "").strip()
-            if not source or not target:
-                raise ValueError(
-                    "voice.stt.context.translation_terms entries require non-empty source and target"
-                )
-            cleaned.append({"source": source, "target": target})
-        return cleaned
+        return [term.strip() for term in value if term.strip()]
 
     def to_soniox_payload(self) -> dict[str, Any] | None:
         payload: dict[str, Any] = {}
@@ -145,228 +109,11 @@ class SonioxSTTContextConfig(BaseModel):
             payload["text"] = self.text
         if self.terms:
             payload["terms"] = list(self.terms)
-        if self.translation_terms:
-            payload["translation_terms"] = list(self.translation_terms)
         return payload or None
 
 
-class VoiceSTTConfig(BaseModel):
-    """Realtime speech-to-text configuration."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    provider: str = VOICE_PROVIDER_SONIOX
-    api_key: str | None = None
-    model: str = "stt-rt-v5"
-    audio_format: str = "pcm_s16le"
-    sample_rate: int = 16000
-    num_channels: int = 1
-    enable_endpoint_detection: bool = True
-    max_endpoint_delay_ms: int = Field(default=_SONIOX_ENDPOINT_DELAY_MS_DEFAULT, ge=500, le=3000)
-    endpoint_sensitivity: float = Field(
-        default=_SONIOX_ENDPOINT_SENSITIVITY_DEFAULT, ge=-1.0, le=1.0
-    )
-    endpoint_latency_adjustment_level: int = Field(
-        default=_SONIOX_ENDPOINT_LATENCY_LEVEL_DEFAULT, ge=0, le=3
-    )
-    language_hints: list[str] = Field(default_factory=lambda: ["zh", "en"])
-    language_hints_strict: bool = False
-    enable_language_identification: bool = True
-    enable_speaker_diarization: bool = False
-    context: SonioxSTTContextConfig | None = None
-    client_reference_id: str | None = None
-    language: str = "zh"
-    turn_detection: Literal["server_vad"] = "server_vad"
-    silence_duration_ms: int = Field(default=_QWEN_SILENCE_DURATION_MS_DEFAULT, ge=200, le=6000)
-    vad_threshold: float = Field(default=_QWEN_VAD_THRESHOLD_DEFAULT, ge=-1.0, le=1.0)
-    corpus_text: str | None = None
-    session_options: dict[str, Any] = Field(default_factory=dict)
-
-    @field_validator("provider")
-    @classmethod
-    def _validate_provider(cls, value: str) -> str:
-        return _voice_provider(value)
-
-    @field_validator("api_key")
-    @classmethod
-    def _validate_api_key(cls, value: str | None) -> str | None:
-        return _validate_optional_key(value)
-
-    @field_validator("model")
-    @classmethod
-    def _validate_model(cls, value: str) -> str:
-        normalized = value.strip()
-        if not normalized:
-            raise ValueError("voice.stt.model must be non-empty")
-        return normalized
-
-    @field_validator("audio_format")
-    @classmethod
-    def _validate_audio_format(cls, value: str) -> str:
-        normalized = value.strip().lower()
-        if normalized not in _VALID_STT_AUDIO_FORMATS:
-            raise ValueError("voice.stt.audio_format must be one of: pcm, pcm_s16le")
-        return normalized
-
-    @field_validator("sample_rate")
-    @classmethod
-    def _validate_sample_rate(cls, value: int) -> int:
-        if value != 16000:
-            raise ValueError("voice.stt.sample_rate must be 16000")
-        return value
-
-    @field_validator("num_channels")
-    @classmethod
-    def _validate_num_channels(cls, value: int) -> int:
-        if value != 1:
-            raise ValueError("voice.stt.num_channels must be 1")
-        return value
-
-    @field_validator("language_hints")
-    @classmethod
-    def _validate_language_hints(cls, value: list[str]) -> list[str]:
-        hints = [item.strip() for item in value if item.strip()]
-        if not hints:
-            raise ValueError("voice.stt.language_hints must include at least one language")
-        return hints
-
-    @field_validator("session_options")
-    @classmethod
-    def _validate_session_options(cls, value: dict[str, Any]) -> dict[str, Any]:
-        return dict(value)
-
-    @field_validator("client_reference_id")
-    @classmethod
-    def _validate_client_reference_id(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        normalized = value.strip()
-        if not normalized:
-            return None
-        if len(normalized) > 256:
-            raise ValueError("voice.stt.client_reference_id must be at most 256 characters")
-        return normalized
-
-    @field_validator("corpus_text")
-    @classmethod
-    def _validate_corpus_text(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        normalized = value.strip()
-        return normalized or None
-
-    @model_validator(mode="after")
-    def _validate_endpointing(self) -> "VoiceSTTConfig":
-        self.audio_format = _normalize_provider_audio_format(self.provider, self.audio_format)
-        if self.provider == VOICE_PROVIDER_SONIOX:
-            self.model = _SONIOX_STT_MODEL_ALIASES.get(self.model, self.model)
-            if not self.enable_endpoint_detection:
-                raise ValueError("voice.stt.enable_endpoint_detection must be true")
-        return self
-
-
-class VoiceTTSConfig(BaseModel):
-    """Realtime text-to-speech configuration."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    provider: str = VOICE_PROVIDER_SONIOX
-    api_key: str | None = None
-    model: str = "tts-rt-v1"
-    voice: str = "Owen"
-    audio_format: str = "pcm_s16le"
-    sample_rate: int = 24000
-    speed: float = Field(default=1.0, ge=0.7, le=1.3)
-    return_timestamps: bool = False
-    client_reference_id: str | None = None
-    speech_rate: float = Field(default=1.0, ge=0.5, le=2.0)
-    volume: int = Field(default=50, ge=0, le=100)
-    pitch_rate: float = Field(default=1.0, ge=0.5, le=2.0)
-    language_policy: Literal["from_stt_dominant", "fallback"] = "from_stt_dominant"
-    fallback_language: str = "zh"
-    max_buffer_chars: int = Field(default=80, ge=1, le=500)
-    mode: Literal["server_commit", "commit"] = "server_commit"
-    language_type: str = "Auto"
-    instructions: str | None = None
-    optimize_instructions: bool = False
-    session_options: dict[str, Any] = Field(default_factory=dict)
-
-    @field_validator("provider")
-    @classmethod
-    def _validate_provider(cls, value: str) -> str:
-        return _voice_provider(value)
-
-    @field_validator("api_key")
-    @classmethod
-    def _validate_api_key(cls, value: str | None) -> str | None:
-        return _validate_optional_key(value)
-
-    @field_validator("model", "voice", "fallback_language", "language_type")
-    @classmethod
-    def _validate_non_empty(cls, value: str) -> str:
-        normalized = value.strip()
-        if not normalized:
-            raise ValueError("voice.tts string fields must be non-empty")
-        return normalized
-
-    @field_validator("instructions")
-    @classmethod
-    def _validate_instructions(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        normalized = value.strip()
-        return normalized or None
-
-    @field_validator("session_options")
-    @classmethod
-    def _validate_session_options(cls, value: dict[str, Any]) -> dict[str, Any]:
-        return dict(value)
-
-    @field_validator("client_reference_id")
-    @classmethod
-    def _validate_client_reference_id(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        normalized = value.strip()
-        if not normalized:
-            return None
-        if len(normalized) > 256:
-            raise ValueError("voice.tts.client_reference_id must be at most 256 characters")
-        return normalized
-
-    @field_validator("audio_format")
-    @classmethod
-    def _validate_audio_format(cls, value: str) -> str:
-        normalized = value.strip().lower()
-        if normalized not in _VALID_TTS_AUDIO_FORMATS:
-            raise ValueError("voice.tts.audio_format must be one of: pcm, pcm_s16le")
-        return normalized
-
-    @field_validator("sample_rate")
-    @classmethod
-    def _validate_sample_rate(cls, value: int) -> int:
-        if value not in _VALID_TTS_SAMPLE_RATES:
-            allowed = ", ".join(str(item) for item in sorted(_VALID_TTS_SAMPLE_RATES))
-            raise ValueError(f"voice.tts.sample_rate must be one of: {allowed}")
-        return value
-
-    @model_validator(mode="after")
-    def _validate_qwen_tts_options(self) -> "VoiceTTSConfig":
-        self.audio_format = _normalize_provider_audio_format(self.provider, self.audio_format)
-        if self.optimize_instructions and not self.instructions:
-            raise ValueError("voice.tts.optimize_instructions requires voice.tts.instructions")
-        if self.provider == VOICE_PROVIDER_QWEN and self.instructions:
-            model_name = self.model.strip().lower()
-            if model_name in _QWEN_TTS_FLASH_MODELS or (
-                model_name.startswith("qwen3-tts-flash-realtime")
-                and "instruct" not in model_name
-            ):
-                self.model = _QWEN_TTS_INSTRUCT_MODEL
-        return self
-
-
 class VoiceAudioConfig(BaseModel):
-    """Local audio device preferences for the voice channel."""
+    """Local audio-device preferences."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -382,73 +129,53 @@ class VoiceAudioConfig(BaseModel):
             if value < 0:
                 raise ValueError("voice.audio device index must be non-negative")
             return value
-        normalized = value.strip()
-        if not normalized:
-            return "auto"
-        return normalized
-
-
-class VoiceWakeConfig(BaseModel):
-    """Wake phrase gating for the local voice channel."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    enabled: bool = False
-    wake_phrases: list[str] = Field(default_factory=lambda: ["xAgent"])
-    exit_phrases: list[str] = Field(
-        default_factory=lambda: ["exit", "stop", "goodbye", "that's all", "never mind"]
-    )
-    match_mode: Literal["prefix", "contains"] = "prefix"
-    idle_timeout_seconds: float = Field(default=60.0, ge=0.1, le=3600.0)
-
-    @field_validator("wake_phrases", "exit_phrases")
-    @classmethod
-    def _validate_phrases(cls, value: list[str]) -> list[str]:
-        return [item.strip() for item in value if item.strip()]
-
-    @model_validator(mode="after")
-    def _validate_enabled_phrases(self) -> "VoiceWakeConfig":
-        if self.enabled and not self.wake_phrases:
-            raise ValueError("voice.wake.wake_phrases must include at least one phrase when enabled")
-        return self
+        return value.strip() or "auto"
 
 
 class VoiceChannelConfig(BaseModel):
-    """User-facing configuration for `channels.voice`."""
+    """Flat user-facing configuration for ``channels.voice``."""
 
     model_config = ConfigDict(extra="forbid")
 
-    enabled: bool = True
-    provider: str | None = None
-    websocket_base_url: str | None = None
-    enable_interruptions: bool = False
+    api_key: str | None = None
+    voice: str = "Owen"
+    language_hints: list[str] = Field(default_factory=lambda: ["zh", "en"])
+    fallback_language: str = "zh"
+    speed: float = Field(default=1.0, ge=0.7, le=1.3)
+    context: SonioxSTTContextConfig = Field(default_factory=SonioxSTTContextConfig)
     audio: VoiceAudioConfig = Field(default_factory=VoiceAudioConfig)
-    wake: VoiceWakeConfig = Field(default_factory=VoiceWakeConfig)
-    stt: VoiceSTTConfig = Field(default_factory=VoiceSTTConfig)
-    tts: VoiceTTSConfig = Field(default_factory=VoiceTTSConfig)
 
-    @field_validator("provider")
+    @model_validator(mode="before")
     @classmethod
-    def _validate_provider(cls, value: str | None) -> str | None:
-        return _resolve_voice_provider(value)
+    def _reject_legacy_configuration(cls, value: Any) -> Any:
+        if isinstance(value, dict):
+            legacy_keys = _LEGACY_VOICE_KEYS.intersection(value)
+            if legacy_keys:
+                raise _migration_error(legacy_keys)
+        return value
 
-    @field_validator("websocket_base_url")
+    @field_validator("api_key")
     @classmethod
-    def _validate_websocket_base_url(cls, value: str | None) -> str | None:
+    def _validate_api_key(cls, value: str | None) -> str | None:
         if value is None:
             return None
-        normalized = value.strip()
-        return normalized or None
+        return value.strip() or None
 
-    @model_validator(mode="after")
-    def _validate_nested_providers(self) -> "VoiceChannelConfig":
-        if self.provider is None:
-            return self
-        if self.provider == VOICE_PROVIDER_CUSTOM:
-            return self
-        if self.stt.provider != self.provider or self.tts.provider != self.provider:
-            raise ValueError("channels.voice provider must match voice.stt.provider and voice.tts.provider")
-        return self
+    @field_validator("voice", "fallback_language")
+    @classmethod
+    def _validate_non_empty(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("voice and fallback_language must be non-empty")
+        return normalized
+
+    @field_validator("language_hints")
+    @classmethod
+    def _validate_language_hints(cls, value: list[str]) -> list[str]:
+        hints = list(dict.fromkeys(item.strip() for item in value if item.strip()))
+        if not hints:
+            raise ValueError("voice.language_hints must include at least one language")
+        return hints
 
     @classmethod
     def from_dict(cls, data: Any) -> "VoiceChannelConfig":
@@ -456,111 +183,22 @@ class VoiceChannelConfig(BaseModel):
             data = {}
         if not isinstance(data, dict):
             raise ValueError("channels.voice must be a dictionary")
-        data = _normalize_voice_config(data)
         try:
             return cls.model_validate(data)
         except ValidationError as exc:
             raise ValueError(str(exc)) from exc
 
-    def resolved_stt_api_key(self) -> str:
-        return self._resolved_nested_api_key(self.stt.provider, self.stt.api_key, "stt")
-
-    def resolved_tts_api_key(self) -> str:
-        return self._resolved_nested_api_key(self.tts.provider, self.tts.api_key, "tts")
-
-    def _resolved_nested_api_key(self, provider: str, api_key: str | None, section: str) -> str:
-        nested_api_key = str(api_key or "").strip()
-        if nested_api_key and nested_api_key not in _VOICE_KEY_PLACEHOLDERS:
-            return nested_api_key
+    def resolved_api_key(self) -> str:
+        configured = str(self.api_key or "").strip()
+        if configured and configured not in _VOICE_KEY_PLACEHOLDERS:
+            return configured
+        environment = os.getenv("SONIOX_API_KEY", "").strip()
+        if environment and environment not in _VOICE_KEY_PLACEHOLDERS:
+            return environment
         raise ValueError(
-            f"{provider} voice API key is required. Set channels.voice.{section}.api_key in config.yaml."
+            "Soniox voice API key is required. Set channels.voice.api_key in config.yaml "
+            "or the SONIOX_API_KEY environment variable."
         )
-
-    def resolved_provider(self) -> str:
-        if self.provider is not None:
-            return self.provider
-        allowed = ", ".join(sorted(VOICE_CHANNEL_PROVIDERS))
-        raise ValueError(
-            f"voice provider is required. Set channels.voice.provider to one of: {allowed}. "
-            "Remove channels.voice if you are not using voice."
-        )
-
-    def resolved_websocket_base_url(self) -> str | None:
-        if self.websocket_base_url is None:
-            return None
-        return self.websocket_base_url.strip() or None
 
     def tts_language_for(self, stt_language: str | None) -> str:
-        if self.tts.language_policy == "from_stt_dominant":
-            language = (stt_language or "").strip()
-            if language:
-                return language
-        return self.tts.fallback_language
-
-
-def _normalize_voice_config(data: dict[str, Any]) -> dict[str, Any]:
-    normalized = dict(data)
-    declared_provider = _resolve_voice_provider(normalized.get("provider"))
-
-    stt = dict(normalized.get("stt") or {})
-    stt_provider = _resolve_voice_provider(stt.get("provider"), allow_custom=False) if "provider" in stt else None
-    if "provider" in stt:
-        if stt_provider is None:
-            stt.pop("provider", None)
-        else:
-            stt["provider"] = stt_provider
-    normalized["stt"] = stt
-
-    tts = dict(normalized.get("tts") or {})
-    tts_provider = _resolve_voice_provider(tts.get("provider"), allow_custom=False) if "provider" in tts else None
-    if "provider" in tts:
-        if tts_provider is None:
-            tts.pop("provider", None)
-        else:
-            tts["provider"] = tts_provider
-
-    inferred_providers = {item for item in (stt_provider, tts_provider) if item is not None}
-    if declared_provider == VOICE_PROVIDER_CUSTOM:
-        if stt_provider is None or tts_provider is None:
-            raise ValueError("channels.voice custom provider requires voice.stt.provider and voice.tts.provider")
-        provider = declared_provider
-        normalized["provider"] = provider
-    elif declared_provider is None:
-        if len(inferred_providers) > 1:
-            raise ValueError("channels.voice provider must match voice.stt.provider and voice.tts.provider")
-        provider = next(iter(inferred_providers), None)
-        if "provider" in normalized or provider is not None:
-            normalized["provider"] = provider
-    else:
-        provider = declared_provider
-        normalized["provider"] = provider
-
-    if provider is not None:
-        stt_default_provider = stt_provider or provider
-        tts_default_provider = tts_provider or provider
-        stt.setdefault("provider", stt_default_provider)
-        stt.setdefault("model", _DEFAULT_STT_MODELS[stt_default_provider])
-        stt.setdefault("audio_format", "pcm" if stt_default_provider == VOICE_PROVIDER_QWEN else "pcm_s16le")
-        if stt_default_provider == VOICE_PROVIDER_QWEN:
-            stt.setdefault("vad_threshold", _QWEN_VAD_THRESHOLD_DEFAULT)
-            stt.setdefault("silence_duration_ms", _QWEN_SILENCE_DURATION_MS_DEFAULT)
-        elif stt_default_provider == VOICE_PROVIDER_SONIOX:
-            stt["model"] = _SONIOX_STT_MODEL_ALIASES.get(
-                str(stt.get("model") or "").strip(),
-                stt.get("model"),
-            )
-            stt.setdefault("max_endpoint_delay_ms", _SONIOX_ENDPOINT_DELAY_MS_DEFAULT)
-            stt.setdefault("endpoint_sensitivity", _SONIOX_ENDPOINT_SENSITIVITY_DEFAULT)
-            stt.setdefault(
-                "endpoint_latency_adjustment_level",
-                _SONIOX_ENDPOINT_LATENCY_LEVEL_DEFAULT,
-            )
-
-        tts.setdefault("provider", tts_default_provider)
-        tts.setdefault("model", _DEFAULT_TTS_MODELS[tts_default_provider])
-        tts.setdefault("voice", _DEFAULT_TTS_VOICES[tts_default_provider])
-        tts.setdefault("audio_format", "pcm" if tts_default_provider == VOICE_PROVIDER_QWEN else "pcm_s16le")
-
-    normalized["tts"] = tts
-
-    return normalized
+        return (stt_language or "").strip() or self.fallback_language

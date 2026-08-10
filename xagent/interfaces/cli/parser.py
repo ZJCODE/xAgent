@@ -5,8 +5,8 @@ from __future__ import annotations
 import argparse
 import sys
 
-from .channels import CHANNEL_API, CHANNEL_FEISHU, CHANNEL_VOICE, CHANNEL_WEIXIN
 from . import agents, processes_status, runtime, setup, update
+from .channels import CHANNEL_API, CHANNEL_FEISHU, CHANNEL_VOICE, CHANNEL_WEIXIN
 
 
 class XAgentArgumentParser(argparse.ArgumentParser):
@@ -249,26 +249,13 @@ def _add_weixin_setup_arguments(parser: argparse.ArgumentParser) -> None:
 
 def _add_voice_setup_arguments(parser: argparse.ArgumentParser) -> None:
     _add_agent_argument(parser)
-    parser.add_argument("--provider", choices=("soniox", "qwen", "custom"), default=None, help="Voice provider")
-    parser.add_argument("--api-key", dest="api_key", default=None, help="Voice provider API key")
-    parser.add_argument("--stt-provider", choices=("soniox", "qwen"), default=None, help="STT provider for custom voice")
-    parser.add_argument("--stt-api-key", dest="stt_api_key", default=None, help="STT provider API key")
-    parser.add_argument("--tts-provider", choices=("soniox", "qwen"), default=None, help="TTS provider for custom voice")
-    parser.add_argument("--tts-api-key", dest="tts_api_key", default=None, help="TTS provider API key")
     parser.add_argument(
-        "--wake",
+        "--enabled",
         action=argparse.BooleanOptionalAction,
         default=None,
-        help="Enable wake phrases for voice",
+        help="Enable or disable voice",
     )
-    parser.add_argument("--wake-phrases", default=None, help="Comma-separated wake phrases")
-    parser.add_argument("--exit-phrases", default=None, help="Comma-separated exit phrases")
-    parser.add_argument(
-        "--interruptions",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="Enable voice interruptions",
-    )
+    parser.add_argument("--api-key", dest="api_key", default=None, help="Soniox API key")
     parser.add_argument("--force", action="store_true", help="Overwrite existing channels.voice config")
 
 

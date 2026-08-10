@@ -2,19 +2,22 @@
 
 from __future__ import annotations
 
+import asyncio
 import tempfile
 import unittest
 from pathlib import Path
 
 from xagent.core.config import AgentConfig
 from xagent.core.handlers.message import MessageHandler
+from xagent.core.providers import ReasoningConfig
 from xagent.core.working_context import (
+    WORKING_CONTEXT_FAILURE_COOLDOWN_SECONDS,
     WorkingContextCompactor,
     WorkingContextState,
     WorkingContextStore,
     WorkingContextSummarizer,
 )
-from xagent.schemas import Message, MessageType, RoleType
+from xagent.schemas import Message, RoleType
 
 
 class _FakeMessageStorage:
@@ -169,6 +172,229 @@ class WorkingContextCompactorTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(view.covers_through_cursor, 0)
             self.assertEqual(store.read().covers_through_cursor, 0)
 
+    async def test_view_for_turn_returns_consistent_snapshot_while_single_refresh_runs(self):
+        messages = [
+            Message.create(f"m-{index:02d}", role=RoleType.USER, sender_id="alice")
+            for index in range(30)
+        ]
+
+        class BlockingSummarizer:
+            def __init__(self):
+                self.calls = 0
+                self.started = asyncio.Event()
+                self.release = asyncio.Event()
+
+            async def summarize(self, **kwargs):
+                del kwargs
+                self.calls += 1
+                self.started.set()
+                await self.release.wait()
+                return "new summary"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = WorkingContextStore(Path(tmpdir) / ".working_context.json")
+            store.write(
+                WorkingContextState(
+                    covers_through_cursor=0,
+                    summary="old summary",
+                )
+            )
+            summarizer = BlockingSummarizer()
+            compactor = WorkingContextCompactor(
+                store=store,
+                message_storage=_FakeMessageStorage(messages),
+                summarizer=summarizer,
+                hot_window=12,
+            )
+
+            first = await compactor.view_for_turn()
+            await asyncio.wait_for(summarizer.started.wait(), timeout=1)
+            second = await compactor.view_for_turn()
+
+            self.assertEqual(first.summary, "old summary")
+            self.assertEqual(first.covers_through_cursor, 0)
+            self.assertEqual(second, first)
+            self.assertEqual(summarizer.calls, 1)
+
+            summarizer.release.set()
+            await compactor.wait_for_refresh()
+            refreshed = await compactor.current_view()
+
+            self.assertEqual(refreshed.summary, "new summary")
+            self.assertEqual(refreshed.covers_through_cursor, 18)
+
+    async def test_failed_refresh_uses_fixed_cooldown_and_success_clears_it(self):
+        messages = [
+            Message.create(f"m-{index:02d}", role=RoleType.USER, sender_id="alice")
+            for index in range(30)
+        ]
+
+        class FlakySummarizer:
+            def __init__(self):
+                self.calls = 0
+
+            async def summarize(self, **kwargs):
+                del kwargs
+                self.calls += 1
+                if self.calls == 1:
+                    raise RuntimeError("temporary failure")
+                return "recovered summary"
+
+        now = [100.0]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = WorkingContextStore(Path(tmpdir) / ".working_context.json")
+            store.write(WorkingContextState(summary="keep me"))
+            summarizer = FlakySummarizer()
+            compactor = WorkingContextCompactor(
+                store=store,
+                message_storage=_FakeMessageStorage(messages),
+                summarizer=summarizer,
+                hot_window=12,
+                clock=lambda: now[0],
+            )
+
+            with self.assertLogs("xagent.core.working_context", level="WARNING") as logs:
+                failed = await compactor.ensure_fresh()
+            during_cooldown = await compactor.ensure_fresh()
+
+            self.assertEqual(failed.summary, "keep me")
+            self.assertEqual(during_cooldown.summary, "keep me")
+            self.assertEqual(summarizer.calls, 1)
+            self.assertIn("retrying after 60s", "\n".join(logs.output))
+
+            now[0] += WORKING_CONTEXT_FAILURE_COOLDOWN_SECONDS
+            recovered = await compactor.ensure_fresh()
+
+            self.assertEqual(summarizer.calls, 2)
+            self.assertEqual(recovered.summary, "recovered summary")
+            self.assertEqual(recovered.covers_through_cursor, 18)
+            self.assertEqual(compactor._retry_not_before, 0.0)
+
+    async def test_cursor_failure_is_not_retried_during_cooldown(self):
+        class BrokenCursorStorage:
+            def __init__(self):
+                self.calls = 0
+
+            async def get_latest_message_cursor(self):
+                self.calls += 1
+                raise RuntimeError("cursor unavailable")
+
+        now = [200.0]
+        storage = BrokenCursorStorage()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = WorkingContextStore(Path(tmpdir) / ".working_context.json")
+            store.write(WorkingContextState(summary="last good summary"))
+            compactor = WorkingContextCompactor(
+                store=store,
+                message_storage=storage,
+                summarizer=_FakeSummarizer(),
+                hot_window=12,
+                clock=lambda: now[0],
+            )
+
+            with self.assertLogs("xagent.core.working_context", level="WARNING"):
+                first = await compactor.ensure_fresh()
+            second = await compactor.ensure_fresh()
+
+            self.assertEqual(first, second)
+            self.assertEqual(first.summary, "last good summary")
+            self.assertEqual(storage.calls, 1)
+
+    async def test_empty_summary_does_not_replace_state_or_advance_coverage(self):
+        class EmptySummarizer:
+            async def summarize(self, **kwargs):
+                del kwargs
+                return "  "
+
+        messages = [
+            Message.create(f"m-{index:02d}", role=RoleType.USER, sender_id="alice")
+            for index in range(30)
+        ]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = WorkingContextStore(Path(tmpdir) / ".working_context.json")
+            store.write(WorkingContextState(summary="last good summary"))
+            compactor = WorkingContextCompactor(
+                store=store,
+                message_storage=_FakeMessageStorage(messages),
+                summarizer=EmptySummarizer(),
+                hot_window=12,
+            )
+
+            with self.assertLogs("xagent.core.working_context", level="WARNING"):
+                view = await compactor.ensure_fresh()
+
+            persisted = store.read()
+            self.assertEqual(view.summary, "last good summary")
+            self.assertEqual(view.covers_through_cursor, 0)
+            self.assertEqual(persisted.summary, "last good summary")
+            self.assertEqual(persisted.covers_through_cursor, 0)
+
+    async def test_cancelled_background_refresh_keeps_persisted_state(self):
+        messages = [
+            Message.create(f"m-{index:02d}", role=RoleType.USER, sender_id="alice")
+            for index in range(30)
+        ]
+
+        class BlockingSummarizer:
+            def __init__(self):
+                self.started = asyncio.Event()
+
+            async def summarize(self, **kwargs):
+                del kwargs
+                self.started.set()
+                await asyncio.Event().wait()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = WorkingContextStore(Path(tmpdir) / ".working_context.json")
+            store.write(WorkingContextState(summary="stable summary"))
+            summarizer = BlockingSummarizer()
+            compactor = WorkingContextCompactor(
+                store=store,
+                message_storage=_FakeMessageStorage(messages),
+                summarizer=summarizer,
+                hot_window=12,
+            )
+
+            snapshot = await compactor.view_for_turn()
+            await asyncio.wait_for(summarizer.started.wait(), timeout=1)
+            await compactor.cancel_refresh()
+
+            self.assertEqual(snapshot.summary, "stable summary")
+            self.assertEqual(store.read().summary, "stable summary")
+            self.assertEqual(store.read().covers_through_cursor, 0)
+
+    async def test_background_refresh_exception_is_consumed_and_deferred(self):
+        class BrokenLockStore(WorkingContextStore):
+            def acquire_lock(self):
+                raise RuntimeError("lock unavailable")
+
+        now = [300.0]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = BrokenLockStore(Path(tmpdir) / ".working_context.json")
+            store.write(WorkingContextState(summary="safe snapshot"))
+            compactor = WorkingContextCompactor(
+                store=store,
+                message_storage=_FakeMessageStorage(),
+                summarizer=_FakeSummarizer(),
+                hot_window=12,
+                clock=lambda: now[0],
+            )
+
+            with self.assertLogs("xagent.core.working_context", level="WARNING") as logs:
+                snapshot = await compactor.view_for_turn()
+                task = compactor._refresh_task
+                self.assertIsNotNone(task)
+                await asyncio.gather(task, return_exceptions=True)
+                await asyncio.sleep(0)
+
+            self.assertEqual(snapshot.summary, "safe snapshot")
+            self.assertIsNone(compactor._refresh_task)
+            self.assertEqual(
+                compactor._retry_not_before,
+                now[0] + WORKING_CONTEXT_FAILURE_COOLDOWN_SECONDS,
+            )
+            self.assertIn("background refresh", "\n".join(logs.output))
+
 
 class WorkingContextPromptInjectionTests(unittest.TestCase):
     def test_working_summary_replaces_omitted_note(self):
@@ -257,6 +483,23 @@ class WorkingContextPromptInjectionTests(unittest.TestCase):
         self.assertIn("NOT a diary", system_prompt)
         self.assertIn("speaker attribution", system_prompt.lower())
         self.assertNotIn('first-person ("I")', system_prompt)
+
+    def test_summarizer_has_bounded_maintenance_generation_settings(self):
+        summarizer = WorkingContextSummarizer(
+            client=object(),
+            model="deepseek-v4-flash",
+            provider_name="deepseek",
+            model_api="openai_chat_completions",
+            reasoning=ReasoningConfig(enabled=False),
+        )
+
+        self.assertEqual(
+            summarizer._llm.max_tokens,
+            AgentConfig.WORKING_CONTEXT_SUMMARY_MAX_TOKENS,
+        )
+        self.assertEqual(summarizer._llm.max_tokens, 2048)
+        self.assertEqual(summarizer._llm.reasoning, ReasoningConfig(enabled=False))
+        self.assertEqual(summarizer.summary_max_chars, 1500)
 
 
 if __name__ == "__main__":

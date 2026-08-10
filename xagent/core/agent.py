@@ -10,12 +10,19 @@ from ..components import (
     RelationshipStore,
     SkillsStorageBase,
 )
-from .journal import JournalLLMService
 from ..integrations.langfuse import (
     NoopObservabilityRuntime,
     ObservabilityRuntime,
     build_session_id,
 )
+from ..schemas import (
+    AgentTurnResult,
+    Message,
+    MessageType,
+    ParticipationDecision,
+    RoleType,
+)
+from ..tools import create_search_memory_tool, create_write_memory_tool
 from .config import AgentConfig, ReplyType
 from .errors import (
     ERROR_EMPTY_RESPONSE,
@@ -25,10 +32,12 @@ from .errors import (
     map_model_error,
 )
 from .handlers import MemoryHandler, MessageHandler, ModelClient
+from .journal import JournalLLMService
 from .providers import (
     MODEL_API_OPENAI_RESPONSES,
     PROVIDER_OPENAI,
     ReasoningConfig,
+    maintenance_reasoning_config,
     model_api_uses_anthropic_client,
     normalize_model_api,
     normalize_provider_name,
@@ -40,8 +49,6 @@ from .working_context import (
     WorkingContextSummarizer,
     WorkingContextView,
 )
-from ..schemas import AgentTurnResult, Message, MessageType, ParticipationDecision, RoleType
-from ..tools import create_write_memory_tool, create_search_memory_tool
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +83,7 @@ class Agent:
         self.model_api = normalize_model_api(model_api)
         self.model_max_tokens = model_max_tokens
         self.reasoning = reasoning
+        self.maintenance_reasoning = maintenance_reasoning_config(reasoning)
         self.supports_vision = bool(supports_vision)
         self.max_history = max_history
         self.journal_batch_size = journal_batch_size
@@ -135,7 +143,7 @@ class Agent:
             provider_name=self.provider_name,
             model_api=self.model_api,
             max_tokens=self.model_max_tokens,
-            reasoning=self.reasoning,
+            reasoning=self.maintenance_reasoning,
         )
         self.memory_handler = MemoryHandler(
             memory=self.markdown_memory,
@@ -237,7 +245,7 @@ class Agent:
             model=self.model,
             provider_name=self.provider_name,
             model_api=self.model_api,
-            reasoning=self.reasoning,
+            reasoning=self.maintenance_reasoning,
         )
         return WorkingContextCompactor(
             store=store,
@@ -251,7 +259,11 @@ class Agent:
         if compactor is None:
             return WorkingContextView()
         try:
-            view = await compactor.ensure_fresh()
+            view_for_turn = getattr(compactor, "view_for_turn", None)
+            if callable(view_for_turn):
+                view = await view_for_turn()
+            else:
+                view = await compactor.ensure_fresh()
             if isinstance(view, WorkingContextView):
                 return view
             # Older fakes may still return a bare summary string.

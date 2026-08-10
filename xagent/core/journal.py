@@ -9,8 +9,11 @@ from typing import Any, List, Optional
 
 from openai import AsyncOpenAI
 
-from .providers import PROVIDER_OPENAI, ReasoningConfig
-
+from .providers import (
+    PROVIDER_OPENAI,
+    ReasoningConfig,
+    maintenance_reasoning_config,
+)
 
 DEFAULT_OPENAI_CHAT_MODEL_API = "openai_chat_completions"
 
@@ -33,7 +36,7 @@ class JournalLLMService:
         self.provider_name = provider_name
         self.model_api = model_api
         self.max_tokens = max_tokens
-        self.reasoning = reasoning
+        self.reasoning = maintenance_reasoning_config(reasoning)
 
     async def format_diary_entry(
         self,

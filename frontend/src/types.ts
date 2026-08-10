@@ -197,35 +197,17 @@ export interface ChannelLogsResponse {
 export type SetupChannelId = Extract<ChannelId, "voice" | "feishu" | "weixin">;
 
 export interface VoiceSelectionInput {
-  voice_enabled?: boolean;
-  voice_provider: string;
+  voice_enabled: boolean;
   voice_api_key: string;
-  voice_stt_provider: string;
-  voice_stt_api_key: string;
-  voice_tts_provider: string;
-  voice_tts_api_key: string;
-  voice_enable_interruptions: boolean;
-  voice_wake_enabled: boolean;
-  voice_wake_phrases: string[];
-  voice_exit_phrases: string[];
 }
 
 export interface VoiceSetupSchema {
-  voice_providers: SetupOption[];
-  voice_custom_providers: string[];
   defaults: {
-    voice_provider: string;
-    voice_stt_provider: string;
-    voice_tts_provider: string;
-    wake_phrases: string[];
-    exit_phrases: string[];
-    voice_wake_enabled: boolean;
-    voice_enable_interruptions: boolean;
+    voice_enabled: boolean;
+    voice_api_key: string;
   };
-  placeholders: Record<string, string>;
-  inherit_api_key_from: {
-    provider: string;
-    can_inherit_qwen_key: boolean;
+  placeholders: {
+    soniox_api_key: string;
   };
   configured: boolean;
   can_force: boolean;

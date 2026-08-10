@@ -8,8 +8,13 @@ from unittest.mock import AsyncMock, patch
 
 from xagent.core.agent import Agent
 from xagent.core.config import AgentConfig, ReplyType
-from xagent.core.handlers.model import ChatToolCall, ModelClient, ModelErrorEvent, ModelStreamEvent
 from xagent.core.handlers.message import MessageHandler
+from xagent.core.handlers.model import (
+    ChatToolCall,
+    ModelClient,
+    ModelErrorEvent,
+    ModelStreamEvent,
+)
 from xagent.core.providers import (
     MODEL_API_ANTHROPIC_MESSAGES,
     MODEL_API_OPENAI_RESPONSES,
@@ -21,6 +26,7 @@ from xagent.core.providers import (
 )
 from xagent.core.runtime import ScheduledDeliveryContext, scheduled_delivery_context
 from xagent.core.tooling.executor import ToolDisplayResult, ToolExecutor
+from xagent.core.working_context import WorkingContextView
 from xagent.integrations.langfuse import NoopObservabilityRuntime
 from xagent.schemas import Message, MessageType, RoleType
 
@@ -451,6 +457,29 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
         deepseek_low_call = deepseek_low_client.chat_completions.calls[0]
         self.assertEqual(deepseek_low_call["reasoning_effort"], "low")
         self.assertEqual(deepseek_low_call["extra_body"], {"thinking": {"type": "enabled"}})
+
+        deepseek_maintenance_client = FakeOpenAIClient([_chat_response(content="ok")])
+        deepseek_maintenance = ModelClient(
+            client=deepseek_maintenance_client,
+            model="deepseek-v4-flash",
+            provider_name=PROVIDER_DEEPSEEK,
+            max_tokens=AgentConfig.WORKING_CONTEXT_SUMMARY_MAX_TOKENS,
+            reasoning=ReasoningConfig(enabled=False),
+        )
+        await deepseek_maintenance.call(
+            messages=[{"role": "user", "content": "summarize"}],
+            tool_specs=None,
+        )
+        maintenance_call = deepseek_maintenance_client.chat_completions.calls[0]
+        self.assertEqual(
+            maintenance_call["max_tokens"],
+            AgentConfig.WORKING_CONTEXT_SUMMARY_MAX_TOKENS,
+        )
+        self.assertEqual(
+            maintenance_call["extra_body"],
+            {"thinking": {"type": "disabled"}},
+        )
+        self.assertNotIn("reasoning_effort", maintenance_call)
 
         qwen_client = FakeOpenAIClient([_chat_response(content="ok")])
         qwen = ModelClient(
@@ -1252,6 +1281,34 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
                 )
 
         self.assertIs(captured["message_storage"], agent.message_storage)
+
+    async def test_agent_turn_uses_nonblocking_working_context_snapshot(self):
+        class SnapshotCompactor:
+            def __init__(self):
+                self.view_calls = 0
+                self.ensure_calls = 0
+
+            async def view_for_turn(self):
+                self.view_calls += 1
+                return WorkingContextView(
+                    summary="last completed summary",
+                    covers_through_cursor=7,
+                )
+
+            async def ensure_fresh(self):
+                self.ensure_calls += 1
+                raise AssertionError("foreground turn must not await compaction")
+
+        agent = Agent.__new__(Agent)
+        compactor = SnapshotCompactor()
+        agent.working_context_compactor = compactor
+
+        view = await Agent._working_context_for_turn(agent)
+
+        self.assertEqual(view.summary, "last completed summary")
+        self.assertEqual(view.covers_through_cursor, 7)
+        self.assertEqual(compactor.view_calls, 1)
+        self.assertEqual(compactor.ensure_calls, 0)
 
     async def test_decide_participation_returns_structured_decision_without_storing_event(self):
         storage = InMemoryMessageStorage([

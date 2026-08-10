@@ -39,16 +39,11 @@ from ...tools.image_generation_tool import (
     normalize_image_generation_provider,
 )
 from ...tools.search_tool import is_placeholder_api_key, normalize_search_provider
+from ..base import BaseAgentConfig, BaseAgentRunner
 from ..voice.config import (
-    QWEN_KEY_PLACEHOLDER,
     SONIOX_KEY_PLACEHOLDER,
-    VOICE_PROVIDER_CUSTOM,
-    VOICE_PROVIDER_QWEN,
-    VOICE_PROVIDER_SONIOX,
     VoiceChannelConfig,
 )
-from ..base import BaseAgentConfig, BaseAgentRunner
-
 
 SEARCH_PROVIDER_NONE = "none"
 SEARCH_PROVIDERS = (SEARCH_PROVIDER_NONE, PROVIDER_OPENAI, PROVIDER_QWEN, PROVIDER_MINIMAX)
@@ -63,8 +58,7 @@ MODEL_APIS = (
     MODEL_API_OPENAI_RESPONSES,
     MODEL_API_ANTHROPIC_MESSAGES,
 )
-VOICE_PRESETS = ("none", VOICE_PROVIDER_SONIOX, VOICE_PROVIDER_QWEN, VOICE_PROVIDER_CUSTOM)
-VOICE_NESTED_PROVIDERS = (VOICE_PROVIDER_SONIOX, VOICE_PROVIDER_QWEN)
+VOICE_PRESETS = ("none", "soniox")
 MODEL_PLACEHOLDER = "your_model_here"
 API_KEY_PLACEHOLDER = "your_api_key_here"
 _REASONING_UNSET = object()
@@ -485,106 +479,12 @@ def prepare_observability_update(
     )
 
 
-def _voice_key_placeholder(provider: str) -> str:
-    return QWEN_KEY_PLACEHOLDER if provider == VOICE_PROVIDER_QWEN else SONIOX_KEY_PLACEHOLDER
-
-
-def _voice_stt(provider: str, api_key: str | None = None) -> dict[str, Any]:
-    config = {
-        "provider": provider,
-        "api_key": (api_key or "").strip() or _voice_key_placeholder(provider),
-    }
-    if provider == VOICE_PROVIDER_QWEN:
-        config.update(
-            {
-                "model": "qwen3-asr-flash-realtime",
-                "audio_format": "pcm",
-                "vad_threshold": 0.0,
-                "silence_duration_ms": 400,
-            }
-        )
-    else:
-        config.update(
-            {
-                "model": "stt-rt-v5",
-                "audio_format": "pcm_s16le",
-                "max_endpoint_delay_ms": 1500,
-                "endpoint_sensitivity": 0.3,
-                "endpoint_latency_adjustment_level": 2,
-            }
-        )
-    return config
-
-
-def _voice_tts(provider: str, api_key: str | None = None) -> dict[str, Any]:
-    config = {
-        "provider": provider,
-        "api_key": (api_key or "").strip() or _voice_key_placeholder(provider),
-    }
-    if provider == VOICE_PROVIDER_QWEN:
-        config.update(
-            {
-                "model": "qwen3-tts-flash-realtime",
-                "voice": "Cherry",
-                "audio_format": "pcm",
-            }
-        )
-    else:
-        config.update(
-            {
-                "model": "tts-rt-v1",
-                "voice": "Owen",
-                "audio_format": "pcm_s16le",
-            }
-        )
-    return config
-
-
-def _voice_base(provider: str) -> dict[str, Any]:
-    return {
-        "provider": provider,
-        "enable_interruptions": False,
-        "audio": {
-            "input": "auto",
-            "output": "auto",
-        },
-        "wake": {
-            "enabled": False,
-            "wake_phrases": ["xAgent"],
-            "exit_phrases": ["exit", "stop", "goodbye", "that's all", "never mind"],
-            "match_mode": "prefix",
-            "idle_timeout_seconds": 60,
-        },
-    }
-
-
 def _current_voice(config: dict[str, Any]) -> dict[str, Any]:
     channels = config.get("channels")
     if not isinstance(channels, dict):
         return {}
     voice = channels.get("voice")
     return dict(voice) if isinstance(voice, dict) else {}
-
-
-def _current_nested_provider(voice: dict[str, Any], section: str, default: str = VOICE_PROVIDER_SONIOX) -> str:
-    nested = voice.get(section)
-    if isinstance(nested, dict):
-        provider = str(nested.get("provider") or "").strip().lower()
-        if provider in VOICE_NESTED_PROVIDERS:
-            return provider
-    provider = str(voice.get("provider") or "").strip().lower()
-    return provider if provider in VOICE_NESTED_PROVIDERS else default
-
-
-def _current_nested_api_key(voice: dict[str, Any], section: str, provider: str) -> str | None:
-    nested = voice.get(section)
-    if not isinstance(nested, dict):
-        return None
-    nested_provider = str(nested.get("provider") or voice.get("provider") or "").strip().lower()
-    api_key = str(nested.get("api_key") or "").strip()
-    if nested_provider == provider and api_key and not is_placeholder_api_key(api_key):
-        return api_key
-    return None
 
 
 def prepare_voice_preset_update(
@@ -595,7 +495,7 @@ def prepare_voice_preset_update(
 ) -> ConfigUpdate:
     normalized_provider = provider.strip().lower()
     if normalized_provider not in VOICE_PRESETS:
-        raise ValueError(f"Unsupported voice provider: {provider}")
+        raise ValueError("Voice is Soniox-only; provider must be soniox or none")
 
     def mutate(data: dict[str, Any]) -> None:
         channels = data.setdefault("channels", {})
@@ -604,146 +504,35 @@ def prepare_voice_preset_update(
         if normalized_provider == "none":
             channels.pop("voice", None)
             return
-        if normalized_provider == VOICE_PROVIDER_CUSTOM:
-            current = _current_voice(data)
-            stt_provider = _current_nested_provider(current, "stt")
-            tts_provider = _current_nested_provider(current, "tts", default=VOICE_PROVIDER_QWEN)
-            voice = _voice_base(VOICE_PROVIDER_CUSTOM)
-            voice["stt"] = _voice_stt(stt_provider, _current_nested_api_key(current, "stt", stt_provider))
-            voice["tts"] = _voice_tts(tts_provider, _current_nested_api_key(current, "tts", tts_provider))
-            channels["voice"] = voice
-            return
-        voice = _voice_base(normalized_provider)
         current = _current_voice(data)
-        existing_key = (
-            _current_nested_api_key(current, "stt", normalized_provider)
-            or _current_nested_api_key(current, "tts", normalized_provider)
-        )
-        resolved_api_key = api_key or existing_key
-        voice["stt"] = _voice_stt(normalized_provider, resolved_api_key)
-        voice["tts"] = _voice_tts(normalized_provider, resolved_api_key)
-        channels["voice"] = voice
+        existing_key = str(current.get("api_key") or "").strip()
+        resolved_api_key = (api_key or "").strip()
+        if not resolved_api_key and existing_key and not is_placeholder_api_key(existing_key):
+            resolved_api_key = existing_key
+        preserved_keys = {
+            "voice",
+            "language_hints",
+            "fallback_language",
+            "speed",
+            "context",
+            "audio",
+        }
+        channels["voice"] = {
+            "api_key": resolved_api_key or SONIOX_KEY_PLACEHOLDER,
+            **{key: value for key, value in current.items() if key in preserved_keys},
+        }
 
     return prepare_update(
         config,
         mutate,
         (
-            "channels.voice.provider",
-            "channels.voice.stt.provider",
-            "channels.voice.stt.api_key",
-            "channels.voice.stt.model",
-            "channels.voice.tts.provider",
-            "channels.voice.tts.api_key",
-            "channels.voice.tts.model",
-            "channels.voice.tts.voice",
-        ),
-    )
-
-
-def prepare_voice_nested_provider_update(
-    config: dict[str, Any],
-    *,
-    section: str,
-    provider: str,
-    api_key: str | None = None,
-) -> ConfigUpdate:
-    if section not in {"stt", "tts"}:
-        raise ValueError("Voice section must be stt or tts")
-    normalized_provider = provider.strip().lower()
-    if normalized_provider not in VOICE_NESTED_PROVIDERS:
-        raise ValueError(f"Unsupported voice provider: {provider}")
-
-    def mutate(data: dict[str, Any]) -> None:
-        channels = data.setdefault("channels", {})
-        if not isinstance(channels, dict):
-            raise ValueError("channels must be a dictionary")
-        current = _current_voice(data)
-        stt_provider = _current_nested_provider(current, "stt")
-        tts_provider = _current_nested_provider(current, "tts", default=VOICE_PROVIDER_QWEN)
-        if section == "stt":
-            stt_provider = normalized_provider
-        else:
-            tts_provider = normalized_provider
-        voice = _voice_base(VOICE_PROVIDER_CUSTOM)
-        stt_key = (
-            api_key
-            if section == "stt"
-            else _current_nested_api_key(current, "stt", stt_provider)
-        )
-        tts_key = (
-            api_key
-            if section == "tts"
-            else _current_nested_api_key(current, "tts", tts_provider)
-        )
-        voice["stt"] = _voice_stt(stt_provider, stt_key)
-        voice["tts"] = _voice_tts(tts_provider, tts_key)
-        channels["voice"] = voice
-
-    return prepare_update(
-        config,
-        mutate,
-        (
-            "channels.voice.provider",
-            f"channels.voice.{section}.provider",
-            f"channels.voice.{section}.api_key",
-            f"channels.voice.{section}.model",
-            "channels.voice.tts.voice",
-        ),
-    )
-
-
-def _require_voice(data: dict[str, Any]) -> dict[str, Any]:
-    channels = data.setdefault("channels", {})
-    if not isinstance(channels, dict):
-        raise ValueError("channels must be a dictionary")
-    voice = channels.get("voice")
-    if not isinstance(voice, dict):
-        raise ValueError("channels.voice must be configured before updating voice options")
-    return voice
-
-
-def prepare_voice_interruptions_update(config: dict[str, Any], *, enabled: bool) -> ConfigUpdate:
-    def mutate(data: dict[str, Any]) -> None:
-        voice = _require_voice(data)
-        voice["enable_interruptions"] = bool(enabled)
-
-    return prepare_update(config, mutate, ("channels.voice.enable_interruptions",))
-
-
-def prepare_voice_wake_update(
-    config: dict[str, Any],
-    *,
-    enabled: bool | None = None,
-    wake_phrases: list[str] | None = None,
-    exit_phrases: list[str] | None = None,
-    match_mode: str | None = None,
-    idle_timeout_seconds: float | None = None,
-) -> ConfigUpdate:
-    def mutate(data: dict[str, Any]) -> None:
-        voice = _require_voice(data)
-        wake = voice.setdefault("wake", {})
-        if not isinstance(wake, dict):
-            raise ValueError("channels.voice.wake must be a dictionary")
-        if enabled is not None:
-            wake["enabled"] = bool(enabled)
-        if wake_phrases is not None:
-            wake["wake_phrases"] = [item.strip() for item in wake_phrases if item.strip()]
-        if exit_phrases is not None:
-            wake["exit_phrases"] = [item.strip() for item in exit_phrases if item.strip()]
-        if match_mode is not None:
-            wake["match_mode"] = match_mode.strip().lower()
-        if idle_timeout_seconds is not None:
-            wake["idle_timeout_seconds"] = float(idle_timeout_seconds)
-
-    return prepare_update(
-        config,
-        mutate,
-        (
-            "channels.voice.wake.enabled",
-            "channels.voice.wake.wake_phrases",
-            "channels.voice.wake.exit_phrases",
-            "channels.voice.wake.match_mode",
-            "channels.voice.wake.idle_timeout_seconds",
+            "channels.voice.api_key",
+            "channels.voice.voice",
+            "channels.voice.language_hints",
+            "channels.voice.fallback_language",
+            "channels.voice.speed",
+            "channels.voice.context",
+            "channels.voice.audio",
         ),
     )
 
@@ -781,6 +570,8 @@ def build_agent_edit_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
     Channel setup (voice/feishu/weixin) lives on the Channels tab, not here.
     """
     from .setup import (
+        _PROVIDER_DESCRIPTIONS,
+        _PROVIDER_LABELS,
         ANTHROPIC_MODELS,
         DEEPSEEK_MODELS,
         LANGFUSE_BASE_URL,
@@ -788,8 +579,6 @@ def build_agent_edit_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
         LANGFUSE_SECRET_KEY_PLACEHOLDER,
         OPENAI_MODELS,
         QWEN_MODELS,
-        _PROVIDER_DESCRIPTIONS,
-        _PROVIDER_LABELS,
         build_setup_schema,
     )
 

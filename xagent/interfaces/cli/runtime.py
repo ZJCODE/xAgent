@@ -12,7 +12,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import Any, Optional
 
 from ...core.runtime import create_runtime_heartbeat
 from ..base import BaseAgentConfig, BaseAgentRunner
@@ -31,12 +31,6 @@ from .channels import (
     voice_config,
     weixin_config,
 )
-from .web_client import (
-    DEFAULT_WEB_CLIENT_PORT,
-    web_client_config,
-    web_client_paths,
-    web_client_public_url,
-)
 from .chat import AgentCLI
 from .paths import (
     config_path,
@@ -46,7 +40,18 @@ from .paths import (
     runtime_dir,
     runtime_dir_or_management_root,
 )
-from .processes import managed_paths, running_pid, start_background, stop_managed_process, tail_text
+from .processes import (
+    managed_paths,
+    running_pid,
+    start_background,
+    stop_managed_process,
+    tail_text,
+)
+from .web_client import (
+    web_client_config,
+    web_client_paths,
+    web_client_public_url,
+)
 
 
 def handle_chat(args: argparse.Namespace) -> int:
@@ -460,7 +465,7 @@ def _run_voice_channel(args: argparse.Namespace, config: dict[str, Any]) -> int:
     try:
         runner = BaseAgentRunner(config_dir=str(runtime_dir(args)))
         voice_data = voice_config(runner.config)
-        if not voice_data or voice_data.get("enabled") is False:
+        if not voice_data:
             print("Voice channel is not configured. Run: xagent voice setup")
             return 1
 
@@ -1180,12 +1185,10 @@ def handle_doctor(args: argparse.Namespace) -> int:
             from ..voice.config import VoiceChannelConfig
 
             data = voice_config(config)
-            if not data or data.get("enabled") is False:
-                raise ValueError("channels.voice is not enabled")
+            if not data:
+                raise ValueError("channels.voice is not configured")
             voice_runtime_config = VoiceChannelConfig.from_dict(data)
-            voice_runtime_config.resolved_provider()
-            voice_runtime_config.resolved_stt_api_key()
-            voice_runtime_config.resolved_tts_api_key()
+            voice_runtime_config.resolved_api_key()
             print("Voice: configured")
         except Exception as exc:
             print(f"Voice: {exc}")

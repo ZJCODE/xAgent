@@ -12,17 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import yaml
 
-from xagent.interfaces.cli.channels import enabled_channels_from_config
-from xagent.interfaces.cli.agents import (
-    default_agent_dir,
-    load_agent_registry,
-    load_agent_registry_or_empty,
-    register_agent,
-    remove_agent,
-    resolve_agent_runtime_dir,
-    select_agent,
-)
-from xagent.interfaces.cli.setup import SETUP_EXIT_CANCELLED
+from xagent.components.message import MessageStorage
 from xagent.interfaces.cli import (
     AgentCLI,
     FeishuInitSelection,
@@ -31,22 +21,21 @@ from xagent.interfaces.cli import (
     SetupCancelled,
     VoiceInitSelection,
     WeixinInitSelection,
-    _run_inspect_launcher,
-    _run_interactive_launcher,
-    _run_channel_launcher,
-    _run_web_launcher,
-    _run_partial_update_launcher,
-    _run_resetup_launcher,
     _format_cli_attachments,
     _format_cli_workspace_links,
     _launcher_channel_options,
     _launcher_help_content,
-    _launcher_overview_subtitle,
     _launcher_options,
+    _launcher_overview_subtitle,
+    _run_channel_launcher,
+    _run_inspect_launcher,
+    _run_interactive_launcher,
     _run_model_config_launcher,
+    _run_partial_update_launcher,
+    _run_resetup_launcher,
+    _run_web_launcher,
     build_parser,
     collect_feishu_init_selection_terminal_ui,
-    handle_config,
     handle_agents,
     handle_chat,
     handle_init,
@@ -60,30 +49,42 @@ from xagent.interfaces.cli import (
     handle_restart,
     handle_run_channel_internal,
     handle_run_web_internal,
-    handle_web_start,
-    handle_web_status,
-    handle_web_open,
     handle_start,
     handle_status,
     handle_stop,
     handle_voice,
+    handle_web_start,
+    handle_web_status,
     main,
 )
-from xagent.interfaces.cli.web_client import DEFAULT_WEB_CLIENT_PORT, web_client_config
-from xagent.components.message import MessageStorage
-from xagent.schemas import Message, RoleType
+from xagent.interfaces.cli.agents import (
+    default_agent_dir,
+    load_agent_registry,
+    load_agent_registry_or_empty,
+    register_agent,
+    remove_agent,
+    resolve_agent_runtime_dir,
+    select_agent,
+)
+from xagent.interfaces.cli.channels import enabled_channels_from_config
 from xagent.interfaces.cli.config_editor import (
     prepare_image_generation_provider_update,
     prepare_model_provider_update,
     prepare_observability_update,
     prepare_search_provider_update,
-    prepare_voice_interruptions_update,
-    prepare_voice_wake_update,
+    prepare_voice_preset_update,
     write_config,
 )
-from xagent.interfaces.cli.launcher import _active_agent_context, _agent_launcher_options, _agent_selection_options
+from xagent.interfaces.cli.launcher import (
+    _active_agent_context,
+    _agent_launcher_options,
+    _agent_selection_options,
+)
 from xagent.interfaces.cli.overview import STATUS_ERROR, build_runtime_overview
 from xagent.interfaces.cli.processes import StartResult
+from xagent.interfaces.cli.setup import SETUP_EXIT_CANCELLED
+from xagent.interfaces.cli.web_client import DEFAULT_WEB_CLIENT_PORT, web_client_config
+from xagent.schemas import Message, RoleType
 
 
 def _selection(**overrides) -> InitSelection:
@@ -127,15 +128,7 @@ def _write_runtime(directory: str, *, feishu: bool = False, weixin: bool = False
         }
     if voice:
         config["channels"]["voice"] = {
-            "provider": "soniox",
-            "stt": {
-                "provider": "soniox",
-                "api_key": "soniox-key",
-            },
-            "tts": {
-                "provider": "soniox",
-                "api_key": "soniox-key",
-            },
+            "api_key": "soniox-key",
         }
     root = Path(directory)
     root.mkdir(parents=True, exist_ok=True)
@@ -634,15 +627,7 @@ class CLICommandTests(unittest.TestCase):
             self.config = {
                 "channels": {
                     "voice": {
-                        "provider": "soniox",
-                        "stt": {
-                            "provider": "soniox",
-                            "api_key": "soniox-key",
-                        },
-                        "tts": {
-                            "provider": "soniox",
-                            "api_key": "soniox-key",
-                        },
+                        "api_key": "soniox-key",
                     }
                 }
             }
@@ -852,22 +837,17 @@ class CLICommandTests(unittest.TestCase):
         voice_setup = build_parser().parse_args([
             "voice",
             "setup",
-            "--provider",
-            "qwen",
             "--api-key",
             "voice-key",
             "--force",
-            "--no-wake",
-            "--interruptions",
+            "--no-enabled",
         ])
         self.assertEqual(voice_setup.command, "voice")
         self.assertEqual(voice_setup.voice_action, "setup")
         self.assertIs(voice_setup.handler, handle_init_voice)
-        self.assertEqual(voice_setup.provider, "qwen")
         self.assertEqual(voice_setup.api_key, "voice-key")
         self.assertTrue(voice_setup.force)
-        self.assertFalse(voice_setup.wake)
-        self.assertTrue(voice_setup.interruptions)
+        self.assertFalse(voice_setup.enabled)
 
     def test_service_command_is_removed(self):
         with self.assertRaises(SystemExit):
@@ -1033,7 +1013,7 @@ class CLICommandTests(unittest.TestCase):
             with patch("xagent.interfaces.cli.overview.running_pid", side_effect=[1357, 26807, 99999, 72069, None]):
                 subtitle = _launcher_overview_subtitle(build_runtime_overview(Path(tmpdir)))
 
-        self.assertIn("Voice      running  soniox pid 1357", subtitle)
+        self.assertIn("Voice      running  soniox half-duplex pid 1357", subtitle)
         self.assertIn("API        running  127.0.0.1:8010 pid 26807", subtitle)
         self.assertIn("Web        running", subtitle)
         self.assertIn("99999", subtitle)
@@ -1351,12 +1331,12 @@ class CLICommandTests(unittest.TestCase):
         stopped_voice = next(item for item in stopped.items if item.name == "Voice")
         self.assertEqual(stopped_voice.status, "idle")
         self.assertEqual(stopped_voice.value, "stopped")
-        self.assertEqual(stopped_voice.detail, "soniox")
+        self.assertEqual(stopped_voice.detail, "soniox half-duplex")
 
         running_voice = next(item for item in running.items if item.name == "Voice")
         self.assertEqual(running_voice.status, "ok")
         self.assertEqual(running_voice.value, "running")
-        self.assertEqual(running_voice.detail, "soniox pid 9753")
+        self.assertEqual(running_voice.detail, "soniox half-duplex pid 9753")
 
     def test_config_editor_updates_search_provider_with_validation(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1563,38 +1543,28 @@ class CLICommandTests(unittest.TestCase):
                     secret_key="sk-lf-test",
                 )
 
-    def test_config_editor_updates_voice_wake_and_interruptions(self):
+    def test_config_editor_updates_voice_key_and_preserves_flat_options(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             _write_runtime(tmpdir)
             root = Path(tmpdir)
             config_path = root / "config.yaml"
             config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
             config["channels"]["voice"] = {
-                "provider": "qwen",
-                "enable_interruptions": False,
-                "stt": {"api_key": "qwen-key"},
-                "tts": {"api_key": "qwen-key"},
-                "wake": {"enabled": False, "wake_phrases": ["xAgent"], "exit_phrases": ["exit"]},
+                "api_key": "old-key",
+                "voice": "Ava",
+                "language_hints": ["en", "zh"],
+                "context": {"terms": ["xAgent"]},
+                "audio": {"input": "Mic", "output": "Speaker"},
             }
 
-            update = prepare_voice_interruptions_update(config, enabled=True)
-            update = prepare_voice_wake_update(
-                update.data,
-                enabled=True,
-                wake_phrases=["hey xagent", "assistant"],
-                exit_phrases=["stop", "done"],
-                match_mode="contains",
-                idle_timeout_seconds=120,
-            )
+            update = prepare_voice_preset_update(config, provider="soniox", api_key="new-key")
             write_config(root, update.data)
             saved = yaml.safe_load(config_path.read_text(encoding="utf-8"))
 
-        self.assertTrue(saved["channels"]["voice"]["enable_interruptions"])
-        self.assertTrue(saved["channels"]["voice"]["wake"]["enabled"])
-        self.assertEqual(saved["channels"]["voice"]["wake"]["wake_phrases"], ["hey xagent", "assistant"])
-        self.assertEqual(saved["channels"]["voice"]["wake"]["exit_phrases"], ["stop", "done"])
-        self.assertEqual(saved["channels"]["voice"]["wake"]["match_mode"], "contains")
-        self.assertEqual(saved["channels"]["voice"]["wake"]["idle_timeout_seconds"], 120.0)
+        self.assertEqual(saved["channels"]["voice"]["api_key"], "new-key")
+        self.assertEqual(saved["channels"]["voice"]["voice"], "Ava")
+        self.assertEqual(saved["channels"]["voice"]["context"]["terms"], ["xAgent"])
+        self.assertNotIn("provider", saved["channels"]["voice"])
 
     def test_partial_update_launcher_includes_observability_and_routes(self):
         class FakeUI:
@@ -1699,7 +1669,9 @@ class CLICommandTests(unittest.TestCase):
             _write_runtime(tmpdir)
             config_dir = Path(tmpdir)
 
-            from xagent.interfaces.cli.launcher import _run_observability_config_launcher
+            from xagent.interfaces.cli.launcher import (
+                _run_observability_config_launcher,
+            )
 
             result = _run_observability_config_launcher(fake_ui, config_dir)
 
@@ -1970,6 +1942,7 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(fake_ui.pause_calls, [])
         self.assertEqual(len(fake_ui.feishu_menu_titles), 2)
 
+    @unittest.skip("wake controls were removed by the Soniox-only voice migration")
     def test_voice_wake_launcher_clears_before_inline_prompt(self):
         class FakeUI:
             def __init__(self):
@@ -2021,13 +1994,16 @@ class CLICommandTests(unittest.TestCase):
             (config_dir / "config.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
 
             with patch("xagent.interfaces.cli.launcher._apply_config_update", return_value=False) as apply_update:
-                from xagent.interfaces.cli.launcher import _run_voice_wake_config_launcher
+                from xagent.interfaces.cli.launcher import (
+                    _run_voice_wake_config_launcher,
+                )
 
                 _run_voice_wake_config_launcher(fake_ui, config_dir)
 
         apply_update.assert_called_once()
         self.assertGreaterEqual(fake_ui.clear_calls, 1)
 
+    @unittest.skip("wake controls were removed by the Soniox-only voice migration")
     def test_voice_wake_launcher_subtitle_includes_phrase_lists(self):
         class FakeUI:
             def __init__(self):
@@ -2070,6 +2046,7 @@ class CLICommandTests(unittest.TestCase):
         self.assertIn("Wake phrases: xAgent, hey agent", fake_ui.subtitle)
         self.assertIn("Exit phrases: stop, goodbye", fake_ui.subtitle)
 
+    @unittest.skip("provider selection was removed by the Soniox-only voice migration")
     def test_voice_config_launcher_uses_provider_mode_menu(self):
         class FakeUI:
             def __init__(self):
@@ -2134,9 +2111,8 @@ class CLICommandTests(unittest.TestCase):
 
             _run_voice_config_launcher(fake_ui, config_dir)
 
-        self.assertFalse(fake_ui.options_by_key["provider_mode"].disabled)
-        self.assertTrue(fake_ui.options_by_key["interruptions"].disabled)
-        self.assertTrue(fake_ui.options_by_key["wake"].disabled)
+        self.assertEqual(set(fake_ui.options_by_key), {"api_key", "disable", "back"})
+        self.assertFalse(fake_ui.options_by_key["api_key"].disabled)
         self.assertTrue(fake_ui.options_by_key["disable"].disabled)
 
     def test_voice_channel_launcher_shows_setup_when_voice_not_enabled(self):
@@ -2211,6 +2187,7 @@ class CLICommandTests(unittest.TestCase):
         voice_config_launcher.assert_called_once_with(fake_ui, config_dir)
         handle_voice.assert_not_called()
 
+    @unittest.skip("provider selection was removed by the Soniox-only voice migration")
     def test_voice_provider_mode_launcher_offers_single_and_custom_paths(self):
         class FakeUI:
             def __init__(self):
@@ -2242,6 +2219,7 @@ class CLICommandTests(unittest.TestCase):
 
         self.assertEqual(fake_ui.option_titles, ["Single Provider", "Custom Providers", "Back"])
 
+    @unittest.skip("nested provider selection was removed by the Soniox-only voice migration")
     def test_voice_nested_config_prompts_for_placeholder_api_key_when_provider_is_reselected(self):
         class FakeUI:
             def __init__(self):
@@ -2748,19 +2726,11 @@ class CLICommandTests(unittest.TestCase):
             args = argparse.Namespace(
                 config_dir=tmpdir,
                 agent=None,
-                provider=None,
+                enabled=True,
                 api_key=None,
-                stt_provider=None,
-                stt_api_key=None,
-                tts_provider=None,
-                tts_api_key=None,
-                wake=None,
-                wake_phrases=None,
-                exit_phrases=None,
-                interruptions=None,
                 force=False,
             )
-            selection = VoiceInitSelection(voice_provider="soniox", voice_api_key="voice-key")
+            selection = VoiceInitSelection(voice_enabled=True, voice_api_key="voice-key")
 
             with patch("xagent.interfaces.cli.setup.TerminalUI") as terminal_ui:
                 with patch(
@@ -2781,16 +2751,8 @@ class CLICommandTests(unittest.TestCase):
             args = argparse.Namespace(
                 config_dir=tmpdir,
                 agent="work",
-                provider="qwen",
+                enabled=True,
                 api_key="voice-key",
-                stt_provider=None,
-                stt_api_key=None,
-                tts_provider=None,
-                tts_api_key=None,
-                wake=False,
-                wake_phrases=None,
-                exit_phrases=None,
-                interruptions=True,
                 force=False,
             )
 
@@ -2804,12 +2766,7 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(after_identity, before_identity)
         self.assertEqual(config["provider"]["model"], "gpt-5.4-mini")
         self.assertEqual(config["channels"]["feishu"]["app_id"], "cli_test")
-        self.assertEqual(config["channels"]["voice"]["provider"], "qwen")
-        self.assertEqual(config["channels"]["voice"]["stt"]["api_key"], "voice-key")
-        self.assertEqual(config["channels"]["voice"]["stt"]["model"], "qwen3-asr-flash-realtime")
-        self.assertEqual(config["channels"]["voice"]["tts"]["api_key"], "voice-key")
-        self.assertEqual(config["channels"]["voice"]["tts"]["voice"], "Cherry")
-        self.assertTrue(config["channels"]["voice"]["enable_interruptions"])
+        self.assertEqual(config["channels"]["voice"], {"api_key": "voice-key"})
         output = stdout.getvalue()
         self.assertIn("xagent voice start --agent work", output)
         self.assertIn("xagent voice logs -f --agent work", output)
@@ -2820,16 +2777,8 @@ class CLICommandTests(unittest.TestCase):
             args = argparse.Namespace(
                 config_dir=tmpdir,
                 agent=None,
-                provider="qwen",
+                enabled=True,
                 api_key="new-key",
-                stt_provider=None,
-                stt_api_key=None,
-                tts_provider=None,
-                tts_api_key=None,
-                wake=False,
-                wake_phrases=None,
-                exit_phrases=None,
-                interruptions=False,
                 force=False,
             )
 
@@ -2839,8 +2788,27 @@ class CLICommandTests(unittest.TestCase):
             config = yaml.safe_load((Path(tmpdir) / "config.yaml").read_text(encoding="utf-8"))
 
         self.assertEqual(exit_code, 1)
-        self.assertEqual(config["channels"]["voice"]["provider"], "soniox")
+        self.assertEqual(config["channels"]["voice"]["api_key"], "soniox-key")
         self.assertIn("xagent voice setup --force", stdout.getvalue())
+
+    def test_init_voice_can_disable_existing_channel(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir, voice=True)
+            args = argparse.Namespace(
+                config_dir=tmpdir,
+                agent=None,
+                enabled=False,
+                api_key=None,
+                force=True,
+            )
+
+            with patch("xagent.interfaces.cli.setup._print_voice_post_setup"):
+                exit_code = handle_init_voice(args)
+
+            config = yaml.safe_load((Path(tmpdir) / "config.yaml").read_text(encoding="utf-8"))
+
+        self.assertEqual(exit_code, 0)
+        self.assertNotIn("voice", config["channels"])
 
     def test_channel_setup_intro_shows_runtime_and_config(self):
         class FakeUI:
@@ -2872,16 +2840,8 @@ class CLICommandTests(unittest.TestCase):
             voice_args = argparse.Namespace(
                 config_dir=tmpdir,
                 agent=None,
-                provider="soniox",
+                enabled=True,
                 api_key="voice-key",
-                stt_provider=None,
-                stt_api_key=None,
-                tts_provider=None,
-                tts_api_key=None,
-                wake=False,
-                wake_phrases=None,
-                exit_phrases=None,
-                interruptions=False,
                 force=False,
             )
             feishu_args = argparse.Namespace(
@@ -3239,8 +3199,9 @@ class CLICommandTests(unittest.TestCase):
         self.assertTrue(qr_or_tip, "Should display either QR code or installation tip")
 
     def test_register_feishu_app_via_qr_handles_access_denied(self):
-        from xagent.interfaces.cli.setup import _register_feishu_app_via_qr
         from lark_oapi.scene.registration import AppAccessDeniedError
+
+        from xagent.interfaces.cli.setup import _register_feishu_app_via_qr
 
         def fake_register_app(**_kwargs):
             raise AppAccessDeniedError("access_denied", "admin rejected")
@@ -3440,7 +3401,7 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(enabled_channels_from_config(config), ["weixin"])
 
     def test_enabled_channels_can_select_voice_without_api(self):
-        config = {"channels": {"voice": {"provider": "soniox", "stt": {"api_key": "key"}, "tts": {"api_key": "key"}}}}
+        config = {"channels": {"voice": {"api_key": "key"}}}
 
         self.assertEqual(enabled_channels_from_config(config), ["voice"])
 

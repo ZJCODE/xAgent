@@ -21,7 +21,14 @@ from ..cli.channels import (
     voice_config,
     weixin_config,
 )
-from ..cli.processes import managed_paths, running_pid, start_background, stop_managed_process, tail_text
+from ..cli.processes import (
+    managed_paths,
+    running_pid,
+    start_background,
+    stop_managed_process,
+    tail_text,
+)
+from ..voice.config import VoiceChannelConfig
 from .qr_sessions import get_qr_session_manager
 from .session import WebAgentSession
 
@@ -270,9 +277,15 @@ def _readiness(config: dict[str, Any], channel: str) -> tuple[bool, bool, str, s
 
     if channel == CHANNEL_VOICE:
         data = voice_config(config)
-        configured = bool(data) and data.get("enabled") is not False
-        provider = str(data.get("provider") or "custom").strip() if isinstance(data, dict) and data else ""
-        return configured, configured, provider, ""
+        configured = bool(data)
+        if not configured:
+            return False, False, "", ""
+        try:
+            voice = VoiceChannelConfig.from_dict(data)
+            voice.resolved_api_key()
+        except ValueError as exc:
+            return True, False, str(exc), ""
+        return True, True, "soniox half-duplex", ""
 
     if channel == CHANNEL_FEISHU:
         data = feishu_config(config)

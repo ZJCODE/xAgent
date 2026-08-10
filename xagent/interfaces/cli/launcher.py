@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import webbrowser
+import webbrowser  # noqa: F401 - retained as the launcher browser patch point
 from pathlib import Path
 from typing import Any, Callable, Optional, Sequence
 
-import yaml
 from rich.text import Text  # type: ignore[import-not-found]
 
 from ...core.providers import (
@@ -45,17 +44,24 @@ from .channels import (
     voice_config,
     weixin_config,
 )
-from .web_client import web_client_config, web_client_paths
+from .config_editor import (
+    ConfigUpdate,
+    image_generation_provider_needs_feature_key,
+    load_config,
+    prepare_image_generation_provider_update,
+    prepare_model_provider_update,
+    prepare_observability_update,
+    prepare_search_provider_update,
+    prepare_voice_preset_update,
+    provider_needs_feature_key,
+    write_config,
+)
+from .overview import STATUS_DISABLED, RuntimeOverview, build_runtime_overview
+from .processes import managed_paths, running_pid
 from .runtime import (
     _launcher_args,
     _xagent_version_text,
     handle_chat,
-    handle_web_logs,
-    handle_web_restart,
-    handle_web_start,
-    handle_web_status,
-    handle_web_stop,
-    handle_web_open,
     handle_config,
     handle_identity,
     handle_messages,
@@ -64,14 +70,18 @@ from .runtime import (
     handle_status,
     handle_stop,
     handle_voice,
+    handle_web_logs,
+    handle_web_open,
+    handle_web_restart,
+    handle_web_start,
+    handle_web_stop,
 )
-from .processes import managed_paths, running_pid
 from .setup import (
     ANTHROPIC_MODELS,
     CUSTOM_MODEL_OPTION,
+    DEEPSEEK_MODELS,
     DEFAULT_MEMORY_LIST_DAYS,
     DEFAULT_MESSAGE_LIST_COUNT,
-    DEEPSEEK_MODELS,
     IMAGE_GENERATION_PROVIDERS,
     LANGFUSE_BASE_URL,
     LANGFUSE_PUBLIC_KEY_PLACEHOLDER,
@@ -88,25 +98,8 @@ from .setup import (
     handle_init_feishu,
     handle_init_weixin,
 )
-from .config_editor import (
-    ConfigUpdate,
-    VOICE_NESTED_PROVIDERS,
-    VOICE_PRESETS,
-    image_generation_provider_needs_feature_key,
-    load_config,
-    prepare_image_generation_provider_update,
-    prepare_model_provider_update,
-    prepare_observability_update,
-    prepare_search_provider_update,
-    prepare_voice_interruptions_update,
-    prepare_voice_nested_provider_update,
-    prepare_voice_preset_update,
-    prepare_voice_wake_update,
-    provider_needs_feature_key,
-    write_config,
-)
-from .overview import STATUS_DISABLED, RuntimeOverview, build_runtime_overview
 from .terminal_ui import MenuOption, ReturnToLauncherHome, TerminalUI
+from .web_client import web_client_config, web_client_paths
 
 
 def _launcher_options(*, initialized: bool, has_agents: bool = True) -> list[MenuOption]:
@@ -313,7 +306,7 @@ def _api_channel_url(config_dir: Path) -> str:
 
 def _voice_is_configured(config: dict[str, Any]) -> bool:
     data = voice_config(config)
-    return bool(data) and data.get("enabled") is not False
+    return bool(data)
 
 
 def _voice_channel_options(config: dict[str, Any]) -> list[MenuOption]:
@@ -327,9 +320,9 @@ def _voice_channel_options(config: dict[str, Any]) -> list[MenuOption]:
         MenuOption(
             "configure",
             "Configure" if voice_enabled else "Set up",
-            "Update voice providers, interruptions, and wake settings."
+            "Update the Soniox API key or disable voice."
             if voice_enabled
-            else "Configure voice providers and enable the channel.",
+            else "Add a Soniox API key and enable voice.",
         ),
         MenuOption("start", "Start", start_description, disabled=not voice_enabled),
         MenuOption("stop", "Stop", "Stop the voice channel."),
@@ -347,29 +340,13 @@ def _voice_channel_options(config: dict[str, Any]) -> list[MenuOption]:
 
 def _voice_resetup_options(config: dict[str, Any]) -> list[MenuOption]:
     voice_enabled = _voice_is_configured(config)
-    interruptions_description = (
-        "Enable or disable barge-in interruptions."
-        if voice_enabled
-        else "Enable voice first to update barge-in interruptions."
-    )
-    wake_description = (
-        "Update wake mode, phrases, match, and idle timeout."
-        if voice_enabled
-        else "Enable voice first to update wake mode and phrases."
-    )
     disable_description = (
         "Remove channels.voice from config."
         if voice_enabled
         else "Voice is already disabled."
     )
     return [
-        MenuOption(
-            "provider_mode",
-            "Providers",
-            "Use one provider for both STT and TTS, or configure separately.",
-        ),
-        MenuOption("interruptions", "Interruptions", interruptions_description, disabled=not voice_enabled),
-        MenuOption("wake", "Wake", wake_description, disabled=not voice_enabled),
+        MenuOption("api_key", "Soniox API Key", "Enable voice or update its credential."),
         MenuOption("disable", "Disable", disable_description, disabled=not voice_enabled),
         MenuOption("back", "Back", "Return to Voice."),
     ]
@@ -671,36 +648,6 @@ def _current_search_provider(config: dict[str, Any]) -> str:
     return str(search.get("provider") or "none").strip().lower()
 
 
-def _current_voice_provider(config: dict[str, Any]) -> str:
-    voice = voice_config(config)
-    if not voice:
-        return "none"
-    return str(voice.get("provider") or "custom").strip().lower()
-
-
-def _voice_provider_mode_label(config: dict[str, Any]) -> str:
-    return "Custom Providers" if _current_voice_provider(config) == "custom" else "Single Provider"
-
-
-def _current_voice_nested_provider(config: dict[str, Any], section: str) -> str:
-    voice = voice_config(config)
-    nested = voice.get(section) if isinstance(voice, dict) else None
-    if isinstance(nested, dict):
-        provider = str(nested.get("provider") or "").strip().lower()
-        if provider:
-            return provider
-    provider = str(voice.get("provider") or "").strip().lower() if isinstance(voice, dict) else ""
-    return provider if provider in VOICE_NESTED_PROVIDERS else VOICE_NESTED_PROVIDERS[0]
-
-
-def _current_voice_nested_api_key(config: dict[str, Any], section: str) -> str:
-    voice = voice_config(config)
-    nested = voice.get(section) if isinstance(voice, dict) else None
-    if not isinstance(nested, dict):
-        return ""
-    return str(nested.get("api_key") or "").strip()
-
-
 def _current_model_provider(config: dict[str, Any]) -> str:
     provider = config.get("provider")
     if not isinstance(provider, dict):
@@ -749,35 +696,13 @@ def _default_model_index(options: Sequence[str], current_model: str) -> int:
         return 0
 
 
-def _phrase_list(raw_value: str) -> list[str]:
-    return [item.strip() for item in raw_value.split(",") if item.strip()]
-
-
-def _phrase_summary(value: Any) -> str:
-    if not isinstance(value, (list, tuple)):
-        return "(none)"
-    items = [str(item).strip() for item in value if str(item).strip()]
-    return ", ".join(items) if items else "(none)"
-
-
-def _voice_wake_subtitle(wake: dict[str, Any]) -> str:
-    return (
-        f"Enabled: {bool(wake.get('enabled', False))}\n"
-        f"Match: {wake.get('match_mode', 'prefix')}\n"
-        f"Idle timeout: {wake.get('idle_timeout_seconds', 60)}s\n"
-        f"Wake phrases: {_phrase_summary(wake.get('wake_phrases'))}\n"
-        f"Exit phrases: {_phrase_summary(wake.get('exit_phrases'))}"
-    )
-
-
 def _voice_summary_subtitle(config: dict[str, Any]) -> str:
-    mode = _voice_provider_mode_label(config)
-    if mode == "Custom Providers":
-        voice = voice_config(config)
-        stt_provider = _current_voice_nested_provider(config, "stt") if voice else "none"
-        tts_provider = _current_voice_nested_provider(config, "tts") if voice else "none"
-        return f"Provider mode: {mode}\nSTT: {stt_provider}\nTTS: {tts_provider}"
-    return f"Provider mode: {mode}\nProvider: {_current_voice_provider(config)}"
+    voice = voice_config(config)
+    if not voice:
+        return "Voice is disabled."
+    api_key = str(voice.get("api_key") or "").strip()
+    credential = "configured" if api_key and not is_placeholder_api_key(api_key) else "placeholder"
+    return f"Provider: Soniox\nMode: Half-duplex\nAPI key: {credential}"
 
 
 def _feishu_config_subtitle(config_dir: Path) -> str:
@@ -908,21 +833,6 @@ def _run_managed_channel_launcher(
         if exit_code != 0:
             ui.print_panel(f"Channel action exited with status {exit_code}.", title="Channel")
         ui.pause(f"Press Enter to return to {channel_title}")
-
-
-def _existing_voice_provider_api_key(config: dict[str, Any], provider: str) -> Optional[str]:
-    voice = voice_config(config)
-    if not voice:
-        return None
-    for section in ("stt", "tts"):
-        nested = voice.get(section)
-        if not isinstance(nested, dict):
-            continue
-        nested_provider = str(nested.get("provider") or voice.get("provider") or "").strip().lower()
-        api_key = str(nested.get("api_key") or "").strip()
-        if nested_provider == provider and api_key and not is_placeholder_api_key(api_key):
-            return api_key
-    return None
 
 
 def _feature_api_key_available(config: dict[str, Any], section: str, provider: str) -> bool:
@@ -1385,229 +1295,6 @@ def _run_observability_config_launcher(ui: TerminalUI, config_dir: Path) -> bool
     return _apply_config_update(ui, config_dir, update, return_home_on_success=True)
 
 
-def _run_voice_single_provider_config(ui: TerminalUI, config_dir: Path) -> None:
-    try:
-        config = load_config(config_dir)
-    except Exception as exc:
-        ui.print_panel(f"Cannot load config: {exc}", title="Setup", border_style="red")
-        return
-    current = _current_voice_provider(config)
-    subtitle = f"Current provider: {current}"
-    if current == "custom":
-        subtitle = "Current mode: Custom Providers\nChoose one provider for both STT and TTS."
-    choice = ui.select_menu(
-        title="xAgent Setup / Voice Single Provider",
-        subtitle=subtitle,
-        options=_menu_option_rows(
-            tuple(provider for provider in VOICE_PRESETS if provider != "custom") + ("back",),
-            _provider_option_descriptions("voice"),
-        ),
-        footer="↑/↓ Move • Enter Select  •  q Back",
-    )
-    if choice is None or choice.key == "back":
-        return
-    api_key = None
-    if choice.key in VOICE_NESTED_PROVIDERS:
-        existing_key = _existing_voice_provider_api_key(config, choice.key)
-        has_existing = bool(existing_key)
-        subtitle = "Leave blank to keep the existing key." if has_existing else ""
-        value = ui.ask_text(
-            f"{choice.key.title()} API key",
-            secret=True,
-            subtitle=subtitle,
-        ).strip()
-        if value:
-            api_key = value
-        elif not has_existing:
-            ui.print_panel("API key is required for this change.", title="Setup")
-            return
-    try:
-        update = prepare_voice_preset_update(config, provider=choice.key, api_key=api_key)
-    except Exception as exc:
-        ui.print_panel(f"Voice update is invalid: {exc}", title="Setup", border_style="red")
-        return
-    _apply_config_update(ui, config_dir, update, return_home_on_success=True)
-
-
-def _run_voice_custom_provider_launcher(ui: TerminalUI, config_dir: Path) -> None:
-    while True:
-        try:
-            config = load_config(config_dir)
-        except Exception as exc:
-            ui.print_panel(f"Cannot load config: {exc}", title="Setup", border_style="red")
-            return
-        voice = voice_config(config)
-        stt_provider = _current_voice_nested_provider(config, "stt") if voice else "none"
-        tts_provider = _current_voice_nested_provider(config, "tts") if voice else "none"
-        option = ui.select_menu(
-            title="xAgent Setup / Voice Custom Providers",
-            subtitle=f"STT: {stt_provider}\nTTS: {tts_provider}",
-            options=[
-                MenuOption("stt", "STT Provider", "Choose the speech-to-text provider."),
-                MenuOption("tts", "TTS Provider", "Choose the text-to-speech provider."),
-                MenuOption("back", "Back", "Return to Provider Mode."),
-            ],
-            footer="↑/↓ Move • Enter Select  •  q Back",
-        )
-        if option is None or option.key == "back":
-            return
-        ui.clear()
-        _run_voice_nested_config(ui, config_dir, config, option.key)
-
-
-def _run_voice_provider_mode_launcher(ui: TerminalUI, config_dir: Path, config: dict[str, Any]) -> None:
-    del config
-    while True:
-        try:
-            current_config = load_config(config_dir)
-        except Exception as exc:
-            ui.print_panel(f"Cannot load config: {exc}", title="Setup", border_style="red")
-            return
-        option = ui.select_menu(
-            title="xAgent Setup / Voice Provider Mode",
-            subtitle=_voice_summary_subtitle(current_config),
-            options=[
-                MenuOption("single", "Single Provider", "Use the same provider for STT and TTS."),
-                MenuOption("custom", "Custom Providers", "Configure STT and TTS independently."),
-                MenuOption("back", "Back", "Return to Voice."),
-            ],
-            footer="↑/↓ Move • Enter Select  •  q Back",
-        )
-        if option is None or option.key == "back":
-            return
-        ui.clear()
-        if option.key == "single":
-            _run_voice_single_provider_config(ui, config_dir)
-        else:
-            _run_voice_custom_provider_launcher(ui, config_dir)
-
-
-def _run_voice_nested_config(ui: TerminalUI, config_dir: Path, config: dict[str, Any], section: str) -> None:
-    current = _current_voice_nested_provider(config, section)
-    title = "STT Provider" if section == "stt" else "TTS Provider"
-    choice = ui.select_menu(
-        title=f"xAgent Setup / Voice {title}",
-        subtitle=f"Current {section.upper()}: {current}",
-        options=_menu_option_rows(VOICE_NESTED_PROVIDERS + ("back",), _provider_option_descriptions("voice")),
-        footer="↑/↓ Move • Enter Select  •  q Back",
-    )
-    if choice is None or choice.key == "back":
-        return
-    api_key = None
-    if choice.key in VOICE_NESTED_PROVIDERS:
-        current_key = _current_voice_nested_api_key(config, section)
-        has_existing = choice.key == current and bool(current_key) and not is_placeholder_api_key(current_key)
-        section_label = "STT" if section == "stt" else "TTS"
-        subtitle = "Leave blank to keep the existing key." if has_existing else ""
-        value = ui.ask_text(
-            f"{choice.key.title()} API key",
-            secret=True,
-            subtitle=subtitle,
-        ).strip()
-        if value:
-            api_key = value
-        elif not has_existing:
-            ui.print_panel("API key is required for this change.", title="Setup")
-            return
-    try:
-        update = prepare_voice_nested_provider_update(config, section=section, provider=choice.key, api_key=api_key)
-    except Exception as exc:
-        ui.print_panel(f"Voice update is invalid: {exc}", title="Setup", border_style="red")
-        return
-    _apply_config_update(ui, config_dir, update, return_home_on_success=True)
-
-
-def _run_voice_interruptions_config(ui: TerminalUI, config_dir: Path, config: dict[str, Any]) -> None:
-    voice = voice_config(config)
-    if not voice:
-        ui.print_panel("Enable voice before updating interruptions.", title="Setup")
-        return
-    current = bool(voice.get("enable_interruptions", False))
-    enabled = ui.confirm("Enable voice interruptions?", default=current)
-    if enabled is None:
-        return
-    try:
-        update = prepare_voice_interruptions_update(config, enabled=enabled)
-    except Exception as exc:
-        ui.print_panel(f"Voice update is invalid: {exc}", title="Setup", border_style="red")
-        return
-    _apply_config_update(ui, config_dir, update, return_home_on_success=True)
-
-
-def _run_voice_wake_config_launcher(ui: TerminalUI, config_dir: Path) -> None:
-    while True:
-        try:
-            config = load_config(config_dir)
-        except Exception as exc:
-            ui.print_panel(f"Cannot load config: {exc}", title="Setup", border_style="red")
-            return
-        voice = voice_config(config)
-        if not voice:
-            ui.print_panel("Enable voice before updating wake settings.", title="Setup")
-            return
-        wake = voice.get("wake") if isinstance(voice.get("wake"), dict) else {}
-        option = ui.select_menu(
-            title="xAgent Setup / Voice Wake",
-            subtitle=_voice_wake_subtitle(wake),
-            options=[
-                MenuOption("enabled", "Wake Mode", "Enable or disable wake phrase gating."),
-                MenuOption("wake_phrases", "Wake Phrases", "Comma-separated phrases that start listening."),
-                MenuOption("exit_phrases", "Exit Phrases", "Comma-separated phrases that stop the session."),
-                MenuOption("match_mode", "Match Mode", "Choose prefix or contains matching."),
-                MenuOption("idle_timeout", "Idle Timeout", "Seconds before an idle wake session closes."),
-                MenuOption("back", "Back", "Return to Voice."),
-            ],
-            footer="↑/↓ Move • Enter Select  •  q Back",
-        )
-        if option is None or option.key == "back":
-            return
-        ui.clear()
-
-        try:
-            if option.key == "enabled":
-                enabled = ui.confirm("Enable wake phrase gating?", default=bool(wake.get("enabled", False)))
-                if enabled is None:
-                    continue
-                update = prepare_voice_wake_update(config, enabled=enabled)
-            elif option.key == "wake_phrases":
-                raw_value = ui.ask_text(
-                    "Wake phrases",
-                    default=", ".join(wake.get("wake_phrases") or ["xAgent"]),
-                    subtitle="Separate phrases with commas.",
-                )
-                update = prepare_voice_wake_update(config, wake_phrases=_phrase_list(raw_value))
-            elif option.key == "exit_phrases":
-                raw_value = ui.ask_text(
-                    "Exit phrases",
-                    default=", ".join(wake.get("exit_phrases") or ["exit", "stop"]),
-                    subtitle="Separate phrases with commas.",
-                )
-                update = prepare_voice_wake_update(config, exit_phrases=_phrase_list(raw_value))
-            elif option.key == "match_mode":
-                current = str(wake.get("match_mode") or "prefix")
-                mode_choice = ui.select_menu(
-                    title="xAgent Setup / Voice Wake Match",
-                    subtitle=f"Current match mode: {current}",
-                    options=_menu_option_rows(("prefix", "contains", "back")),
-                    footer="↑/↓ Move • Enter Select  •  q Back",
-                )
-                if mode_choice is None or mode_choice.key == "back":
-                    continue
-                update = prepare_voice_wake_update(config, match_mode=mode_choice.key)
-            else:
-                raw_value = ui.ask_text(
-                    "Idle timeout seconds",
-                    default=str(wake.get("idle_timeout_seconds") or 60),
-                    subtitle="Enter a number between 0.1 and 3600.",
-                ).strip()
-                idle_timeout_seconds = float(raw_value)
-                update = prepare_voice_wake_update(config, idle_timeout_seconds=idle_timeout_seconds)
-        except Exception as exc:
-            ui.print_panel(f"Voice wake update is invalid: {exc}", title="Setup", border_style="red")
-            continue
-        _apply_config_update(ui, config_dir, update, return_home_on_success=True)
-
-
 def _run_voice_config_launcher(ui: TerminalUI, config_dir: Path) -> None:
     while True:
         try:
@@ -1624,12 +1311,28 @@ def _run_voice_config_launcher(ui: TerminalUI, config_dir: Path) -> None:
         if option is None or option.key == "back":
             return
         ui.clear()
-        if option.key == "provider_mode":
-            _run_voice_provider_mode_launcher(ui, config_dir, config)
-        elif option.key == "interruptions":
-            _run_voice_interruptions_config(ui, config_dir, config)
-        elif option.key == "wake":
-            _run_voice_wake_config_launcher(ui, config_dir)
+        if option.key == "api_key":
+            current = voice_config(config)
+            existing_key = str(current.get("api_key") or "").strip()
+            has_existing = bool(existing_key) and not is_placeholder_api_key(existing_key)
+            value = ui.ask_text(
+                "Soniox API key",
+                secret=True,
+                subtitle="Leave blank to keep the existing key." if has_existing else "",
+            ).strip()
+            if not value and not has_existing:
+                ui.print_panel("Soniox API key is required to enable voice.", title="Setup")
+                continue
+            try:
+                update = prepare_voice_preset_update(
+                    config,
+                    provider="soniox",
+                    api_key=value or None,
+                )
+            except Exception as exc:
+                ui.print_panel(f"Voice update is invalid: {exc}", title="Setup", border_style="red")
+                continue
+            _apply_config_update(ui, config_dir, update, return_home_on_success=True)
         elif option.key == "disable":
             try:
                 update = prepare_voice_preset_update(config, provider="none")

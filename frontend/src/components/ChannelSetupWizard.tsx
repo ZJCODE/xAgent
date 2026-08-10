@@ -28,16 +28,8 @@ interface ChannelSetupWizardProps {
 
 function defaultVoiceSelection(schema: VoiceSetupSchema): VoiceSelectionInput {
   return {
-    voice_provider: schema.defaults.voice_provider,
-    voice_api_key: "",
-    voice_stt_provider: schema.defaults.voice_stt_provider,
-    voice_stt_api_key: "",
-    voice_tts_provider: schema.defaults.voice_tts_provider,
-    voice_tts_api_key: "",
-    voice_enable_interruptions: schema.defaults.voice_enable_interruptions,
-    voice_wake_enabled: schema.defaults.voice_wake_enabled,
-    voice_wake_phrases: [...schema.defaults.wake_phrases],
-    voice_exit_phrases: [...schema.defaults.exit_phrases],
+    voice_enabled: schema.defaults.voice_enabled,
+    voice_api_key: schema.defaults.voice_api_key,
   };
 }
 
@@ -169,7 +161,13 @@ export function ChannelSetupWizard({ channel, open, onClose, onComplete }: Chann
 
   const validateStep = (): string => {
     if (channel === "voice" && voiceSelection) {
-      if (!voiceSelection.voice_provider) return "Choose a voice provider.";
+      if (
+        voiceSelection.voice_enabled &&
+        !voiceSelection.voice_api_key.trim() &&
+        !(schema as VoiceSetupSchema | null)?.configured
+      ) {
+        return "Soniox API key is required.";
+      }
     }
     if (channel === "feishu") {
       if (currentStepId === "access" && feishuSelection.credential_mode === "manual") {
