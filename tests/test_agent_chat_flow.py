@@ -430,39 +430,52 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("reasoning_effort", call)
         self.assertNotIn("max_completion_tokens", call)
 
-    async def test_chat_reasoning_and_output_limits_map_by_provider(self):
-        deepseek_client = FakeOpenAIClient([_chat_response(content="ok")])
+    async def test_deepseek_uses_responses_api_reasoning_and_limits(self):
+        deepseek_client = FakeOpenAIClient(response_api_responses=[_responses_response(output_text="ok")])
         deepseek = ModelClient(
             client=deepseek_client,
             model="deepseek-v4-pro",
             provider_name=PROVIDER_DEEPSEEK,
+            model_api=MODEL_API_OPENAI_RESPONSES,
             max_tokens=6000,
             reasoning=ReasoningConfig(enabled=True, effort="max"),
         )
         await deepseek.call(messages=[{"role": "user", "content": "hello"}], tool_specs=None)
-        deepseek_call = deepseek_client.chat_completions.calls[0]
-        self.assertEqual(deepseek_call["max_tokens"], 6000)
-        self.assertEqual(deepseek_call["reasoning_effort"], "max")
-        self.assertEqual(deepseek_call["extra_body"], {"thinking": {"type": "enabled"}})
-        self.assertNotIn("max_completion_tokens", deepseek_call)
+        deepseek_call = deepseek_client.responses_api.calls[0]
+        self.assertEqual(deepseek_call["max_output_tokens"], 6000)
+        self.assertEqual(deepseek_call["reasoning"], {"effort": "max"})
+        self.assertFalse(deepseek_call["store"])
+        self.assertNotIn("include", deepseek_call)
+        self.assertEqual(deepseek_client.chat_completions.calls, [])
 
-        deepseek_low_client = FakeOpenAIClient([_chat_response(content="ok")])
+        deepseek_low_client = FakeOpenAIClient(response_api_responses=[_responses_response(output_text="ok")])
         deepseek_low = ModelClient(
             client=deepseek_low_client,
             model="deepseek-v4-flash",
             provider_name=PROVIDER_DEEPSEEK,
+            model_api=MODEL_API_OPENAI_RESPONSES,
             reasoning=ReasoningConfig(enabled=True, effort="low"),
         )
-        await deepseek_low.call(messages=[{"role": "user", "content": "hello"}], tool_specs=None)
-        deepseek_low_call = deepseek_low_client.chat_completions.calls[0]
-        self.assertEqual(deepseek_low_call["reasoning_effort"], "low")
-        self.assertEqual(deepseek_low_call["extra_body"], {"thinking": {"type": "enabled"}})
+        await deepseek_low.call(
+            messages=[{"role": "user", "content": "hello"}],
+            tool_specs=[{
+                "type": "function",
+                "function": {"name": "lookup", "parameters": {"type": "object"}},
+            }],
+        )
+        deepseek_low_call = deepseek_low_client.responses_api.calls[0]
+        self.assertEqual(deepseek_low_call["reasoning"], {"effort": "low"})
+        self.assertEqual(deepseek_low_call["tool_choice"], "auto")
+        self.assertNotIn("include", deepseek_low_call)
 
-        deepseek_maintenance_client = FakeOpenAIClient([_chat_response(content="ok")])
+        deepseek_maintenance_client = FakeOpenAIClient(
+            response_api_responses=[_responses_response(output_text="ok")]
+        )
         deepseek_maintenance = ModelClient(
             client=deepseek_maintenance_client,
             model="deepseek-v4-flash",
             provider_name=PROVIDER_DEEPSEEK,
+            model_api=MODEL_API_OPENAI_RESPONSES,
             max_tokens=AgentConfig.WORKING_CONTEXT_SUMMARY_MAX_TOKENS,
             reasoning=ReasoningConfig(enabled=False),
         )
@@ -470,17 +483,56 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
             messages=[{"role": "user", "content": "summarize"}],
             tool_specs=None,
         )
-        maintenance_call = deepseek_maintenance_client.chat_completions.calls[0]
+        maintenance_call = deepseek_maintenance_client.responses_api.calls[0]
         self.assertEqual(
-            maintenance_call["max_tokens"],
+            maintenance_call["max_output_tokens"],
             AgentConfig.WORKING_CONTEXT_SUMMARY_MAX_TOKENS,
         )
-        self.assertEqual(
-            maintenance_call["extra_body"],
-            {"thinking": {"type": "disabled"}},
-        )
-        self.assertNotIn("reasoning_effort", maintenance_call)
+        self.assertEqual(maintenance_call["reasoning"], {"effort": "none"})
 
+    async def test_deepseek_responses_strips_unsupported_reasoning_replay_fields(self):
+        client = FakeOpenAIClient(response_api_responses=[_responses_response(output_text="ok")])
+        model = ModelClient(
+            client=client,
+            model="deepseek-v4-flash",
+            provider_name=PROVIDER_DEEPSEEK,
+            model_api=MODEL_API_OPENAI_RESPONSES,
+        )
+        await model.call(
+            messages=[
+                {"role": "user", "content": "continue"},
+                {
+                    "type": "reasoning",
+                    "id": "rs_1",
+                    "content": [{"type": "reasoning_text", "text": "plan"}],
+                    "encrypted_content": "secret",
+                    "summary": [{"type": "summary_text", "text": "ignored"}],
+                },
+                {
+                    "type": "function_call",
+                    "call_id": "call-1",
+                    "name": "lookup",
+                    "arguments": "{}",
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": "call-1",
+                    "output": "done",
+                },
+            ],
+            tool_specs=None,
+        )
+        call = client.responses_api.calls[0]
+        reasoning_item = next(item for item in call["input"] if item.get("type") == "reasoning")
+        self.assertEqual(reasoning_item["id"], "rs_1")
+        self.assertEqual(
+            reasoning_item["content"],
+            [{"type": "reasoning_text", "text": "plan"}],
+        )
+        self.assertNotIn("encrypted_content", reasoning_item)
+        self.assertNotIn("summary", reasoning_item)
+
+    async def test_chat_reasoning_and_output_limits_map_by_provider(self):
         qwen_client = FakeOpenAIClient([_chat_response(content="ok")])
         qwen = ModelClient(
             client=qwen_client,
@@ -1148,6 +1200,70 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload[0].name, "lookup")
         self.assertEqual(payload[0].arguments, '{"value": "ok"}')
         self.assertEqual(payload[0].response_items[-1]["type"], "function_call")
+
+    async def test_deepseek_responses_stream_captures_reasoning_text_for_replay(self):
+        events = [
+            SimpleNamespace(
+                type="response.output_item.added",
+                output_index=0,
+                item=SimpleNamespace(type="reasoning", id="rs_1", content=[]),
+            ),
+            SimpleNamespace(
+                type="response.reasoning_text.delta",
+                item_id="rs_1",
+                output_index=0,
+                delta="I should call ",
+            ),
+            SimpleNamespace(
+                type="response.reasoning_text.delta",
+                item_id="rs_1",
+                output_index=0,
+                delta="lookup.",
+            ),
+            SimpleNamespace(
+                type="response.output_item.done",
+                output_index=0,
+                item=SimpleNamespace(
+                    type="reasoning",
+                    id="rs_1",
+                    content=[{"type": "reasoning_text", "text": "I should call lookup."}],
+                ),
+            ),
+            SimpleNamespace(
+                type="response.output_item.added",
+                output_index=1,
+                item=SimpleNamespace(
+                    type="function_call",
+                    id="fc_1",
+                    call_id="call-1",
+                    name="lookup",
+                    arguments="{}",
+                ),
+            ),
+        ]
+        client = FakeOpenAIClient(response_api_responses=[AsyncChunkStream(events)])
+        model = ModelClient(
+            client=client,
+            model="deepseek-v4-flash",
+            provider_name=PROVIDER_DEEPSEEK,
+            model_api=MODEL_API_OPENAI_RESPONSES,
+        )
+
+        reply_type, payload = await model.call(
+            messages=[{"role": "user", "content": "lookup"}],
+            tool_specs=[{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}],
+            stream=True,
+        )
+
+        self.assertEqual(reply_type, ReplyType.TOOL_CALL)
+        reasoning_item = next(
+            item for item in payload[0].response_items if item.get("type") == "reasoning"
+        )
+        self.assertEqual(reasoning_item["id"], "rs_1")
+        self.assertEqual(
+            reasoning_item["content"],
+            [{"type": "reasoning_text", "text": "I should call lookup."}],
+        )
 
     async def test_responses_stream_text_before_tool_call_is_preserved_in_replay(self):
         events = [

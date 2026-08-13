@@ -489,7 +489,7 @@ class WorkingContextPromptInjectionTests(unittest.TestCase):
             client=object(),
             model="deepseek-v4-flash",
             provider_name="deepseek",
-            model_api="openai_chat_completions",
+            model_api="openai_responses",
             reasoning=ReasoningConfig(enabled=False),
         )
 
