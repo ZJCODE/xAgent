@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from ..config import AgentConfig
+from ..inbox import INBOX_KIND_METADATA_KEY, is_scheduled_work
 from ...components import MessageStorage
 from ...schemas import Message, RoleType, MessageType
 from ...schemas.attachment import (
@@ -143,6 +144,7 @@ class MessageHandler:
         role: RoleType = RoleType.ENVIRONMENT,
         channel: Optional[str] = None,
         recipient_id: Optional[str] = None,
+        sender_id: Optional[str] = None,
     ) -> Message:
         """Store a non-direct observation from the agent's environment."""
         event_msg = Message.create_context_event(
@@ -152,6 +154,8 @@ class MessageHandler:
             metadata=metadata,
             role=role,
         )
+        if sender_id:
+            event_msg.sender_id = sender_id
         if recipient_id:
             event_msg.recipient_id = recipient_id
         if room_name:
@@ -334,6 +338,11 @@ class MessageHandler:
             or current_date
             or datetime.now().strftime("%Y-%m-%d %H:%M")
         )
+        inbox_kind = ""
+        if current_message is not None:
+            inbox_kind = str(
+                (current_message.metadata or {}).get(INBOX_KIND_METADATA_KEY) or ""
+            ).strip()
         ctx = PromptAssembleContext(
             relationship_context=relationship_context,
             memory_context=memory_context,
@@ -342,6 +351,7 @@ class MessageHandler:
             current_time=resolved_current_time,
             channel_instructions=channel_instructions,
             task_mode=task_mode,
+            inbox_kind=inbox_kind,
         )
         registry = prompt_registry or default_prompt_registry()
         context_messages = registry.assemble(KIND_TURN, ctx)
@@ -507,24 +517,37 @@ class MessageHandler:
     @staticmethod
     def _format_context_event_header(message: Message) -> str:
         header = f"[ambient context][timestamp={MessageHandler._format_transcript_timestamp(message)}]"
+        speaker = MessageHandler._sanitize_marker_field(message.sender_id)
+        if speaker:
+            header += f"[from={speaker}]"
         if message.channel:
             header += f"[channel={message.channel}]"
         if message.room_name:
-            safe_room = message.room_name.replace("\n", " ").replace("]", "")
+            safe_room = MessageHandler._sanitize_marker_field(message.room_name)
             header += f"[room={safe_room}]"
         return header
 
     @staticmethod
     def _format_transcript_message_header(message: Message) -> str:
-        speaker = MessageHandler._format_transcript_speaker(message)
         timestamp = MessageHandler._format_transcript_timestamp(message)
-        header = f"[speaker={speaker}][timestamp={timestamp}]"
+        if is_scheduled_work(message.metadata):
+            header = f"[scheduled task][timestamp={timestamp}]"
+            target = MessageHandler._sanitize_marker_field(message.sender_id)
+            if target:
+                header += f"[for={target}]"
+        else:
+            speaker = MessageHandler._format_transcript_speaker(message)
+            header = f"[speaker={speaker}][timestamp={timestamp}]"
         if message.channel:
             header += f"[channel={message.channel}]"
         if message.room_name:
-            safe_room = message.room_name.replace("\n", " ").replace("]", "")
+            safe_room = MessageHandler._sanitize_marker_field(message.room_name)
             header += f"[room={safe_room}]"
         return header
+
+    @staticmethod
+    def _sanitize_marker_field(value: Optional[str]) -> str:
+        return str(value or "").strip().replace("\n", " ").replace("]", "")
 
     @staticmethod
     def _format_transcript_timestamp(message: Message) -> str:

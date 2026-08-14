@@ -753,6 +753,7 @@ class FeishuAdapter:
             metadata=metadata,
             room_name=room_name,
             channel="feishu",
+            user_id=sender_name or sender_id,
         )
 
     async def _decide_group_participation(

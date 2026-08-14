@@ -19,6 +19,10 @@ class ToolCallContext:
     name: str
     args: dict
     workspace_dir: Optional[Path] = None
+    user_id: str = ""
+    channel: Optional[str] = None
+    room_name: Optional[str] = None
+    inbox_kind: str = ""
 
 
 @dataclass(frozen=True)

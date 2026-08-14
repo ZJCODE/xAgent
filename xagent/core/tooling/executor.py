@@ -51,12 +51,21 @@ class ToolExecutor:
         self.observability = observability
         self.guards = list(guards or [])
         self.workspace_dir = workspace_dir
+        self._turn_user_id = ""
+        self._turn_channel = None
+        self._turn_room_name = None
+        self._turn_inbox_kind = ""
 
     async def handle_tool_calls(
         self,
         tool_calls: list,
         input_messages: list,
         max_concurrent_tools: int = AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS,
+        *,
+        user_id: str = "",
+        channel: Optional[str] = None,
+        room_name: Optional[str] = None,
+        inbox_kind: str = "",
     ) -> Optional[ToolDisplayResult]:
         """
         Handle tool calls by executing them concurrently with concurrency limit.
@@ -64,6 +73,36 @@ class ToolExecutor:
         Returns:
             None if no displayable output, otherwise a ToolDisplayResult.
         """
+        previous = (
+            self._turn_user_id,
+            self._turn_channel,
+            self._turn_room_name,
+            self._turn_inbox_kind,
+        )
+        self._turn_user_id = user_id
+        self._turn_channel = channel
+        self._turn_room_name = room_name
+        self._turn_inbox_kind = inbox_kind
+        try:
+            return await self._handle_tool_calls_locked(
+                tool_calls,
+                input_messages,
+                max_concurrent_tools,
+            )
+        finally:
+            (
+                self._turn_user_id,
+                self._turn_channel,
+                self._turn_room_name,
+                self._turn_inbox_kind,
+            ) = previous
+
+    async def _handle_tool_calls_locked(
+        self,
+        tool_calls: list,
+        input_messages: list,
+        max_concurrent_tools: int,
+    ) -> Optional[ToolDisplayResult]:
         if not tool_calls:
             return None
 
@@ -151,6 +190,10 @@ class ToolExecutor:
             name=name,
             args=args,
             workspace_dir=self.workspace_dir,
+            user_id=self._turn_user_id,
+            channel=self._turn_channel,
+            room_name=self._turn_room_name,
+            inbox_kind=self._turn_inbox_kind,
         )
         denied = await self._pre_execute(call_ctx)
         if denied is not None:

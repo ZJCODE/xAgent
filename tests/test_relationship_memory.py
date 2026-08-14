@@ -280,6 +280,20 @@ class MemoryHandlerRelationshipTests(unittest.IsolatedAsyncioTestCase):
         participants = MemoryHandler._extract_participants([human, work_order])
         self.assertEqual([p["key"] for p in participants], ["api:web_user"])
 
+    def test_extract_participants_skips_scheduled_inbox_kind(self):
+        human = Message.create(content="hi", role=RoleType.USER, sender_id="web_user")
+        human.channel = "api"
+        work_order = Message.create(
+            content="This scheduled task is now due.",
+            role=RoleType.USER,
+            sender_id="web_user",
+        )
+        work_order.channel = "api"
+        work_order.metadata = {"inbox_kind": "scheduled_turn"}
+
+        participants = MemoryHandler._extract_participants([human, work_order])
+        self.assertEqual([p["key"] for p in participants], ["api:web_user"])
+
     async def test_get_relationship_context_respects_card_budget(self):
         for index in range(6):
             await self.store.write_card(

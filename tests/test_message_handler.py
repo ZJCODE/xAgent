@@ -8,6 +8,7 @@ import unittest
 
 from xagent.core.config import AgentConfig
 from xagent.core.handlers.message import MessageHandler
+from xagent.core.inbox import INBOX_KIND_METADATA_KEY, InboxKind
 from xagent.schemas import Message, MessageType, RoleType
 from xagent.utils.image_utils import data_uri_to_bytes, extract_image_urls_from_text
 
@@ -273,6 +274,33 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         self.assertNotIn("ou_xxx", current_task)
         self.assertIn("<channel_instructions>", channel_layer)
         self.assertIn(mention_syntax, channel_layer)
+
+    def test_scheduled_turn_is_not_formatted_as_human_speech(self):
+        due = Message.create(
+            "This scheduled task is now due. Execute it and return the message to deliver.\n\nTask: ping",
+            role=RoleType.USER,
+            sender_id="Joy",
+        )
+        due.channel = "api"
+        due.metadata[INBOX_KIND_METADATA_KEY] = InboxKind.SCHEDULED_TURN.value
+        due.metadata["source"] = "scheduled_task"
+
+        context_messages = MessageHandler.build_turn_context_messages(
+            [due],
+            current_user_id="Joy",
+            current_time="2026-05-14 09:30",
+            current_message=due,
+        )
+
+        experience = context_messages[0]["content"]
+        current_task = context_messages[1]["content"]
+        self.assertIn("[scheduled task]", experience)
+        self.assertIn("[for=Joy]", experience)
+        self.assertNotIn("[speaker=Joy]", experience)
+        self.assertIn('kind="scheduled_turn"', current_task)
+        self.assertIn("Delivery target: Joy", current_task)
+        self.assertNotIn("what Joy just said", current_task)
+        self.assertNotIn("Current speaker: Joy", current_task)
 
     def test_subconscious_mode_has_no_contacts_layer_and_injects_relationships(self):
         messages = [

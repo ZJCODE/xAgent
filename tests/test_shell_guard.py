@@ -151,3 +151,39 @@ class ToolExecutorGuardTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(called["value"])
             self.assertIn("Tool error:", tool_message["content"])
             self.assertIn("outside the agent workspace", tool_message["content"])
+
+    async def test_pre_execute_receives_turn_attribution(self):
+        seen = {}
+
+        async def lookup():
+            return "ok"
+
+        class CaptureGuard:
+            async def pre_execute(self, ctx):
+                seen["user_id"] = ctx.user_id
+                seen["channel"] = ctx.channel
+                seen["room_name"] = ctx.room_name
+                seen["inbox_kind"] = ctx.inbox_kind
+                return ToolGuardResult.allow()
+
+            async def post_execute(self, ctx, result):
+                return result
+
+        executor = ToolExecutor(
+            tool_manager=FakeToolManager(tools={"lookup": lookup}),
+            message_storage=InMemoryMessageStorage(),
+            client=None,
+            guards=[CaptureGuard()],
+        )
+        await executor.handle_tool_calls(
+            [FakeToolCall(name="lookup")],
+            [],
+            user_id="alice",
+            channel="feishu",
+            room_name="Eng",
+            inbox_kind="user_turn",
+        )
+        self.assertEqual(seen["user_id"], "alice")
+        self.assertEqual(seen["channel"], "feishu")
+        self.assertEqual(seen["room_name"], "Eng")
+        self.assertEqual(seen["inbox_kind"], "user_turn")

@@ -34,6 +34,7 @@ class PromptAssembleContext:
     current_time: str = ""
     channel_instructions: str = ""
     task_mode: str = "reply"
+    inbox_kind: str = ""
 
 
 @dataclass(frozen=True)
@@ -146,6 +147,7 @@ def _render_current_task(ctx: PromptAssembleContext) -> str:
     return AgentConfig.build_current_task(
         current_user_id=ctx.current_user_id,
         current_time=resolved_current_time,
+        inbox_kind=ctx.inbox_kind,
     )
 
 

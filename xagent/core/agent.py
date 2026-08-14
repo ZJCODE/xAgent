@@ -36,6 +36,7 @@ from .inbox import (
     AgentInbox,
     InboxItem,
     InboxKind,
+    is_scheduled_work,
     normalize_inbox_kind,
 )
 from .handlers import MemoryHandler, MessageHandler, ModelClient
@@ -369,6 +370,8 @@ class Agent:
             peer_id = (message.sender_id or "").strip()
             if not peer_id:
                 continue
+            if is_scheduled_work(getattr(message, "metadata", None)):
+                continue
             peer_key = RelationshipStore.make_key(
                 (message.channel or "").strip(), peer_id
             )
@@ -691,6 +694,10 @@ class Agent:
                         tool_calls,
                         iteration_messages,
                         self.max_concurrent_tools,
+                        user_id=user_id,
+                        channel=channel,
+                        room_name=room_name,
+                        inbox_kind=inbox_item.kind.value,
                     )
 
                     for tool_call in tool_calls:
@@ -832,6 +839,7 @@ class Agent:
                 metadata=item.metadata,
                 room_name=item.room_name,
                 channel=item.channel,
+                user_id=item.user_id,
             )
         return self.chat_events(
             user_message=item.content,
@@ -853,10 +861,17 @@ class Agent:
         metadata: Optional[Dict[str, Any]] = None,
         room_name: Optional[str] = None,
         channel: Optional[str] = None,
+        user_id: Optional[str] = None,
     ) -> AgentTurnResult:
         """Record environmental context without generating a reply."""
         event_metadata = dict(metadata or {})
         event_metadata.setdefault(INBOX_KIND_METADATA_KEY, InboxKind.OBSERVATION.value)
+        sender_id = (
+            str(user_id or "").strip()
+            or str(event_metadata.get("sender_name") or "").strip()
+            or str(event_metadata.get("sender_id") or "").strip()
+            or None
+        )
         event_msg = await self.message_handler.store_context_event(
             context=context,
             source=source,
@@ -864,6 +879,7 @@ class Agent:
             metadata=event_metadata,
             room_name=room_name,
             channel=channel,
+            sender_id=sender_id,
         )
         self._schedule_experience_write(
             messages=[event_msg],

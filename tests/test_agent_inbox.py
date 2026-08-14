@@ -125,12 +125,39 @@ class AgentInboxTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(storage.messages[0].type, MessageType.CONTEXT_EVENT)
         self.assertEqual(storage.messages[0].channel, "api")
         self.assertEqual(storage.messages[0].metadata["source"], "camera")
+        self.assertEqual(storage.messages[0].sender_id, "alice")
         self.assertEqual(
             storage.messages[0].metadata.get(INBOX_KIND_METADATA_KEY),
             InboxKind.OBSERVATION.value,
         )
         self.assertEqual(model_client.calls, [])
         self.assertFalse(agent.inbox.busy)
+
+    async def test_scheduled_turn_prompt_does_not_treat_task_as_speech(self):
+        storage = InMemoryMessageStorage()
+        model_client = CapturingModelClient([(ReplyType.SIMPLE_REPLY, "done")])
+        agent = self._build_agent(storage, model_client)
+
+        events = [
+            event
+            async for event in agent.chat_events(
+                user_message=AgentConfig.scheduled_agent_prompt("ping the room"),
+                user_id="web_user",
+                channel="api",
+                inbox_kind=InboxKind.SCHEDULED_TURN,
+            )
+        ]
+
+        self.assertTrue(any(event.get("type") == "done" for event in events))
+        rendered = "\n".join(
+            str(message.get("content") or "")
+            for message in model_client.calls[0]
+        )
+        self.assertIn("[scheduled task]", rendered)
+        self.assertIn("[for=web_user]", rendered)
+        self.assertNotIn("[speaker=web_user]", rendered)
+        self.assertIn("due scheduled task", rendered)
+        self.assertNotIn("what web_user just said", rendered)
 
     async def test_overlapping_chat_events_run_serially(self):
         storage = InMemoryMessageStorage()

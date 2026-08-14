@@ -176,6 +176,17 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(record["timestamp"], 1710000000.0)
 
+    def test_experience_record_includes_channel_and_room(self):
+        message = Message.create(content="hi", role=RoleType.USER, sender_id="alice")
+        message.channel = "feishu"
+        message.room_name = "Eng"
+        message.timestamp = 1710000000.0
+
+        record = MemoryHandler._experience_record(message)
+
+        self.assertEqual(record["channel"], "feishu")
+        self.assertEqual(record["room_name"], "Eng")
+
     async def test_schedule_experience_write_triggers_background_maintenance(self):
         message = Message(
             role=RoleType.USER,
