@@ -4,6 +4,7 @@ import logging
 from typing import Optional
 
 from xagent.core.config import AgentConfig
+from xagent.core.tooling.guards import WorkspaceEscapeError, resolve_workspace_cwd
 from xagent.utils.tool_decorator import function_tool
 
 logger = logging.getLogger(__name__)
@@ -62,6 +63,7 @@ def create_workspace_run_command_tool(default_working_directory: str):
             command=command,
             working_directory=working_directory or default_working_directory,
             timeout=timeout,
+            workspace_root=default_working_directory,
         )
 
     workspace_run_command.tool_spec = run_command.tool_spec
@@ -73,6 +75,7 @@ async def _run_shell_command(
     command: str,
     working_directory: Optional[str] = None,
     timeout: int = 30,
+    workspace_root: Optional[str] = None,
 ) -> dict:
     """Execute a shell command and return stdout, stderr, and return code."""
     if not command or not command.strip():
@@ -80,10 +83,20 @@ async def _run_shell_command(
 
     timeout = max(1, min(timeout, AgentConfig.MAX_COMMAND_TIMEOUT))
     max_output = AgentConfig.MAX_COMMAND_OUTPUT_SIZE
+    cwd = working_directory
+    if workspace_root:
+        try:
+            cwd = resolve_workspace_cwd(working_directory, workspace_root)
+        except WorkspaceEscapeError as exc:
+            return {
+                "stdout": "",
+                "stderr": str(exc),
+                "return_code": -1,
+            }
 
     logger.warning(
         "[SHELL AUDIT] Executing command: %s | cwd: %s | timeout: %ds",
-        command, working_directory or "(inherit)", timeout,
+        command, cwd or "(inherit)", timeout,
     )
 
     try:
@@ -91,7 +104,7 @@ async def _run_shell_command(
             command,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            cwd=working_directory,
+            cwd=cwd,
         )
         stdout_bytes, stderr_bytes = await asyncio.wait_for(
             process.communicate(), timeout=timeout

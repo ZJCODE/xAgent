@@ -50,6 +50,7 @@ from .providers import (
     normalize_provider_name,
 )
 from .tooling import ToolExecutor, ToolManager
+from .tooling.guards import WorkspaceShellGuard
 from .working_context import (
     WorkingContextCompactor,
     WorkingContextStore,
@@ -196,6 +197,8 @@ class Agent:
             message_storage=self.message_storage,
             client=self.client,
             observability=self.observability,
+            guards=[WorkspaceShellGuard(self.workspace_dir)],
+            workspace_dir=self.workspace_dir,
         )
         self._inbox = AgentInbox()
 
