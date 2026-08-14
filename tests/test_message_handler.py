@@ -246,6 +246,34 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         self.assertIn("Keep simple replies short", context_messages[2]["content"])
         self.assertIn("Never rely on Markdown image embeds", context_messages[2]["content"])
 
+    def test_channel_instructions_are_a_separate_named_layer(self):
+        messages = [
+            Message.create("Hello", role=RoleType.USER, sender_id="Joy"),
+        ]
+        mention_syntax = 'To mention someone, use <at user_id="ou_xxx"></at>.'
+
+        context_messages = MessageHandler.build_turn_context_messages(
+            messages,
+            current_user_id="Joy",
+            current_time="2026-05-14 09:30",
+            channel_instructions=mention_syntax,
+        )
+
+        self.assertEqual(
+            [message["name"] for message in context_messages],
+            [
+                AgentConfig.RECENT_EXPERIENCE_NAME,
+                AgentConfig.CURRENT_TASK_NAME,
+                AgentConfig.CHANNEL_INSTRUCTIONS_NAME,
+            ],
+        )
+        current_task = context_messages[1]["content"]
+        channel_layer = context_messages[2]["content"]
+        self.assertIn("<current_task>", current_task)
+        self.assertNotIn("ou_xxx", current_task)
+        self.assertIn("<channel_instructions>", channel_layer)
+        self.assertIn(mention_syntax, channel_layer)
+
     def test_subconscious_mode_has_no_contacts_layer_and_injects_relationships(self):
         messages = [
             Message.create("Hello", role=RoleType.USER, sender_id="Joy"),

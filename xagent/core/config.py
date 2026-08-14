@@ -29,6 +29,7 @@ class AgentConfig:
     RECENT_EXPERIENCE_NAME = "recent_experience"
     SUBCONSCIOUS_RELATIONSHIPS_NAME = "subconscious_relationships"
     CURRENT_TASK_NAME = "current_task"
+    CHANNEL_INSTRUCTIONS_NAME = "channel_instructions"
     DECISION_RULES_NAME = "participation_decision_rules"
 
     # ============================================================
@@ -438,10 +439,9 @@ class AgentConfig:
         current_date: str = "",
         channel_instructions: str = "",
     ) -> str:
+        del channel_instructions  # assembled as its own prompt section
         resolved_current_time = current_time or current_date
         reply_prompt = AgentConfig.build_turn_reply_prompt(current_user_id)
-        if channel_instructions.strip():
-            reply_prompt += "\n" + channel_instructions.strip()
         return AgentConfig.CURRENT_TASK_TEMPLATE.format(
             current_user_id=current_user_id,
             current_time=resolved_current_time,

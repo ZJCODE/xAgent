@@ -334,6 +334,7 @@ class Agent:
             channel_instructions=channel_instructions,
             working_summary=working_context.summary,
             covers_through_cursor=working_context.covers_through_cursor,
+            prompt_registry=getattr(msg_handler, "prompt_registry", None),
         )
         input_messages = msg_handler.sanitize_input_messages(list(iteration_messages))
         return tool_specs, instructions, iteration_messages, input_messages
@@ -905,17 +906,21 @@ class Agent:
         or memory — the decision is scoped to the current room's conversation.
         """
         try:
-            instructions = [{
-                "role": "system",
-                "name": AgentConfig.DECISION_RULES_NAME,
-                "content": AgentConfig.DECISION_SYSTEM_PROMPT,
-            }]
-            if self.system_prompt.strip():
-                instructions.append({
+            message_handler = getattr(self, "message_handler", None)
+            if message_handler is not None and hasattr(message_handler, "build_decision_messages"):
+                instructions = message_handler.build_decision_messages()
+            else:
+                instructions = [{
                     "role": "system",
-                    "name": AgentConfig.IDENTITY_CONTEXT_NAME,
-                    "content": AgentConfig.build_identity_context(self.system_prompt),
-                })
+                    "name": AgentConfig.DECISION_RULES_NAME,
+                    "content": AgentConfig.DECISION_SYSTEM_PROMPT,
+                }]
+                if self.system_prompt.strip():
+                    instructions.append({
+                        "role": "system",
+                        "name": AgentConfig.IDENTITY_CONTEXT_NAME,
+                        "content": AgentConfig.build_identity_context(self.system_prompt),
+                    })
 
             input_messages = [{
                 "role": "user",

@@ -381,6 +381,7 @@ class SubconsciousLoop:
             include_images=False,
             workspace_dir=getattr(self._agent, "workspace_dir", None),
             task_mode="subconscious_json",
+            prompt_registry=getattr(message_handler, "prompt_registry", None),
         )
         input_messages = message_handler.sanitize_input_messages(list(iteration_messages))
         return instructions, input_messages, []
