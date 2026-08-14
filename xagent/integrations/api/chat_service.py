@@ -183,6 +183,7 @@ class ChatService:
                     attachments=attachments,
                     stream=bool(input_data.stream),
                     channel=CHANNEL_API,
+                    inbox_kind="user_turn",
                 )
                 async for event in self._iterate_before_deadline(response, deadline):
                     if event.get("type") == "done":

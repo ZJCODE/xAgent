@@ -22,6 +22,7 @@ from ...core.runtime import (
     scheduled_delivery_context,
     upsert_contact,
 )
+from ...interfaces.channel import ChatTurnRequest
 from ...schemas.attachment import (
     ATTACHMENT_KIND_IMAGE,
     attachment_kind,
@@ -110,6 +111,8 @@ class _MessageDeduplicator:
 
 class WeixinAdapter:
     """Bridge iLink direct messages to an in-process xAgent instance."""
+
+    channel_name = "weixin"
 
     def __init__(
         self,
@@ -347,7 +350,7 @@ class WeixinAdapter:
         if not text:
             return
 
-        chat_kwargs = self._chat_kwargs(user_id=user_id, text=text, inbound=inbound)
+        chat_kwargs = self._chat_kwargs(user_id=user_id, text=text, inbound=inbound).to_chat_kwargs()
 
         # Record contact for subconscious thought routing
         try:
@@ -482,17 +485,18 @@ class WeixinAdapter:
         )
         return attachment, "", attachment_markdown(attachment)
 
-    def _chat_kwargs(self, *, user_id: str, text: str, inbound: _WeixinInboundPayload) -> dict[str, Any]:
-        kwargs: dict[str, Any] = {
-            "user_message": text,
-            "user_id": user_id,
-            "channel": "weixin",
-        }
+    def _chat_kwargs(self, *, user_id: str, text: str, inbound: _WeixinInboundPayload) -> ChatTurnRequest:
+        image_source = None
         if inbound.image_sources and bool(getattr(self.agent, "supports_vision", True)):
-            kwargs["image_source"] = inbound.image_sources[0] if len(inbound.image_sources) == 1 else inbound.image_sources
-        if inbound.attachments:
-            kwargs["attachments"] = inbound.attachments
-        return kwargs
+            image_source = inbound.image_sources[0] if len(inbound.image_sources) == 1 else inbound.image_sources
+        return ChatTurnRequest(
+            user_message=text,
+            user_id=user_id,
+            channel="weixin",
+            inbox_kind="user_turn",
+            image_source=image_source,
+            attachments=inbound.attachments or None,
+        )
 
     async def _send_event_replies(self, *, user_id: str, context_token: str, source_message_id: str, chat_kwargs: dict[str, Any]) -> None:
         chat_events = getattr(self.agent, "chat_events", None)

@@ -117,6 +117,8 @@ class VoicePlayer(Protocol):
 class VoiceRuntime:
     """Run the single half-duplex listen, think, speak state machine."""
 
+    channel_name = "voice"
+
     def __init__(
         self,
         *,
@@ -353,6 +355,7 @@ class VoiceRuntime:
                 user_id=self.options.user_id,
                 stream=self.options.stream,
                 channel="voice",
+                inbox_kind="user_turn",
             ):
                 event_type = event.get("type")
                 message_id = str(event.get("message_id") or uuid.uuid4().hex)

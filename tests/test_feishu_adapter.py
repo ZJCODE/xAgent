@@ -556,6 +556,8 @@ class FeishuAdapterTests(unittest.TestCase):
 
         self.assertEqual(len(agent.chat_calls), 1)
         self.assertEqual(agent.chat_calls[0]["user_message"], "hello")
+        self.assertEqual(agent.chat_calls[0]["inbox_kind"], "user_turn")
+        self.assertEqual(agent.chat_calls[0]["channel"], "feishu")
         self.assertNotIn("private", agent.chat_calls[0])
         self.assertEqual(adapter._channel.sent[0][2], {"uuid": "om_user"})
 
