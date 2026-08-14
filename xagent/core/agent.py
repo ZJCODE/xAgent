@@ -31,6 +31,13 @@ from .errors import (
     build_public_error,
     map_model_error,
 )
+from .inbox import (
+    INBOX_KIND_METADATA_KEY,
+    AgentInbox,
+    InboxItem,
+    InboxKind,
+    normalize_inbox_kind,
+)
 from .handlers import MemoryHandler, MessageHandler, ModelClient
 from .journal import JournalLLMService
 from .providers import (
@@ -190,6 +197,7 @@ class Agent:
             client=self.client,
             observability=self.observability,
         )
+        self._inbox = AgentInbox()
 
     @property
     def identity(self) -> str:
@@ -207,6 +215,14 @@ class Agent:
     @property
     def tools(self) -> dict:
         return self.tool_manager.tools
+
+    @property
+    def inbox(self) -> AgentInbox:
+        current = getattr(self, "_inbox", None)
+        if current is None:
+            current = AgentInbox()
+            self._inbox = current
+        return current
 
     @classmethod
     def _message_storage_path(cls, workspace: Path) -> Path:
@@ -484,6 +500,7 @@ class Agent:
         channel_instructions: str = "",
         room_name: Optional[str] = None,
         channel: Optional[str] = None,
+        inbox_kind: Optional[Union[str, InboxKind]] = None,
     ) -> AsyncGenerator[dict, None]:
         """Emit one agent turn as structured message/tool events.
 
@@ -493,6 +510,9 @@ class Agent:
 
         Args:
             room_name: Optional room/group name for multi-participant conversations.
+            inbox_kind: How this input should be classified. Defaults to a
+                user turn; scheduled delivery context upgrades it to
+                ``scheduled_turn``.
         """
         self._record_last_interaction()
         from .runtime import current_delivery_context
@@ -502,11 +522,45 @@ class Agent:
         if not resolved_channel and delivery_context is not None:
             resolved_channel = str(delivery_context.channel or "").strip()
         channel = resolved_channel or None
-        user_metadata: Optional[Dict[str, Any]] = None
-        if delivery_context is not None:
-            source = str((delivery_context.metadata or {}).get("source") or "").strip()
-            if source == "scheduled_task":
-                user_metadata = {"source": "scheduled_task"}
+        inbox_item = self._inbox_item_for_chat(
+            user_message=user_message,
+            user_id=user_id,
+            image_source=image_source,
+            attachments=attachments,
+            stream=stream,
+            channel_instructions=channel_instructions,
+            room_name=room_name,
+            channel=channel,
+            inbox_kind=inbox_kind,
+            delivery_context=delivery_context,
+        )
+        user_metadata = inbox_item.message_metadata()
+        await self.inbox.acquire_turn()
+        try:
+            async for event in self._drive_claimed_turn(
+                inbox_item=inbox_item,
+                user_metadata=user_metadata,
+                stream=stream,
+            ):
+                yield event
+        finally:
+            self.inbox.release_turn()
+
+    async def _drive_claimed_turn(
+        self,
+        *,
+        inbox_item: InboxItem,
+        user_metadata: Dict[str, Any],
+        stream: bool,
+    ) -> AsyncGenerator[dict, None]:
+        """Run one claimed waking turn. Caller must hold the inbox turn lock."""
+        user_message = inbox_item.content
+        user_id = inbox_item.user_id
+        image_source = inbox_item.image_source
+        attachments = inbox_item.attachments
+        channel_instructions = inbox_item.channel_instructions
+        room_name = inbox_item.room_name
+        channel = inbox_item.channel
         msg_handler = self.message_handler
         model_name = getattr(self, "model", AgentConfig.DEFAULT_MODEL)
         channel_name = str(channel or "local")
@@ -725,6 +779,68 @@ class Agent:
         except Exception as exc:
             logger.warning("Failed to flush observability events: %s", exc)
 
+    def _inbox_item_for_chat(
+        self,
+        *,
+        user_message: str,
+        user_id: str,
+        image_source: Optional[Union[str, List[str]]],
+        attachments: Optional[List[Dict[str, Any]]],
+        stream: bool,
+        channel_instructions: str,
+        room_name: Optional[str],
+        channel: Optional[str],
+        inbox_kind: Optional[Union[str, InboxKind]],
+        delivery_context: Any,
+    ) -> InboxItem:
+        kind = normalize_inbox_kind(inbox_kind)
+        extra_metadata: Dict[str, Any] = {}
+        if delivery_context is not None:
+            source = str((delivery_context.metadata or {}).get("source") or "").strip()
+            if source:
+                extra_metadata["source"] = source
+            if source == "scheduled_task" and kind is InboxKind.USER_TURN:
+                kind = InboxKind.SCHEDULED_TURN
+        return InboxItem(
+            kind=kind,
+            content=user_message,
+            user_id=user_id,
+            channel=channel,
+            room_name=room_name,
+            attachments=attachments,
+            image_source=image_source,
+            channel_instructions=channel_instructions,
+            metadata=extra_metadata,
+            stream=stream,
+        )
+
+    async def submit(self, item: InboxItem):
+        """Submit a classified inbox item.
+
+        Observations persist without waking a model turn. Waking items are
+        driven through ``chat_events``.
+        """
+        if item.kind is InboxKind.OBSERVATION:
+            return await self.observe(
+                context=item.content,
+                source=str((item.metadata or {}).get("source") or "environment"),
+                event_type=str((item.metadata or {}).get("event_type") or "observation"),
+                metadata=item.metadata,
+                room_name=item.room_name,
+                channel=item.channel,
+            )
+        return self.chat_events(
+            user_message=item.content,
+            user_id=item.user_id,
+            image_source=item.image_source,
+            attachments=item.attachments,
+            stream=item.stream,
+            channel_instructions=item.channel_instructions,
+            room_name=item.room_name,
+            channel=item.channel,
+            inbox_kind=item.kind,
+        )
+
     async def observe(
         self,
         context: str,
@@ -735,13 +851,15 @@ class Agent:
         channel: Optional[str] = None,
     ) -> AgentTurnResult:
         """Record environmental context without generating a reply."""
+        event_metadata = dict(metadata or {})
+        event_metadata.setdefault(INBOX_KIND_METADATA_KEY, InboxKind.OBSERVATION.value)
         event_msg = await self.message_handler.store_context_event(
             context=context,
             source=source,
             event_type=event_type,
-            metadata=metadata,
+            metadata=event_metadata,
             room_name=room_name,
-                    channel=channel,
+            channel=channel,
         )
         self._schedule_experience_write(
             messages=[event_msg],

@@ -749,6 +749,7 @@ class FeishuAdapter:
             event_type="group_message",
             metadata=metadata,
             room_name=room_name,
+            channel="feishu",
         )
 
     async def _decide_group_participation(
@@ -2394,6 +2395,7 @@ class FeishuAdapter:
             user_id=user_id,
             stream=False,
             channel="feishu",
+            inbox_kind="scheduled_turn",
         ):
             event_type = event.get("type")
             if event_type == "message_done" and str(event.get("phase") or "final") == "final":

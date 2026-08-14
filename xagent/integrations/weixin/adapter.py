@@ -732,6 +732,7 @@ class WeixinAdapter:
                 user_id=user_id,
                 stream=False,
                 channel="weixin",
+                inbox_kind="scheduled_turn",
             ):
                 if event.get("type") == "message_done" and str(event.get("phase") or "final") == "final":
                     content = str(event.get("content") or "").strip()

@@ -466,6 +466,7 @@ class VoiceRuntime:
                 user_id=task.delivery_user_id or self.options.user_id or AgentConfig.DEFAULT_USER_ID,
                 stream=self.options.stream,
                 channel="voice",
+                inbox_kind="scheduled_turn",
             ):
                 event_type = event.get("type")
                 message_id = str(event.get("message_id") or uuid.uuid4().hex)

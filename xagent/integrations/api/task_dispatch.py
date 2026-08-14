@@ -133,6 +133,7 @@ class TaskDispatchService:
                 user_id=user_id,
                 stream=False,
                 channel=channel,
+                inbox_kind="scheduled_turn",
             ),
             deadline,
         ):

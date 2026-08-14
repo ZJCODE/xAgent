@@ -1753,6 +1753,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(user_msg.role, RoleType.USER)
         self.assertEqual(user_msg.channel, "api")
         self.assertEqual(user_msg.metadata.get("source"), "scheduled_task")
+        self.assertEqual(user_msg.metadata.get("inbox_kind"), "scheduled_turn")
         self.assertEqual(assistant_msg.role, RoleType.ASSISTANT)
         self.assertEqual(assistant_msg.channel, "api")
 
