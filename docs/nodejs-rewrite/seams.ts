@@ -118,4 +118,8 @@ export interface XAgentHost {
  * - ChannelAdapter is a first-class seam; dsh has no Feishu/Weixin/voice seam.
  * - LifeRuntime (subconscious + contacts) is product core, not a job plugin.
  * - MessageStore must read ~/.xagent SQLite, not a new harness home.
+ *
+ * Channel-free minimal spike: keep DiaryMemory + identity prompt only.
+ * Drop ChannelAdapter and LifeRuntime. Do not reimplement LlmAdapter or the
+ * tool loop; use dsh or a few-dozen-line chat-completions host.
  */

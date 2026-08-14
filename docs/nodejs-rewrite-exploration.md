@@ -15,6 +15,8 @@
 
 推荐：继续用 Python 做产品内核。前端已经是 Node 栈，不必为「统一语言」再搬一次后端。若要吸收 `dsh` 的优点，学它的插件缝（LLM / tools / session events），而不是换运行时。
 
+**去掉全部渠道之后：** 仍然不值得从零重写一个 Node 版 xAgent。变值得做的是更小的东西——只验证「日记 + 身份」能不能独立存在，loop 直接用现成的（Python 或 `dsh`），不要自己再写一遍。详见下文「最小版本（无渠道）」。
+
 ---
 
 ## 两个项目不是同一类东西
@@ -159,19 +161,77 @@
 
 ---
 
-## 若仍要 Node：最小可行切片（不要从 launcher 开始）
+## 最小版本（无渠道）
 
-如果只是验证「TS 能不能表达 xAgent」，顺序应该是：
+问的是：飞书 / 微信 / 语音 / Web 渠道管理都拿掉，只留一个能对话的内核，值不值得用 Node 重写。
 
-1. **数据兼容层**：读现有 `messages.sqlite3` 和 `memory/daily/*.md`。
-2. **ModelClient + 单轮 `chat_events`**：对齐现有 event 形状，让 Web UI 不改。
-3. **日记写入 + search_memory / write_memory。**
-4. **一个渠道**：Web，而不是飞书。
-5. 停。用这一层对比 Python 的延迟、prompt 组装、日记质量。
+### 短结论
 
-不要先搬 CLI launcher、飞书、语音。那些是重写税，不是验证项。
+**不值得重写 harness。值得做的是一个日记插件实验，不是一个迷你 xAgent。**
 
-示意接口见 [`docs/nodejs-rewrite/seams.ts`](nodejs-rewrite/seams.ts)。那是设计草稿，不是可运行运行时。
+去掉渠道以后，成本确实掉下来了，但产品独特性也一起掉下来。剩下的东西大半和 `dsh` 重叠：模型适配、tool loop、shell、session 历史、Web UI。自己用 Node 再写一遍 loop，是在重做 `dsh` 已经开源的部分。
+
+无渠道之后，xAgent 还剩的、`dsh` 没有一等模型的，几乎只有：
+
+| 还值得搬的 | 约行数 | 为什么是内核 |
+|---|---|---|
+| Markdown 日记 + `JournalLLMService` | ~0.9k | 第一人称记忆载体 |
+| `MemoryHandler` + memory tools | ~1.0k | 何时写入、如何检索 |
+| `identity.md` + prompt 分层 | 含在 message handler 里 | 稳定自我 |
+| SQLite 消息流（agent 级，不是 session 级） | ~0.5k | 跨对话连续存在 |
+| Working context 滚动摘要 | ~0.5k | 长期对话不爆窗口 |
+
+下面这些看起来像内核，无渠道时其实该删：
+
+| 不要放进最小版 | 原因 |
+|---|---|
+| 潜意识 / 联系人 | 外发没有投递目标 |
+| 文件调度器 | 投递也绑在渠道上 |
+| 群参与决策 | 没有群 |
+| ModelClient 1.6k 行 | `dsh` / 官方 SDK 已有 |
+| Agent loop / tool executor | `dsh` 已有 |
+| launcher / setup / 多 agent 进程管理 | 渠道和安装向导，不是内核 |
+| 图像生成、搜索、skills catalog | 最小验证用不到 |
+
+无渠道的「最小 xAgent」如果只做成「能 chat、能跑 shell、有一段历史」，那它已经不是 xAgent，只是一个普通 harness。那种东西不该重写，该直接用 `dsh`。
+
+### 和整仓重写比，成本变成什么样
+
+| | 整仓（含渠道） | 无渠道最小内核 |
+|---|---|---|
+| 要搬的业务代码 | ~4 万行量级 | 独特逻辑大约 2–3k 行 |
+| 主要风险 | 飞书 / 微信 / 语音回归 | 日记语气和 prompt 分层漂移 |
+| 和 `dsh` 的重叠 | 中等（渠道是差异） | **很高**（loop/tools/UI 都重叠） |
+| 对 GOAL.md | 渠道是「活在真实世界」的载体 | 无渠道后主体性变弱，日记还在 |
+
+所以：渠道拿掉以后，**重写变便宜了，但重写的理由也变弱了。** 便宜的是 loop，而 loop 恰好不该自己写。
+
+### 若仍要做一个最小实验：做什么
+
+只回答一个问题：**Node 里能否保住第一人称日记 + 稳定 identity，而不是再做一个 coding agent。**
+
+范围锁死：
+
+1. 读 `identity.md`
+2. 读/写现有 `memory/daily/*.md`（格式兼容，不必先接 SQLite）
+3. `write_memory` / `search_memory` 两个工具
+4. 一种对话入口：`dsh` Web，或一个几十行的 CLI
+5. 停。对比同一段对话在 Python xAgent 里写成的日记
+
+不要做：自研 streaming loop、多 provider ModelClient、working context、潜意识、调度、前端、`~/.xagent` 全量兼容。
+
+两种做法，只选一个：
+
+- **更推荐：`dsh` 插件 spike。** loop / LLM / UI 用 `dsh`，只写日记和 identity 两个插件。这才叫最小。代价是 `dsh` API 会破，所以这是实验，不是下一代产品。
+- **次选：自研一个极小 TS host。** 只有 identity + 日记 + 一次 chat completions。用来证明内核可以离开 Python。不要在这个 host 里长出工具生态。
+
+示意接口仍见 [`docs/nodejs-rewrite/seams.ts`](nodejs-rewrite/seams.ts)。无渠道时 `ChannelAdapter` / `LifeRuntime` 都可以删，只留 `DiaryMemory` + `AgentRuntime`。
+
+### 对「值不值得」的最终判断
+
+- **当新产品替换 Python xAgent：** 不值得。无渠道的 Node 版既不能服务现有用户，也不能覆盖 GOAL.md 的真实世界存在。
+- **当架构 spike：** 值得，但范围必须是日记插件，不是「最小 xAgent 重写」。
+- **当想要更好的 agent loop：** 直接用 `dsh` 或继续改 Python loop，不要用 Node 重写现有 `Agent.chat()`。
 
 ---
 
@@ -186,7 +246,7 @@
 - **Diary-only carrier：** 不要借重写引入向量库当主记忆。
 - **Attribution and continuity：** SQLite + channel 元数据必须兼容；这是重写的硬约束。
 
-GOAL.md 不支持「为了跟 `dsh` 同栈而重写」。
+GOAL.md 不支持「为了跟 `dsh` 同栈而重写」。无渠道的最小版还削弱了「真实世界存在」和多用户原则；它只能当日记内核的实验，不能当产品方向。
 
 ---
 
@@ -210,6 +270,7 @@ GOAL.md 不支持「为了跟 `dsh` 同栈而重写」。
 - 本判断
 - 子系统移植表
 - 四条路径排序
+- 无渠道最小版本判断（日记插件 spike，不是迷你 xAgent）
 - TypeScript 缝草稿（示意）
 
 明确不做：
