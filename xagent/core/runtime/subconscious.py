@@ -473,13 +473,17 @@ class SubconsciousLoop:
             return "(memory read failed)"
 
     async def _collect_relationship_context(self) -> str:
-        """Collect relationship cards to ground subconscious thought."""
+        """Collect relationship cards to ground subconscious thought.
+
+        Cards are people the agent knows, not a send-list. Delivery still
+        filters to channels this runtime can reach.
+        """
         memory_handler = getattr(self._agent, "memory_handler", None)
         if memory_handler is None or not callable(
             getattr(memory_handler, "get_relationship_context", None)
         ):
             return ""
-        contacts = self._filter_deliverable_contacts(load_contacts(self._contacts_file))
+        contacts = load_contacts(self._contacts_file)
         from ...components.memory import RelationshipStore
 
         keys: list[str] = []
@@ -495,9 +499,7 @@ class SubconsciousLoop:
                     stored_keys = await stored_keys
                 if isinstance(stored_keys, list):
                     for key in stored_keys:
-                        channel, _user_id = RelationshipStore.split_key(str(key))
-                        if str(channel or "").strip().lower() in self._deliverable_channels:
-                            self._append_unique_key(keys, str(key))
+                        self._append_unique_key(keys, str(key))
             except Exception:
                 self._logger.warning("Failed to list relationship cards for subconscious", exc_info=True)
 
@@ -680,31 +682,30 @@ class SubconsciousLoop:
         contacts: List[ContactEntry],
         recipient_hint: Any,
     ) -> Optional[ContactEntry]:
-        """Pick the most relevant contact for the thought."""
+        """Pick the named contact. No hint means no send — never guess another person."""
         if not contacts:
             return None
         # If hint matches a contact, prefer that
         hint = str(recipient_hint or "").strip().lower()
-        if hint:
-            token_map = {
-                id(contact): SubconsciousLoop._contact_match_tokens(contact)
-                for contact in contacts
-            }
-            # -- pass 1: exact match on name, user_id, or channel:user_id --
-            for contact in contacts:
-                exact_tokens, _partial = token_map[id(contact)]
-                if hint in exact_tokens:
-                    return contact
-            # -- pass 2: partial match (hint contains name, or name contains
-            #    hint).  The hint may carry channel annotations such as
-            #    "Telos (feishu)", and user / sender names may be prefixes.
-            for contact in contacts:
-                _exact, partial_tokens = token_map[id(contact)]
-                if any(token and (hint in token or token in hint) for token in partial_tokens):
-                    return contact
+        if not hint:
             return None
-        # Default: most recently seen contact
-        return max(contacts, key=lambda c: c.last_seen)
+        token_map = {
+            id(contact): SubconsciousLoop._contact_match_tokens(contact)
+            for contact in contacts
+        }
+        # -- pass 1: exact match on name, user_id, or channel:user_id --
+        for contact in contacts:
+            exact_tokens, _partial = token_map[id(contact)]
+            if hint in exact_tokens:
+                return contact
+        # -- pass 2: partial match (hint contains name, or name contains
+        #    hint).  The hint may carry channel annotations such as
+        #    "Telos (feishu)", and user / sender names may be prefixes.
+        for contact in contacts:
+            _exact, partial_tokens = token_map[id(contact)]
+            if any(token and (hint in token or token in hint) for token in partial_tokens):
+                return contact
+        return None
 
     @staticmethod
     def _normalize_deliverable_channels(channels: Optional[Iterable[str]]) -> set[str]:
