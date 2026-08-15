@@ -229,7 +229,7 @@ provider:
         )
         self.assertEqual(
             provider_model_api({"name": "deepseek"}),
-            MODEL_API_OPENAI_CHAT_COMPLETIONS,
+            MODEL_API_OPENAI_RESPONSES,
         )
         self.assertEqual(
             provider_model_api({"name": "qwen"}),
@@ -438,7 +438,7 @@ search:
             self.assertEqual(runner.agent.model_api, MODEL_API_ANTHROPIC_MESSAGES)
             self.assertEqual(str(runner.agent.client.base_url).rstrip("/"), "https://api.example.com/anthropic")
 
-    def test_deepseek_runner_uses_chat_completions_protocol(self):
+    def test_deepseek_runner_uses_responses_protocol(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "config.yaml"
             config_path.write_text(
@@ -457,8 +457,8 @@ search:
 
             runner = BaseAgentRunner(config_dir=tmpdir)
 
-            self.assertEqual(runner.agent.model_api, MODEL_API_OPENAI_CHAT_COMPLETIONS)
-            self.assertEqual(runner.agent.model_client.model_api, MODEL_API_OPENAI_CHAT_COMPLETIONS)
+            self.assertEqual(runner.agent.model_api, MODEL_API_OPENAI_RESPONSES)
+            self.assertEqual(runner.agent.model_client.model_api, MODEL_API_OPENAI_RESPONSES)
 
     def test_custom_openai_runner_uses_chat_completions_protocol(self):
         with tempfile.TemporaryDirectory() as tmpdir:

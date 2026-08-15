@@ -377,10 +377,15 @@ class ModelClient:
         if tool_specs:
             params["tools"] = self._to_responses_tools(tool_specs)
             params["tool_choice"] = "auto"
-            params["include"] = ["reasoning.encrypted_content"]
+            # DeepSeek Responses API does not support `include`; OpenAI uses
+            # encrypted reasoning content for multi-turn tool replay.
+            if self.provider_name != PROVIDER_DEEPSEEK:
+                params["include"] = ["reasoning.encrypted_content"]
         if self.max_tokens is not None:
             params["max_output_tokens"] = self.max_tokens
         if self.reasoning is not None:
+            # DeepSeek and OpenAI both use reasoning.effort; DeepSeek maps
+            # none→off, minimal/low→low, medium/high/xhigh→high, max→max.
             params["reasoning"] = {
                 "effort": self.reasoning.effort if self.reasoning.enabled else "none"
             }
@@ -405,15 +410,16 @@ class ModelClient:
             return
         params["reasoning_effort"] = reasoning.effort if reasoning.enabled else "none"
 
-    @classmethod
-    def _build_responses_input(cls, messages: list) -> list:
+    def _build_responses_input(self, messages: list) -> list:
         input_items = []
         for message in messages:
             if not isinstance(message, dict):
                 continue
             message_type = str(message.get("type") or "").strip()
             if message_type in {"reasoning", "function_call", "function_call_output", "message"}:
-                input_items.append(cls._to_plain_data(message))
+                item = self._to_plain_data(message)
+                if isinstance(item, dict):
+                    input_items.append(self._sanitize_responses_input_item(item))
                 continue
 
             role = str(message.get("role") or "").strip()
@@ -421,23 +427,34 @@ class ModelClient:
                 input_items.append({
                     "type": "function_call_output",
                     "call_id": str(message.get("tool_call_id") or "call_0"),
-                    "output": cls._content_to_text(message.get("content")),
+                    "output": self._content_to_text(message.get("content")),
                 })
                 continue
 
             if role == "assistant" and message.get("tool_calls"):
-                content_text = cls._content_to_text(message.get("content"))
+                content_text = self._content_to_text(message.get("content"))
                 if content_text:
                     input_items.append({"role": "assistant", "content": content_text})
                 for tool_call in message.get("tool_calls") or []:
-                    input_items.append(cls._chat_tool_call_to_responses_item(tool_call))
+                    input_items.append(self._chat_tool_call_to_responses_item(tool_call))
                 continue
 
             if role in {"user", "assistant", "system"}:
-                content = cls._to_responses_message_content(message.get("content"), role=role)
+                content = self._to_responses_message_content(message.get("content"), role=role)
                 if content:
                     input_items.append({"role": role, "content": content})
         return input_items
+
+    def _sanitize_responses_input_item(self, item: dict) -> dict:
+        """Drop Responses fields DeepSeek does not accept on replay."""
+        if self.provider_name != PROVIDER_DEEPSEEK:
+            return item
+        if item.get("type") != "reasoning":
+            return item
+        sanitized = dict(item)
+        sanitized.pop("encrypted_content", None)
+        sanitized.pop("summary", None)
+        return sanitized
 
     @classmethod
     def _to_responses_message_content(cls, content: Any, *, role: str) -> Any:
@@ -1425,6 +1442,32 @@ class ModelClient:
                 cls._merge_responses_tool_item(part, raw_item)
             return None
 
+        if event_type == "response.output_item.done":
+            # Finalize reasoning/message items with full plain-text content
+            # needed for DeepSeek (and OpenAI) multi-turn tool replay.
+            raw_item = cls._field(event, "item") or {}
+            item = cls._to_plain_data(raw_item)
+            if isinstance(item, dict) and item:
+                cls._upsert_responses_stream_item(response_items, item)
+            if cls._field(raw_item, "type") == "function_call":
+                index = cls._field(event, "output_index")
+                if index is None:
+                    index = len(tool_call_parts)
+                part = tool_call_parts.setdefault(int(index), cls._empty_responses_tool_part())
+                cls._merge_responses_tool_item(part, raw_item, replace_arguments=True)
+            return None
+
+        if event_type == "response.reasoning_text.delta":
+            delta = cls._field(event, "delta")
+            if isinstance(delta, str) and delta:
+                cls._append_responses_reasoning_delta(
+                    response_items,
+                    delta,
+                    item_id=cls._field(event, "item_id"),
+                    output_index=cls._field(event, "output_index"),
+                )
+            return None
+
         if event_type == "response.function_call_arguments.delta":
             index = cls._field(event, "output_index")
             if index is None:
@@ -1453,6 +1496,60 @@ class ModelClient:
             return None
 
         return None
+
+    @classmethod
+    def _upsert_responses_stream_item(cls, response_items: list[dict], item: dict) -> None:
+        item_id = cls._field(item, "id")
+        if item_id:
+            for index, existing in enumerate(response_items):
+                if cls._field(existing, "id") == item_id:
+                    response_items[index] = item
+                    return
+        response_items.append(item)
+
+    @classmethod
+    def _append_responses_reasoning_delta(
+        cls,
+        response_items: list[dict],
+        delta: str,
+        *,
+        item_id: Any = None,
+        output_index: Any = None,
+    ) -> None:
+        target = None
+        if item_id:
+            for item in response_items:
+                if cls._field(item, "type") == "reasoning" and cls._field(item, "id") == item_id:
+                    target = item
+                    break
+        if target is None and isinstance(output_index, int):
+            if 0 <= output_index < len(response_items):
+                candidate = response_items[output_index]
+                if cls._field(candidate, "type") == "reasoning":
+                    target = candidate
+        if target is None:
+            for item in reversed(response_items):
+                if cls._field(item, "type") == "reasoning":
+                    target = item
+                    break
+        if target is None:
+            target = {"type": "reasoning", "content": []}
+            if item_id:
+                target["id"] = item_id
+            response_items.append(target)
+
+        content = target.get("content")
+        if not isinstance(content, list):
+            content = []
+            target["content"] = content
+        if content and isinstance(content[-1], dict) and content[-1].get("type") in {
+            "reasoning_text",
+            "output_text",
+            "text",
+        }:
+            content[-1]["text"] = str(content[-1].get("text") or "") + delta
+            return
+        content.append({"type": "reasoning_text", "text": delta})
 
     @staticmethod
     def _empty_responses_tool_part() -> dict:
