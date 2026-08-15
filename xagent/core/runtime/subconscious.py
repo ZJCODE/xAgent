@@ -266,11 +266,12 @@ class SubconsciousLoop:
         return random.random() < max(0.0, min(1.0, float(self._probability)))
 
     async def maybe_think(self) -> None:
-        """Run one subconscious cycle if the epoch gate and dice roll pass.
+        """Run one subconscious cycle if the refractory gate and dice roll pass.
 
-        First principle: the same unmoved experience should not re-trigger
-        reflection. After a cycle on a cursor, wait for new messages (or an
-        optional idle refire window) before thinking again.
+        Subconscious is autonomous inner life (GOAL: independent subject),
+        not a chat echo. After a cycle, wait for either new external experience
+        or the idle refractory window before thinking again — time passing
+        itself is continuity, so a human message is not required.
         """
         experience_cursor, experience_moved = await self._experience_state()
         if not experience_moved and not self._idle_refire_ready():
@@ -318,12 +319,12 @@ class SubconsciousLoop:
         self._mark_thought_epoch(experience_cursor)
 
     def _mark_thought_epoch(self, experience_cursor: int) -> None:
-        """Lock this experience cursor until life moves (or idle refire)."""
+        """Start the refractory window for this experience cursor."""
         self._last_experience_cursor = experience_cursor
         self._last_thought_at_mono = time.monotonic()
 
     def _idle_refire_ready(self) -> bool:
-        """True when the same cursor may be reconsidered after a long idle gap."""
+        """True when enough solitary time has passed to allow another inner moment."""
         if self._idle_refire_seconds <= 0:
             return False
         if self._last_thought_at_mono is None:
@@ -331,10 +332,11 @@ class SubconsciousLoop:
         return (time.monotonic() - self._last_thought_at_mono) >= self._idle_refire_seconds
 
     async def _experience_state(self) -> tuple[int, bool]:
-        """Return ``(cursor, moved)`` describing whether life moved on.
+        """Return ``(cursor, moved)`` for external experience (messages, etc.).
 
-        When no message cursor is available, the first cycle in-process counts
-        as movement; later ticks stay locked until an idle refire window opens.
+        New attributable experience unlocks early. If no cursor is available,
+        the first in-process cycle counts as movement; later ticks rely on the
+        idle refractory window so inner life is not message-gated.
         """
         raw_cursor = await self._current_experience_cursor()
         if raw_cursor is None:

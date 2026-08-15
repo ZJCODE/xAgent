@@ -201,10 +201,12 @@ class AgentConfig:
     # 0=off, 1=very active. Suggested: 0.01~0.1
     SUBCONSCIOUS_ACTIVITY = 0.02
     SUBCONSCIOUS_MAX_CONTACTS = 10
-    # After a subconscious cycle on a given experience cursor, do not think
-    # again until the cursor moves. Set >0 to allow another idle thought
-    # after this many seconds on the same cursor (0 = only when life moves).
-    SUBCONSCIOUS_IDLE_REFIRE_SECONDS = 0
+    # Refractory period for autonomous inner life (GOAL: independent subject +
+    # continuity). After a subconscious cycle, do not think again until either
+    # new messages arrive or this many seconds pass. Time alone counts as life
+    # continuing — do not require a human message. 0 disables time-based
+    # refire (message-unlock only; not recommended).
+    SUBCONSCIOUS_IDLE_REFIRE_SECONDS = 3600
 
     # ============================================================
     # 11. Tool Policy Baseline
@@ -294,9 +296,9 @@ class AgentConfig:
         "Form one private thought from recent experience and memory; "
         "empty internal_content is fine if nothing surfaces. "
         "Do not invent a new inner monologue just to fill the turn.\n"
-        "If recent diary already holds this observation and recent experience "
-        "has not moved, return empty internal_content — silence is better than "
-        "restating the same private note.\n"
+        "If recent diary already holds this observation and nothing in life has "
+        "moved — no new messages, no new angle from memory — return empty "
+        "internal_content — silence is better than restating the same private note.\n"
         "The diary is only yours. Writing a thought down did not send it.\n"
         "Look at the current time. At night, avoid unsolicited messages; "
         "if someone is already talking with you, continuing is not a disturbance.\n"

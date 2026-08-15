@@ -365,6 +365,7 @@ class SubconsciousLoopTests(unittest.TestCase):
             self.assertIn("their thread to someone else", current_task["content"])
             self.assertIn("recent diary already holds this observation", current_task["content"])
             self.assertIn("return empty internal_content", current_task["content"])
+            self.assertIn("nothing in life has moved", current_task["content"])
             self.assertIn(
                 "Write internal_content and external_content in the recent conversation language",
                 current_task["content"],
@@ -1033,7 +1034,7 @@ class SubconsciousLoopTests(unittest.TestCase):
             self.assertEqual(call_args[0][0], "There is a signal here, but it is not speakable yet.")
 
     def test_same_experience_epoch_skips_second_thought(self):
-        """Unmoved experience must not re-trigger reflection."""
+        """Within the refractory window, unmoved experience must not re-fire."""
         agent = self._make_agent_mock()
         self._set_model_json(agent, {
             "internal_content": "这个陌生人来来回回就是那几句。",
@@ -1046,6 +1047,8 @@ class SubconsciousLoopTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             loop = SubconsciousLoop(agent, workspace=Path(tmpdir))
             loop._probability = 1.0
+            self.assertEqual(loop._idle_refire_seconds, AgentConfig.SUBCONSCIOUS_IDLE_REFIRE_SECONDS)
+            self.assertGreater(loop._idle_refire_seconds, 0)
 
             asyncio.run(loop.maybe_think())
             agent.record_subconscious_thought.assert_called_once()
@@ -1056,6 +1059,37 @@ class SubconsciousLoopTests(unittest.TestCase):
 
             agent.record_subconscious_thought.assert_called_once()
             self.assertEqual(len(agent.model_client.calls), 1)
+
+    def test_default_refire_keeps_idle_inner_life_without_new_messages(self):
+        """GOAL: continuity of an independent subject — time alone can unlock."""
+        agent = self._make_agent_mock()
+        self._set_model_json(agent, {
+            "internal_content": "夜深了，想起上周那通未说完的话。",
+            "worthy": False,
+            "recipient_hint": None,
+            "external_content": None,
+        })
+        agent.message_storage = MagicMock()
+        agent.message_storage.get_latest_message_cursor = AsyncMock(return_value=7)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop = SubconsciousLoop(agent, workspace=Path(tmpdir))
+            loop._probability = 1.0
+
+            asyncio.run(loop.maybe_think())
+            self.assertEqual(agent.record_subconscious_thought.call_count, 1)
+
+            # No new messages, but solitary time passed → may think again.
+            loop._last_thought_at_mono = time.monotonic() - (
+                AgentConfig.SUBCONSCIOUS_IDLE_REFIRE_SECONDS + 1
+            )
+            self._set_model_json(agent, {
+                "internal_content": "时间又过了一截，心里换了个角度。",
+                "worthy": False,
+                "recipient_hint": None,
+                "external_content": None,
+            })
+            asyncio.run(loop.maybe_think())
+            self.assertEqual(agent.record_subconscious_thought.call_count, 2)
 
     def test_new_experience_allows_another_thought(self):
         agent = self._make_agent_mock()
