@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import random
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
@@ -223,6 +224,10 @@ class SubconsciousLoop:
         self._delivery_retry_delay_seconds = SUBCONSCIOUS_DELIVERY_RETRY_DELAY_SECONDS
         self._last_experience_cursor: Optional[int] = None
         self._stale_streak = 0
+        self._habituation_anchor_mono: Optional[float] = None
+        self._recovery_seconds = max(
+            0.0, float(AgentConfig.SUBCONSCIOUS_HABITUATION_RECOVERY_SECONDS)
+        )
 
     # ------------------------------------------------------------------
     # Public API
@@ -264,7 +269,7 @@ class SubconsciousLoop:
         return random.random() < self._effective_probability()
 
     def _effective_probability(self) -> float:
-        """``activity × 0.5^stale_streak`` — no floor; new experience resets streak."""
+        """``activity × 0.5^stale_streak`` — no floor; life can reset or recover streak."""
         probability = max(0.0, min(1.0, float(self._probability)))
         if self._stale_streak <= 0 or probability <= 0.0:
             return probability
@@ -273,14 +278,15 @@ class SubconsciousLoop:
     async def maybe_think(self) -> None:
         """Run one subconscious cycle if the dice roll passes.
 
-        Intensity is ``subconscious_activity``. The only extra rule is
-        habituation: each empty/unworthy reflection on unmoved experience
-        halves the next effective rate; new experience or a worthy impulse
-        clears it. The model is asked to return empty when nothing moved.
+        Intensity is ``subconscious_activity``. Habituation halves the rate
+        after empty/unworthy reflections; new messages clear the streak;
+        solitude slowly recovers it so alone time still counts as life.
         """
         experience_cursor, experience_moved = await self._experience_state()
         if experience_moved:
-            self._stale_streak = 0
+            self._clear_habituation()
+        else:
+            self._recover_habituation_from_solitude()
 
         if not self.should_trigger():
             return
@@ -322,15 +328,34 @@ class SubconsciousLoop:
             await self._write_subconscious_thought(diary_note)
 
         if worthy:
-            self._stale_streak = 0
+            self._clear_habituation()
             self._last_experience_cursor = experience_cursor
         else:
             self._habituate(experience_cursor)
+
+    def _clear_habituation(self) -> None:
+        self._stale_streak = 0
+        self._habituation_anchor_mono = time.monotonic()
 
     def _habituate(self, experience_cursor: int) -> None:
         """One more private reflection without movement — quiet down next time."""
         self._stale_streak += 1
         self._last_experience_cursor = experience_cursor
+        self._habituation_anchor_mono = time.monotonic()
+
+    def _recover_habituation_from_solitude(self) -> None:
+        """Let alone time reduce streak so life is not message-gated."""
+        if self._stale_streak <= 0 or self._recovery_seconds <= 0:
+            return
+        if self._habituation_anchor_mono is None:
+            self._habituation_anchor_mono = time.monotonic()
+            return
+        elapsed = time.monotonic() - self._habituation_anchor_mono
+        steps = int(elapsed // self._recovery_seconds)
+        if steps <= 0:
+            return
+        self._stale_streak = max(0, self._stale_streak - steps)
+        self._habituation_anchor_mono += steps * self._recovery_seconds
 
     async def _experience_state(self) -> tuple[int, bool]:
         """Return ``(cursor, moved)`` for whether external experience changed.

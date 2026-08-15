@@ -3,6 +3,7 @@
 import asyncio
 import json
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -1048,9 +1049,29 @@ class SubconsciousLoopTests(unittest.TestCase):
             loop._stale_streak = 8
             self.assertEqual(loop._effective_probability(), 1.0 / 256)
 
-            # No floor: long streaks keep halving toward silence until life moves.
+            # No floor: long streaks keep halving toward silence until
+            # messages arrive or solitude recovers the streak.
             loop._stale_streak = 20
             self.assertLess(loop._effective_probability(), 1e-6)
+
+    def test_solitude_recovers_habituation_without_new_messages(self):
+        agent = self._make_agent_mock()
+        agent.message_storage = MagicMock()
+        agent.message_storage.get_latest_message_cursor = AsyncMock(return_value=42)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop = SubconsciousLoop(agent, workspace=Path(tmpdir))
+            loop._probability = 0.0  # only exercise recovery, not generation
+            loop._last_experience_cursor = 42
+            loop._stale_streak = 3
+            loop._recovery_seconds = 3600.0
+            loop._habituation_anchor_mono = time.monotonic() - 7200.0
+
+            asyncio.run(loop.maybe_think())
+
+            self.assertEqual(loop._stale_streak, 1)
+            self.assertEqual(loop._effective_probability(), 0.0)  # activity still 0
+            loop._probability = 1.0
+            self.assertEqual(loop._effective_probability(), 0.5)
 
     def test_unworthy_thought_habituates_without_blocking_diary(self):
         agent = self._make_agent_mock()

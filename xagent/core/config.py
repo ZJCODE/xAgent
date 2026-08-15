@@ -202,6 +202,9 @@ class AgentConfig:
     # Primary intensity knob — habituation only softens it when experience is stale.
     SUBCONSCIOUS_ACTIVITY = 0.02
     SUBCONSCIOUS_MAX_CONTACTS = 10
+    # Solitude recovery: each this many seconds without new messages reduces
+    # stale_streak by 1, so alone time can restore inner life. 0 disables.
+    SUBCONSCIOUS_HABITUATION_RECOVERY_SECONDS = 3600
 
     # ============================================================
     # 11. Tool Policy Baseline
