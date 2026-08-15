@@ -99,7 +99,7 @@ export function FeatureSetupModal({ open, feature, schema, onClose, onSaved }: F
     () => (feature === "model" ? reasoningCapabilityFor(schema, provider, modelApi) : null),
     [feature, schema, provider, modelApi],
   );
-  const reasoningMode = reasoning ? (reasoning.enabled ? "enabled" : "disabled") : "automatic";
+  const reasoningMode = reasoning?.enabled ? "enabled" : "automatic";
   const reasoningControl = reasoning?.budget_tokens !== undefined ? "budget_tokens" : "effort";
   const showFeatureKey =
     (feature === "search" || feature === "image") && needsFeatureKey(schema.model_provider, provider);
@@ -366,13 +366,11 @@ export function FeatureSetupModal({ open, feature, schema, onClose, onSaved }: F
                   onChange={(event) => {
                     const mode = event.target.value;
                     if (mode === "automatic") setReasoning(null);
-                    else if (mode === "disabled") setReasoning({ enabled: false });
                     else setReasoning(defaultEnabledReasoning(capability));
                   }}
                 >
                   <option value="automatic">Automatic (follow model)</option>
                   <option value="enabled">Enabled</option>
-                  <option value="disabled">Disabled</option>
                 </select>
               </WizardField>
               {reasoningMode === "enabled" && capability.controls.length > 1 ? (
