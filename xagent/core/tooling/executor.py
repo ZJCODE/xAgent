@@ -6,6 +6,7 @@ from typing import Any, Optional
 
 from ..config import AgentConfig
 from .manager import ToolManager
+from .guards import ToolCallContext, ToolDecision, ToolGuardResult
 from ...components import MessageStorage
 from ...utils.image_utils import is_image_output
 from ...tools.image_generation_tool import (
@@ -41,17 +42,30 @@ class ToolExecutor:
         message_storage: MessageStorage,
         client: Any,
         observability: Any = None,
+        guards: Optional[list] = None,
+        workspace_dir: Optional[Any] = None,
     ):
         self.tool_manager = tool_manager
         self.message_storage = message_storage
         self.client = client
         self.observability = observability
+        self.guards = list(guards or [])
+        self.workspace_dir = workspace_dir
+        self._turn_user_id = ""
+        self._turn_channel = None
+        self._turn_room_name = None
+        self._turn_inbox_kind = ""
 
     async def handle_tool_calls(
         self,
         tool_calls: list,
         input_messages: list,
         max_concurrent_tools: int = AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS,
+        *,
+        user_id: str = "",
+        channel: Optional[str] = None,
+        room_name: Optional[str] = None,
+        inbox_kind: str = "",
     ) -> Optional[ToolDisplayResult]:
         """
         Handle tool calls by executing them concurrently with concurrency limit.
@@ -59,6 +73,36 @@ class ToolExecutor:
         Returns:
             None if no displayable output, otherwise a ToolDisplayResult.
         """
+        previous = (
+            self._turn_user_id,
+            self._turn_channel,
+            self._turn_room_name,
+            self._turn_inbox_kind,
+        )
+        self._turn_user_id = user_id
+        self._turn_channel = channel
+        self._turn_room_name = room_name
+        self._turn_inbox_kind = inbox_kind
+        try:
+            return await self._handle_tool_calls_locked(
+                tool_calls,
+                input_messages,
+                max_concurrent_tools,
+            )
+        finally:
+            (
+                self._turn_user_id,
+                self._turn_channel,
+                self._turn_room_name,
+                self._turn_inbox_kind,
+            ) = previous
+
+    async def _handle_tool_calls_locked(
+        self,
+        tool_calls: list,
+        input_messages: list,
+        max_concurrent_tools: int,
+    ) -> Optional[ToolDisplayResult]:
         if not tool_calls:
             return None
 
@@ -142,11 +186,26 @@ class ToolExecutor:
         if not func:
             return self._tool_result_message(call_id, f"Tool `{name}` not found."), None
 
+        call_ctx = ToolCallContext(
+            name=name,
+            args=args,
+            workspace_dir=self.workspace_dir,
+            user_id=self._turn_user_id,
+            channel=self._turn_channel,
+            room_name=self._turn_room_name,
+            inbox_kind=self._turn_inbox_kind,
+        )
+        denied = await self._pre_execute(call_ctx)
+        if denied is not None:
+            return self._tool_result_message(call_id, denied), None
+
         logger.info("Calling tool: %s with args: %s", name, args)
+
         tool_ctx = self._tool_observation(name=name, call_id=call_id, arguments=args)
         with tool_ctx as tool_obs:
             try:
                 result = await func(**args)
+                result = await self._post_execute(call_ctx, result)
             except Exception as e:
                 logger.error("Tool call error: %s", e)
                 result = f"Tool error: {e}"
@@ -191,6 +250,31 @@ class ToolExecutor:
                 attachments=[],
             ) if image_data else None
             return self._tool_result_message(call_id, model_output), display_result
+
+    async def _pre_execute(self, ctx: ToolCallContext) -> Optional[str]:
+        for guard in self.guards:
+            pre_execute = getattr(guard, "pre_execute", None)
+            if not callable(pre_execute):
+                continue
+            outcome = await pre_execute(ctx)
+            if not isinstance(outcome, ToolGuardResult):
+                continue
+            if outcome.decision is ToolDecision.ALLOW:
+                continue
+            reason = outcome.reason or "tool call denied"
+            if outcome.decision is ToolDecision.ASK:
+                reason = f"approval required: {reason}"
+            return f"Tool error: {reason}"
+        return None
+
+    async def _post_execute(self, ctx: ToolCallContext, result: Any) -> Any:
+        current = result
+        for guard in self.guards:
+            post_execute = getattr(guard, "post_execute", None)
+            if not callable(post_execute):
+                continue
+            current = await post_execute(ctx, current)
+        return current
 
     def _tool_observation(self, *, name: str, call_id: str, arguments: Any):
         runtime = self.observability

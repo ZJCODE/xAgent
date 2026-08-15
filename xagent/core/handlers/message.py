@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from ..config import AgentConfig
+from ..inbox import INBOX_KIND_METADATA_KEY, is_scheduled_work
 from ...components import MessageStorage
 from ...schemas import Message, RoleType, MessageType
 from ...schemas.attachment import (
@@ -12,6 +13,14 @@ from ...schemas.attachment import (
     attachment_image_sources,
     attachment_manifest_markdown,
     dedupe_attachments,
+)
+from ..prompt_registry import (
+    KIND_DECISION,
+    KIND_INSTRUCTIONS,
+    KIND_TURN,
+    PromptAssembleContext,
+    PromptRegistry,
+    default_prompt_registry,
 )
 from ...utils.image_utils import (
     MAX_IMAGES_PER_MESSAGE,
@@ -40,10 +49,12 @@ class MessageHandler:
         message_storage: MessageStorage,
         system_prompt: str = "",
         workspace_dir: Optional[Union[str, Path]] = None,
+        prompt_registry: Optional[PromptRegistry] = None,
     ):
         self.message_storage = message_storage
         self.system_prompt = system_prompt
         self.workspace_dir = Path(workspace_dir).expanduser().resolve() if workspace_dir is not None else None
+        self.prompt_registry = prompt_registry or default_prompt_registry()
 
     async def store_user_message(
         self,
@@ -133,6 +144,7 @@ class MessageHandler:
         role: RoleType = RoleType.ENVIRONMENT,
         channel: Optional[str] = None,
         recipient_id: Optional[str] = None,
+        sender_id: Optional[str] = None,
     ) -> Message:
         """Store a non-direct observation from the agent's environment."""
         event_msg = Message.create_context_event(
@@ -142,6 +154,8 @@ class MessageHandler:
             metadata=metadata,
             role=role,
         )
+        if sender_id:
+            event_msg.sender_id = sender_id
         if recipient_id:
             event_msg.recipient_id = recipient_id
         if room_name:
@@ -288,6 +302,7 @@ class MessageHandler:
         task_mode: str = "reply",
         working_summary: str = "",
         covers_through_cursor: int = 0,
+        prompt_registry: Optional[PromptRegistry] = None,
     ) -> list[dict]:
         """Build the per-turn model input context as named message layers."""
         conversation_messages = MessageHandler.filter_conversation_messages(messages)
@@ -312,65 +327,44 @@ class MessageHandler:
             budgeted_observations,
         )
 
-        context_messages: list[dict] = []
-        if relationship_context.strip():
-            if task_mode == "subconscious_json":
-                relationship_layer_name = AgentConfig.SUBCONSCIOUS_RELATIONSHIPS_NAME
-                relationship_layer_content = AgentConfig.build_subconscious_relationships_context(
-                    relationship_context
-                )
-            else:
-                relationship_layer_name = AgentConfig.RELATIONSHIP_CONTEXT_NAME
-                relationship_layer_content = AgentConfig.build_relationship_context(
-                    relationship_context
-                )
-            context_messages.append({
-                "role": RoleType.USER.value,
-                "name": relationship_layer_name,
-                "content": relationship_layer_content,
-            })
-
-        if memory_context.strip():
-            context_messages.append({
-                "role": RoleType.USER.value,
-                "name": AgentConfig.RECENT_MEMORY_NAME,
-                "content": MessageHandler._wrap_untrusted_context(
-                    AgentConfig.RECENT_MEMORY_NAME,
-                    memory_context,
-                ),
-            })
-
-        context_messages.append({
-            "role": RoleType.USER.value,
-            "name": AgentConfig.RECENT_EXPERIENCE_NAME,
-            "content": MessageHandler._build_recent_experience_context(
-                experience_entries=experience_entries,
-                omitted_messages=omitted_count,
-                omitted_observations=omitted_observation_count,
-                working_summary=working_summary,
-            ),
-        })
-
+        recent_experience = MessageHandler._build_recent_experience_context(
+            experience_entries=experience_entries,
+            omitted_messages=omitted_count,
+            omitted_observations=omitted_observation_count,
+            working_summary=working_summary,
+        )
         resolved_current_time = (
             current_time
             or current_date
             or datetime.now().strftime("%Y-%m-%d %H:%M")
         )
-        if task_mode == "subconscious_json":
-            current_task_text = AgentConfig.build_subconscious_current_task(
-                current_time=resolved_current_time,
-            )
-        else:
-            current_task_text = AgentConfig.build_current_task(
-                current_user_id=current_user_id,
-                current_time=resolved_current_time,
-                channel_instructions=channel_instructions,
-            )
-        current_task_message = {
-            "role": RoleType.USER.value,
-            "name": AgentConfig.CURRENT_TASK_NAME,
-            "content": current_task_text,
-        }
+        inbox_kind = ""
+        if current_message is not None:
+            inbox_kind = str(
+                (current_message.metadata or {}).get(INBOX_KIND_METADATA_KEY) or ""
+            ).strip()
+        ctx = PromptAssembleContext(
+            relationship_context=relationship_context,
+            memory_context=memory_context,
+            recent_experience=recent_experience,
+            current_user_id=current_user_id,
+            current_time=resolved_current_time,
+            channel_instructions=channel_instructions,
+            task_mode=task_mode,
+            inbox_kind=inbox_kind,
+        )
+        registry = prompt_registry or default_prompt_registry()
+        context_messages = registry.assemble(KIND_TURN, ctx)
+
+        current_task_text = next(
+            (
+                str(message["content"])
+                for message in context_messages
+                if message.get("name") == AgentConfig.CURRENT_TASK_NAME
+                and isinstance(message.get("content"), str)
+            ),
+            "",
+        )
 
         current_images: List[str] = []
         if include_images:
@@ -383,15 +377,17 @@ class MessageHandler:
                 current_user_id,
                 workspace_dir=workspace_dir,
             )
-        if current_images:
-            content = [{"type": "text", "text": current_task_text}]
-            content.extend(
-                {"type": "image_url", "image_url": {"url": image_source}}
-                for image_source in current_images
-            )
-            current_task_message["content"] = content
-
-        context_messages.append(current_task_message)
+        if current_images and current_task_text:
+            for message in context_messages:
+                if message.get("name") != AgentConfig.CURRENT_TASK_NAME:
+                    continue
+                content = [{"type": "text", "text": current_task_text}]
+                content.extend(
+                    {"type": "image_url", "image_url": {"url": image_source}}
+                    for image_source in current_images
+                )
+                message["content"] = content
+                break
         return context_messages
 
     @staticmethod
@@ -521,24 +517,37 @@ class MessageHandler:
     @staticmethod
     def _format_context_event_header(message: Message) -> str:
         header = f"[ambient context][timestamp={MessageHandler._format_transcript_timestamp(message)}]"
+        speaker = MessageHandler._sanitize_marker_field(message.sender_id)
+        if speaker:
+            header += f"[from={speaker}]"
         if message.channel:
             header += f"[channel={message.channel}]"
         if message.room_name:
-            safe_room = message.room_name.replace("\n", " ").replace("]", "")
+            safe_room = MessageHandler._sanitize_marker_field(message.room_name)
             header += f"[room={safe_room}]"
         return header
 
     @staticmethod
     def _format_transcript_message_header(message: Message) -> str:
-        speaker = MessageHandler._format_transcript_speaker(message)
         timestamp = MessageHandler._format_transcript_timestamp(message)
-        header = f"[speaker={speaker}][timestamp={timestamp}]"
+        if is_scheduled_work(message.metadata):
+            header = f"[scheduled task][timestamp={timestamp}]"
+            target = MessageHandler._sanitize_marker_field(message.sender_id)
+            if target:
+                header += f"[for={target}]"
+        else:
+            speaker = MessageHandler._format_transcript_speaker(message)
+            header = f"[speaker={speaker}][timestamp={timestamp}]"
         if message.channel:
             header += f"[channel={message.channel}]"
         if message.room_name:
-            safe_room = message.room_name.replace("\n", " ").replace("]", "")
+            safe_room = MessageHandler._sanitize_marker_field(message.room_name)
             header += f"[room={safe_room}]"
         return header
+
+    @staticmethod
+    def _sanitize_marker_field(value: Optional[str]) -> str:
+        return str(value or "").strip().replace("\n", " ").replace("]", "")
 
     @staticmethod
     def _format_transcript_timestamp(message: Message) -> str:
@@ -914,47 +923,20 @@ class MessageHandler:
         appended to the core prompt so the model knows it cannot execute
         tasks or use tools during this turn.
         """
-        core_prompt = AgentConfig.BASE_AGENT_PROMPT.strip()
-        if not supports_vision:
-            core_prompt = core_prompt + AgentConfig.NO_VISION_NOTICE.rstrip()
-        if is_subconscious:
-            core_prompt = core_prompt + AgentConfig.SUBCONSCIOUS_MODE_NOTICE.rstrip()
-        messages = [{
-            "role": "system",
-            "name": AgentConfig.CORE_INTERACTION_RULES_NAME,
-            "content": core_prompt,
-        }]
+        ctx = PromptAssembleContext(
+            system_prompt=self.system_prompt,
+            tool_names=list(tool_names or []),
+            skills_catalog=skills_catalog,
+            workspace_context=workspace_context,
+            supports_vision=supports_vision,
+            is_subconscious=is_subconscious,
+        )
+        return self.prompt_registry.assemble(KIND_INSTRUCTIONS, ctx)
 
-        tool_policy = self._build_tool_policy(tool_names=tool_names)
-        if tool_policy:
-            messages.append({
-                "role": "system",
-                "name": AgentConfig.TOOL_POLICY_NAME,
-                "content": tool_policy,
-            })
-
-        if self.system_prompt.strip():
-            messages.append({
-                "role": "system",
-                "name": AgentConfig.IDENTITY_CONTEXT_NAME,
-                "content": AgentConfig.build_identity_context(self.system_prompt),
-            })
-
-        if workspace_context.strip():
-            messages.append({
-                "role": "system",
-                "name": AgentConfig.WORKSPACE_CONTEXT_NAME,
-                "content": workspace_context.strip(),
-            })
-
-        if skills_catalog.strip():
-            messages.append({
-                "role": "system",
-                "name": AgentConfig.SKILLS_CATALOG_NAME,
-                "content": skills_catalog.strip(),
-            })
-
-        return messages
+    def build_decision_messages(self) -> list[dict]:
+        """Named system layers for a participation decision request."""
+        ctx = PromptAssembleContext(system_prompt=self.system_prompt)
+        return self.prompt_registry.assemble(KIND_DECISION, ctx)
 
     @staticmethod
     def _build_tool_policy(tool_names: Optional[List[str]] = None) -> str:

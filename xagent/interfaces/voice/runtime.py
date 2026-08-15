@@ -117,6 +117,8 @@ class VoicePlayer(Protocol):
 class VoiceRuntime:
     """Run the single half-duplex listen, think, speak state machine."""
 
+    channel_name = "voice"
+
     def __init__(
         self,
         *,
@@ -353,6 +355,7 @@ class VoiceRuntime:
                 user_id=self.options.user_id,
                 stream=self.options.stream,
                 channel="voice",
+                inbox_kind="user_turn",
             ):
                 event_type = event.get("type")
                 message_id = str(event.get("message_id") or uuid.uuid4().hex)
@@ -457,7 +460,7 @@ class VoiceRuntime:
         if task.task_type != "agent":
             raise ValueError(f"unsupported scheduled voice task type: {task.task_type}")
 
-        prompt = AgentConfig.scheduled_agent_prompt(task.content)
+        prompt = str(task.content or "").strip()
         with scheduled_delivery_context(self._delivery_context(task=task)):
             parts: list[str] = []
             message_delta_seen: set[str] = set()
@@ -466,6 +469,7 @@ class VoiceRuntime:
                 user_id=task.delivery_user_id or self.options.user_id or AgentConfig.DEFAULT_USER_ID,
                 stream=self.options.stream,
                 channel="voice",
+                inbox_kind="scheduled_turn",
             ):
                 event_type = event.get("type")
                 message_id = str(event.get("message_id") or uuid.uuid4().hex)

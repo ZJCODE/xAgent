@@ -22,6 +22,7 @@ class ApiChannelAdapter:
     """Bridge between HTTP/WebSocket routes and the Agent for the api channel."""
 
     CHANNEL = CHANNEL_API
+    channel_name = CHANNEL_API
 
     def __init__(
         self,

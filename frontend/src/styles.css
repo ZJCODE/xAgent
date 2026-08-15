@@ -2156,6 +2156,10 @@ input::placeholder {
   border-left-color: var(--info);
 }
 
+.message-row.role-scheduled {
+  border-left-color: var(--warning, #d97706);
+}
+
 .message-row-meta {
   display: flex;
   flex-wrap: wrap;
@@ -2180,6 +2184,11 @@ input::placeholder {
 .meta-chip.role-observation {
   background: var(--info-soft);
   color: var(--info);
+}
+
+.meta-chip.role-scheduled {
+  background: var(--warning-soft, rgba(217, 119, 6, 0.16));
+  color: var(--warning, #d97706);
 }
 
 .message-archive-media {

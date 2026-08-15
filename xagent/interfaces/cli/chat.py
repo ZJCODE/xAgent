@@ -228,6 +228,7 @@ class AgentCLI(BaseAgentRunner):
             user_id=user_id,
             stream=stream,
             channel="cli",
+            inbox_kind="user_turn",
         ):
             event_type = event.get("type")
             if event_type == "message_start":
@@ -290,6 +291,7 @@ class AgentCLI(BaseAgentRunner):
             user_id=user_id,
             stream=stream,
             channel="cli",
+            inbox_kind="user_turn",
         ):
             event_type = event.get("type")
             if event_type == "message_start":
