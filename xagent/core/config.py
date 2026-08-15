@@ -202,9 +202,6 @@ class AgentConfig:
     # Primary intensity knob — habituation only softens it when experience is stale.
     SUBCONSCIOUS_ACTIVITY = 0.02
     SUBCONSCIOUS_MAX_CONTACTS = 10
-    # Floor for activity × 0.5^stale_streak after empty/unworthy reflections
-    # on unmoved experience. New experience or worthy clears the streak.
-    SUBCONSCIOUS_STALE_DAMPEN_FLOOR = 0.0625  # 0.5**4
 
     # ============================================================
     # 11. Tool Policy Baseline

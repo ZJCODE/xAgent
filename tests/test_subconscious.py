@@ -1043,10 +1043,14 @@ class SubconsciousLoopTests(unittest.TestCase):
             self.assertEqual(loop._effective_probability(), 0.5)
 
             loop._stale_streak = 4
-            self.assertEqual(loop._effective_probability(), AgentConfig.SUBCONSCIOUS_STALE_DAMPEN_FLOOR)
+            self.assertEqual(loop._effective_probability(), 0.0625)
 
             loop._stale_streak = 8
-            self.assertEqual(loop._effective_probability(), AgentConfig.SUBCONSCIOUS_STALE_DAMPEN_FLOOR)
+            self.assertEqual(loop._effective_probability(), 1.0 / 256)
+
+            # No floor: long streaks keep halving toward silence until life moves.
+            loop._stale_streak = 20
+            self.assertLess(loop._effective_probability(), 1e-6)
 
     def test_unworthy_thought_habituates_without_blocking_diary(self):
         agent = self._make_agent_mock()

@@ -223,7 +223,6 @@ class SubconsciousLoop:
         self._delivery_retry_delay_seconds = SUBCONSCIOUS_DELIVERY_RETRY_DELAY_SECONDS
         self._last_experience_cursor: Optional[int] = None
         self._stale_streak = 0
-        self._stale_dampen_floor = float(AgentConfig.SUBCONSCIOUS_STALE_DAMPEN_FLOOR)
 
     # ------------------------------------------------------------------
     # Public API
@@ -265,13 +264,11 @@ class SubconsciousLoop:
         return random.random() < self._effective_probability()
 
     def _effective_probability(self) -> float:
-        """``activity`` tempered by habituation to unmoved experience."""
+        """``activity × 0.5^stale_streak`` — no floor; new experience resets streak."""
         probability = max(0.0, min(1.0, float(self._probability)))
         if self._stale_streak <= 0 or probability <= 0.0:
             return probability
-        dampen = 0.5 ** min(int(self._stale_streak), 8)
-        floor = max(0.0, min(1.0, self._stale_dampen_floor))
-        return probability * max(floor, dampen)
+        return probability * (0.5 ** int(self._stale_streak))
 
     async def maybe_think(self) -> None:
         """Run one subconscious cycle if the dice roll passes.
@@ -332,7 +329,7 @@ class SubconsciousLoop:
 
     def _habituate(self, experience_cursor: int) -> None:
         """One more private reflection without movement — quiet down next time."""
-        self._stale_streak = min(self._stale_streak + 1, 8)
+        self._stale_streak += 1
         self._last_experience_cursor = experience_cursor
 
     async def _experience_state(self) -> tuple[int, bool]:
