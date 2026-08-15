@@ -398,9 +398,8 @@ class SubconsciousLoop:
                     break
             if end is not None:
                 cleaned = "\n".join(lines[1:end]).strip()
-        try:
-            result = json.loads(cleaned)
-        except json.JSONDecodeError:
+        parsed = SubconsciousLoop._load_json_object(cleaned)
+        if parsed is None:
             # Fallback: treat the whole text as an unworthy thought
             return {
                 "internal_content": text[:500],
@@ -408,14 +407,57 @@ class SubconsciousLoop:
                 "recipient_hint": None,
                 "external_content": None,
             }
-        if not isinstance(result, dict):
+        if not isinstance(parsed, dict):
             return {
-                "internal_content": str(result)[:500],
+                "internal_content": str(parsed)[:500],
                 "worthy": False,
                 "recipient_hint": None,
                 "external_content": None,
             }
-        return result
+        return SubconsciousLoop._normalize_subconscious_result(parsed)
+
+    @staticmethod
+    def _load_json_object(text: str) -> Any:
+        """Load a JSON value, or the first embedded object if the model added prose."""
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            pass
+        decoder = json.JSONDecoder()
+        for index, char in enumerate(text):
+            if char != "{":
+                continue
+            try:
+                obj, _end = decoder.raw_decode(text[index:])
+            except json.JSONDecodeError:
+                continue
+            if isinstance(obj, dict):
+                return obj
+        return None
+
+    @staticmethod
+    def _normalize_subconscious_result(result: Dict[str, Any]) -> Dict[str, Any]:
+        """Accept common field aliases and string booleans from model output."""
+        worthy_raw = result.get("worthy")
+        if isinstance(worthy_raw, str):
+            worthy = worthy_raw.strip().lower() in {"true", "1", "yes"}
+        else:
+            worthy = bool(worthy_raw)
+        hint = result.get("recipient_hint")
+        if hint is None:
+            hint = result.get("recipient")
+        external = result.get("external_content")
+        if external is None:
+            external = result.get("outward_content")
+        internal = result.get("internal_content")
+        if internal is None:
+            internal = result.get("thought")
+        return {
+            "internal_content": internal,
+            "worthy": worthy,
+            "recipient_hint": hint,
+            "external_content": external,
+        }
 
     async def _collect_memory_context(self) -> str:
         """Collect recent memory for subconscious context."""
@@ -454,7 +496,9 @@ class SubconsciousLoop:
                     stored_keys = await stored_keys
                 if isinstance(stored_keys, list):
                     for key in stored_keys:
-                        self._append_unique_key(keys, str(key))
+                        channel, _user_id = RelationshipStore.split_key(str(key))
+                        if str(channel or "").strip().lower() in self._deliverable_channels:
+                            self._append_unique_key(keys, str(key))
             except Exception:
                 self._logger.warning("Failed to list relationship cards for subconscious", exc_info=True)
 
@@ -509,6 +553,7 @@ class SubconsciousLoop:
         to the diary by the caller.
         """
         contacts = self._filter_deliverable_contacts(load_contacts(self._contacts_file))
+        contacts = await self._alias_contacts_for_routing(contacts)
         recipient = self._pick_recipient(contacts, recipient_hint)
 
         if recipient is None:
@@ -571,6 +616,73 @@ class SubconsciousLoop:
         if last_error is not None:
             raise last_error
 
+    async def _alias_contacts_for_routing(self, contacts: List[ContactEntry]) -> List[ContactEntry]:
+        """Copy relationship display names onto contacts that lack sender_name.
+
+        API / Weixin / voice contacts often store only a raw user_id. The model
+        is shown ``## Alice [user_id: web_user]`` and commonly emits ``Alice``
+        as ``recipient_hint``, which would otherwise miss the contact.
+        """
+        if not contacts:
+            return contacts
+        memory_handler = getattr(self._agent, "memory_handler", None)
+        relationship_store = getattr(memory_handler, "relationship_store", None)
+        read_cards = getattr(relationship_store, "read_cards", None)
+        if not callable(read_cards):
+            return contacts
+        from ...components.memory import RelationshipStore
+
+        keys = [RelationshipStore.make_key(contact.channel, contact.user_id) for contact in contacts]
+        try:
+            cards = read_cards(keys)
+            if inspect.isawaitable(cards):
+                cards = await cards
+        except Exception:
+            self._logger.warning("Failed to enrich subconscious contacts from relationship cards", exc_info=True)
+            return contacts
+        if not isinstance(cards, list) or not cards:
+            return contacts
+        by_key = {card.key: card for card in cards if getattr(card, "key", None)}
+        enriched: List[ContactEntry] = []
+        for contact in contacts:
+            key = RelationshipStore.make_key(contact.channel, contact.user_id)
+            card = by_key.get(key)
+            display_name = str(getattr(card, "display_name", "") or "").strip()
+            if not display_name:
+                enriched.append(contact)
+                continue
+            target = dict(contact.target)
+            if not str(target.get("sender_name") or "").strip():
+                target["sender_name"] = display_name
+            if not str(target.get("display_name") or "").strip():
+                target["display_name"] = display_name
+            enriched.append(
+                ContactEntry(
+                    channel=contact.channel,
+                    user_id=contact.user_id,
+                    target=target,
+                    last_seen=contact.last_seen,
+                    interaction_count=contact.interaction_count,
+                )
+            )
+        return enriched
+
+    @staticmethod
+    def _contact_match_tokens(contact: ContactEntry) -> tuple[list[str], list[str]]:
+        """Return (exact_tokens, partial_tokens) used to match a recipient hint."""
+        exact = [
+            contact.user_id,
+            str(contact.target.get("sender_name") or ""),
+            str(contact.target.get("display_name") or ""),
+            str(contact.target.get("room_name") or ""),
+            f"{contact.channel}:{contact.user_id}",
+        ]
+        exact_tokens = [token.strip().lower() for token in exact if str(token).strip()]
+        # Composite keys such as ``api:web_user`` are exact-only so a bare
+        # channel name cannot absorb every contact on that channel.
+        partial_tokens = [token for token in exact_tokens if ":" not in token]
+        return exact_tokens, partial_tokens
+
     @staticmethod
     def _pick_recipient(
         contacts: List[ContactEntry],
@@ -582,22 +694,22 @@ class SubconsciousLoop:
         # If hint matches a contact, prefer that
         hint = str(recipient_hint or "").strip().lower()
         if hint:
-            # -- pass 1: exact match on name or user_id --
-            for c in contacts:
-                name = str(c.target.get("sender_name") or "").lower()
-                if hint == name or hint == c.user_id.lower():
-                    return c
+            token_map = {
+                id(contact): SubconsciousLoop._contact_match_tokens(contact)
+                for contact in contacts
+            }
+            # -- pass 1: exact match on name, user_id, or channel:user_id --
+            for contact in contacts:
+                exact_tokens, _partial = token_map[id(contact)]
+                if hint in exact_tokens:
+                    return contact
             # -- pass 2: partial match (hint contains name, or name contains
             #    hint).  The hint may carry channel annotations such as
             #    "Telos (feishu)", and user / sender names may be prefixes.
-            for c in contacts:
-                name = str(c.target.get("sender_name") or "").lower()
-                user_id_lower = c.user_id.lower()
-                if (
-                    (name and (hint in name or name in hint))
-                    or (user_id_lower and (hint in user_id_lower or user_id_lower in hint))
-                ):
-                    return c
+            for contact in contacts:
+                _exact, partial_tokens = token_map[id(contact)]
+                if any(token and (hint in token or token in hint) for token in partial_tokens):
+                    return contact
             return None
         # Default: most recently seen contact
         return max(contacts, key=lambda c: c.last_seen)

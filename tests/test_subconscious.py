@@ -237,6 +237,46 @@ class SubconsciousLoopTests(unittest.TestCase):
         self.assertEqual(result["internal_content"], "['not', 'a dict']")
         self.assertIsNone(result["external_content"])
 
+    def test_parse_subconscious_json_embedded_in_prose(self):
+        result = SubconsciousLoop._parse_subconscious_json(
+            "A private note first.\n"
+            + json.dumps({
+                "internal_content": "This should still count.",
+                "worthy": True,
+                "recipient_hint": "web_user",
+                "external_content": "Hello from the inner voice.",
+            })
+            + "\nThanks."
+        )
+        self.assertTrue(result["worthy"])
+        self.assertEqual(result["internal_content"], "This should still count.")
+        self.assertEqual(result["external_content"], "Hello from the inner voice.")
+        self.assertEqual(result["recipient_hint"], "web_user")
+
+    def test_parse_subconscious_json_normalizes_string_worthy_and_aliases(self):
+        result = SubconsciousLoop._parse_subconscious_json(
+            json.dumps({
+                "thought": "Alias thought",
+                "worthy": "true",
+                "recipient": "Alice",
+                "outward_content": "Alias message",
+            })
+        )
+        self.assertTrue(result["worthy"])
+        self.assertEqual(result["internal_content"], "Alias thought")
+        self.assertEqual(result["recipient_hint"], "Alice")
+        self.assertEqual(result["external_content"], "Alias message")
+
+        false_result = SubconsciousLoop._parse_subconscious_json(
+            json.dumps({
+                "internal_content": "Keep this inside.",
+                "worthy": "false",
+                "recipient_hint": None,
+                "external_content": None,
+            })
+        )
+        self.assertFalse(false_result["worthy"])
+
     def test_is_appropriate_time_default_config(self):
         """Default quiet hours 22–8: 8 AM to <10 PM is appropriate."""
         with patch.object(AgentConfig, 'SUBCONSCIOUS_QUIET_HOURS_START', 22), \
@@ -361,6 +401,24 @@ class SubconsciousLoopTests(unittest.TestCase):
         kwargs = memory_handler.get_relationship_context.await_args.kwargs
         self.assertEqual(kwargs["speaker_keys"], ["feishu:alice"])
         self.assertTrue(kwargs["include_routing_id"])
+
+    def test_collect_relationship_context_skips_undeliverable_channel_cards(self):
+        agent = self._make_agent_mock()
+        memory_handler = MagicMock()
+        memory_handler.relationship_store.list_keys = AsyncMock(
+            return_value=["feishu:alice", "api:web_user"]
+        )
+        memory_handler.get_relationship_context = AsyncMock(return_value="## Web user\nReachable here.")
+        agent.memory_handler = memory_handler
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop = SubconsciousLoop(agent, workspace=Path(tmpdir), deliverable_channels={"api"})
+            context = asyncio.run(loop._collect_relationship_context())
+
+        self.assertIn("Reachable here", context)
+        kwargs = memory_handler.get_relationship_context.await_args.kwargs
+        self.assertEqual(kwargs["speaker_keys"], ["api:web_user"])
+        self.assertNotIn("feishu:alice", kwargs["speaker_keys"])
 
     def test_deliverable_filter_keeps_declared_channels_only(self):
         agent = self._make_agent_mock()
@@ -690,6 +748,72 @@ class SubconsciousLoopTests(unittest.TestCase):
             delivery_sink.assert_not_awaited()
             agent.record_subconscious_thought.assert_called_once()
             self.assertEqual(agent.record_subconscious_thought.call_args[0][0], "This was meant for 张三 only.")
+
+    def test_display_name_hint_matches_api_contact_via_relationship_card(self):
+        agent = self._make_agent_mock()
+        self._set_model_json(agent, {
+            "internal_content": "This is for Alice, even if her routing id is web_user.",
+            "worthy": True,
+            "recipient_hint": "Alice",
+            "external_content": "A note for Alice.",
+        })
+        card = MagicMock()
+        card.key = "api:web_user"
+        card.display_name = "Alice"
+        agent.memory_handler.relationship_store.read_cards = AsyncMock(return_value=[card])
+        delivery_sink = AsyncMock()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop = SubconsciousLoop(
+                agent,
+                workspace=Path(tmpdir),
+                delivery_sink=delivery_sink,
+                deliverable_channels={"api"},
+            )
+            loop.record_interaction(
+                channel="api",
+                user_id="web_user",
+                target={"user_id": "web_user"},
+            )
+            loop._probability = 1.0
+
+            with patch.object(SubconsciousLoop, '_is_appropriate_time', return_value=True):
+                asyncio.run(loop.maybe_think())
+
+            delivery_sink.assert_awaited_once()
+            delivery = delivery_sink.await_args.args[0]
+            self.assertEqual(delivery.recipient.channel, "api")
+            self.assertEqual(delivery.recipient.user_id, "web_user")
+            self.assertEqual(delivery.content, "A note for Alice.")
+
+    def test_channel_prefixed_hint_matches_deliverable_contact(self):
+        agent = self._make_agent_mock()
+        self._set_model_json(agent, {
+            "internal_content": "Address this with the relationship key.",
+            "worthy": True,
+            "recipient_hint": "api:web_user",
+            "external_content": "A keyed note.",
+        })
+        delivery_sink = AsyncMock()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop = SubconsciousLoop(
+                agent,
+                workspace=Path(tmpdir),
+                delivery_sink=delivery_sink,
+                deliverable_channels={"api"},
+            )
+            loop.record_interaction(
+                channel="api",
+                user_id="web_user",
+                target={"user_id": "web_user"},
+            )
+            loop._probability = 1.0
+
+            with patch.object(SubconsciousLoop, '_is_appropriate_time', return_value=True):
+                asyncio.run(loop.maybe_think())
+
+            delivery_sink.assert_awaited_once()
+            delivery = delivery_sink.await_args.args[0]
+            self.assertEqual(delivery.recipient.user_id, "web_user")
 
     def test_empty_hint_defaults_to_most_recent_deliverable_contact(self):
         agent = self._make_agent_mock()
