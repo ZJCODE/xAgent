@@ -290,6 +290,22 @@ class SubconsciousLoopTests(unittest.TestCase):
             "Already held.\nI didn't send this.",
         )
 
+    def test_pick_recipient_requires_an_explicit_hint(self):
+        contacts = [
+            ContactEntry(
+                channel="api",
+                user_id="web_user",
+                target={"user_id": "web_user"},
+                last_seen="2026-08-15 23:13:00",
+            ),
+        ]
+        self.assertIsNone(SubconsciousLoop._pick_recipient(contacts, None))
+        self.assertIsNone(SubconsciousLoop._pick_recipient(contacts, ""))
+        self.assertEqual(
+            SubconsciousLoop._pick_recipient(contacts, "web_user").user_id,
+            "web_user",
+        )
+
     def test_record_interaction(self):
         agent = self._make_agent_mock()
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -345,6 +361,7 @@ class SubconsciousLoopTests(unittest.TestCase):
             self.assertIn("already talking with you", current_task["content"])
             self.assertIn("would speak now", current_task["content"])
             self.assertIn("will be sent", current_task["content"])
+            self.assertIn("their thread to someone else", current_task["content"])
             self.assertIn(
                 "Write internal_content and external_content in the recent conversation language",
                 current_task["content"],
@@ -482,6 +499,7 @@ class SubconsciousLoopTests(unittest.TestCase):
             self.assertTrue(any("Context and Attribution" in c for c in contents))
             self.assertTrue(any("avoid unsolicited messages" in c for c in contents))
             self.assertTrue(any("would speak now" in c for c in contents))
+            self.assertTrue(any("must not be spoken to another" in c for c in contents))
             self.assertFalse(any("quiet hours" in c.lower() for c in contents))
             self.assertFalse(any("All available tools are defined" in c for c in contents))
             self.assertEqual(agent.model_client.calls[0]["tool_specs"], [])
@@ -827,10 +845,11 @@ class SubconsciousLoopTests(unittest.TestCase):
             delivery = delivery_sink.await_args.args[0]
             self.assertEqual(delivery.recipient.user_id, "web_user")
 
-    def test_empty_hint_defaults_to_most_recent_deliverable_contact(self):
+    def test_empty_hint_does_not_send_to_another_contact(self):
+        """An unnamed worthy thought must not be dumped on whoever this channel can reach."""
         agent = self._make_agent_mock()
         self._set_model_json(agent, {
-            "internal_content": "This can go to the current reachable contact.",
+            "internal_content": "This was about Telos on Feishu, not the web user.",
             "worthy": True,
             "recipient_hint": None,
             "external_content": "A reachable note.",
@@ -853,13 +872,13 @@ class SubconsciousLoopTests(unittest.TestCase):
                 ContactEntry(
                     channel="feishu",
                     user_id="ou_123",
-                    target={"chat_id": "oc_xxx", "sender_name": "张三"},
+                    target={"chat_id": "oc_xxx", "sender_name": "Telos"},
                     last_seen="2026-06-25 11:00:00",
                 ),
                 ContactEntry(
                     channel="api",
-                    user_id="new_api_user",
-                    target={"user_id": "new_api_user", "sender_name": "New"},
+                    user_id="web_user",
+                    target={"user_id": "web_user", "sender_name": "New"},
                     last_seen="2026-06-25 10:00:00",
                 ),
             ])
@@ -867,14 +886,11 @@ class SubconsciousLoopTests(unittest.TestCase):
 
             asyncio.run(loop.maybe_think())
 
-            delivery_sink.assert_awaited_once()
-            delivery = delivery_sink.await_args.args[0]
-            self.assertEqual(delivery.recipient.channel, "api")
-            self.assertEqual(delivery.recipient.user_id, "new_api_user")
+            delivery_sink.assert_not_awaited()
             agent.record_subconscious_thought.assert_called_once()
             self.assertEqual(
                 agent.record_subconscious_thought.call_args[0][0],
-                "This can go to the current reachable contact.",
+                "This was about Telos on Feishu, not the web user.\nI didn't send this.",
             )
 
     def test_delivery_sink_failure_keeps_subconscious_thought(self):

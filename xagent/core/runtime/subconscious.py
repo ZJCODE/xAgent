@@ -680,31 +680,30 @@ class SubconsciousLoop:
         contacts: List[ContactEntry],
         recipient_hint: Any,
     ) -> Optional[ContactEntry]:
-        """Pick the most relevant contact for the thought."""
+        """Pick the named contact. No hint means no send — never guess another person."""
         if not contacts:
             return None
         # If hint matches a contact, prefer that
         hint = str(recipient_hint or "").strip().lower()
-        if hint:
-            token_map = {
-                id(contact): SubconsciousLoop._contact_match_tokens(contact)
-                for contact in contacts
-            }
-            # -- pass 1: exact match on name, user_id, or channel:user_id --
-            for contact in contacts:
-                exact_tokens, _partial = token_map[id(contact)]
-                if hint in exact_tokens:
-                    return contact
-            # -- pass 2: partial match (hint contains name, or name contains
-            #    hint).  The hint may carry channel annotations such as
-            #    "Telos (feishu)", and user / sender names may be prefixes.
-            for contact in contacts:
-                _exact, partial_tokens = token_map[id(contact)]
-                if any(token and (hint in token or token in hint) for token in partial_tokens):
-                    return contact
+        if not hint:
             return None
-        # Default: most recently seen contact
-        return max(contacts, key=lambda c: c.last_seen)
+        token_map = {
+            id(contact): SubconsciousLoop._contact_match_tokens(contact)
+            for contact in contacts
+        }
+        # -- pass 1: exact match on name, user_id, or channel:user_id --
+        for contact in contacts:
+            exact_tokens, _partial = token_map[id(contact)]
+            if hint in exact_tokens:
+                return contact
+        # -- pass 2: partial match (hint contains name, or name contains
+        #    hint).  The hint may carry channel annotations such as
+        #    "Telos (feishu)", and user / sender names may be prefixes.
+        for contact in contacts:
+            _exact, partial_tokens = token_map[id(contact)]
+            if any(token and (hint in token or token in hint) for token in partial_tokens):
+                return contact
+        return None
 
     @staticmethod
     def _normalize_deliverable_channels(channels: Optional[Iterable[str]]) -> set[str]:
