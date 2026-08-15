@@ -201,16 +201,10 @@ class AgentConfig:
     # 0=off, 1=very active. Suggested: 0.01~0.1
     SUBCONSCIOUS_ACTIVITY = 0.02
     SUBCONSCIOUS_MAX_CONTACTS = 10
-    # When recent experience has not moved, each consecutive unworthy /
-    # empty / near-duplicate thought halves the effective activity
-    # (floored by this factor) so dense configs do not spin on the same
-    # observation every heartbeat.
-    SUBCONSCIOUS_STALE_DAMPEN_FLOOR = 0.0625  # 0.5**4
-    # Unworthy thoughts whose char-bigram Jaccard similarity to a recent
-    # inner thought is at or above this threshold are not written to the
-    # diary (breaks the self-feeding rumination loop).
-    SUBCONSCIOUS_REDUNDANCY_THRESHOLD = 0.55
-    SUBCONSCIOUS_RECENT_THOUGHT_LIMIT = 8
+    # After a subconscious cycle on a given experience cursor, do not think
+    # again until the cursor moves. Set >0 to allow another idle thought
+    # after this many seconds on the same cursor (0 = only when life moves).
+    SUBCONSCIOUS_IDLE_REFIRE_SECONDS = 0
 
     # ============================================================
     # 11. Tool Policy Baseline

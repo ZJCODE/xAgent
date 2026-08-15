@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import random
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
@@ -222,11 +223,8 @@ class SubconsciousLoop:
         self._delivery_retries = SUBCONSCIOUS_DELIVERY_RETRIES
         self._delivery_retry_delay_seconds = SUBCONSCIOUS_DELIVERY_RETRY_DELAY_SECONDS
         self._last_experience_cursor: Optional[int] = None
-        self._stale_streak = 0
-        self._recent_inner_thoughts: List[str] = []
-        self._redundancy_threshold = float(AgentConfig.SUBCONSCIOUS_REDUNDANCY_THRESHOLD)
-        self._recent_thought_limit = max(1, int(AgentConfig.SUBCONSCIOUS_RECENT_THOUGHT_LIMIT))
-        self._stale_dampen_floor = float(AgentConfig.SUBCONSCIOUS_STALE_DAMPEN_FLOOR)
+        self._last_thought_at_mono: Optional[float] = None
+        self._idle_refire_seconds = max(0.0, float(AgentConfig.SUBCONSCIOUS_IDLE_REFIRE_SECONDS))
 
     # ------------------------------------------------------------------
     # Public API
@@ -262,32 +260,21 @@ class SubconsciousLoop:
             )
 
     def should_trigger(self) -> bool:
-        """Return True if subconscious thought should fire this tick.
-
-        Base rate is ``subconscious_activity``. When recent experience has not
-        moved, consecutive empty / unworthy / near-duplicate cycles dampen the
-        effective probability so a dense config cannot rehash the same
-        observation every heartbeat.
-        """
+        """Return True if subconscious thought should fire this tick."""
         if not self._enabled:
             return False
-        probability = self._effective_probability()
-        return random.random() < probability
-
-    def _effective_probability(self) -> float:
-        probability = max(0.0, min(1.0, float(self._probability)))
-        if self._stale_streak <= 0 or probability <= 0.0:
-            return probability
-        dampen = 0.5 ** min(int(self._stale_streak), 8)
-        floor = max(0.0, min(1.0, self._stale_dampen_floor))
-        return probability * max(floor, dampen)
+        return random.random() < max(0.0, min(1.0, float(self._probability)))
 
     async def maybe_think(self) -> None:
-        """Run one subconscious cycle if the dice roll passes."""
+        """Run one subconscious cycle if the epoch gate and dice roll pass.
+
+        First principle: the same unmoved experience should not re-trigger
+        reflection. After a cycle on a cursor, wait for new messages (or an
+        optional idle refire window) before thinking again.
+        """
         experience_cursor, experience_moved = await self._experience_state()
-        if experience_moved:
-            # Fresh experience clears rumination dampening before the dice roll.
-            self._stale_streak = 0
+        if not experience_moved and not self._idle_refire_ready():
+            return
 
         if not self.should_trigger():
             return
@@ -312,13 +299,7 @@ class SubconsciousLoop:
         )
 
         if not internal_content and not external_content:
-            self._note_uneventful_cycle(experience_cursor, experience_moved)
-            return
-
-        if not worthy and internal_content and self._is_near_duplicate_thought(internal_content):
-            self._logger.info("Subconscious thought skipped as near-duplicate of recent inner notes")
-            self._remember_inner_thought(internal_content)
-            self._note_uneventful_cycle(experience_cursor, experience_moved)
+            self._mark_thought_epoch(experience_cursor)
             return
 
         diary_note = internal_content
@@ -333,72 +314,27 @@ class SubconsciousLoop:
 
         if diary_note:
             await self._write_subconscious_thought(diary_note)
-            self._remember_inner_thought(diary_note)
 
-        if worthy:
-            # A speakable impulse (sent or held back) is progress, not rumination.
-            self._stale_streak = 0
-            self._last_experience_cursor = experience_cursor
-        else:
-            self._note_uneventful_cycle(experience_cursor, experience_moved)
+        self._mark_thought_epoch(experience_cursor)
 
-    def _note_uneventful_cycle(
-        self,
-        experience_cursor: int,
-        experience_moved: bool,
-    ) -> None:
-        """Track idle rumination so the next dice roll can dampen."""
-        if experience_moved:
-            self._stale_streak = 1
-        else:
-            self._stale_streak = min(self._stale_streak + 1, 8)
+    def _mark_thought_epoch(self, experience_cursor: int) -> None:
+        """Lock this experience cursor until life moves (or idle refire)."""
         self._last_experience_cursor = experience_cursor
+        self._last_thought_at_mono = time.monotonic()
 
-    def _remember_inner_thought(self, content: str) -> None:
-        note = str(content or "").strip()
-        if not note:
-            return
-        self._recent_inner_thoughts.append(note)
-        overflow = len(self._recent_inner_thoughts) - self._recent_thought_limit
-        if overflow > 0:
-            del self._recent_inner_thoughts[:overflow]
-
-    def _is_near_duplicate_thought(self, content: str) -> bool:
-        """Return True when *content* restates a recent inner thought."""
-        threshold = self._redundancy_threshold
-        if threshold <= 0.0:
+    def _idle_refire_ready(self) -> bool:
+        """True when the same cursor may be reconsidered after a long idle gap."""
+        if self._idle_refire_seconds <= 0:
             return False
-        for previous in self._recent_inner_thoughts:
-            if self._thought_similarity(content, previous) >= threshold:
-                return True
-        return False
-
-    @staticmethod
-    def _thought_similarity(left: str, right: str) -> float:
-        """Char-bigram Jaccard; works for CJK monologues and short Latin notes."""
-        left_grams = SubconsciousLoop._char_bigrams(left)
-        right_grams = SubconsciousLoop._char_bigrams(right)
-        if not left_grams or not right_grams:
-            return 0.0
-        overlap = len(left_grams & right_grams)
-        union = len(left_grams | right_grams)
-        if union <= 0:
-            return 0.0
-        return overlap / union
-
-    @staticmethod
-    def _char_bigrams(text: str) -> set[str]:
-        normalized = "".join(ch.lower() for ch in text if not ch.isspace())
-        if len(normalized) < 2:
-            return {normalized} if normalized else set()
-        return {normalized[i : i + 2] for i in range(len(normalized) - 1)}
+        if self._last_thought_at_mono is None:
+            return True
+        return (time.monotonic() - self._last_thought_at_mono) >= self._idle_refire_seconds
 
     async def _experience_state(self) -> tuple[int, bool]:
         """Return ``(cursor, moved)`` describing whether life moved on.
 
         When no message cursor is available, the first cycle in-process counts
-        as movement and later ticks are treated as stale so dense idle configs
-        can still dampen.
+        as movement; later ticks stay locked until an idle refire window opens.
         """
         raw_cursor = await self._current_experience_cursor()
         if raw_cursor is None:
