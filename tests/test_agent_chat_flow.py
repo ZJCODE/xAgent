@@ -533,6 +533,7 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("summary", reasoning_item)
 
     async def test_chat_reasoning_and_output_limits_map_by_provider(self):
+        qwen_client = FakeOpenAIClient([_chat_response(content="ok")])
         qwen = ModelClient(
             client=qwen_client,
             model="qwen3.7-max",
