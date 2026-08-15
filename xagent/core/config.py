@@ -201,6 +201,16 @@ class AgentConfig:
     # 0=off, 1=very active. Suggested: 0.01~0.1
     SUBCONSCIOUS_ACTIVITY = 0.02
     SUBCONSCIOUS_MAX_CONTACTS = 10
+    # When recent experience has not moved, each consecutive unworthy /
+    # empty / near-duplicate thought halves the effective activity
+    # (floored by this factor) so dense configs do not spin on the same
+    # observation every heartbeat.
+    SUBCONSCIOUS_STALE_DAMPEN_FLOOR = 0.0625  # 0.5**4
+    # Unworthy thoughts whose char-bigram Jaccard similarity to a recent
+    # inner thought is at or above this threshold are not written to the
+    # diary (breaks the self-feeding rumination loop).
+    SUBCONSCIOUS_REDUNDANCY_THRESHOLD = 0.55
+    SUBCONSCIOUS_RECENT_THOUGHT_LIMIT = 8
 
     # ============================================================
     # 11. Tool Policy Baseline
@@ -290,6 +300,9 @@ class AgentConfig:
         "Form one private thought from recent experience and memory; "
         "empty internal_content is fine if nothing surfaces. "
         "Do not invent a new inner monologue just to fill the turn.\n"
+        "If recent diary already holds this observation and recent experience "
+        "has not moved, return empty internal_content — silence is better than "
+        "restating the same private note.\n"
         "The diary is only yours. Writing a thought down did not send it.\n"
         "Look at the current time. At night, avoid unsolicited messages; "
         "if someone is already talking with you, continuing is not a disturbance.\n"
@@ -297,8 +310,8 @@ class AgentConfig:
         "will be sent. If you want to speak but now is a bad time, keep it in "
         "internal_content, set worthy=false, and leave external_content null. "
         "internal_content is the thought, not a delivery receipt; do not write "
-        "as if it already went out. Do not rewrite the same unspoken thought "
-        "each turn unless it has moved.\n"
+        "as if it already went out. A thought already in the diary can still be "
+        "worthy if you would speak it now and it has not gone out.\n"
         "If addressed to someone, recipient_hint must be their exact user_id "
         "from a relationship card that includes [user_id: ...] (no extra text), "
         "else null. You may think about anyone in recent experience; you may "

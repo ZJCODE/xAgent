@@ -221,6 +221,12 @@ class SubconsciousLoop:
         )
         self._delivery_retries = SUBCONSCIOUS_DELIVERY_RETRIES
         self._delivery_retry_delay_seconds = SUBCONSCIOUS_DELIVERY_RETRY_DELAY_SECONDS
+        self._last_experience_cursor: Optional[int] = None
+        self._stale_streak = 0
+        self._recent_inner_thoughts: List[str] = []
+        self._redundancy_threshold = float(AgentConfig.SUBCONSCIOUS_REDUNDANCY_THRESHOLD)
+        self._recent_thought_limit = max(1, int(AgentConfig.SUBCONSCIOUS_RECENT_THOUGHT_LIMIT))
+        self._stale_dampen_floor = float(AgentConfig.SUBCONSCIOUS_STALE_DAMPEN_FLOOR)
 
     # ------------------------------------------------------------------
     # Public API
@@ -256,13 +262,33 @@ class SubconsciousLoop:
             )
 
     def should_trigger(self) -> bool:
-        """Return True if subconscious thought should fire this tick (2% dice roll)."""
+        """Return True if subconscious thought should fire this tick.
+
+        Base rate is ``subconscious_activity``. When recent experience has not
+        moved, consecutive empty / unworthy / near-duplicate cycles dampen the
+        effective probability so a dense config cannot rehash the same
+        observation every heartbeat.
+        """
         if not self._enabled:
             return False
-        return random.random() < self._probability
+        probability = self._effective_probability()
+        return random.random() < probability
+
+    def _effective_probability(self) -> float:
+        probability = max(0.0, min(1.0, float(self._probability)))
+        if self._stale_streak <= 0 or probability <= 0.0:
+            return probability
+        dampen = 0.5 ** min(int(self._stale_streak), 8)
+        floor = max(0.0, min(1.0, self._stale_dampen_floor))
+        return probability * max(floor, dampen)
 
     async def maybe_think(self) -> None:
         """Run one subconscious cycle if the dice roll passes."""
+        experience_cursor, experience_moved = await self._experience_state()
+        if experience_moved:
+            # Fresh experience clears rumination dampening before the dice roll.
+            self._stale_streak = 0
+
         if not self.should_trigger():
             return
 
@@ -286,6 +312,13 @@ class SubconsciousLoop:
         )
 
         if not internal_content and not external_content:
+            self._note_uneventful_cycle(experience_cursor, experience_moved)
+            return
+
+        if not worthy and internal_content and self._is_near_duplicate_thought(internal_content):
+            self._logger.info("Subconscious thought skipped as near-duplicate of recent inner notes")
+            self._remember_inner_thought(internal_content)
+            self._note_uneventful_cycle(experience_cursor, experience_moved)
             return
 
         diary_note = internal_content
@@ -300,6 +333,108 @@ class SubconsciousLoop:
 
         if diary_note:
             await self._write_subconscious_thought(diary_note)
+            self._remember_inner_thought(diary_note)
+
+        if worthy:
+            # A speakable impulse (sent or held back) is progress, not rumination.
+            self._stale_streak = 0
+            self._last_experience_cursor = experience_cursor
+        else:
+            self._note_uneventful_cycle(experience_cursor, experience_moved)
+
+    def _note_uneventful_cycle(
+        self,
+        experience_cursor: int,
+        experience_moved: bool,
+    ) -> None:
+        """Track idle rumination so the next dice roll can dampen."""
+        if experience_moved:
+            self._stale_streak = 1
+        else:
+            self._stale_streak = min(self._stale_streak + 1, 8)
+        self._last_experience_cursor = experience_cursor
+
+    def _remember_inner_thought(self, content: str) -> None:
+        note = str(content or "").strip()
+        if not note:
+            return
+        self._recent_inner_thoughts.append(note)
+        overflow = len(self._recent_inner_thoughts) - self._recent_thought_limit
+        if overflow > 0:
+            del self._recent_inner_thoughts[:overflow]
+
+    def _is_near_duplicate_thought(self, content: str) -> bool:
+        """Return True when *content* restates a recent inner thought."""
+        threshold = self._redundancy_threshold
+        if threshold <= 0.0:
+            return False
+        for previous in self._recent_inner_thoughts:
+            if self._thought_similarity(content, previous) >= threshold:
+                return True
+        return False
+
+    @staticmethod
+    def _thought_similarity(left: str, right: str) -> float:
+        """Char-bigram Jaccard; works for CJK monologues and short Latin notes."""
+        left_grams = SubconsciousLoop._char_bigrams(left)
+        right_grams = SubconsciousLoop._char_bigrams(right)
+        if not left_grams or not right_grams:
+            return 0.0
+        overlap = len(left_grams & right_grams)
+        union = len(left_grams | right_grams)
+        if union <= 0:
+            return 0.0
+        return overlap / union
+
+    @staticmethod
+    def _char_bigrams(text: str) -> set[str]:
+        normalized = "".join(ch.lower() for ch in text if not ch.isspace())
+        if len(normalized) < 2:
+            return {normalized} if normalized else set()
+        return {normalized[i : i + 2] for i in range(len(normalized) - 1)}
+
+    async def _experience_state(self) -> tuple[int, bool]:
+        """Return ``(cursor, moved)`` describing whether life moved on.
+
+        When no message cursor is available, the first cycle in-process counts
+        as movement and later ticks are treated as stale so dense idle configs
+        can still dampen.
+        """
+        raw_cursor = await self._current_experience_cursor()
+        if raw_cursor is None:
+            moved = self._last_experience_cursor is None
+            cursor = 0 if self._last_experience_cursor is None else int(self._last_experience_cursor)
+            return cursor, moved
+        moved = (
+            self._last_experience_cursor is None
+            or int(raw_cursor) != int(self._last_experience_cursor)
+        )
+        return int(raw_cursor), moved
+
+    async def _current_experience_cursor(self) -> Optional[int]:
+        """Best-effort message cursor used to detect whether life moved on."""
+        for owner_name in ("message_storage", "message_handler"):
+            owner = getattr(self._agent, owner_name, None)
+            if owner is None:
+                continue
+            getter = getattr(owner, "get_latest_message_cursor", None)
+            if not callable(getter):
+                storage = getattr(owner, "message_storage", None)
+                getter = getattr(storage, "get_latest_message_cursor", None) if storage else None
+            if not callable(getter):
+                continue
+            try:
+                cursor = getter()
+                if inspect.isawaitable(cursor):
+                    cursor = await cursor
+                return int(cursor)
+            except Exception:
+                self._logger.debug(
+                    "Failed to read experience cursor from %s",
+                    owner_name,
+                    exc_info=True,
+                )
+        return None
 
     # ------------------------------------------------------------------
     # Internal helpers
