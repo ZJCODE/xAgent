@@ -660,6 +660,80 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload[0].arguments, '{"query": "x"}')
         self.assertEqual(payload[0].response_items, response_items)
 
+    async def test_responses_hides_reasoning_text_from_visible_reply(self):
+        response = _responses_response(
+            output_text="private thoughtVisible answer",
+            output=[
+                {
+                    "type": "reasoning",
+                    "id": "rs_1",
+                    "content": [{"type": "reasoning_text", "text": "private thought"}],
+                },
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {"type": "reasoning_text", "text": "should stay hidden"},
+                        {"type": "output_text", "text": "Visible answer"},
+                    ],
+                },
+            ],
+        )
+        client = FakeOpenAIClient(response_api_responses=[response])
+        model = ModelClient(
+            client=client,
+            model="deepseek-v4-pro",
+            provider_name=PROVIDER_DEEPSEEK,
+            model_api=MODEL_API_OPENAI_RESPONSES,
+        )
+
+        events = [
+            event async for event in model.model_turn_events(
+                messages=[{"role": "user", "content": "hello"}],
+                tool_specs=None,
+                stream=False,
+            )
+        ]
+
+        self.assertEqual([event.type for event in events], ["text"])
+        self.assertEqual(events[0].delta, "Visible answer")
+
+    async def test_responses_hides_reasoning_when_tool_call_has_no_message(self):
+        response = _responses_response(
+            output_text="I should call lookup first.",
+            output=[
+                {
+                    "type": "reasoning",
+                    "id": "rs_1",
+                    "content": [{"type": "reasoning_text", "text": "I should call lookup first."}],
+                },
+                {
+                    "type": "function_call",
+                    "call_id": "call-1",
+                    "name": "lookup",
+                    "arguments": "{}",
+                },
+            ],
+        )
+        client = FakeOpenAIClient(response_api_responses=[response])
+        model = ModelClient(
+            client=client,
+            model="deepseek-v4-flash",
+            provider_name=PROVIDER_DEEPSEEK,
+            model_api=MODEL_API_OPENAI_RESPONSES,
+        )
+
+        events = [
+            event async for event in model.model_turn_events(
+                messages=[{"role": "user", "content": "lookup"}],
+                tool_specs=[{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}],
+                stream=False,
+            )
+        ]
+
+        self.assertEqual([event.type for event in events], ["tool_calls"])
+        self.assertEqual(events[0].tool_calls[0].assistant_content, None)
+
     async def test_call_uses_anthropic_messages_backend(self):
         client = FakeAnthropicClient([
             _anthropic_response([{"type": "text", "text": "ok"}])
@@ -1264,6 +1338,74 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
             reasoning_item["content"],
             [{"type": "reasoning_text", "text": "I should call lookup."}],
         )
+
+        stream_events = [
+            event async for event in ModelClient(
+                client=FakeOpenAIClient(response_api_responses=[AsyncChunkStream(events)]),
+                model="deepseek-v4-flash",
+                provider_name=PROVIDER_DEEPSEEK,
+                model_api=MODEL_API_OPENAI_RESPONSES,
+            ).stream_turn(
+                messages=[{"role": "user", "content": "lookup"}],
+                tool_specs=[{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}],
+            )
+        ]
+        self.assertEqual([event.type for event in stream_events], ["tool_calls"])
+        self.assertEqual(stream_events[0].tool_calls[0].assistant_content, None)
+
+    async def test_deepseek_responses_stream_hides_reasoning_output_text_deltas(self):
+        events = [
+            SimpleNamespace(
+                type="response.output_item.added",
+                output_index=0,
+                item=SimpleNamespace(type="reasoning", id="rs_1", content=[]),
+            ),
+            SimpleNamespace(
+                type="response.output_text.delta",
+                item_id="rs_1",
+                output_index=0,
+                delta="private thought",
+            ),
+            SimpleNamespace(
+                type="response.reasoning_text.delta",
+                item_id="rs_1",
+                output_index=0,
+                delta="also private",
+            ),
+            SimpleNamespace(
+                type="response.output_item.added",
+                output_index=1,
+                item=SimpleNamespace(
+                    type="message",
+                    id="msg_1",
+                    role="assistant",
+                    content=[],
+                ),
+            ),
+            SimpleNamespace(
+                type="response.output_text.delta",
+                item_id="msg_1",
+                output_index=1,
+                delta="Visible answer",
+            ),
+        ]
+        client = FakeOpenAIClient(response_api_responses=[AsyncChunkStream(events)])
+        model = ModelClient(
+            client=client,
+            model="deepseek-v4-pro",
+            provider_name=PROVIDER_DEEPSEEK,
+            model_api=MODEL_API_OPENAI_RESPONSES,
+        )
+
+        stream_events = [
+            event async for event in model.stream_turn(
+                messages=[{"role": "user", "content": "hello"}],
+                tool_specs=None,
+            )
+        ]
+
+        self.assertEqual([event.type for event in stream_events], ["delta"])
+        self.assertEqual(stream_events[0].delta, "Visible answer")
 
     async def test_responses_stream_text_before_tool_call_is_preserved_in_replay(self):
         events = [

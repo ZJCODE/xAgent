@@ -1002,7 +1002,7 @@ class ModelClient:
                 event,
             ) or completed_response
 
-            content = self._extract_responses_stream_text_delta(event)
+            content = self._extract_responses_stream_text_delta(event, response_items)
             if content:
                 text_parts.append(content)
                 yield ModelStreamEvent(type="delta", delta=content)
@@ -1280,20 +1280,42 @@ class ModelClient:
 
     @staticmethod
     def _extract_responses_text(response, fallback_text: str = "") -> str:
-        """Extract assistant text from a completed Responses API response."""
+        """Extract user-visible assistant text from a Responses API response.
+
+        DeepSeek (and OpenAI) return chain-of-thought as ``reasoning`` items
+        with ``reasoning_text`` parts. Those must never be sent to channels.
+        """
+        output = ModelClient._field(response, "output", None)
+        if output:
+            text_parts = []
+            for output_item in output:
+                if ModelClient._field(output_item, "type") != "message":
+                    continue
+                content = ModelClient._field(output_item, "content")
+                if isinstance(content, str) and content:
+                    text_parts.append(content)
+                    continue
+                for content_item in content or []:
+                    if not ModelClient._is_visible_responses_text_part(content_item):
+                        continue
+                    text = ModelClient._field(content_item, "text")
+                    if isinstance(text, str) and text:
+                        text_parts.append(text)
+            return "".join(text_parts) or fallback_text
+
         output_text = ModelClient._field(response, "output_text")
         if isinstance(output_text, str) and output_text:
             return output_text
+        return fallback_text
 
-        text_parts = []
-        for output_item in ModelClient._field(response, "output", []) or []:
-            if ModelClient._field(output_item, "type") != "message":
-                continue
-            for content_item in ModelClient._field(output_item, "content", []) or []:
-                text = ModelClient._field(content_item, "text")
-                if isinstance(text, str) and text:
-                    text_parts.append(text)
-        return "".join(text_parts) or fallback_text
+    @staticmethod
+    def _is_visible_responses_text_part(content_item: Any) -> bool:
+        content_type = ModelClient._field(content_item, "type")
+        return content_type in {None, "output_text", "text"}
+
+    @staticmethod
+    def _is_responses_reasoning_item(item: Any) -> bool:
+        return ModelClient._field(item, "type") == "reasoning"
 
     @staticmethod
     def _extract_responses_tool_calls(response) -> list[ChatToolCall]:
@@ -1404,12 +1426,30 @@ class ModelClient:
         return tool_calls
 
     @staticmethod
-    def _extract_responses_stream_text_delta(event) -> str:
+    def _extract_responses_stream_text_delta(event, response_items: Optional[list] = None) -> str:
         event_type = ModelClient._field(event, "type")
+        if event_type in {"response.reasoning_text.delta", "response.reasoning_text.done"}:
+            return ""
         if event_type not in {"response.output_text.delta", "response.text.delta"}:
+            return ""
+        if ModelClient._event_targets_reasoning_item(event, response_items):
             return ""
         delta = ModelClient._field(event, "delta")
         return delta if isinstance(delta, str) else ""
+
+    @staticmethod
+    def _event_targets_reasoning_item(event, response_items: Optional[list]) -> bool:
+        if not response_items:
+            return False
+        item_id = ModelClient._field(event, "item_id")
+        if item_id:
+            for item in response_items:
+                if ModelClient._field(item, "id") == item_id:
+                    return ModelClient._is_responses_reasoning_item(item)
+        output_index = ModelClient._field(event, "output_index")
+        if isinstance(output_index, int) and 0 <= output_index < len(response_items):
+            return ModelClient._is_responses_reasoning_item(response_items[output_index])
+        return False
 
     @staticmethod
     def _responses_event_starts_tool_call(event) -> bool:
