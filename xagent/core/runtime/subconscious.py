@@ -275,6 +275,23 @@ class SubconsciousLoop:
             return probability
         return probability * (0.5 ** int(self._stale_streak))
 
+    def _agent_is_busy(self) -> bool:
+        """True when a waking turn holds the inbox lock.
+
+        Subconscious must not generate or deliver outward messages while a
+        user/scheduled turn is mid-flight — otherwise two replies land for
+        the same inbound message.
+        """
+        inbox = getattr(self._agent, "inbox", None)
+        if inbox is None:
+            return False
+        try:
+            # Use identity check so MagicMock auto-attrs are not treated as busy.
+            return getattr(inbox, "busy", False) is True
+        except Exception:
+            self._logger.debug("Failed to read agent inbox busy state", exc_info=True)
+            return False
+
     async def maybe_think(self) -> None:
         """Run one subconscious cycle if the dice roll passes.
 
@@ -291,6 +308,12 @@ class SubconsciousLoop:
         if not self.should_trigger():
             return
 
+        if self._agent_is_busy():
+            self._logger.info(
+                "Subconscious thought skipped – agent turn in progress"
+            )
+            return
+
         self._logger.info("Subconscious thought triggered – generating thought")
         try:
             result = await self._generate_subconscious_thought()
@@ -302,6 +325,17 @@ class SubconsciousLoop:
         external_content = str(result.get("external_content") or "").strip()
         worthy = bool(result.get("worthy"))
         recipient_hint = result.get("recipient_hint")
+
+        # A waking turn may have started while we were generating. Keep the
+        # private thought, but never compete with the live reply.
+        if self._agent_is_busy() and worthy and external_content:
+            self._logger.info(
+                "Subconscious outward share demoted – agent turn in progress"
+            )
+            if not internal_content:
+                internal_content = external_content
+            worthy = False
+            external_content = ""
 
         self._logger.info(
             "Subconscious result: worthy=%s internal=%.80s... external=%.80s...",
@@ -656,6 +690,13 @@ class SubconsciousLoop:
 
         if self._delivery_sink is None:
             self._logger.info("No subconscious delivery sink configured")
+            return False
+
+        # Last-chance gate: a waking turn may have started after routing.
+        if self._agent_is_busy():
+            self._logger.info(
+                "Subconscious delivery held back – agent turn in progress"
+            )
             return False
 
         now = datetime.now()

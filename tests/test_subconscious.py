@@ -359,7 +359,8 @@ class SubconsciousLoopTests(unittest.TestCase):
             self.assertIn("diary is only yours", current_task["content"])
             self.assertIn("did not send it", current_task["content"])
             self.assertIn("avoid unsolicited messages", current_task["content"])
-            self.assertIn("already talking with you", current_task["content"])
+            self.assertIn("Waking turns own replies", current_task["content"])
+            self.assertIn("unanswered user message", current_task["content"])
             self.assertIn("would speak now", current_task["content"])
             self.assertIn("will be sent", current_task["content"])
             self.assertIn("their thread to someone else", current_task["content"])
@@ -370,6 +371,8 @@ class SubconsciousLoopTests(unittest.TestCase):
                 "Write internal_content and external_content in the recent conversation language",
                 current_task["content"],
             )
+            self.assertNotIn("already talking with you", current_task["content"])
+            self.assertNotIn("continuing is not a disturbance", current_task["content"])
             self.assertNotIn("replay the same thought", current_task["content"])
             self.assertNotIn("quiet hours", current_task["content"].lower())
             self.assertNotIn("connect older memories", current_task["content"])
@@ -525,7 +528,9 @@ class SubconsciousLoopTests(unittest.TestCase):
             self.assertTrue(any("Context and Attribution" in c for c in contents))
             self.assertTrue(any("avoid unsolicited messages" in c for c in contents))
             self.assertTrue(any("would speak now" in c for c in contents))
+            self.assertTrue(any("waking turn" in c for c in contents))
             self.assertTrue(any("must not be spoken to another" in c for c in contents))
+            self.assertFalse(any("already talking with you" in c for c in contents))
             self.assertFalse(any("quiet hours" in c.lower() for c in contents))
             self.assertFalse(any("All available tools are defined" in c for c in contents))
             self.assertEqual(agent.model_client.calls[0]["tool_specs"], [])
@@ -614,6 +619,107 @@ class SubconsciousLoopTests(unittest.TestCase):
             loop._probability = 0.0
             asyncio.run(loop.maybe_think())
             self.assertEqual(agent.model_client.calls, [])
+
+    def test_maybe_think_skips_when_agent_turn_busy(self):
+        """Do not generate a subconscious reply while a waking turn is live."""
+        agent = self._make_agent_mock()
+        inbox = MagicMock()
+        inbox.busy = True
+        agent.inbox = inbox
+        delivery_sink = AsyncMock()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop = SubconsciousLoop(
+                agent,
+                workspace=Path(tmpdir),
+                delivery_sink=delivery_sink,
+                deliverable_channels={"feishu"},
+            )
+            loop._probability = 1.0
+
+            asyncio.run(loop.maybe_think())
+
+            self.assertEqual(agent.model_client.calls, [])
+            delivery_sink.assert_not_awaited()
+            agent.record_subconscious_thought.assert_not_called()
+
+    def test_maybe_think_demotes_outward_share_if_turn_starts_mid_generation(self):
+        """If a waking turn claims the inbox during generation, keep diary only."""
+        agent = self._make_agent_mock()
+        inbox = MagicMock()
+        inbox.busy = False
+        agent.inbox = inbox
+        self._set_model_json(agent, {
+            "internal_content": "I should acknowledge the top-up ask.",
+            "worthy": True,
+            "recipient_hint": "张三",
+            "external_content": "好，记下了，到时候你来喊我。",
+        })
+        original_generate = SubconsciousLoop._generate_subconscious_thought
+
+        async def generate_and_mark_busy(loop_self):
+            inbox.busy = True
+            return await original_generate(loop_self)
+
+        delivery_sink = AsyncMock()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop = SubconsciousLoop(
+                agent,
+                workspace=Path(tmpdir),
+                delivery_sink=delivery_sink,
+                deliverable_channels={"feishu"},
+            )
+            loop.record_interaction(
+                channel="feishu",
+                user_id="ou_123",
+                target={"chat_id": "oc_xxx", "sender_name": "张三"},
+            )
+            loop._probability = 1.0
+            loop._generate_subconscious_thought = (  # type: ignore[method-assign]
+                lambda: generate_and_mark_busy(loop)
+            )
+
+            asyncio.run(loop.maybe_think())
+
+            delivery_sink.assert_not_awaited()
+            agent.record_subconscious_thought.assert_called_once()
+            self.assertEqual(
+                agent.record_subconscious_thought.call_args[0][0],
+                "I should acknowledge the top-up ask.",
+            )
+
+    def test_route_holds_back_delivery_when_agent_becomes_busy(self):
+        """Last-chance busy gate before the delivery sink runs."""
+        agent = self._make_agent_mock()
+        inbox = MagicMock()
+        inbox.busy = False
+        agent.inbox = inbox
+        delivery_sink = AsyncMock()
+
+        async def sink_that_should_not_run(_delivery):
+            raise AssertionError("delivery sink must not run while busy")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop = SubconsciousLoop(
+                agent,
+                workspace=Path(tmpdir),
+                delivery_sink=sink_that_should_not_run,
+                deliverable_channels={"feishu"},
+            )
+            loop.record_interaction(
+                channel="feishu",
+                user_id="ou_123",
+                target={"chat_id": "oc_xxx", "sender_name": "张三"},
+            )
+            inbox.busy = True
+            delivered = asyncio.run(
+                loop._route_subconscious_thought(
+                    "outward",
+                    "inner",
+                    "张三",
+                )
+            )
+            self.assertFalse(delivered)
+            delivery_sink.assert_not_awaited()
 
     def test_maybe_think_unworthy_writes_subconscious_thought(self):
         agent = self._make_agent_mock()
