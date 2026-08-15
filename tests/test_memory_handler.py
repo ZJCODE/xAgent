@@ -157,6 +157,8 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
 
         ctx = await self.handler.get_subconscious_context(days=1)
 
+        self.assertIn("private inner record", ctx)
+        self.assertIn("not necessarily sent", ctx)
         self.assertIn("Recent daily diary", ctx)
         self.assertIn("Fresh inner diary note", ctx)
         self.assertIn("Longer-range diary summaries", ctx)

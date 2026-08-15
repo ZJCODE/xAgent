@@ -288,20 +288,19 @@ class SubconsciousLoop:
         if not internal_content and not external_content:
             return
 
+        route_status = None
+        if worthy and external_content:
+            route_status = await self._route_subconscious_thought(
+                external_content,
+                internal_content,
+                recipient_hint,
+            )
+
         if internal_content:
-            await self._write_subconscious_thought(internal_content)
-
-        if not worthy:
-            return
-
-        if not external_content:
-            return
-
-        await self._route_subconscious_thought(
-            external_content,
-            internal_content,
-            recipient_hint,
-        )
+            note = internal_content
+            if route_status == "quiet_hours":
+                note = self._annotate_unsent_quiet_hours(internal_content)
+            await self._write_subconscious_thought(note)
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -545,12 +544,12 @@ class SubconsciousLoop:
         external_content: str,
         internal_content: str,
         recipient_hint: Any,
-    ) -> None:
+    ) -> str:
         """Route a worthy thought for direct delivery when possible.
 
-        During quiet hours (22:00-8:00), delivery is skipped to avoid
-        disturbing the user. The inner thought has already been written
-        to the diary by the caller.
+        During quiet hours, delivery is skipped so the user is not disturbed.
+        The caller writes the inner thought afterward, and quiet-hour skips
+        are annotated so the next daytime turn can see it was never sent.
         """
         contacts = self._filter_deliverable_contacts(load_contacts(self._contacts_file))
         contacts = await self._alias_contacts_for_routing(contacts)
@@ -558,16 +557,16 @@ class SubconsciousLoop:
 
         if recipient is None:
             self._logger.info("No suitable recipient for subconscious thought")
-            return
+            return "no_recipient"
 
         now = datetime.now()
         if not self._is_appropriate_time(now):
             self._logger.info("Quiet hours – skipping subconscious delivery")
-            return
+            return "quiet_hours"
 
         if self._delivery_sink is None:
             self._logger.info("No subconscious delivery sink configured")
-            return
+            return "no_sink"
 
         delivery = SubconsciousDelivery(
             content=external_content,
@@ -583,8 +582,18 @@ class SubconsciousLoop:
                 recipient.user_id,
                 now.isoformat(sep=" "),
             )
+            return "delivered"
         except Exception:
             self._logger.warning("Subconscious delivery failed", exc_info=True)
+            return "failed"
+
+    @staticmethod
+    def _annotate_unsent_quiet_hours(internal_content: str) -> str:
+        """Mark a quiet-hour thought so daytime turns do not treat it as already sent."""
+        return (
+            f"{internal_content.rstrip()}\n\n"
+            "(Not sent outward — quiet hours. This is still a private note.)"
+        )
 
     async def _deliver_with_retries(self, delivery: SubconsciousDelivery) -> None:
         """Deliver a subconscious thought, retrying transient sink failures."""

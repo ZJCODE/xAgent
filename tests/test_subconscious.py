@@ -346,10 +346,13 @@ class SubconsciousLoopTests(unittest.TestCase):
             self.assertIn("worthy=true", current_task["content"])
             self.assertIn("recipient_hint", current_task["content"])
             self.assertIn("exact user_id", current_task["content"])
+            self.assertIn("diary is private", current_task["content"])
+            self.assertIn("never sent", current_task["content"])
             self.assertIn(
                 "Write internal_content and external_content in the recent conversation language",
                 current_task["content"],
             )
+            self.assertNotIn("replay the same thought", current_task["content"])
             self.assertNotIn("connect older memories", current_task["content"])
             self.assertNotIn("Known delivery contacts", current_task["content"])
 
@@ -613,7 +616,7 @@ class SubconsciousLoopTests(unittest.TestCase):
 
 
     def test_nighttime_worthy_writes_subconscious_thought(self):
-        """During quiet hours, worthy thoughts are written to diary but not delivered."""
+        """During quiet hours, worthy thoughts are written as unsent so daytime turns can still share them."""
         agent = self._make_agent_mock()
         self._set_model_json(agent, {
             "internal_content": "The timing matters, but this can wait.",
@@ -636,7 +639,9 @@ class SubconsciousLoopTests(unittest.TestCase):
 
             agent.record_subconscious_thought.assert_called_once()
             call_args = agent.record_subconscious_thought.call_args
-            self.assertEqual(call_args[0][0], "The timing matters, but this can wait.")
+            written = call_args[0][0]
+            self.assertIn("The timing matters, but this can wait.", written)
+            self.assertIn("Not sent outward — quiet hours", written)
             agent.message_handler.store_context_event.assert_not_called()
 
     def test_daytime_worthy_delivers_to_sink(self):

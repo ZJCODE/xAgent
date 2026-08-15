@@ -159,7 +159,10 @@ class MemoryHandler:
         normal turns, but it benefits from a slightly wider time horizon than
         the recent daily window.
         """
-        sections: list[str] = []
+        sections: list[str] = [
+            "Diary below is a private inner record. A thought appearing here "
+            "was not necessarily sent to anyone, including notes written at night.",
+        ]
 
         summary_sections = await self._latest_summary_sections_for_subconscious()
         if summary_sections:
@@ -175,13 +178,12 @@ class MemoryHandler:
         sections: list[str] = []
         for scope in self.SUBCONSCIOUS_SUMMARY_SCOPES:
             try:
-                files = await self.memory.list_files(scope=scope)
+                paths = await self._list_summary_paths(scope)
             except Exception as exc:
                 logger.warning("Failed to list %s memory summaries: %s", scope, exc, exc_info=True)
                 continue
 
-            for file_name in reversed(files):
-                path = Path(file_name)
+            for path in reversed(paths):
                 try:
                     content = await self.memory.read_file(path)
                 except Exception as exc:
@@ -195,6 +197,24 @@ class MemoryHandler:
                 sections.append(f"[{scope}: {label}]\n{trimmed}")
                 break
         return sections
+
+    async def _list_summary_paths(self, scope: str) -> list[Path]:
+        """Return real summary files for a scope.
+
+        ``MarkdownMemory.list_files`` returns display labels, not paths, so
+        subconscious context has to walk the scope directory itself.
+        """
+        scope_root = getattr(self.memory, "_scope_root", None)
+        if callable(scope_root):
+            root = Path(scope_root(scope))
+        else:
+            root = Path(self.memory.root) / scope
+        def _collect() -> list[Path]:
+            if not root.exists():
+                return []
+            return sorted(path for path in root.rglob("*.md") if path.is_file())
+
+        return await asyncio.to_thread(_collect)
 
     @classmethod
     def _trim_subconscious_summary(cls, text: str) -> str:
