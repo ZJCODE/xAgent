@@ -734,6 +734,111 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([event.type for event in events], ["tool_calls"])
         self.assertEqual(events[0].tool_calls[0].assistant_content, None)
 
+    async def test_deepseek_hides_merged_message_text_before_tool_call(self):
+        response = _responses_response(
+            output_text="web_user 在问 ZJun 是谁。\n\n我简短回答一下他的身份即可。",
+            output=[
+                {
+                    "type": "reasoning",
+                    "id": "rs_1",
+                    "content": [{
+                        "type": "reasoning_text",
+                        "text": "web_user 在问 ZJun 是谁。\n\n我简短回答一下他的身份即可。",
+                    }],
+                },
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{
+                        "type": "output_text",
+                        "text": "web_user 在问 ZJun 是谁。\n\n我简短回答一下他的身份即可。",
+                    }],
+                },
+                {
+                    "type": "function_call",
+                    "call_id": "call-1",
+                    "name": "search_memory",
+                    "arguments": '{"query": "ZJun"}',
+                },
+            ],
+        )
+        client = FakeOpenAIClient(response_api_responses=[response])
+        model = ModelClient(
+            client=client,
+            model="deepseek-v4-pro",
+            provider_name=PROVIDER_DEEPSEEK,
+            model_api=MODEL_API_OPENAI_RESPONSES,
+        )
+
+        events = [
+            event async for event in model.model_turn_events(
+                messages=[{"role": "user", "content": "ZJun是谁"}],
+                tool_specs=[{"type": "function", "function": {"name": "search_memory", "parameters": {"type": "object"}}}],
+                stream=False,
+            )
+        ]
+
+        self.assertEqual([event.type for event in events], ["tool_calls"])
+        self.assertIsNone(events[0].tool_calls[0].assistant_content)
+        reasoning_item = next(
+            item for item in events[0].tool_calls[0].response_items if item.get("type") == "reasoning"
+        )
+        self.assertIn("web_user 在问 ZJun 是谁", reasoning_item["content"][0]["text"])
+
+    async def test_deepseek_stream_hides_message_output_text_before_tool_call(self):
+        events = [
+            SimpleNamespace(
+                type="response.output_item.added",
+                output_index=0,
+                item=SimpleNamespace(type="reasoning", id="rs_1", content=[]),
+            ),
+            SimpleNamespace(
+                type="response.reasoning_text.delta",
+                item_id="rs_1",
+                output_index=0,
+                delta="web_user 在问 ZJun 是谁。",
+            ),
+            SimpleNamespace(
+                type="response.output_item.added",
+                output_index=1,
+                item=SimpleNamespace(type="message", id="msg_1", role="assistant", content=[]),
+            ),
+            SimpleNamespace(
+                type="response.output_text.delta",
+                item_id="msg_1",
+                output_index=1,
+                delta="web_user 在问 ZJun 是谁。\n\n我简短回答一下他的身份即可。",
+            ),
+            SimpleNamespace(
+                type="response.output_item.added",
+                output_index=2,
+                item=SimpleNamespace(
+                    type="function_call",
+                    id="fc_1",
+                    call_id="call-1",
+                    name="search_memory",
+                    arguments='{"query": "ZJun"}',
+                ),
+            ),
+        ]
+        client = FakeOpenAIClient(response_api_responses=[AsyncChunkStream(events)])
+        model = ModelClient(
+            client=client,
+            model="deepseek-v4-flash",
+            provider_name=PROVIDER_DEEPSEEK,
+            model_api=MODEL_API_OPENAI_RESPONSES,
+        )
+
+        stream_events = [
+            event async for event in model.stream_turn(
+                messages=[{"role": "user", "content": "ZJun是谁"}],
+                tool_specs=[{"type": "function", "function": {"name": "search_memory", "parameters": {"type": "object"}}}],
+            )
+        ]
+
+        self.assertEqual([event.type for event in stream_events], ["tool_calls"])
+        self.assertIsNone(stream_events[0].tool_calls[0].assistant_content)
+
     async def test_call_uses_anthropic_messages_backend(self):
         client = FakeAnthropicClient([
             _anthropic_response([{"type": "text", "text": "ok"}])

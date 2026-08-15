@@ -850,11 +850,16 @@ class ModelClient:
         tool_calls = cls._extract_tool_calls(response)
         return cls._completed_turn_events(text, tool_calls)
 
-    @classmethod
-    def _responses_non_stream_turn_events(cls, response) -> list[ModelStreamEvent]:
-        text = cls._extract_responses_text(response)
-        tool_calls = cls._extract_responses_tool_calls(response)
-        return cls._completed_turn_events(text, tool_calls)
+    def _responses_non_stream_turn_events(self, response) -> list[ModelStreamEvent]:
+        text = self._extract_responses_text(response)
+        tool_calls = self._extract_responses_tool_calls(response)
+        if tool_calls and self._hides_responses_tool_preface():
+            # DeepSeek merges chain-of-thought into the adjacent assistant
+            # message. That text must stay on the replay path, not channels.
+            text = ""
+            for tool_call in tool_calls:
+                tool_call.assistant_content = None
+        return self._completed_turn_events(text, tool_calls)
 
     @classmethod
     def _anthropic_non_stream_turn_events(cls, response) -> list[ModelStreamEvent]:
@@ -989,11 +994,16 @@ class ModelClient:
                 ),
             )
 
+    def _hides_responses_tool_preface(self) -> bool:
+        """DeepSeek thinking is enabled by default and often lands in message output_text before a function_call."""
+        return self.provider_name == PROVIDER_DEEPSEEK
+
     async def _iter_responses_turn_events(self, response) -> AsyncGenerator[ModelStreamEvent, None]:
         text_parts: list[str] = []
         tool_call_parts: dict[int, dict] = {}
         response_items: list[dict] = []
         completed_response = None
+        hide_preface = self._hides_responses_tool_preface()
 
         async for event in response:
             completed_response = self._merge_responses_stream_event(
@@ -1005,13 +1015,17 @@ class ModelClient:
             content = self._extract_responses_stream_text_delta(event, response_items)
             if content:
                 text_parts.append(content)
-                yield ModelStreamEvent(type="delta", delta=content)
+                if not hide_preface:
+                    yield ModelStreamEvent(type="delta", delta=content)
 
         assistant_content = "".join(text_parts) or None
+        has_tool_parts = bool(tool_call_parts) or any(
+            item.get("type") == "function_call" for item in response_items
+        )
         tool_calls = self._finalize_responses_stream_tool_calls(
             tool_call_parts,
             response_items,
-            assistant_content=assistant_content,
+            assistant_content=None if (hide_preface and has_tool_parts) else assistant_content,
         )
         if not tool_calls and completed_response is not None:
             tool_calls = self._extract_responses_tool_calls(completed_response)
@@ -1019,7 +1033,26 @@ class ModelClient:
                 self._set_tool_calls_assistant_content(tool_calls, assistant_content)
 
         if tool_calls:
+            if hide_preface:
+                for tool_call in tool_calls:
+                    tool_call.assistant_content = None
             yield ModelStreamEvent(type="tool_calls", tool_calls=tool_calls)
+            return
+
+        if hide_preface:
+            visible_text = assistant_content
+            if completed_response is not None:
+                visible_text = self._extract_responses_text(completed_response) or assistant_content
+            if visible_text:
+                yield ModelStreamEvent(type="delta", delta=visible_text)
+                return
+            yield ModelStreamEvent(
+                type="error",
+                error=ModelErrorEvent(
+                    code="empty_stream_response",
+                    message="No valid output from model response.",
+                ),
+            )
             return
 
         if not text_parts and completed_response is not None:
@@ -1311,7 +1344,7 @@ class ModelClient:
     @staticmethod
     def _is_visible_responses_text_part(content_item: Any) -> bool:
         content_type = ModelClient._field(content_item, "type")
-        return content_type in {None, "output_text", "text"}
+        return content_type in {"output_text", "text"}
 
     @staticmethod
     def _is_responses_reasoning_item(item: Any) -> bool:
@@ -1426,8 +1459,12 @@ class ModelClient:
         return tool_calls
 
     @staticmethod
+    def _responses_event_type(event) -> str:
+        return str(ModelClient._field(event, "type") or ModelClient._field(event, "event") or "")
+
+    @staticmethod
     def _extract_responses_stream_text_delta(event, response_items: Optional[list] = None) -> str:
-        event_type = ModelClient._field(event, "type")
+        event_type = ModelClient._responses_event_type(event)
         if event_type in {"response.reasoning_text.delta", "response.reasoning_text.done"}:
             return ""
         if event_type not in {"response.output_text.delta", "response.text.delta"}:
@@ -1465,7 +1502,7 @@ class ModelClient:
         response_items: list[dict],
         event,
     ) -> Any:
-        event_type = cls._field(event, "type")
+        event_type = cls._responses_event_type(event)
         if event_type == "response.completed":
             return cls._field(event, "response")
 
