@@ -104,6 +104,8 @@ class WeixinAdapterTests(unittest.TestCase):
 
             self.assertEqual(agent.chat_calls[0]["user_message"], "hello")
             self.assertEqual(agent.chat_calls[0]["user_id"], "owner@im.wechat")
+            self.assertEqual(agent.chat_calls[0]["inbox_kind"], "user_turn")
+            self.assertEqual(agent.chat_calls[0]["channel"], "weixin")
             self.assertEqual(client.sent_text[0]["to_user_id"], "owner@im.wechat")
             self.assertEqual(client.sent_text[0]["context_token"], "ctx-owner")
             self.assertEqual(state.load_context_tokens("bot@im.bot"), {"owner@im.wechat": "ctx-owner"})

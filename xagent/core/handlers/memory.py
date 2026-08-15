@@ -20,6 +20,7 @@ except ImportError:  # pragma: no cover - POSIX platforms
     msvcrt = None
 
 from ..config import AgentConfig
+from ..inbox import is_scheduled_work
 from ...schemas import Message, MessageType, RoleType
 
 if TYPE_CHECKING:
@@ -344,6 +345,8 @@ class MemoryHandler:
             "sender_id": message.sender_id,
             "content": message.content,
             "timestamp": message.timestamp,
+            "channel": message.channel,
+            "room_name": message.room_name,
             "metadata": metadata,
         }
 
@@ -430,10 +433,10 @@ class MemoryHandler:
             if not channel:
                 # Incomplete identity must not mint unknown:* parallel keys.
                 continue
-            metadata = message.metadata or {}
-            if str(metadata.get("source") or "").strip() == "scheduled_task":
+            if is_scheduled_work(message.metadata):
                 # Synthetic work-order prompts are not human speech.
                 continue
+            metadata = message.metadata or {}
             key = RelationshipStore.make_key(channel, user_id)
             if key in participants:
                 continue

@@ -14,6 +14,7 @@ from .providers import (
     ReasoningConfig,
     maintenance_reasoning_config,
 )
+from .inbox import is_scheduled_work
 
 DEFAULT_OPENAI_CHAT_MODEL_API = "openai_chat_completions"
 
@@ -91,6 +92,7 @@ class JournalLLMService:
 Input markers:
 - `[speaker=Name][timestamp=Time][channel=Channel]` — Name spoke via Channel. `[speaker=ME]` — you said or did this.
 - `[speaker=Name][timestamp=Time][channel=Channel][room=RoomName]` — Name spoke in RoomName via Channel. `[speaker=ME]` — you said or did this in that room.
+- `[scheduled task][for=Name][timestamp=Time][channel=Channel]` — a due task targeting Name, not something Name said.
 - `[ambient context][timestamp=Time][channel=Channel]` — something you noticed, overheard, or received via Channel.
 - `[ambient context][timestamp=Time][channel=Channel][room=RoomName]` — something you noticed, overheard, or received in RoomName via Channel.
 - `[room context]` ... `[/room context]` blocks: `room_name:`, `room_id:`, lines like `Name YYYY-MM-DD HH:mm: text`; `ME ...` inside means you.
@@ -101,6 +103,7 @@ Rules:
 - Keep people, rooms, preferences, commitments, and experiences separate.
 - First-person words in non-ME entries belong to that speaker, not to you.
 - Ambient context is not a direct request unless it says it was addressed to you.
+- Scheduled tasks are work you owed, not a person speaking. Do not attribute their wording to the delivery target.
 - Use timestamps only for ordering and attribution. Do not repeat markers, metadata, or timestamps.
 - The memory writer manually adds a `## YYYY-MM-DD HH:MM` heading. Return the diary body only; do not include `#` or `##` headings, date headings, or timestamp headings.
 - Preserve durable details and uncertainty. Aim for 100-300 characters for brief sources, 200-500 for substantial sources.
@@ -319,6 +322,20 @@ New experience:
 
         if message_type == "context_event":
             header = JournalLLMService._append_timestamp_marker("[ambient context]", timestamp)
+            speaker = JournalLLMService._sanitize_marker_field(message.get("sender_id"))
+            if speaker:
+                header += f"[from={speaker}]"
+            if channel:
+                header += f"[channel={channel}]"
+            if room_name:
+                header += f"[room={room_name}]"
+            return header
+
+        if is_scheduled_work(message.get("metadata")):
+            header = JournalLLMService._append_timestamp_marker("[scheduled task]", timestamp)
+            target = JournalLLMService._sanitize_marker_field(message.get("sender_id"))
+            if target:
+                header += f"[for={target}]"
             if channel:
                 header += f"[channel={channel}]"
             if room_name:

@@ -51,6 +51,7 @@ from ...core.runtime import (
     scheduled_delivery_context,
     upsert_contact,
 )
+from ...interfaces.channel import ChatTurnRequest
 from .config import FeishuAdapterConfig
 from .history import (
     FeishuHistoryFetcher,
@@ -193,6 +194,8 @@ class FeishuArtifactRenderer:
 
 class FeishuAdapter:
     """Bridge between ``FeishuChannel`` events and an ``Agent`` instance."""
+
+    channel_name = "feishu"
 
     def __init__(
         self,
@@ -749,6 +752,8 @@ class FeishuAdapter:
             event_type="group_message",
             metadata=metadata,
             room_name=room_name,
+            channel="feishu",
+            user_id=sender_name or sender_id,
         )
 
     async def _decide_group_participation(
@@ -2194,7 +2199,7 @@ class FeishuAdapter:
             attachments=attachments,
             room_name=resolved_room_name,
             is_group=is_group,
-        )
+        ).to_chat_kwargs()
         anchor = self._reply_anchor(raw_msg=raw_msg, message_id=message_id)
         context = ScheduledDeliveryContext(
             channel="feishu",
@@ -2375,7 +2380,7 @@ class FeishuAdapter:
         with scheduled_delivery_context(context):
             return await self._scheduled_task_event_result(
                 chat_events,
-                prompt=AgentConfig.scheduled_agent_prompt(task.content),
+                prompt=str(task.content or "").strip(),
                 user_id=user_id,
             )
 
@@ -2394,6 +2399,7 @@ class FeishuAdapter:
             user_id=user_id,
             stream=False,
             channel="feishu",
+            inbox_kind="scheduled_turn",
         ):
             event_type = event.get("type")
             if event_type == "message_done" and str(event.get("phase") or "final") == "final":
@@ -2425,24 +2431,25 @@ class FeishuAdapter:
         attachments: Optional[list[dict[str, Any]]] = None,
         room_name: Optional[str] = None,
         is_group: bool = False,
-    ) -> dict[str, Any]:
-        kwargs: dict[str, Any] = {
-            "user_message": text,
-            "user_id": user_id,
-            "channel": "feishu",
-        }
-        if is_group:
-            kwargs["channel_instructions"] = (
+    ) -> ChatTurnRequest:
+        return ChatTurnRequest(
+            user_message=text,
+            user_id=user_id,
+            channel="feishu",
+            inbox_kind="user_turn",
+            room_name=room_name,
+            channel_instructions=(
                 "For mentions, use <at user_id=\"ou_xxx\">Name</at>, never plain @Name. "
                 "Room context shows users as Name(id). Mention only when direct attention is needed."
-            )
-        if room_name:
-            kwargs["room_name"] = room_name
-        if image_sources:
-            kwargs["image_source"] = image_sources[0] if len(image_sources) == 1 else image_sources
-        if attachments:
-            kwargs["attachments"] = attachments
-        return kwargs
+                if is_group
+                else ""
+            ),
+            image_source=(
+                image_sources[0] if image_sources and len(image_sources) == 1
+                else image_sources or None
+            ),
+            attachments=attachments,
+        )
 
     @staticmethod
     def _image_sources_for_model(image_assets: list[_FeishuInboundImageAsset]) -> list[str]:

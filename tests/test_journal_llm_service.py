@@ -16,6 +16,7 @@ class JournalLLMServicePromptTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("not a user-owned log or searchable database", prompt)
         self.assertIn("[speaker=Name][timestamp=Time]", prompt)
         self.assertIn("[speaker=ME]", prompt)
+        self.assertIn("[scheduled task][for=Name][timestamp=Time]", prompt)
         self.assertIn("[ambient context][timestamp=Time]", prompt)
         self.assertNotIn("[internal_monologue]", prompt)
         self.assertIn("write in the language used by the users in the transcript", prompt)
@@ -24,6 +25,7 @@ class JournalLLMServicePromptTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("synthesize the period's arc", prompt)
         self.assertIn("Keep people, rooms, preferences, commitments, and experiences separate", prompt)
         self.assertIn("First-person words in non-ME entries belong to that speaker", prompt)
+        self.assertIn("Scheduled tasks are work you owed", prompt)
         self.assertIn("Use timestamps only for ordering and attribution", prompt)
         self.assertIn("manually adds a `## YYYY-MM-DD HH:MM` heading", prompt)
         self.assertIn("Return the diary body only", prompt)
@@ -99,6 +101,22 @@ class JournalLLMServicePromptTests(unittest.IsolatedAsyncioTestCase):
             "[speaker=o9cq80_w4Ka1lFvfZNLbR9yBgiFQ@im.wechat][timestamp=2026-06-08 13:42:21]\n我稍后给你发材料。",
             transcript,
         )
+
+    def test_format_transcript_marks_scheduled_tasks_as_work_orders(self):
+        transcript = JournalLLMService._format_transcript([
+            {
+                "role": "user",
+                "type": "message",
+                "sender_id": "web_user",
+                "content": "This scheduled task is now due.",
+                "timestamp": "2026-06-08 13:42:21",
+                "channel": "api",
+                "metadata": {"inbox_kind": "scheduled_turn", "source": "scheduled_task"},
+            }
+        ])
+
+        self.assertIn("[scheduled task][timestamp=2026-06-08 13:42:21][for=web_user][channel=api]", transcript)
+        self.assertNotIn("[speaker=web_user]", transcript)
 
     def test_build_diary_user_prompt_uses_single_period_transcript(self):
         prompt = JournalLLMService.build_diary_user_prompt(

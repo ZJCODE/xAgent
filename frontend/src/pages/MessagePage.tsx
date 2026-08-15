@@ -4,6 +4,7 @@ import { Markdown } from "../components/Markdown";
 import { Button, EmptyState, IconButton, PageShell, PageToolbar, SearchField } from "../components/ui";
 import { getAgentInfo, getMessages, searchMessages } from "../lib/api";
 import { classNames, formatBytes, formatTimestamp } from "../lib/format";
+import { isScheduledWork, scheduledTaskDisplayContent } from "../lib/scheduledMessage";
 import type { AttachmentAsset, MessageItem, MessageSearchResult } from "../types";
 
 const PAGE_SIZE = 50;
@@ -23,19 +24,37 @@ function roleClass(role: string): string {
   if (normalized.includes("assistant")) return "role-assistant";
   if (normalized.includes("system")) return "role-system";
   if (normalized.includes("tool")) return "role-tool";
+  if (normalized.includes("scheduled")) return "role-scheduled";
   return "role-observation";
 }
 
 function messageRoleClass(message: MessageItem): string {
+  if (isScheduledWork(message.metadata)) return "role-scheduled";
   return roleClass(message.role);
 }
 
 function messageRoleLabel(message: MessageItem): string {
+  if (isScheduledWork(message.metadata)) return "scheduled";
   return message.role;
+}
+
+function messageDisplayContent(message: MessageItem): string {
+  if (isScheduledWork(message.metadata)) {
+    return scheduledTaskDisplayContent(message.content, message.metadata);
+  }
+  return message.content;
 }
 
 /** Extract channel / name / group from a message for display as meta chips. */
 function messageMetaChips(message: MessageItem): { channel?: string; name?: string; group?: string } {
+  if (isScheduledWork(message.metadata)) {
+    return {
+      channel: message.channel,
+      name: message.sender_id ? `for ${message.sender_id}` : undefined,
+      group: message.room_name && message.room_name !== message.sender_id ? message.room_name : undefined,
+    };
+  }
+
   if (message.role === "user") {
     return {
       channel: message.channel,
@@ -214,20 +233,16 @@ export function MessagePage() {
           activeMessages.map((message, index) => {
             const imageUrls = messageImageUrls(message);
             const files = messageFileAttachments(message);
+            const displayContent = messageDisplayContent(message);
+            const chips = messageMetaChips(message);
+            const roleChipClass = messageRoleClass(message);
             return (
-              <article key={`${message.timestamp}-${index}`} className={classNames("message-row", messageRoleClass(message))}>
+              <article key={`${message.timestamp}-${index}`} className={classNames("message-row", roleChipClass)}>
                 <div className="message-row-meta">
-                  <span className={classNames("meta-chip", messageRoleClass(message))}>{messageRoleLabel(message)}</span>
-                  {(() => {
-                    const chips = messageMetaChips(message);
-                    return (
-                      <>
-                        {chips.channel ? <span className="meta-chip">{chips.channel}</span> : null}
-                        {chips.name ? <span className="meta-chip">{chips.name}</span> : null}
-                        {chips.group ? <span className="meta-chip">{chips.group}</span> : null}
-                      </>
-                    );
-                  })()}
+                  <span className={classNames("meta-chip", roleChipClass)}>{messageRoleLabel(message)}</span>
+                  {chips.channel ? <span className="meta-chip">{chips.channel}</span> : null}
+                  {chips.name ? <span className="meta-chip">{chips.name}</span> : null}
+                  {chips.group ? <span className="meta-chip">{chips.group}</span> : null}
                   <span className="meta-chip">{formatTimestamp(message.timestamp)}</span>
                   {isSearchResult(message)
                     ? message.matched_in.map((match) => (
@@ -237,7 +252,7 @@ export function MessagePage() {
                       ))
                     : null}
                 </div>
-                {message.content ? <Markdown content={message.content} renderImages={false} /> : null}
+                {displayContent ? <Markdown content={displayContent} renderImages={false} /> : null}
                 {imageUrls.length ? (
                   <div className="message-archive-media">
                     {imageUrls.map((url, imageIndex) => (

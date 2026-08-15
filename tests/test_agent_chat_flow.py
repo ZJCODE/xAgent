@@ -233,7 +233,7 @@ class FakeToolExecutor:
     def __init__(self):
         self.seen_input_messages = []
 
-    async def handle_tool_calls(self, tool_calls, input_messages, max_concurrent_tools):
+    async def handle_tool_calls(self, tool_calls, input_messages, max_concurrent_tools, **kwargs):
         self.seen_input_messages.append(list(input_messages))
         input_messages.extend([
             {
@@ -254,7 +254,7 @@ class FakeAttachmentToolExecutor:
     def __init__(self, display_result):
         self.display_result = display_result
 
-    async def handle_tool_calls(self, tool_calls, input_messages, max_concurrent_tools):
+    async def handle_tool_calls(self, tool_calls, input_messages, max_concurrent_tools, **kwargs):
         input_messages.extend([
             {
                 "role": "assistant",
@@ -1753,6 +1753,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(user_msg.role, RoleType.USER)
         self.assertEqual(user_msg.channel, "api")
         self.assertEqual(user_msg.metadata.get("source"), "scheduled_task")
+        self.assertEqual(user_msg.metadata.get("inbox_kind"), "scheduled_turn")
         self.assertEqual(assistant_msg.role, RoleType.ASSISTANT)
         self.assertEqual(assistant_msg.channel, "api")
 

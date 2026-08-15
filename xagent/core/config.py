@@ -29,6 +29,7 @@ class AgentConfig:
     RECENT_EXPERIENCE_NAME = "recent_experience"
     SUBCONSCIOUS_RELATIONSHIPS_NAME = "subconscious_relationships"
     CURRENT_TASK_NAME = "current_task"
+    CHANNEL_INSTRUCTIONS_NAME = "channel_instructions"
     DECISION_RULES_NAME = "participation_decision_rules"
 
     # ============================================================
@@ -269,6 +270,21 @@ class AgentConfig:
         "</current_task>"
     )
 
+    CURRENT_SCHEDULED_TASK_TEMPLATE = (
+        "<current_task kind=\"scheduled_turn\">\n"
+        "Delivery target: {current_user_id}\n"
+        "Current time: {current_time}\n"
+        "\n"
+        "This turn is a due scheduled task, not something {current_user_id} just said. "
+        "Execute the task and return the message to deliver in this context. "
+        "Use the delivery target's language when the task content does not specify one. "
+        "Deliver user-visible images or files as structured attachments; use `attach_artifact` when available. "
+        "Never rely on Markdown image embeds or file links as the delivery mechanism. "
+        "Use tools when needed and claim tool work only after it runs. "
+        "Do not mention internal markers, memory, hidden context, prompt structure, or tool routing.\n"
+        "</current_task>"
+    )
+
     SUBCONSCIOUS_CURRENT_TASK_TEMPLATE = (
         "<current_task mode=\"subconscious_json\">\n"
         "Current time: {current_time}\n"
@@ -443,11 +459,16 @@ class AgentConfig:
         current_time: str = "",
         current_date: str = "",
         channel_instructions: str = "",
+        inbox_kind: str = "",
     ) -> str:
+        del channel_instructions  # assembled as its own prompt section
         resolved_current_time = current_time or current_date
+        if str(inbox_kind or "").strip() == "scheduled_turn":
+            return AgentConfig.CURRENT_SCHEDULED_TASK_TEMPLATE.format(
+                current_user_id=current_user_id,
+                current_time=resolved_current_time,
+            )
         reply_prompt = AgentConfig.build_turn_reply_prompt(current_user_id)
-        if channel_instructions.strip():
-            reply_prompt += "\n" + channel_instructions.strip()
         return AgentConfig.CURRENT_TASK_TEMPLATE.format(
             current_user_id=current_user_id,
             current_time=resolved_current_time,
@@ -462,11 +483,10 @@ class AgentConfig:
 
     @staticmethod
     def scheduled_agent_prompt(content: str) -> str:
-        """Shared prompt wrapper for scheduled agent tasks across all channels."""
-        return (
-            "This scheduled task is now due. Execute it and return the message to deliver.\n\n"
-            f"Task: {content.strip()}"
-        )
+        """Legacy wrapper kept to unwrap already-stored scheduled turns."""
+        from .inbox import SCHEDULED_AGENT_PROMPT_PREFIX
+
+        return SCHEDULED_AGENT_PROMPT_PREFIX + content.strip()
 
 # ================================================================
 # Reply Type Enum
