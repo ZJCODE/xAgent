@@ -159,10 +159,7 @@ class MemoryHandler:
         normal turns, but it benefits from a slightly wider time horizon than
         the recent daily window.
         """
-        sections: list[str] = [
-            "Diary below is a private inner record. A thought appearing here "
-            "was not necessarily sent to anyone, including notes written at night.",
-        ]
+        sections: list[str] = []
 
         summary_sections = await self._latest_summary_sections_for_subconscious()
         if summary_sections:
