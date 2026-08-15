@@ -27,8 +27,14 @@ def create_schedule_task_tool(*, tasks_dir: str):
         name="manage_scheduled_tasks",
         description=(
             "Create, list, duplicate, update, pause, resume, or delete scheduled tasks. "
-            "Use message tasks for fixed text, agent tasks for due-time work that may need tools or reasoning, "
-            "and interval schedules for bounded repeated reminders. "
+            "Use message tasks for fixed text, or agent tasks for due-time work that may need tools or reasoning. "
+            "Choose schedule kind by intent: "
+            "oneshot (run_at/delay_seconds) for one-time; "
+            "daily for every day at a clock time; "
+            "weekly for specific weekdays; "
+            "monthly for calendar-month anchors (day of month, last day, or nth weekday); "
+            "interval for bounded short repeats that require end_at or duration_seconds. "
+            "Do not use monthly nth weekday for ordinary weekly repeats — use weekly. "
             "Interval tasks require an explicit user-provided duration_seconds or end_at; "
             "if missing, ask the user and do not invent a default. "
             "For a window like 10:00–12:00 every 10 minutes, use start_at, end_at, and interval_seconds together; "
@@ -43,7 +49,17 @@ def create_schedule_task_tool(*, tasks_dir: str):
             "content": "Text to send or instruction to execute when due.",
             "run_at": "One-time local datetime, e.g. 20260601-143000 or 2026-06-01 14:30:00.",
             "delay_seconds": "One-time delay from now in seconds, or first run delay for interval schedules.",
-            "recurrence": "Structured recurrence rules, e.g. daily, weekly, or interval dictionaries.",
+            "recurrence": (
+                "Structured recurrence rules. Examples: "
+                "{\"kind\":\"daily\",\"time\":\"09:00:00\"}; "
+                "{\"kind\":\"weekly\",\"time\":\"13:28:00\",\"weekdays\":[\"wed\",\"fri\"]}; "
+                "{\"kind\":\"monthly\",\"time\":\"09:00:00\",\"day\":1}; "
+                "{\"kind\":\"monthly\",\"time\":\"18:00:00\",\"day\":-1}; "
+                "{\"kind\":\"monthly\",\"time\":\"10:00:00\",\"weekday\":\"mon\",\"nth\":2}; "
+                "{\"kind\":\"monthly\",\"time\":\"10:00:00\",\"weekday\":\"fri\",\"nth\":-1}; "
+                "{\"kind\":\"interval\",\"every_seconds\":600,\"end_at\":\"2026-06-01 12:00:00\"}. "
+                "Monthly day and weekday/nth are mutually exclusive; day=-1 is month end; day=31 skips short months."
+            ),
             "interval_seconds": "Repeat every N seconds. Requires user-provided duration_seconds or end_at.",
             "duration_seconds": "Required for interval unless end_at is set. Must come from the user; do not invent.",
             "start_at": "Optional interval window start. Use for requests like from 10:00 to 12:00 every 10 minutes.",

@@ -2,8 +2,9 @@ import type { ScheduledTaskItem, ScheduledTaskRecurrenceRule, TaskCreateInput, T
 
 export const WEEKDAY_OPTIONS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const;
 export type WeekdayOption = (typeof WEEKDAY_OPTIONS)[number];
-export type TaskScheduleKind = "oneshot" | "daily" | "weekly" | "interval";
+export type TaskScheduleKind = "oneshot" | "daily" | "weekly" | "monthly" | "interval";
 export type OneShotMode = "delay" | "absolute";
+export type MonthlyOnType = "day" | "nth_weekday";
 export type IntervalStartMode = "now" | "at";
 export type IntervalEndMode = "duration" | "end_at";
 export type IntervalFirstRunMode = "default" | "immediate" | "delay";
@@ -19,6 +20,11 @@ export interface TaskFormState {
   dailyTime: string;
   weeklyTime: string;
   weekdays: WeekdayOption[];
+  monthlyTime: string;
+  monthlyOnType: MonthlyOnType;
+  monthlyDay: string;
+  monthlyWeekday: WeekdayOption;
+  monthlyNth: string;
   intervalMinutes: string;
   intervalStartMode: IntervalStartMode;
   intervalStartAt: string;
@@ -30,6 +36,7 @@ export interface TaskFormState {
 }
 
 const MAX_INTERVAL_DURATION_MINUTES = 30 * 24 * 60;
+const MONTHLY_NTH_OPTIONS = new Set(["1", "2", "3", "4", "-1"]);
 
 export function createDefaultTaskFormState(): TaskFormState {
   return {
@@ -43,6 +50,11 @@ export function createDefaultTaskFormState(): TaskFormState {
     dailyTime: "09:00",
     weeklyTime: "09:00",
     weekdays: [],
+    monthlyTime: "09:00",
+    monthlyOnType: "day",
+    monthlyDay: "1",
+    monthlyWeekday: "mon",
+    monthlyNth: "2",
     intervalMinutes: "5",
     intervalStartMode: "now",
     intervalStartAt: "",
@@ -59,6 +71,7 @@ export function inferScheduleKind(task: ScheduledTaskItem): TaskScheduleKind {
   if (rule?.kind === "interval") return "interval";
   if (rule?.kind === "daily") return "daily";
   if (rule?.kind === "weekly") return "weekly";
+  if (rule?.kind === "monthly") return "monthly";
   return "oneshot";
 }
 
@@ -89,6 +102,19 @@ export function taskToFormState(task: ScheduledTaskItem): TaskFormState {
   if (state.scheduleKind === "weekly" && rule) {
     state.weeklyTime = fromApiTime(rule.time || "09:00:00");
     state.weekdays = normalizeWeekdays(rule.weekdays);
+    return state;
+  }
+
+  if (state.scheduleKind === "monthly" && rule) {
+    state.monthlyTime = fromApiTime(rule.time || "09:00:00");
+    if (rule.day != null) {
+      state.monthlyOnType = "day";
+      state.monthlyDay = String(rule.day);
+    } else {
+      state.monthlyOnType = "nth_weekday";
+      state.monthlyWeekday = normalizeSingleWeekday(rule.weekday);
+      state.monthlyNth = String(rule.nth ?? 2);
+    }
     return state;
   }
 
@@ -134,6 +160,22 @@ export function validateTaskForm(state: TaskFormState): string | null {
   if (state.scheduleKind === "weekly") {
     if (!isValidTimeInput(state.weeklyTime)) return "Weekly time is required.";
     if (state.weekdays.length === 0) return "Select at least one weekday.";
+    return null;
+  }
+
+  if (state.scheduleKind === "monthly") {
+    if (!isValidTimeInput(state.monthlyTime)) return "Monthly time is required.";
+    if (state.monthlyOnType === "day") {
+      const day = parseNumber(state.monthlyDay);
+      if (day == null || (day !== -1 && (day < 1 || day > 31))) {
+        return "Day must be 1–31 or last day.";
+      }
+      return null;
+    }
+    if (!WEEKDAY_OPTIONS.includes(state.monthlyWeekday)) return "Select a weekday.";
+    if (!MONTHLY_NTH_OPTIONS.has(state.monthlyNth.trim())) {
+      return "Nth must be 1st–4th or last.";
+    }
     return null;
   }
 
@@ -236,6 +278,10 @@ function schedulePayloadForCreate(state: TaskFormState): Partial<TaskCreateInput
     return { recurrence: [{ kind: "weekly", time: toApiTime(state.weeklyTime), weekdays: state.weekdays }] };
   }
 
+  if (state.scheduleKind === "monthly") {
+    return { recurrence: [monthlyRecurrenceRule(state)] };
+  }
+
   return intervalPayload(state);
 }
 
@@ -254,6 +300,10 @@ function schedulePayloadForUpdate(state: TaskFormState, original: ScheduledTaskI
     return { recurrence: [{ kind: "weekly", time: toApiTime(state.weeklyTime), weekdays: state.weekdays }] };
   }
 
+  if (state.scheduleKind === "monthly") {
+    return { recurrence: [monthlyRecurrenceRule(state)] };
+  }
+
   if (inferScheduleKind(original) === "interval") {
     return intervalPayload(state);
   }
@@ -261,6 +311,22 @@ function schedulePayloadForUpdate(state: TaskFormState, original: ScheduledTaskI
   return {
     recurrence: [intervalRecurrenceRule(state)],
     ...(state.intervalStartMode === "now" ? intervalFirstRunPayload(state) : {}),
+  };
+}
+
+function monthlyRecurrenceRule(state: TaskFormState): ScheduledTaskRecurrenceRule {
+  if (state.monthlyOnType === "day") {
+    return {
+      kind: "monthly",
+      time: toApiTime(state.monthlyTime),
+      day: Number(state.monthlyDay),
+    };
+  }
+  return {
+    kind: "monthly",
+    time: toApiTime(state.monthlyTime),
+    weekday: state.monthlyWeekday,
+    nth: Number(state.monthlyNth),
   };
 }
 
@@ -325,6 +391,12 @@ function scheduleSignature(state: TaskFormState): string {
   }
   if (state.scheduleKind === "daily") return `daily:${toApiTime(state.dailyTime)}`;
   if (state.scheduleKind === "weekly") return `weekly:${toApiTime(state.weeklyTime)}:${state.weekdays.join(",")}`;
+  if (state.scheduleKind === "monthly") {
+    if (state.monthlyOnType === "day") {
+      return `monthly:day:${toApiTime(state.monthlyTime)}:${Number(state.monthlyDay)}`;
+    }
+    return `monthly:nth:${toApiTime(state.monthlyTime)}:${state.monthlyWeekday}:${Number(state.monthlyNth)}`;
+  }
   return [
     "interval",
     minutesToSeconds(state.intervalMinutes),
@@ -344,6 +416,11 @@ function firstRecurrenceRule(task: ScheduledTaskItem): ScheduledTaskRecurrenceRu
 function normalizeWeekdays(value: unknown): WeekdayOption[] {
   if (!Array.isArray(value)) return [];
   return value.filter((item): item is WeekdayOption => WEEKDAY_OPTIONS.includes(item as WeekdayOption));
+}
+
+function normalizeSingleWeekday(value: unknown): WeekdayOption {
+  const text = String(value || "").trim().toLowerCase();
+  return WEEKDAY_OPTIONS.includes(text as WeekdayOption) ? (text as WeekdayOption) : "mon";
 }
 
 function fromApiTime(value: string): string {

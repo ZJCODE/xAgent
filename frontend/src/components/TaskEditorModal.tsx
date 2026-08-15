@@ -13,6 +13,7 @@ import {
   type IntervalEndMode,
   type IntervalFirstRunMode,
   type IntervalStartMode,
+  type MonthlyOnType,
   type OneShotMode,
   type TaskFormState,
   type TaskScheduleKind,
@@ -168,6 +169,7 @@ export function TaskEditorModal({
                 <option value="oneshot">One-shot</option>
                 <option value="daily">Daily</option>
                 <option value="weekly">Weekly</option>
+                <option value="monthly">Monthly</option>
                 <option value="interval">Interval</option>
               </select>
             </WizardField>
@@ -181,6 +183,7 @@ export function TaskEditorModal({
             {form.scheduleKind === "weekly" && (
               <WeeklyFields form={form} updateForm={updateForm} toggleWeekday={toggleWeekday} />
             )}
+            {form.scheduleKind === "monthly" && <MonthlyFields form={form} updateForm={updateForm} />}
             {form.scheduleKind === "interval" && <IntervalFields form={form} updateForm={updateForm} />}
           </form>
         </div>
@@ -261,6 +264,73 @@ function WeeklyFields({
           ))}
         </div>
       </div>
+    </div>
+  );
+}
+
+function MonthlyFields({
+  form,
+  updateForm,
+}: {
+  form: TaskFormState;
+  updateForm: (patch: Partial<TaskFormState>) => void;
+}) {
+  return (
+    <div className="task-editor-section">
+      <WizardField label="Monthly time" hint="Local wall-clock time.">
+        <input type="time" value={form.monthlyTime} onChange={(event) => updateForm({ monthlyTime: event.target.value })} />
+      </WizardField>
+      <RadioGroup
+        name="monthly-on-type"
+        value={form.monthlyOnType}
+        options={[
+          { value: "day", label: "Day of month" },
+          { value: "nth_weekday", label: "Nth weekday" },
+        ]}
+        onChange={(value) => updateForm({ monthlyOnType: value as MonthlyOnType })}
+      />
+      {form.monthlyOnType === "day" ? (
+        <WizardField label="Day" hint="Use last day for month end. Day 31 skips short months.">
+          <select value={form.monthlyDay} onChange={(event) => updateForm({ monthlyDay: event.target.value })}>
+            {Array.from({ length: 31 }, (_, index) => {
+              const day = String(index + 1);
+              return (
+                <option key={day} value={day}>
+                  {day}
+                </option>
+              );
+            })}
+            <option value="-1">Last day</option>
+          </select>
+        </WizardField>
+      ) : (
+        <>
+          <WizardField label="Which">
+            <select value={form.monthlyNth} onChange={(event) => updateForm({ monthlyNth: event.target.value })}>
+              <option value="1">1st</option>
+              <option value="2">2nd</option>
+              <option value="3">3rd</option>
+              <option value="4">4th</option>
+              <option value="-1">Last</option>
+            </select>
+          </WizardField>
+          <div className="task-editor-field-block">
+            <span>Weekday</span>
+            <div className="weekday-chip-list">
+              {WEEKDAY_OPTIONS.map((weekday) => (
+                <button
+                  key={weekday}
+                  type="button"
+                  className={classNames("weekday-chip", form.monthlyWeekday === weekday && "selected")}
+                  onClick={() => updateForm({ monthlyWeekday: weekday })}
+                >
+                  {weekday}
+                </button>
+              ))}
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }

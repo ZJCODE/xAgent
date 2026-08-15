@@ -71,6 +71,14 @@ function formatSeconds(value: unknown): string {
   return `${seconds}s`;
 }
 
+function formatMonthlyOrdinal(nth: number): string {
+  if (nth === -1) return "last";
+  if (nth === 1) return "1st";
+  if (nth === 2) return "2nd";
+  if (nth === 3) return "3rd";
+  return `${nth}th`;
+}
+
 function taskRecurrenceChips(task: ScheduledTaskItem): string[] {
   const chips: string[] = [];
   for (const rule of Array.isArray(task.recurrence) ? task.recurrence : []) {
@@ -82,6 +90,13 @@ function taskRecurrenceChips(task: ScheduledTaskItem): string[] {
       if (every) chips.push(`every ${every}`);
       const endAt = formatRunAt(String(rule?.end_at || ""));
       if (endAt) chips.push(`until ${endAt}`);
+    } else if (kind === "monthly") {
+      if (rule?.day != null) {
+        chips.push(Number(rule.day) === -1 ? "last day" : `day ${rule.day}`);
+      } else if (rule?.weekday && rule?.nth != null) {
+        chips.push(`${formatMonthlyOrdinal(Number(rule.nth))} ${rule.weekday}`);
+      }
+      if (rule?.time) chips.push(String(rule.time));
     } else {
       const weekdays = Array.isArray(rule?.weekdays) ? rule.weekdays.join(", ") : "";
       if (weekdays) chips.push(weekdays);

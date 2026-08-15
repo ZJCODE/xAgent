@@ -1,6 +1,7 @@
 """Shared helpers for file-backed scheduled tasks."""
 from __future__ import annotations
 
+import calendar
 import os
 import uuid
 from datetime import datetime, time, timedelta
@@ -35,9 +36,17 @@ WEEKDAY_ALIASES = {
 }
 RECURRENCE_KIND_DAILY = "daily"
 RECURRENCE_KIND_WEEKLY = "weekly"
+RECURRENCE_KIND_MONTHLY = "monthly"
 RECURRENCE_KIND_INTERVAL = "interval"
 MIN_INTERVAL_EVERY_SECONDS = 60
 MAX_INTERVAL_DURATION_SECONDS = 30 * 24 * 3600
+MAX_MONTHLY_LOOKAHEAD_MONTHS = 36
+SUPPORTED_RECURRENCE_KINDS = {
+    RECURRENCE_KIND_DAILY,
+    RECURRENCE_KIND_WEEKLY,
+    RECURRENCE_KIND_MONTHLY,
+    RECURRENCE_KIND_INTERVAL,
+}
 
 
 def format_task_timestamp(run_at: datetime) -> str:
@@ -138,14 +147,16 @@ def normalize_recurrence_rules(value: Any) -> list[dict[str, Any]]:
         raise ValueError("recurrence must be an object or a list of objects")
 
     normalized_rules: list[dict[str, Any]] = []
-    seen: set[tuple[str, str, tuple[str, ...] | int]] = set()
+    seen: set[tuple[Any, ...]] = set()
     for raw_rule in raw_rules:
         if not isinstance(raw_rule, Mapping):
             raise ValueError("each recurrence rule must be an object")
         kind = str(raw_rule.get("kind") or "").strip().lower()
-        if kind not in {RECURRENCE_KIND_DAILY, RECURRENCE_KIND_WEEKLY, RECURRENCE_KIND_INTERVAL}:
+        if kind not in SUPPORTED_RECURRENCE_KINDS:
             raise ValueError(
-                f"recurrence rule kind must be one of: {RECURRENCE_KIND_DAILY}, {RECURRENCE_KIND_WEEKLY}, {RECURRENCE_KIND_INTERVAL}"
+                "recurrence rule kind must be one of: "
+                f"{RECURRENCE_KIND_DAILY}, {RECURRENCE_KIND_WEEKLY}, "
+                f"{RECURRENCE_KIND_MONTHLY}, {RECURRENCE_KIND_INTERVAL}"
             )
         if kind == RECURRENCE_KIND_INTERVAL:
             rule = _normalize_interval_rule(raw_rule)
@@ -155,9 +166,20 @@ def normalize_recurrence_rules(value: Any) -> list[dict[str, Any]]:
             seen.add(key)
             normalized_rules.append(rule)
             continue
+        if kind == RECURRENCE_KIND_MONTHLY:
+            rule = _normalize_monthly_rule(raw_rule)
+            if "day" in rule:
+                key = (kind, rule["time"], "day", int(rule["day"]))
+            else:
+                key = (kind, rule["time"], "weekday", str(rule["weekday"]), int(rule["nth"]))
+            if key in seen:
+                continue
+            seen.add(key)
+            normalized_rules.append(rule)
+            continue
         formatted_time = format_time_of_day(parse_time_of_day(str(raw_rule.get("time") or "")))
         if kind == RECURRENCE_KIND_DAILY:
-            rule: dict[str, Any] = {"kind": RECURRENCE_KIND_DAILY, "time": formatted_time}
+            rule = {"kind": RECURRENCE_KIND_DAILY, "time": formatted_time}
             key = (kind, formatted_time, ())
         else:
             weekdays = normalize_weekdays(raw_rule.get("weekdays"))
@@ -407,6 +429,24 @@ def calculate_next_weekly_run_at(
     return _next_weekly_occurrence(value.time().replace(microsecond=0), weekdays=parsed_weekdays, now=now)
 
 
+def resolve_monthly_run_at(rule: Mapping[str, Any], *, now: datetime | None = None) -> datetime:
+    """Resolve a monthly calendar rule into the next future local datetime."""
+    normalized = _normalize_monthly_rule(rule)
+    current = (now or datetime.now()).replace(microsecond=0)
+    year = current.year
+    month = current.month
+    for _ in range(MAX_MONTHLY_LOOKAHEAD_MONTHS):
+        candidate = _occurrence_in_month(normalized, year=year, month=month)
+        if candidate is not None and candidate > current:
+            return candidate
+        if month == 12:
+            year += 1
+            month = 1
+        else:
+            month += 1
+    raise ValueError("could not resolve a future monthly occurrence")
+
+
 def resolve_recurrence_run_at(value: Any, *, now: datetime | None = None) -> datetime:
     """Resolve recurrence rules into the next future scheduled datetime."""
     rules = normalize_recurrence_rules(value)
@@ -462,6 +502,8 @@ def _next_occurrence_for_rule(rule: Mapping[str, Any], *, now: datetime | None =
         return resolve_daily_run_at(time_value, now=current)
     if kind == RECURRENCE_KIND_WEEKLY:
         return resolve_weekly_run_at(time_value, weekdays=rule.get("weekdays"), now=current)
+    if kind == RECURRENCE_KIND_MONTHLY:
+        return resolve_monthly_run_at(rule, now=current)
     if kind == RECURRENCE_KIND_INTERVAL:
         return resolve_interval_first_run_at(rule, now=current)
     raise ValueError(f"unsupported recurrence rule kind: {kind}")
@@ -472,6 +514,10 @@ def _recurrence_rule_sort_key(rule: Mapping[str, Any]) -> tuple[str, str, tuple[
     if kind == RECURRENCE_KIND_INTERVAL:
         return kind, str(rule.get("start_at") or ""), (str(rule.get("end_at") or ""), str(rule.get("every_seconds") or ""))
     time_value = str(rule.get("time") or "").strip()
+    if kind == RECURRENCE_KIND_MONTHLY:
+        if "day" in rule:
+            return kind, time_value, ("day", str(rule.get("day")))
+        return kind, time_value, ("weekday", str(rule.get("weekday") or ""), str(rule.get("nth")))
     weekdays = tuple(normalize_weekdays(rule.get("weekdays")))
     return kind, time_value, weekdays
 
@@ -484,6 +530,88 @@ def _raw_recurrence_rules(value: Any) -> list[Any]:
     if isinstance(value, (list, tuple)):
         return list(value)
     raise ValueError("recurrence must be an object or a list of objects")
+
+
+def _normalize_monthly_rule(raw_rule: Mapping[str, Any]) -> dict[str, Any]:
+    formatted_time = format_time_of_day(parse_time_of_day(str(raw_rule.get("time") or "")))
+    has_day = "day" in raw_rule and raw_rule.get("day") is not None
+    has_weekday = bool(str(raw_rule.get("weekday") or "").strip())
+    has_nth = "nth" in raw_rule and raw_rule.get("nth") is not None
+    if has_day and (has_weekday or has_nth):
+        raise ValueError("monthly recurrence cannot combine day with weekday/nth")
+    if has_day:
+        try:
+            day = int(raw_rule.get("day"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("monthly day must be 1..31 or -1 for last day") from exc
+        if day != -1 and not 1 <= day <= 31:
+            raise ValueError("monthly day must be 1..31 or -1 for last day")
+        return {
+            "kind": RECURRENCE_KIND_MONTHLY,
+            "time": formatted_time,
+            "day": day,
+        }
+    if has_weekday ^ has_nth:
+        raise ValueError("monthly weekday recurrence requires both weekday and nth")
+    if not (has_weekday and has_nth):
+        raise ValueError("monthly recurrence requires day, or weekday and nth")
+    weekday = normalize_weekday(str(raw_rule.get("weekday") or ""))
+    try:
+        nth = int(raw_rule.get("nth"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("monthly nth must be 1..4 or -1 for last") from exc
+    if nth != -1 and nth not in {1, 2, 3, 4}:
+        raise ValueError("monthly nth must be 1..4 or -1 for last")
+    return {
+        "kind": RECURRENCE_KIND_MONTHLY,
+        "time": formatted_time,
+        "weekday": weekday,
+        "nth": nth,
+    }
+
+
+def _occurrence_in_month(rule: Mapping[str, Any], *, year: int, month: int) -> datetime | None:
+    parsed_time = parse_time_of_day(str(rule.get("time") or ""))
+    days_in_month = calendar.monthrange(year, month)[1]
+    if "day" in rule:
+        day = int(rule["day"])
+        if day == -1:
+            day = days_in_month
+        elif day > days_in_month:
+            return None
+        return datetime(
+            year,
+            month,
+            day,
+            parsed_time.hour,
+            parsed_time.minute,
+            parsed_time.second,
+        )
+
+    weekday = normalize_weekday(str(rule.get("weekday") or ""))
+    nth = int(rule["nth"])
+    target_weekday = WEEKDAY_INDEX_BY_NAME[weekday]
+    matching_days = [
+        day
+        for day in range(1, days_in_month + 1)
+        if datetime(year, month, day).weekday() == target_weekday
+    ]
+    if not matching_days:
+        return None
+    if nth == -1:
+        day = matching_days[-1]
+    elif nth > len(matching_days):
+        return None
+    else:
+        day = matching_days[nth - 1]
+    return datetime(
+        year,
+        month,
+        day,
+        parsed_time.hour,
+        parsed_time.minute,
+        parsed_time.second,
+    )
 
 
 def _normalize_interval_rule(raw_rule: Mapping[str, Any]) -> dict[str, Any]:
