@@ -309,6 +309,9 @@ class SubconsciousLoop:
         Intensity is ``subconscious_activity``. Habituation halves the rate
         after empty/unworthy reflections; new messages clear the streak;
         solitude slowly recovers it so alone time still counts as life.
+
+        Mode follows first principles: unanswered waking inbound => private
+        reflection only; idle conversation => initiative share allowed.
         """
         experience_cursor, experience_moved = await self._experience_state()
         if experience_moved:
@@ -319,24 +322,32 @@ class SubconsciousLoop:
         if not self.should_trigger():
             return
 
-        # Snapshot before generation: if inbound is pending a waking reply,
-        # any outward share this cycle would be a competing timely reply.
-        reply_owned_by_waking = await self._has_unanswered_waking_inbound()
-
-        self._logger.info("Subconscious thought triggered – generating thought")
+        private_only = await self._has_unanswered_waking_inbound()
+        mode = "subconscious_private" if private_only else "subconscious_json"
+        self._logger.info(
+            "Subconscious thought triggered – generating thought (mode=%s)",
+            mode,
+        )
         try:
-            result = await self._generate_subconscious_thought()
+            result = await self._generate_subconscious_thought(private_only=private_only)
         except Exception:
             self._logger.exception("Subconscious thought generation failed")
             return
 
         internal_content = str(result.get("internal_content") or "").strip()
-        external_content = str(result.get("external_content") or "").strip()
-        worthy = bool(result.get("worthy"))
-        recipient_hint = result.get("recipient_hint")
+        if private_only:
+            # Outbound channel is closed for this mode — never share.
+            external_content = ""
+            worthy = False
+            recipient_hint = None
+        else:
+            external_content = str(result.get("external_content") or "").strip()
+            worthy = bool(result.get("worthy"))
+            recipient_hint = result.get("recipient_hint")
 
         self._logger.info(
-            "Subconscious result: worthy=%s internal=%.80s... external=%.80s...",
+            "Subconscious result: mode=%s worthy=%s internal=%.80s... external=%.80s...",
+            mode,
             worthy,
             internal_content,
             external_content,
@@ -348,22 +359,13 @@ class SubconsciousLoop:
 
         diary_note = internal_content
         if worthy and external_content:
-            still_unanswered = await self._has_unanswered_waking_inbound()
-            if reply_owned_by_waking or still_unanswered:
-                self._logger.info(
-                    "Subconscious outward share held back – waking turn owns the reply"
-                )
-                diary_note = self._held_back_diary_note(
-                    internal_content or external_content
-                )
-            else:
-                delivered = await self._route_subconscious_thought(
-                    external_content,
-                    internal_content,
-                    recipient_hint,
-                )
-                if not delivered:
-                    diary_note = self._held_back_diary_note(internal_content)
+            delivered = await self._route_subconscious_thought(
+                external_content,
+                internal_content,
+                recipient_hint,
+            )
+            if not delivered:
+                diary_note = self._held_back_diary_note(internal_content)
 
         if diary_note:
             await self._write_subconscious_thought(diary_note)
@@ -444,9 +446,15 @@ class SubconsciousLoop:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    async def _generate_subconscious_thought(self) -> Dict[str, Any]:
+    async def _generate_subconscious_thought(
+        self,
+        *,
+        private_only: bool = False,
+    ) -> Dict[str, Any]:
         """Run a subconscious agent turn and parse the final JSON result."""
-        instructions, input_messages, tool_specs = await self._build_subconscious_turn_context()
+        instructions, input_messages, tool_specs = await self._build_subconscious_turn_context(
+            private_only=private_only,
+        )
 
         model_client = getattr(self._agent, "model_client", None)
         if model_client is None:
@@ -479,17 +487,21 @@ class SubconsciousLoop:
             if tool_calls:
                 self._logger.warning("Subconscious returned tool calls; tools are unavailable for this turn")
                 if text:
-                    return self._parse_subconscious_json(text)
+                    return self._parse_subconscious_json(text, private_only=private_only)
                 raise RuntimeError("Subconscious returned tool calls without text")
 
             if text:
-                return self._parse_subconscious_json(text)
+                return self._parse_subconscious_json(text, private_only=private_only)
 
             raise RuntimeError("Subconscious model turn ended without text or tool calls")
 
         raise RuntimeError(f"Subconscious thought failed after {max_iter} attempts")
 
-    async def _build_subconscious_turn_context(self) -> tuple[list[dict], list[dict], list]:
+    async def _build_subconscious_turn_context(
+        self,
+        *,
+        private_only: bool = False,
+    ) -> tuple[list[dict], list[dict], list]:
         """Build model input using the same layers as a normal agent turn."""
         message_handler = getattr(self._agent, "message_handler", None)
         if message_handler is None:
@@ -501,6 +513,7 @@ class SubconsciousLoop:
         )
         memory_context = await self._collect_memory_context()
         relationship_context = await self._collect_relationship_context()
+        task_mode = "subconscious_private" if private_only else "subconscious_json"
 
         instructions = message_handler.build_instruction_messages(
             tool_names=[],
@@ -508,6 +521,7 @@ class SubconsciousLoop:
             supports_vision=bool(getattr(self._agent, "supports_vision", True)),
             workspace_context="",
             is_subconscious=True,
+            task_mode=task_mode,
         )
         iteration_messages = message_handler.build_turn_context_messages(
             recent_messages,
@@ -517,14 +531,14 @@ class SubconsciousLoop:
             max_messages=hot_window,
             include_images=False,
             workspace_dir=getattr(self._agent, "workspace_dir", None),
-            task_mode="subconscious_json",
+            task_mode=task_mode,
             prompt_registry=getattr(message_handler, "prompt_registry", None),
         )
         input_messages = message_handler.sanitize_input_messages(list(iteration_messages))
         return instructions, input_messages, []
 
     @staticmethod
-    def _parse_subconscious_json(text: str) -> Dict[str, Any]:
+    def _parse_subconscious_json(text: str, *, private_only: bool = False) -> Dict[str, Any]:
         """Parse subconscious JSON from LLM output, robust to code fences."""
         cleaned = text.strip()
         if cleaned.startswith("```"):
@@ -552,7 +566,12 @@ class SubconsciousLoop:
                 "recipient_hint": None,
                 "external_content": None,
             }
-        return SubconsciousLoop._normalize_subconscious_result(parsed)
+        result = SubconsciousLoop._normalize_subconscious_result(parsed)
+        if private_only:
+            result["worthy"] = False
+            result["recipient_hint"] = None
+            result["external_content"] = None
+        return result
 
     @staticmethod
     def _load_json_object(text: str) -> Any:

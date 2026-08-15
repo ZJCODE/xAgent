@@ -359,8 +359,8 @@ class SubconsciousLoopTests(unittest.TestCase):
             self.assertIn("diary is only yours", current_task["content"])
             self.assertIn("did not send it", current_task["content"])
             self.assertIn("avoid unsolicited messages", current_task["content"])
-            self.assertIn("Waking turns own replies", current_task["content"])
-            self.assertIn("unanswered user message", current_task["content"])
+            self.assertIn("conversation is idle", current_task["content"])
+            self.assertIn("own initiative", current_task["content"])
             self.assertIn("would speak now", current_task["content"])
             self.assertIn("will be sent", current_task["content"])
             self.assertIn("their thread to someone else", current_task["content"])
@@ -371,6 +371,7 @@ class SubconsciousLoopTests(unittest.TestCase):
                 "Write internal_content and external_content in the recent conversation language",
                 current_task["content"],
             )
+            self.assertNotIn("outbound speech is closed", current_task["content"])
             self.assertNotIn("already talking with you", current_task["content"])
             self.assertNotIn("continuing is not a disturbance", current_task["content"])
             self.assertNotIn("replay the same thought", current_task["content"])
@@ -528,8 +529,9 @@ class SubconsciousLoopTests(unittest.TestCase):
             self.assertTrue(any("Context and Attribution" in c for c in contents))
             self.assertTrue(any("avoid unsolicited messages" in c for c in contents))
             self.assertTrue(any("would speak now" in c for c in contents))
-            self.assertTrue(any("waking turn" in c for c in contents))
+            self.assertTrue(any("initiative allowed" in c for c in contents))
             self.assertTrue(any("must not be spoken to another" in c for c in contents))
+            self.assertFalse(any("outbound speech is closed" in c for c in contents))
             self.assertFalse(any("already talking with you" in c for c in contents))
             self.assertFalse(any("quiet hours" in c.lower() for c in contents))
             self.assertFalse(any("All available tools are defined" in c for c in contents))
@@ -639,8 +641,8 @@ class SubconsciousLoopTests(unittest.TestCase):
             loop = SubconsciousLoop(agent, workspace=Path(tmpdir))
             self.assertFalse(asyncio.run(loop._has_unanswered_waking_inbound()))
 
-    def test_maybe_think_holds_back_outward_share_for_unanswered_inbound(self):
-        """Do not let subconscious act as a timely reply to a pending user message."""
+    def test_maybe_think_uses_private_mode_for_unanswered_inbound(self):
+        """Pending waking inbound closes the outbound channel — private thought only."""
         from xagent.schemas import Message, RoleType
 
         agent = self._make_agent_mock()
@@ -654,9 +656,6 @@ class SubconsciousLoopTests(unittest.TestCase):
         ])
         self._set_model_json(agent, {
             "internal_content": "他们要我记着充话费。",
-            "worthy": True,
-            "recipient_hint": "张三",
-            "external_content": "好，记下了，到时候你来喊我。",
         })
         delivery_sink = AsyncMock()
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -676,54 +675,27 @@ class SubconsciousLoopTests(unittest.TestCase):
             asyncio.run(loop.maybe_think())
 
             delivery_sink.assert_not_awaited()
-            agent.record_subconscious_thought.assert_called_once()
-            note = agent.record_subconscious_thought.call_args[0][0]
-            self.assertIn("他们要我记着充话费。", note)
-            self.assertIn("我没有发出去。", note)
-
-    def test_maybe_think_holds_back_if_inbound_was_pending_at_generation_start(self):
-        """Even after the waking reply lands, a reply-shaped thought stays private."""
-        from xagent.schemas import Message, RoleType
-
-        agent = self._make_agent_mock()
-        pending = [
-            Message(role=RoleType.USER, sender_id="alice", content="充话费", timestamp=1.0),
-        ]
-        answered = pending + [
-            Message(role=RoleType.ASSISTANT, sender_id="agent", content="已设置", timestamp=2.0),
-        ]
-        agent.message_handler.get_recent_messages = AsyncMock(side_effect=[
-            pending,   # snapshot before generation
-            pending,   # generation context build
-            answered,  # post-generation re-check
-        ])
-        self._set_model_json(agent, {
-            "internal_content": "抢答念头",
-            "worthy": True,
-            "recipient_hint": "张三",
-            "external_content": "我来回一句。",
-        })
-        delivery_sink = AsyncMock()
-        with tempfile.TemporaryDirectory() as tmpdir:
-            loop = SubconsciousLoop(
-                agent,
-                workspace=Path(tmpdir),
-                delivery_sink=delivery_sink,
-                deliverable_channels={"feishu"},
+            agent.record_subconscious_thought.assert_called_once_with("他们要我记着充话费。")
+            call = agent.model_client.calls[0]
+            current_task = next(
+                msg for msg in call["messages"] if msg.get("name") == AgentConfig.CURRENT_TASK_NAME
             )
-            loop.record_interaction(
-                channel="feishu",
-                user_id="ou_123",
-                target={"chat_id": "oc_xxx", "sender_name": "张三"},
-            )
-            loop._probability = 1.0
+            self.assertIn('mode="subconscious_private"', current_task["content"])
+            self.assertIn("outbound speech is closed", current_task["content"])
+            self.assertNotIn("worthy=true", current_task["content"])
+            instructions = "\n".join(item["content"] for item in call["instructions"])
+            self.assertIn("Outbound speech is closed", instructions)
+            self.assertNotIn("initiative allowed", instructions)
 
-            asyncio.run(loop.maybe_think())
-
-            delivery_sink.assert_not_awaited()
-            note = agent.record_subconscious_thought.call_args[0][0]
-            self.assertIn("抢答念头", note)
-            self.assertIn("我没有发出去。", note)
+    def test_parse_subconscious_json_private_only_strips_outbound_fields(self):
+        result = SubconsciousLoop._parse_subconscious_json(
+            '{"internal_content": "keep", "worthy": true, "external_content": "nope", "recipient_hint": "x"}',
+            private_only=True,
+        )
+        self.assertEqual(result["internal_content"], "keep")
+        self.assertFalse(result["worthy"])
+        self.assertIsNone(result["external_content"])
+        self.assertIsNone(result["recipient_hint"])
 
     def test_maybe_think_unworthy_writes_subconscious_thought(self):
         agent = self._make_agent_mock()

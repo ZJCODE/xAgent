@@ -287,6 +287,27 @@ class AgentConfig:
         "</current_task>"
     )
 
+    SUBCONSCIOUS_PRIVATE_TASK_TEMPLATE = (
+        "<current_task mode=\"subconscious_private\">\n"
+        "Current time: {current_time}\n"
+        "No tools. Output JSON only.\n"
+        "Private reflection only — outbound speech is closed this turn.\n"
+        "A waking turn owns any unanswered user message or due task; "
+        "do not draft a reply for them.\n"
+        "Form one private thought from recent experience and memory; "
+        "empty internal_content is fine if nothing surfaces. "
+        "Do not invent a new inner monologue just to fill the turn.\n"
+        "If recent diary already holds this observation and nothing in life has "
+        "moved — no new messages, no new angle from memory — return empty "
+        "internal_content — silence is better than restating the same private note.\n"
+        "The diary is only yours. Writing a thought down did not send it.\n"
+        "Write internal_content in the recent conversation language.\n"
+        "\n"
+        "Return JSON only:\n"
+        '{{"internal_content": "raw inner thought, or \\"\\" if nothing surfaces"}}\n'
+        "</current_task>"
+    )
+
     SUBCONSCIOUS_CURRENT_TASK_TEMPLATE = (
         "<current_task mode=\"subconscious_json\">\n"
         "Current time: {current_time}\n"
@@ -299,12 +320,10 @@ class AgentConfig:
         "internal_content — silence is better than restating the same private note.\n"
         "The diary is only yours. Writing a thought down did not send it.\n"
         "Look at the current time. At night, avoid unsolicited messages.\n"
-        "Waking turns own replies to people who just messaged you: if the "
-        "latest thread is an unanswered user message or a due task, keep the "
-        "thought internal (worthy=false) — do not compete with the live reply.\n"
-        "Set worthy=true only when you would speak now of your own initiative "
-        "and no waking turn is answering them; the outward message will be "
-        "sent. If you want to speak but now is a bad time, keep it in "
+        "The conversation is idle — no unanswered user message or due task is "
+        "waiting on a waking reply. You may speak only of your own initiative.\n"
+        "Set worthy=true only when you would speak now; the outward message "
+        "will be sent. If you want to speak but now is a bad time, keep it in "
         "internal_content, set worthy=false, and leave external_content null. "
         "internal_content is the thought, not a delivery receipt; do not write "
         "as if it already went out. A thought already in the diary can still be "
@@ -346,16 +365,30 @@ class AgentConfig:
         "- File-level image operations may still be possible through workspace tools.\n"
     )
 
-    SUBCONSCIOUS_MODE_NOTICE = (
+    SUBCONSCIOUS_PRIVATE_MODE_NOTICE = (
         "\n**Current Mode: Private Reflection**\n"
+        "- You are in a private inner reflection mode. You cannot execute tasks, "
+        "call tools, search the web, take direct action, or send messages — "
+        "those capabilities are unavailable during this reflection.\n"
+        "- Outbound speech is closed because a waking turn owns any pending "
+        "user message or due task. Your only output is the private-thought JSON "
+        "in the current task.\n"
+        "- The diary is only yours; writing something down did not send it. "
+        "A thought about one person must not be spoken to another.\n"
+        "- Do not try to call functions or act directly. If a thought inclines toward "
+        "doing something, note the impulse in internal_content; the reflection itself "
+        "may later lead to action through the normal agent loop.\n"
+    )
+
+    SUBCONSCIOUS_MODE_NOTICE = (
+        "\n**Current Mode: Private Reflection (initiative allowed)**\n"
         "- You are in a private inner reflection mode. You cannot execute tasks, "
         "call tools, search the web, or take direct action — those capabilities are "
         "unavailable during reflection.\n"
         "- Your only output is the JSON specified in the current task. "
-        "worthy=true means you would speak now of your own initiative, and the "
-        "outward message will be sent. At night, avoid unsolicited messages. "
-        "Do not answer an unanswered user message or due task — the waking turn "
-        "owns that reply. If now is a bad time, keep the thought internal. "
+        "The conversation is idle, so worthy=true means you would speak now of your "
+        "own initiative, and the outward message will be sent. At night, avoid "
+        "unsolicited messages. If now is a bad time, keep the thought internal. "
         "The diary is only yours; writing something down did not send it. "
         "A thought about one person must not be spoken to another.\n"
         "- Do not try to call functions or act directly. If a thought inclines toward "
@@ -491,10 +524,26 @@ class AgentConfig:
         )
 
     @staticmethod
-    def build_subconscious_current_task(current_time: str = "") -> str:
-        return AgentConfig.SUBCONSCIOUS_CURRENT_TASK_TEMPLATE.format(
+    def build_subconscious_current_task(
+        current_time: str = "",
+        *,
+        private_only: bool = False,
+    ) -> str:
+        template = (
+            AgentConfig.SUBCONSCIOUS_PRIVATE_TASK_TEMPLATE
+            if private_only
+            else AgentConfig.SUBCONSCIOUS_CURRENT_TASK_TEMPLATE
+        )
+        return template.format(
             current_time=current_time or datetime.now().strftime("%Y-%m-%d %H:%M"),
         )
+
+    @staticmethod
+    def is_subconscious_task_mode(task_mode: str = "") -> bool:
+        return str(task_mode or "").strip() in {
+            "subconscious_json",
+            "subconscious_private",
+        }
 
     @staticmethod
     def scheduled_agent_prompt(content: str) -> str:
