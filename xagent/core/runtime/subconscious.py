@@ -288,20 +288,18 @@ class SubconsciousLoop:
         if not internal_content and not external_content:
             return
 
-        if internal_content:
-            await self._write_subconscious_thought(internal_content)
+        diary_note = internal_content
+        if worthy and external_content:
+            delivered = await self._route_subconscious_thought(
+                external_content,
+                internal_content,
+                recipient_hint,
+            )
+            if not delivered:
+                diary_note = self._held_back_diary_note(internal_content)
 
-        if not worthy:
-            return
-
-        if not external_content:
-            return
-
-        await self._route_subconscious_thought(
-            external_content,
-            internal_content,
-            recipient_hint,
-        )
+        if diary_note:
+            await self._write_subconscious_thought(diary_note)
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -546,31 +544,21 @@ class SubconsciousLoop:
         external_content: str,
         internal_content: str,
         recipient_hint: Any,
-    ) -> None:
-        """Route a worthy thought for direct delivery when possible.
-
-        During quiet hours, delivery is skipped so the user is not disturbed.
-        The inner thought has already been written to the diary as private
-        first-person prose; the next daytime turn is told that writing it
-        down did not send it.
-        """
+    ) -> bool:
+        """Deliver a worthy thought. Return True only when the sink accepted it."""
         contacts = self._filter_deliverable_contacts(load_contacts(self._contacts_file))
         contacts = await self._alias_contacts_for_routing(contacts)
         recipient = self._pick_recipient(contacts, recipient_hint)
 
         if recipient is None:
             self._logger.info("No suitable recipient for subconscious thought")
-            return
-
-        now = datetime.now()
-        if not self._is_appropriate_time(now):
-            self._logger.info("Quiet hours – skipping subconscious delivery")
-            return
+            return False
 
         if self._delivery_sink is None:
             self._logger.info("No subconscious delivery sink configured")
-            return
+            return False
 
+        now = datetime.now()
         delivery = SubconsciousDelivery(
             content=external_content,
             recipient=recipient,
@@ -585,8 +573,10 @@ class SubconsciousLoop:
                 recipient.user_id,
                 now.isoformat(sep=" "),
             )
+            return True
         except Exception:
             self._logger.warning("Subconscious delivery failed", exc_info=True)
+            return False
 
     async def _deliver_with_retries(self, delivery: SubconsciousDelivery) -> None:
         """Deliver a subconscious thought, retrying transient sink failures."""
@@ -730,18 +720,16 @@ class SubconsciousLoop:
         ]
 
     @staticmethod
-    def _is_appropriate_time(now: datetime) -> bool:
-        """Check whether the current time is appropriate for sending.
+    def _held_back_diary_note(internal_content: str) -> str:
+        """Record that a worthy thought stayed inside, in the thought's language."""
+        thought = (internal_content or "").strip()
+        coda = "我没有发出去。" if SubconsciousLoop._looks_cjk(thought) else "I didn't send this."
+        if not thought:
+            return coda
+        if coda in thought:
+            return thought
+        return f"{thought}\n{coda}"
 
-        Respects ``AgentConfig.SUBCONSCIOUS_QUIET_HOURS_START`` and
-        ``SUBCONSCIOUS_QUIET_HOURS_END`` so users can define their own
-        quiet window.
-        """
-        hour = now.hour
-        start = AgentConfig.SUBCONSCIOUS_QUIET_HOURS_START
-        end = AgentConfig.SUBCONSCIOUS_QUIET_HOURS_END
-        if start <= end:
-            # Simple range: e.g. quiet 0–6 (midnight to 6 AM)
-            return not (start <= hour < end)
-        # Overnight range: e.g. quiet 22–8 (10 PM to 8 AM)
-        return not (hour >= start or hour < end)
+    @staticmethod
+    def _looks_cjk(text: str) -> bool:
+        return any("\u4e00" <= char <= "\u9fff" for char in text)

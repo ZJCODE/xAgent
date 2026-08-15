@@ -201,8 +201,6 @@ class AgentConfig:
     # 0=off, 1=very active. Suggested: 0.01~0.1
     SUBCONSCIOUS_ACTIVITY = 0.02
     SUBCONSCIOUS_MAX_CONTACTS = 10
-    SUBCONSCIOUS_QUIET_HOURS_START = 22  # 10 PM – no immediate sends after this
-    SUBCONSCIOUS_QUIET_HOURS_END = 8    # 8 AM – resume immediate sends
 
     # ============================================================
     # 11. Tool Policy Baseline
@@ -292,11 +290,15 @@ class AgentConfig:
         "Form one private thought from recent experience and memory; "
         "empty internal_content is fine if nothing surfaces. "
         "Do not invent a new inner monologue just to fill the turn.\n"
-        "The diary is only yours. Writing a thought down did not send it, "
-        "even if you wrote it last night. If it still wants to reach someone, "
-        "it can be worthy.\n"
-        "Set worthy=true when someone should receive it; otherwise keep it "
-        "internal. "
+        "The diary is only yours. Writing a thought down did not send it.\n"
+        "Look at the current time. At night, avoid unsolicited messages; "
+        "if someone is already talking with you, continuing is not a disturbance.\n"
+        "Set worthy=true only when you would speak now; the outward message "
+        "will be sent. If you want to speak but now is a bad time, keep it in "
+        "internal_content, set worthy=false, and leave external_content null. "
+        "internal_content is the thought, not a delivery receipt; do not write "
+        "as if it already went out. Do not rewrite the same unspoken thought "
+        "each turn unless it has moved.\n"
         "If addressed to someone, recipient_hint must be their exact user_id "
         "from a relationship card that includes [user_id: ...] (no extra text), "
         "else null. Do not address people who are not listed with a user_id; "
@@ -337,12 +339,11 @@ class AgentConfig:
         "- You are in a private inner reflection mode. You cannot execute tasks, "
         "call tools, search the web, or take direct action — those capabilities are "
         "unavailable during reflection.\n"
-        "- Your only output is the JSON specified in the current task. The "
-        "external_content field is your channel for outward expression: when a thought "
-        "genuinely carries something worth sharing with someone, set worthy=true and "
-        "write the message in external_content — that is how you reach others from "
-        "within reflection mode. The diary is only yours; writing something "
-        "down did not send it.\n"
+        "- Your only output is the JSON specified in the current task. "
+        "worthy=true means you would speak now, and the outward message will be sent. "
+        "At night, avoid unsolicited messages; if someone is already talking with you, "
+        "continuing is not a disturbance. If now is a bad time, keep the thought "
+        "internal. The diary is only yours; writing something down did not send it.\n"
         "- Do not try to call functions or act directly. If a thought inclines toward "
         "doing something, note the impulse in internal_content; the reflection itself "
         "may later lead to action through the normal agent loop.\n"
