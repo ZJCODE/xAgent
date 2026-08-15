@@ -315,6 +315,10 @@ class SubconsciousLoop:
         if not self.should_trigger():
             return
 
+        # Snapshot before generation: a thought formed while inbound was
+        # unanswered must not be delivered later as a post-reply follow-up.
+        inbound_pending = await self._has_unanswered_waking_inbound()
+
         self._logger.info("Subconscious thought triggered – generating thought")
         try:
             result = await self._generate_subconscious_thought()
@@ -340,8 +344,9 @@ class SubconsciousLoop:
 
         diary_note = internal_content
         if worthy and external_content:
-            # Subconscious is initiative, not a reply path.
-            if await self._has_unanswered_waking_inbound():
+            # Subconscious is initiative, not a reply path — including after
+            # the waking turn lands mid-cycle.
+            if inbound_pending or await self._has_unanswered_waking_inbound():
                 self._logger.info(
                     "Subconscious outbound skipped – unanswered waking inbound"
                 )

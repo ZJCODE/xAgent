@@ -659,6 +659,47 @@ class SubconsciousLoopTests(unittest.TestCase):
                 "他们要我记着充话费。"
             )
 
+    def test_maybe_think_skips_outbound_formed_under_pending_inbound(self):
+        """A reply-shaped thought must not slip out after the waking reply lands."""
+        from xagent.schemas import Message, RoleType
+
+        agent = self._make_agent_mock()
+        pending = [
+            Message(role=RoleType.USER, sender_id="alice", content="充话费", timestamp=1.0),
+        ]
+        answered = pending + [
+            Message(role=RoleType.ASSISTANT, sender_id="agent", content="已设置", timestamp=2.0),
+        ]
+        # snapshot → generation context → post-generation check
+        agent.message_handler.get_recent_messages = AsyncMock(
+            side_effect=[pending, pending, answered]
+        )
+        self._set_model_json(agent, {
+            "internal_content": "抢答念头",
+            "worthy": True,
+            "recipient_hint": "张三",
+            "external_content": "我来回一句。",
+        })
+        delivery_sink = AsyncMock()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop = SubconsciousLoop(
+                agent,
+                workspace=Path(tmpdir),
+                delivery_sink=delivery_sink,
+                deliverable_channels={"feishu"},
+            )
+            loop.record_interaction(
+                channel="feishu",
+                user_id="ou_123",
+                target={"chat_id": "oc_xxx", "sender_name": "张三"},
+            )
+            loop._probability = 1.0
+
+            asyncio.run(loop.maybe_think())
+
+            delivery_sink.assert_not_awaited()
+            agent.record_subconscious_thought.assert_called_once_with("抢答念头")
+
     def test_maybe_think_unworthy_writes_subconscious_thought(self):
         agent = self._make_agent_mock()
         self._set_model_json(agent, {
