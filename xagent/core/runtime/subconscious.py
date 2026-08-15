@@ -26,6 +26,8 @@ except ImportError:  # pragma: no cover - POSIX platforms
     msvcrt = None
 
 from ..config import AgentConfig
+from ..handlers.message import MessageHandler
+from ...schemas import RoleType
 from .scheduler import _fsync_directory
 
 logger = logging.getLogger(__name__)
@@ -275,22 +277,31 @@ class SubconsciousLoop:
             return probability
         return probability * (0.5 ** int(self._stale_streak))
 
-    def _agent_is_busy(self) -> bool:
-        """True when a waking turn holds the inbox lock.
+    async def _has_unanswered_waking_inbound(self) -> bool:
+        """True when the latest conversation message still awaits a waking reply.
 
-        Subconscious must not generate or deliver outward messages while a
-        user/scheduled turn is mid-flight — otherwise two replies land for
-        the same inbound message.
+        Subconscious must not act as a timely reply to that inbound — the
+        waking turn owns it. Private diary thoughts are still allowed.
         """
-        inbox = getattr(self._agent, "inbox", None)
-        if inbox is None:
+        message_handler = getattr(self._agent, "message_handler", None)
+        get_recent = getattr(message_handler, "get_recent_messages", None)
+        if not callable(get_recent):
             return False
         try:
-            # Use identity check so MagicMock auto-attrs are not treated as busy.
-            return getattr(inbox, "busy", False) is True
+            hot_window = getattr(self._agent, "max_history", AgentConfig.DEFAULT_MAX_HISTORY)
+            recent = get_recent(max_history=AgentConfig.history_fetch_depth(hot_window))
+            if inspect.isawaitable(recent):
+                recent = await recent
         except Exception:
-            self._logger.debug("Failed to read agent inbox busy state", exc_info=True)
+            self._logger.debug(
+                "Failed to inspect recent messages for unanswered inbound",
+                exc_info=True,
+            )
             return False
+        conversation = MessageHandler.filter_conversation_messages(list(recent or []))
+        if not conversation:
+            return False
+        return conversation[-1].role == RoleType.USER
 
     async def maybe_think(self) -> None:
         """Run one subconscious cycle if the dice roll passes.
@@ -308,11 +319,9 @@ class SubconsciousLoop:
         if not self.should_trigger():
             return
 
-        if self._agent_is_busy():
-            self._logger.info(
-                "Subconscious thought skipped – agent turn in progress"
-            )
-            return
+        # Snapshot before generation: if inbound is pending a waking reply,
+        # any outward share this cycle would be a competing timely reply.
+        reply_owned_by_waking = await self._has_unanswered_waking_inbound()
 
         self._logger.info("Subconscious thought triggered – generating thought")
         try:
@@ -325,17 +334,6 @@ class SubconsciousLoop:
         external_content = str(result.get("external_content") or "").strip()
         worthy = bool(result.get("worthy"))
         recipient_hint = result.get("recipient_hint")
-
-        # A waking turn may have started while we were generating. Keep the
-        # private thought, but never compete with the live reply.
-        if self._agent_is_busy() and worthy and external_content:
-            self._logger.info(
-                "Subconscious outward share demoted – agent turn in progress"
-            )
-            if not internal_content:
-                internal_content = external_content
-            worthy = False
-            external_content = ""
 
         self._logger.info(
             "Subconscious result: worthy=%s internal=%.80s... external=%.80s...",
@@ -350,13 +348,22 @@ class SubconsciousLoop:
 
         diary_note = internal_content
         if worthy and external_content:
-            delivered = await self._route_subconscious_thought(
-                external_content,
-                internal_content,
-                recipient_hint,
-            )
-            if not delivered:
-                diary_note = self._held_back_diary_note(internal_content)
+            still_unanswered = await self._has_unanswered_waking_inbound()
+            if reply_owned_by_waking or still_unanswered:
+                self._logger.info(
+                    "Subconscious outward share held back – waking turn owns the reply"
+                )
+                diary_note = self._held_back_diary_note(
+                    internal_content or external_content
+                )
+            else:
+                delivered = await self._route_subconscious_thought(
+                    external_content,
+                    internal_content,
+                    recipient_hint,
+                )
+                if not delivered:
+                    diary_note = self._held_back_diary_note(internal_content)
 
         if diary_note:
             await self._write_subconscious_thought(diary_note)
@@ -690,13 +697,6 @@ class SubconsciousLoop:
 
         if self._delivery_sink is None:
             self._logger.info("No subconscious delivery sink configured")
-            return False
-
-        # Last-chance gate: a waking turn may have started after routing.
-        if self._agent_is_busy():
-            self._logger.info(
-                "Subconscious delivery held back – agent turn in progress"
-            )
             return False
 
         now = datetime.now()

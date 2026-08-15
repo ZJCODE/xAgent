@@ -620,46 +620,44 @@ class SubconsciousLoopTests(unittest.TestCase):
             asyncio.run(loop.maybe_think())
             self.assertEqual(agent.model_client.calls, [])
 
-    def test_maybe_think_skips_when_agent_turn_busy(self):
-        """Do not generate a subconscious reply while a waking turn is live."""
+    def test_has_unanswered_waking_inbound_detects_user_tail(self):
+        from xagent.schemas import Message, RoleType
+
         agent = self._make_agent_mock()
-        inbox = MagicMock()
-        inbox.busy = True
-        agent.inbox = inbox
-        delivery_sink = AsyncMock()
+        agent.message_handler.get_recent_messages = AsyncMock(return_value=[
+            Message(role=RoleType.USER, sender_id="alice", content="充话费", timestamp=1.0),
+        ])
         with tempfile.TemporaryDirectory() as tmpdir:
-            loop = SubconsciousLoop(
-                agent,
-                workspace=Path(tmpdir),
-                delivery_sink=delivery_sink,
-                deliverable_channels={"feishu"},
-            )
-            loop._probability = 1.0
+            loop = SubconsciousLoop(agent, workspace=Path(tmpdir))
+            self.assertTrue(asyncio.run(loop._has_unanswered_waking_inbound()))
 
-            asyncio.run(loop.maybe_think())
+        agent.message_handler.get_recent_messages = AsyncMock(return_value=[
+            Message(role=RoleType.USER, sender_id="alice", content="充话费", timestamp=1.0),
+            Message(role=RoleType.ASSISTANT, sender_id="agent", content="已设置", timestamp=2.0),
+        ])
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop = SubconsciousLoop(agent, workspace=Path(tmpdir))
+            self.assertFalse(asyncio.run(loop._has_unanswered_waking_inbound()))
 
-            self.assertEqual(agent.model_client.calls, [])
-            delivery_sink.assert_not_awaited()
-            agent.record_subconscious_thought.assert_not_called()
+    def test_maybe_think_holds_back_outward_share_for_unanswered_inbound(self):
+        """Do not let subconscious act as a timely reply to a pending user message."""
+        from xagent.schemas import Message, RoleType
 
-    def test_maybe_think_demotes_outward_share_if_turn_starts_mid_generation(self):
-        """If a waking turn claims the inbox during generation, keep diary only."""
         agent = self._make_agent_mock()
-        inbox = MagicMock()
-        inbox.busy = False
-        agent.inbox = inbox
+        agent.message_handler.get_recent_messages = AsyncMock(return_value=[
+            Message(
+                role=RoleType.USER,
+                sender_id="alice",
+                content="每个月1号提醒我充话费",
+                timestamp=1.0,
+            ),
+        ])
         self._set_model_json(agent, {
-            "internal_content": "I should acknowledge the top-up ask.",
+            "internal_content": "他们要我记着充话费。",
             "worthy": True,
             "recipient_hint": "张三",
             "external_content": "好，记下了，到时候你来喊我。",
         })
-        original_generate = SubconsciousLoop._generate_subconscious_thought
-
-        async def generate_and_mark_busy(loop_self):
-            inbox.busy = True
-            return await original_generate(loop_self)
-
         delivery_sink = AsyncMock()
         with tempfile.TemporaryDirectory() as tmpdir:
             loop = SubconsciousLoop(
@@ -674,35 +672,43 @@ class SubconsciousLoopTests(unittest.TestCase):
                 target={"chat_id": "oc_xxx", "sender_name": "张三"},
             )
             loop._probability = 1.0
-            loop._generate_subconscious_thought = (  # type: ignore[method-assign]
-                lambda: generate_and_mark_busy(loop)
-            )
 
             asyncio.run(loop.maybe_think())
 
             delivery_sink.assert_not_awaited()
             agent.record_subconscious_thought.assert_called_once()
-            self.assertEqual(
-                agent.record_subconscious_thought.call_args[0][0],
-                "I should acknowledge the top-up ask.",
-            )
+            note = agent.record_subconscious_thought.call_args[0][0]
+            self.assertIn("他们要我记着充话费。", note)
+            self.assertIn("我没有发出去。", note)
 
-    def test_route_holds_back_delivery_when_agent_becomes_busy(self):
-        """Last-chance busy gate before the delivery sink runs."""
+    def test_maybe_think_holds_back_if_inbound_was_pending_at_generation_start(self):
+        """Even after the waking reply lands, a reply-shaped thought stays private."""
+        from xagent.schemas import Message, RoleType
+
         agent = self._make_agent_mock()
-        inbox = MagicMock()
-        inbox.busy = False
-        agent.inbox = inbox
+        pending = [
+            Message(role=RoleType.USER, sender_id="alice", content="充话费", timestamp=1.0),
+        ]
+        answered = pending + [
+            Message(role=RoleType.ASSISTANT, sender_id="agent", content="已设置", timestamp=2.0),
+        ]
+        agent.message_handler.get_recent_messages = AsyncMock(side_effect=[
+            pending,   # snapshot before generation
+            pending,   # generation context build
+            answered,  # post-generation re-check
+        ])
+        self._set_model_json(agent, {
+            "internal_content": "抢答念头",
+            "worthy": True,
+            "recipient_hint": "张三",
+            "external_content": "我来回一句。",
+        })
         delivery_sink = AsyncMock()
-
-        async def sink_that_should_not_run(_delivery):
-            raise AssertionError("delivery sink must not run while busy")
-
         with tempfile.TemporaryDirectory() as tmpdir:
             loop = SubconsciousLoop(
                 agent,
                 workspace=Path(tmpdir),
-                delivery_sink=sink_that_should_not_run,
+                delivery_sink=delivery_sink,
                 deliverable_channels={"feishu"},
             )
             loop.record_interaction(
@@ -710,16 +716,14 @@ class SubconsciousLoopTests(unittest.TestCase):
                 user_id="ou_123",
                 target={"chat_id": "oc_xxx", "sender_name": "张三"},
             )
-            inbox.busy = True
-            delivered = asyncio.run(
-                loop._route_subconscious_thought(
-                    "outward",
-                    "inner",
-                    "张三",
-                )
-            )
-            self.assertFalse(delivered)
+            loop._probability = 1.0
+
+            asyncio.run(loop.maybe_think())
+
             delivery_sink.assert_not_awaited()
+            note = agent.record_subconscious_thought.call_args[0][0]
+            self.assertIn("抢答念头", note)
+            self.assertIn("我没有发出去。", note)
 
     def test_maybe_think_unworthy_writes_subconscious_thought(self):
         agent = self._make_agent_mock()
