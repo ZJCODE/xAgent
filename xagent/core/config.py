@@ -199,8 +199,12 @@ class AgentConfig:
     SUBCONSCIOUS_ENABLED = True
     # Probability of spontaneous thought per heartbeat tick.
     # 0=off, 1=very active. Suggested: 0.01~0.1
+    # Primary intensity knob — habituation only softens it when experience is stale.
     SUBCONSCIOUS_ACTIVITY = 0.02
     SUBCONSCIOUS_MAX_CONTACTS = 10
+    # Solitude recovery: each this many seconds without new messages reduces
+    # stale_streak by 1, so alone time can restore inner life. 0 disables.
+    SUBCONSCIOUS_HABITUATION_RECOVERY_SECONDS = 3600
 
     # ============================================================
     # 11. Tool Policy Baseline
@@ -290,6 +294,9 @@ class AgentConfig:
         "Form one private thought from recent experience and memory; "
         "empty internal_content is fine if nothing surfaces. "
         "Do not invent a new inner monologue just to fill the turn.\n"
+        "If recent diary already holds this observation and nothing in life has "
+        "moved — no new messages, no new angle from memory — return empty "
+        "internal_content — silence is better than restating the same private note.\n"
         "The diary is only yours. Writing a thought down did not send it.\n"
         "Look at the current time. At night, avoid unsolicited messages; "
         "if someone is already talking with you, continuing is not a disturbance.\n"
@@ -297,8 +304,8 @@ class AgentConfig:
         "will be sent. If you want to speak but now is a bad time, keep it in "
         "internal_content, set worthy=false, and leave external_content null. "
         "internal_content is the thought, not a delivery receipt; do not write "
-        "as if it already went out. Do not rewrite the same unspoken thought "
-        "each turn unless it has moved.\n"
+        "as if it already went out. A thought already in the diary can still be "
+        "worthy if you would speak it now and it has not gone out.\n"
         "If addressed to someone, recipient_hint must be their exact user_id "
         "from a relationship card that includes [user_id: ...] (no extra text), "
         "else null. You may think about anyone in recent experience; you may "

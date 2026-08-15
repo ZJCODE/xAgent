@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import random
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
@@ -221,6 +222,12 @@ class SubconsciousLoop:
         )
         self._delivery_retries = SUBCONSCIOUS_DELIVERY_RETRIES
         self._delivery_retry_delay_seconds = SUBCONSCIOUS_DELIVERY_RETRY_DELAY_SECONDS
+        self._last_experience_cursor: Optional[int] = None
+        self._stale_streak = 0
+        self._habituation_anchor_mono: Optional[float] = None
+        self._recovery_seconds = max(
+            0.0, float(AgentConfig.SUBCONSCIOUS_HABITUATION_RECOVERY_SECONDS)
+        )
 
     # ------------------------------------------------------------------
     # Public API
@@ -256,13 +263,31 @@ class SubconsciousLoop:
             )
 
     def should_trigger(self) -> bool:
-        """Return True if subconscious thought should fire this tick (2% dice roll)."""
+        """Return True if subconscious thought should fire this tick."""
         if not self._enabled:
             return False
-        return random.random() < self._probability
+        return random.random() < self._effective_probability()
+
+    def _effective_probability(self) -> float:
+        """``activity × 0.5^stale_streak`` — no floor; life can reset or recover streak."""
+        probability = max(0.0, min(1.0, float(self._probability)))
+        if self._stale_streak <= 0 or probability <= 0.0:
+            return probability
+        return probability * (0.5 ** int(self._stale_streak))
 
     async def maybe_think(self) -> None:
-        """Run one subconscious cycle if the dice roll passes."""
+        """Run one subconscious cycle if the dice roll passes.
+
+        Intensity is ``subconscious_activity``. Habituation halves the rate
+        after empty/unworthy reflections; new messages clear the streak;
+        solitude slowly recovers it so alone time still counts as life.
+        """
+        experience_cursor, experience_moved = await self._experience_state()
+        if experience_moved:
+            self._clear_habituation()
+        else:
+            self._recover_habituation_from_solitude()
+
         if not self.should_trigger():
             return
 
@@ -286,6 +311,7 @@ class SubconsciousLoop:
         )
 
         if not internal_content and not external_content:
+            self._habituate(experience_cursor)
             return
 
         diary_note = internal_content
@@ -300,6 +326,78 @@ class SubconsciousLoop:
 
         if diary_note:
             await self._write_subconscious_thought(diary_note)
+
+        if worthy:
+            self._clear_habituation()
+            self._last_experience_cursor = experience_cursor
+        else:
+            self._habituate(experience_cursor)
+
+    def _clear_habituation(self) -> None:
+        self._stale_streak = 0
+        self._habituation_anchor_mono = time.monotonic()
+
+    def _habituate(self, experience_cursor: int) -> None:
+        """One more private reflection without movement — quiet down next time."""
+        self._stale_streak += 1
+        self._last_experience_cursor = experience_cursor
+        self._habituation_anchor_mono = time.monotonic()
+
+    def _recover_habituation_from_solitude(self) -> None:
+        """Let alone time reduce streak so life is not message-gated."""
+        if self._stale_streak <= 0 or self._recovery_seconds <= 0:
+            return
+        if self._habituation_anchor_mono is None:
+            self._habituation_anchor_mono = time.monotonic()
+            return
+        elapsed = time.monotonic() - self._habituation_anchor_mono
+        steps = int(elapsed // self._recovery_seconds)
+        if steps <= 0:
+            return
+        self._stale_streak = max(0, self._stale_streak - steps)
+        self._habituation_anchor_mono += steps * self._recovery_seconds
+
+    async def _experience_state(self) -> tuple[int, bool]:
+        """Return ``(cursor, moved)`` for whether external experience changed.
+
+        Without a message cursor, the first in-process cycle counts as movement
+        so later idle ticks can accumulate habituation.
+        """
+        raw_cursor = await self._current_experience_cursor()
+        if raw_cursor is None:
+            moved = self._last_experience_cursor is None
+            cursor = 0 if self._last_experience_cursor is None else int(self._last_experience_cursor)
+            return cursor, moved
+        moved = (
+            self._last_experience_cursor is None
+            or int(raw_cursor) != int(self._last_experience_cursor)
+        )
+        return int(raw_cursor), moved
+
+    async def _current_experience_cursor(self) -> Optional[int]:
+        """Best-effort message cursor used to detect whether life moved on."""
+        for owner_name in ("message_storage", "message_handler"):
+            owner = getattr(self._agent, owner_name, None)
+            if owner is None:
+                continue
+            getter = getattr(owner, "get_latest_message_cursor", None)
+            if not callable(getter):
+                storage = getattr(owner, "message_storage", None)
+                getter = getattr(storage, "get_latest_message_cursor", None) if storage else None
+            if not callable(getter):
+                continue
+            try:
+                cursor = getter()
+                if inspect.isawaitable(cursor):
+                    cursor = await cursor
+                return int(cursor)
+            except Exception:
+                self._logger.debug(
+                    "Failed to read experience cursor from %s",
+                    owner_name,
+                    exc_info=True,
+                )
+        return None
 
     # ------------------------------------------------------------------
     # Internal helpers

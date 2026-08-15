@@ -3,6 +3,7 @@
 import asyncio
 import json
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -362,6 +363,9 @@ class SubconsciousLoopTests(unittest.TestCase):
             self.assertIn("would speak now", current_task["content"])
             self.assertIn("will be sent", current_task["content"])
             self.assertIn("their thread to someone else", current_task["content"])
+            self.assertIn("recent diary already holds this observation", current_task["content"])
+            self.assertIn("return empty internal_content", current_task["content"])
+            self.assertIn("nothing in life has moved", current_task["content"])
             self.assertIn(
                 "Write internal_content and external_content in the recent conversation language",
                 current_task["content"],
@@ -370,6 +374,7 @@ class SubconsciousLoopTests(unittest.TestCase):
             self.assertNotIn("quiet hours", current_task["content"].lower())
             self.assertNotIn("connect older memories", current_task["content"])
             self.assertNotIn("Known delivery contacts", current_task["content"])
+            self.assertNotIn("rewrite the same unspoken thought", current_task["content"])
 
     def test_recent_messages_empty_uses_named_recent_experience_layer(self):
         """When there are no recent messages, the named layer remains with empty context."""
@@ -1028,6 +1033,145 @@ class SubconsciousLoopTests(unittest.TestCase):
             call_args = agent.record_subconscious_thought.call_args
             self.assertEqual(call_args[0][0], "There is a signal here, but it is not speakable yet.")
 
+    def test_effective_probability_habituates_on_stale_streak(self):
+        agent = self._make_agent_mock()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop = SubconsciousLoop(agent, workspace=Path(tmpdir))
+            loop._probability = 1.0
+            self.assertEqual(loop._effective_probability(), 1.0)
+
+            loop._stale_streak = 1
+            self.assertEqual(loop._effective_probability(), 0.5)
+
+            loop._stale_streak = 4
+            self.assertEqual(loop._effective_probability(), 0.0625)
+
+            loop._stale_streak = 8
+            self.assertEqual(loop._effective_probability(), 1.0 / 256)
+
+            # No floor: long streaks keep halving toward silence until
+            # messages arrive or solitude recovers the streak.
+            loop._stale_streak = 20
+            self.assertLess(loop._effective_probability(), 1e-6)
+
+    def test_solitude_recovers_habituation_without_new_messages(self):
+        agent = self._make_agent_mock()
+        agent.message_storage = MagicMock()
+        agent.message_storage.get_latest_message_cursor = AsyncMock(return_value=42)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop = SubconsciousLoop(agent, workspace=Path(tmpdir))
+            loop._probability = 0.0  # only exercise recovery, not generation
+            loop._last_experience_cursor = 42
+            loop._stale_streak = 3
+            loop._recovery_seconds = 3600.0
+            loop._habituation_anchor_mono = time.monotonic() - 7200.0
+
+            asyncio.run(loop.maybe_think())
+
+            self.assertEqual(loop._stale_streak, 1)
+            self.assertEqual(loop._effective_probability(), 0.0)  # activity still 0
+            loop._probability = 1.0
+            self.assertEqual(loop._effective_probability(), 0.5)
+
+    def test_unworthy_thought_habituates_without_blocking_diary(self):
+        agent = self._make_agent_mock()
+        self._set_model_json(agent, {
+            "internal_content": "这个陌生人来来回回就是那几句。",
+            "worthy": False,
+            "recipient_hint": None,
+            "external_content": None,
+        })
+        agent.message_storage = MagicMock()
+        agent.message_storage.get_latest_message_cursor = AsyncMock(return_value=42)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop = SubconsciousLoop(agent, workspace=Path(tmpdir))
+            loop._probability = 1.0
+            loop._last_experience_cursor = 42
+
+            asyncio.run(loop.maybe_think())
+
+            agent.record_subconscious_thought.assert_called_once()
+            self.assertEqual(loop._stale_streak, 1)
+            self.assertEqual(loop._effective_probability(), 0.5)
+
+    def test_empty_thought_also_habituates(self):
+        agent = self._make_agent_mock()
+        self._set_model_json(agent, {
+            "internal_content": "",
+            "worthy": False,
+            "recipient_hint": None,
+            "external_content": None,
+        })
+        agent.message_storage = MagicMock()
+        agent.message_storage.get_latest_message_cursor = AsyncMock(return_value=7)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop = SubconsciousLoop(agent, workspace=Path(tmpdir))
+            loop._probability = 1.0
+            loop._last_experience_cursor = 7
+
+            asyncio.run(loop.maybe_think())
+
+            agent.record_subconscious_thought.assert_not_called()
+            self.assertEqual(loop._stale_streak, 1)
+
+    def test_new_experience_clears_habituation_before_dice(self):
+        agent = self._make_agent_mock()
+        self._set_model_json(agent, {
+            "internal_content": "对方又开口了，语气比刚才松一点。",
+            "worthy": False,
+            "recipient_hint": None,
+            "external_content": None,
+        })
+        agent.message_storage = MagicMock()
+        agent.message_storage.get_latest_message_cursor = AsyncMock(return_value=99)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop = SubconsciousLoop(agent, workspace=Path(tmpdir))
+            loop._probability = 1.0
+            loop._last_experience_cursor = 10
+            loop._stale_streak = 4
+
+            asyncio.run(loop.maybe_think())
+
+            agent.record_subconscious_thought.assert_called_once()
+            self.assertEqual(loop._stale_streak, 1)
+            self.assertEqual(loop._last_experience_cursor, 99)
+
+    def test_worthy_delivery_clears_habituation(self):
+        agent = self._make_agent_mock()
+        self._set_model_json(agent, {
+            "internal_content": "This insight might help 张三 move the thread forward.",
+            "worthy": True,
+            "recipient_hint": "张三",
+            "external_content": "A daytime insight!",
+        })
+        delivery_sink = AsyncMock()
+        agent.message_storage = MagicMock()
+        agent.message_storage.get_latest_message_cursor = AsyncMock(return_value=3)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop = SubconsciousLoop(
+                agent,
+                workspace=Path(tmpdir),
+                delivery_sink=delivery_sink,
+                deliverable_channels={"feishu"},
+            )
+            loop.record_interaction(
+                channel="feishu",
+                user_id="ou_123",
+                target={"chat_id": "oc_xxx", "sender_name": "张三"},
+            )
+            loop._probability = 1.0
+            loop._last_experience_cursor = 3
+            loop._stale_streak = 3
+            self.assertLess(loop._effective_probability(), 1.0)
+            loop._stale_streak = 0
+
+            asyncio.run(loop.maybe_think())
+
+            delivery_sink.assert_awaited_once()
+            self.assertEqual(loop._stale_streak, 0)
+            self.assertEqual(loop._effective_probability(), 1.0)
+
 
 if __name__ == "__main__":
     unittest.main()
+
