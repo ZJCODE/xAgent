@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional, Union
 
 from ..config import AgentConfig
 from ..inbox import INBOX_KIND_METADATA_KEY, is_scheduled_work
+from ..reply_events import is_history_preface_message
 from ...components import MessageStorage
 from ...schemas import Message, RoleType, MessageType
 from ...schemas.attachment import (
@@ -185,11 +186,16 @@ class MessageHandler:
 
     @staticmethod
     def filter_conversation_messages(messages: List[Message]) -> List[Message]:
-        """Keep only persisted user/assistant natural-language messages."""
+        """Keep only persisted user/assistant natural-language messages.
+
+        Tool-call preface is stored for the archive when it was a brief
+        status, but it is not conversation the model should imitate.
+        """
         return [
             msg for msg in messages
             if msg.type == MessageType.MESSAGE
             and msg.role in (RoleType.USER, RoleType.ASSISTANT)
+            and not is_history_preface_message(msg)
         ]
 
     @staticmethod

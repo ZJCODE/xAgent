@@ -24,6 +24,12 @@ from ..schemas import (
 )
 from ..tools import create_search_memory_tool, create_write_memory_tool
 from .config import AgentConfig, ReplyType
+from .reply_events import (
+    TURN_PHASE_FINAL,
+    TURN_PHASE_PREFACE,
+    event_phase,
+    is_user_visible_preface,
+)
 from .errors import (
     ERROR_EMPTY_RESPONSE,
     ERROR_INVALID_INPUT,
@@ -468,6 +474,8 @@ class Agent:
                 ):
                     event_type = event.get("type")
                     message_id = str(event.get("message_id") or "")
+                    if event_phase(event) != TURN_PHASE_FINAL:
+                        continue
                     if event_type == "message_delta":
                         if message_id:
                             streamed_message_ids.add(message_id)
@@ -491,7 +499,7 @@ class Agent:
             room_name=room_name,
             channel=channel,
         ):
-            if event.get("type") == "message_done" and event.get("phase") == "final":
+            if event.get("type") == "message_done" and event_phase(event) == TURN_PHASE_FINAL:
                 final_reply = str(event.get("content") or "")
             elif event.get("type") == "error":
                 last_error = str(event.get("error") or "")
@@ -511,9 +519,10 @@ class Agent:
     ) -> AsyncGenerator[dict, None]:
         """Emit one agent turn as structured message/tool events.
 
-        ``stream`` only controls whether text is additionally exposed as
-        ``message_delta`` events. Message boundaries and tool progress are
-        always eventized.
+        ``stream`` only controls whether completed user-visible text is
+        additionally exposed as ``message_delta`` events. Deltas are emitted
+        after each model step finishes so tool-call scratchpad can be held
+        back. Message boundaries and tool progress are always eventized.
 
         Args:
             room_name: Optional room/group name for multi-participant conversations.
@@ -621,12 +630,6 @@ class Agent:
                 message_id = self._turn_message_id(user_msg, iteration_index)
                 text_parts: list[str] = []
                 tool_calls = []
-                message_started = False
-
-                def ensure_live_message_started() -> dict:
-                    nonlocal message_started
-                    message_started = True
-                    return self._message_start_event(message_id, "assistant")
 
                 async for model_event in self.model_client.model_turn_events(
                     messages=input_messages,
@@ -636,14 +639,6 @@ class Agent:
                 ):
                     if model_event.type in {"delta", "text"} and model_event.delta:
                         text_parts.append(model_event.delta)
-                        if stream:
-                            if not message_started:
-                                yield ensure_live_message_started()
-                            yield self._message_delta_event(
-                                message_id,
-                                "assistant",
-                                model_event.delta,
-                            )
                         continue
 
                     if model_event.type == "tool_calls":
@@ -666,25 +661,27 @@ class Agent:
 
                 visible_text = "".join(text_parts)
                 if tool_calls:
-                    if visible_text:
-                        if message_started:
-                            yield self._message_done_event(message_id, "preface", visible_text)
-                        else:
-                            for event in self._message_events(
-                                message_id=message_id,
-                                phase="preface",
-                                content=visible_text,
-                                stream=stream,
-                                deltas=text_parts,
-                            ):
-                                yield event
+                    if is_user_visible_preface(visible_text):
+                        for event in self._message_events(
+                            message_id=message_id,
+                            phase=TURN_PHASE_PREFACE,
+                            content=visible_text,
+                            stream=stream,
+                            deltas=text_parts,
+                        ):
+                            yield event
                         await msg_handler.store_model_reply(
                             visible_text,
                             self._assistant_sender_id,
-                            metadata={"turn_phase": "preface"},
+                            metadata={AgentConfig.MESSAGE_TURN_PHASE_KEY: TURN_PHASE_PREFACE},
                             room_name=room_name,
                             channel=channel,
                             recipient_id=room_name or user_id,
+                        )
+                    elif visible_text.strip():
+                        logger.debug(
+                            "Holding back %s-char tool-call scratchpad from user-visible preface",
+                            len(visible_text.strip()),
                         )
 
                     for tool_call in tool_calls:
@@ -707,7 +704,7 @@ class Agent:
                         final_message_id = self._turn_message_id(user_msg, iteration_index, suffix="image")
                         for event in self._message_events(
                             message_id=final_message_id,
-                            phase="final",
+                            phase=TURN_PHASE_FINAL,
                             content=tool_result.content,
                             stream=False,
                             attachments=tool_result.attachments,
@@ -716,7 +713,7 @@ class Agent:
                         assistant_msg = await msg_handler.store_model_reply(
                             tool_result.description,
                             self._assistant_sender_id,
-                            metadata={"turn_phase": "final"},
+                            metadata={AgentConfig.MESSAGE_TURN_PHASE_KEY: TURN_PHASE_FINAL},
                             attachments=tool_result.attachments,
                             room_name=room_name,
                             channel=channel,
@@ -733,21 +730,18 @@ class Agent:
                     continue
 
                 if visible_text:
-                    if message_started:
-                        yield self._message_done_event(message_id, "final", visible_text)
-                    else:
-                        for event in self._message_events(
-                            message_id=message_id,
-                            phase="final",
-                            content=visible_text,
-                            stream=stream,
-                            deltas=text_parts,
-                        ):
-                            yield event
+                    for event in self._message_events(
+                        message_id=message_id,
+                        phase=TURN_PHASE_FINAL,
+                        content=visible_text,
+                        stream=stream,
+                        deltas=text_parts,
+                    ):
+                        yield event
                     assistant_msg = await msg_handler.store_model_reply(
                         visible_text,
                         self._assistant_sender_id,
-                        metadata={"turn_phase": "final"},
+                        metadata={AgentConfig.MESSAGE_TURN_PHASE_KEY: TURN_PHASE_FINAL},
                         room_name=room_name,
                         channel=channel,
                         recipient_id=room_name or user_id,

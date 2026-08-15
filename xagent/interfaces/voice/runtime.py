@@ -12,6 +12,10 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Iterable, Iterator, Optional, Protocol
 
 from xagent.core.config import AgentConfig
+from xagent.core.reply_events import (
+    is_deliverable_assistant_event,
+    is_live_streamable_event,
+)
 from xagent.core.runtime import (
     AsyncTaskScheduler,
     ScheduledDeliveryContext,
@@ -360,6 +364,8 @@ class VoiceRuntime:
                 event_type = event.get("type")
                 message_id = str(event.get("message_id") or uuid.uuid4().hex)
                 if event_type == "message_delta":
+                    if not is_live_streamable_event(event):
+                        continue
                     delta = str(event.get("delta") or "")
                     if not delta:
                         continue
@@ -368,6 +374,8 @@ class VoiceRuntime:
                     started = True
                     yield delta
                 elif event_type == "message_done":
+                    if not is_deliverable_assistant_event(event):
+                        continue
                     content = str(event.get("content") or "")
                     if content and message_id not in message_delta_seen:
                         self.output(content, end="")
@@ -474,11 +482,15 @@ class VoiceRuntime:
                 event_type = event.get("type")
                 message_id = str(event.get("message_id") or uuid.uuid4().hex)
                 if event_type == "message_delta":
+                    if not is_live_streamable_event(event):
+                        continue
                     delta = str(event.get("delta") or "")
                     if delta:
                         message_delta_seen.add(message_id)
                         parts.append(delta)
                 elif event_type == "message_done" and message_id not in message_delta_seen:
+                    if not is_deliverable_assistant_event(event):
+                        continue
                     content = str(event.get("content") or "")
                     if content:
                         parts.append(content)

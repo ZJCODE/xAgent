@@ -244,14 +244,16 @@ messages with deterministic UUID suffixes.
 
 ## Segmented replies
 
-Feishu replies are always driven by `Agent.chat_events()`. Every completed
-assistant segment (`message_done`) is sent as its own markdown message, so a
-preface such as “我去看看” can appear before tool execution and the final answer
-can arrive as a later message.
+Feishu replies are always driven by `Agent.chat_events()`. Completed
+user-visible assistant segments (`message_done`) are sent as markdown messages.
+A brief preface such as “我去看看” can appear before tool execution; longer
+model scratchpad (analysis, drafts, inner reasoning) is held back and is not
+sent. The final answer arrives as a later message.
 
 Set `channels.feishu.stream: true` to use `FeishuChannel.stream(...)` for
 the current segment. This only controls whether text deltas update the active
-Feishu card; segmented message boundaries are always enabled.
+Feishu card; segmented message boundaries are always enabled. Streaming cards
+only follow the final reply, not preface scratchpad.
 
 ## Python API
 

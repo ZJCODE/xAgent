@@ -14,6 +14,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from ...core.agent import Agent
 from ...core.config import AgentConfig
+from ...core.reply_events import is_deliverable_assistant_event
 from ...core.runtime import (
     AsyncTaskScheduler,
     ScheduledDeliveryContext,
@@ -508,6 +509,8 @@ class WeixinAdapter:
                 async for event in chat_events(**chat_kwargs, stream=False):
                     event_type = event.get("type")
                     if event_type == "message_done":
+                        if not is_deliverable_assistant_event(event):
+                            continue
                         content = str(event.get("content") or "").strip()
                         attachments = self._outbound_attachments_from_event(event)
                         if not content and not attachments:

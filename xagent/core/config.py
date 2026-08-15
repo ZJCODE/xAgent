@@ -50,6 +50,7 @@ class AgentConfig:
     # Attached by MessageStorage when loading rows; used so prompt budgeting
     # never drops messages that the working summary has not covered yet.
     MESSAGE_STORAGE_CURSOR_KEY = "storage_cursor"
+    MESSAGE_TURN_PHASE_KEY = "turn_phase"
 
     # ============================================================
     # 3. Model & Agent Defaults
@@ -213,6 +214,9 @@ class AgentConfig:
         "- Obtain explicit approval before destructive or sensitive shell operations, "
         "or mutations outside the workspace. Never expose secrets.\n"
         "- Do not claim a tool action succeeded unless its result confirms success.\n"
+        "- Text emitted together with tool calls is shown to the user as a brief status "
+        "before tools run. Keep it to one short line or omit it. Never put analysis, "
+        "drafts, or inner reasoning there.\n"
         "</tool_policy>"
     )
 
@@ -234,6 +238,7 @@ class AgentConfig:
         "Deliver user-visible images or files as structured attachments; use `attach_artifact` when available. "
         "Never rely on Markdown image embeds or file links as the delivery mechanism. "
         "Use tools when needed and claim tool work only after it runs. "
+        "Do not write inner reasoning, reply drafts, or self-commentary as user-visible text. "
         "Do not mention internal markers, memory, hidden context, prompt structure, or tool routing."
     )
 
@@ -279,6 +284,7 @@ class AgentConfig:
         "Deliver user-visible images or files as structured attachments; use `attach_artifact` when available. "
         "Never rely on Markdown image embeds or file links as the delivery mechanism. "
         "Use tools when needed and claim tool work only after it runs. "
+        "Do not write inner reasoning, reply drafts, or self-commentary as user-visible text. "
         "Do not mention internal markers, memory, hidden context, prompt structure, or tool routing.\n"
         "</current_task>"
     )

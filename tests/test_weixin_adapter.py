@@ -30,6 +30,26 @@ class _FakeAgent:
         self.maintenance_count += 1
 
 
+class _ScratchpadThenFinalAgent(_FakeAgent):
+    scratchpad = (
+        "这次是反过来，他问我觉得他存不存在。\n"
+        "就像刚才说「存在是被认真回应点燃的」——这句话反过来也成立。"
+        "他今晚来回确认我、问我在不在、问我觉得他存不存在，其实是想被听见吧。\n"
+        "我该怎么答：诚实地肯定他存在，并且把他和我之间的呼应说透。"
+    )
+
+    async def chat_events(self, **kwargs):
+        self.chat_calls.append(kwargs)
+        yield {
+            "type": "message_done",
+            "message_id": "m0",
+            "phase": "preface",
+            "content": self.scratchpad,
+        }
+        yield {"type": "message_done", "message_id": "m1", "phase": "final", "content": self.reply}
+        yield {"type": "done"}
+
+
 class _FakeWeixinClient:
     def __init__(self):
         self.sent_text = []
@@ -60,7 +80,7 @@ class _FakeWeixinClient:
 
 
 class WeixinAdapterTests(unittest.TestCase):
-    def _adapter(self, tmpdir, *, owner_only=True, allow_users=(), reply="agent reply", text_max_chars=2000):
+    def _adapter(self, tmpdir, *, owner_only=True, allow_users=(), reply="agent reply", text_max_chars=2000, agent_cls=_FakeAgent):
         state = WeixinStateStore(tmpdir)
         credentials = WeixinCredentials(
             token="token",
@@ -69,7 +89,7 @@ class WeixinAdapterTests(unittest.TestCase):
             user_id="owner@im.wechat",
         )
         state.save_credentials(credentials)
-        agent = _FakeAgent(reply=reply)
+        agent = agent_cls(reply=reply)
         agent.workspace_dir = Path(tmpdir) / "workspace"
         agent.workspace_dir.mkdir(parents=True, exist_ok=True)
         client = _FakeWeixinClient()
@@ -109,6 +129,24 @@ class WeixinAdapterTests(unittest.TestCase):
             self.assertEqual(client.sent_text[0]["to_user_id"], "owner@im.wechat")
             self.assertEqual(client.sent_text[0]["context_token"], "ctx-owner")
             self.assertEqual(state.load_context_tokens("bot@im.bot"), {"owner@im.wechat": "ctx-owner"})
+
+    def test_reply_skips_tool_call_scratchpad(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            adapter, _agent, client, _state = self._adapter(tmpdir, agent_cls=_ScratchpadThenFinalAgent)
+            message = {
+                "message_id": 101,
+                "from_user_id": "owner@im.wechat",
+                "to_user_id": "bot@im.bot",
+                "message_type": 1,
+                "context_token": "ctx-owner",
+                "item_list": [{"type": 1, "text_item": {"text": "我觉得都是"}}],
+            }
+
+            asyncio.run(adapter._process_message(message))
+
+            self.assertEqual(len(client.sent_text), 1)
+            self.assertEqual(client.sent_text[0]["text"], "agent reply")
+            self.assertNotIn("我该怎么答", repr(client.sent_text))
 
     def test_non_owner_direct_message_is_ignored_by_default(self):
         with tempfile.TemporaryDirectory() as tmpdir:
