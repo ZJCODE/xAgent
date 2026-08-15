@@ -26,6 +26,8 @@ except ImportError:  # pragma: no cover - POSIX platforms
     msvcrt = None
 
 from ..config import AgentConfig
+from ..handlers.message import MessageHandler
+from ...schemas import RoleType
 from .scheduler import _fsync_directory
 
 logger = logging.getLogger(__name__)
@@ -275,6 +277,28 @@ class SubconsciousLoop:
             return probability
         return probability * (0.5 ** int(self._stale_streak))
 
+    async def _has_unanswered_waking_inbound(self) -> bool:
+        """True when the latest conversation message still awaits a waking reply."""
+        message_handler = getattr(self._agent, "message_handler", None)
+        get_recent = getattr(message_handler, "get_recent_messages", None)
+        if not callable(get_recent):
+            return False
+        try:
+            hot_window = getattr(self._agent, "max_history", AgentConfig.DEFAULT_MAX_HISTORY)
+            recent = get_recent(max_history=AgentConfig.history_fetch_depth(hot_window))
+            if inspect.isawaitable(recent):
+                recent = await recent
+        except Exception:
+            self._logger.debug(
+                "Failed to inspect recent messages for unanswered inbound",
+                exc_info=True,
+            )
+            return False
+        conversation = MessageHandler.filter_conversation_messages(list(recent or []))
+        if not conversation:
+            return False
+        return conversation[-1].role == RoleType.USER
+
     async def maybe_think(self) -> None:
         """Run one subconscious cycle if the dice roll passes.
 
@@ -316,13 +340,20 @@ class SubconsciousLoop:
 
         diary_note = internal_content
         if worthy and external_content:
-            delivered = await self._route_subconscious_thought(
-                external_content,
-                internal_content,
-                recipient_hint,
-            )
-            if not delivered:
-                diary_note = self._held_back_diary_note(internal_content)
+            # Subconscious is initiative, not a reply path.
+            if await self._has_unanswered_waking_inbound():
+                self._logger.info(
+                    "Subconscious outbound skipped – unanswered waking inbound"
+                )
+                diary_note = internal_content or external_content
+            else:
+                delivered = await self._route_subconscious_thought(
+                    external_content,
+                    internal_content,
+                    recipient_hint,
+                )
+                if not delivered:
+                    diary_note = self._held_back_diary_note(internal_content)
 
         if diary_note:
             await self._write_subconscious_thought(diary_note)

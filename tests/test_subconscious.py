@@ -359,7 +359,8 @@ class SubconsciousLoopTests(unittest.TestCase):
             self.assertIn("diary is only yours", current_task["content"])
             self.assertIn("did not send it", current_task["content"])
             self.assertIn("avoid unsolicited messages", current_task["content"])
-            self.assertIn("already talking with you", current_task["content"])
+            self.assertIn("unanswered user message", current_task["content"])
+            self.assertIn("own initiative", current_task["content"])
             self.assertIn("would speak now", current_task["content"])
             self.assertIn("will be sent", current_task["content"])
             self.assertIn("their thread to someone else", current_task["content"])
@@ -370,6 +371,8 @@ class SubconsciousLoopTests(unittest.TestCase):
                 "Write internal_content and external_content in the recent conversation language",
                 current_task["content"],
             )
+            self.assertNotIn("already talking with you", current_task["content"])
+            self.assertNotIn("continuing is not a disturbance", current_task["content"])
             self.assertNotIn("replay the same thought", current_task["content"])
             self.assertNotIn("quiet hours", current_task["content"].lower())
             self.assertNotIn("connect older memories", current_task["content"])
@@ -614,6 +617,47 @@ class SubconsciousLoopTests(unittest.TestCase):
             loop._probability = 0.0
             asyncio.run(loop.maybe_think())
             self.assertEqual(agent.model_client.calls, [])
+
+    def test_maybe_think_skips_outbound_when_inbound_unanswered(self):
+        """Do not let subconscious act as a timely reply to a pending user message."""
+        from xagent.schemas import Message, RoleType
+
+        agent = self._make_agent_mock()
+        agent.message_handler.get_recent_messages = AsyncMock(return_value=[
+            Message(
+                role=RoleType.USER,
+                sender_id="alice",
+                content="每个月1号提醒我充话费",
+                timestamp=1.0,
+            ),
+        ])
+        self._set_model_json(agent, {
+            "internal_content": "他们要我记着充话费。",
+            "worthy": True,
+            "recipient_hint": "张三",
+            "external_content": "好，记下了，到时候你来喊我。",
+        })
+        delivery_sink = AsyncMock()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop = SubconsciousLoop(
+                agent,
+                workspace=Path(tmpdir),
+                delivery_sink=delivery_sink,
+                deliverable_channels={"feishu"},
+            )
+            loop.record_interaction(
+                channel="feishu",
+                user_id="ou_123",
+                target={"chat_id": "oc_xxx", "sender_name": "张三"},
+            )
+            loop._probability = 1.0
+
+            asyncio.run(loop.maybe_think())
+
+            delivery_sink.assert_not_awaited()
+            agent.record_subconscious_thought.assert_called_once_with(
+                "他们要我记着充话费。"
+            )
 
     def test_maybe_think_unworthy_writes_subconscious_thought(self):
         agent = self._make_agent_mock()
