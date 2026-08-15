@@ -3,7 +3,6 @@
 import asyncio
 import json
 import tempfile
-import time
 import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -1033,11 +1032,34 @@ class SubconsciousLoopTests(unittest.TestCase):
             call_args = agent.record_subconscious_thought.call_args
             self.assertEqual(call_args[0][0], "There is a signal here, but it is not speakable yet.")
 
-    def test_same_experience_epoch_skips_second_thought(self):
-        """Within the refractory window, unmoved experience must not re-fire."""
+    def test_effective_probability_dampens_on_stale_streak(self):
         agent = self._make_agent_mock()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop = SubconsciousLoop(agent, workspace=Path(tmpdir))
+            loop._probability = 1.0
+            self.assertEqual(loop._effective_probability(), 1.0)
+
+            loop._stale_streak = 1
+            self.assertEqual(loop._effective_probability(), 0.5)
+
+            loop._stale_streak = 4
+            self.assertEqual(loop._effective_probability(), AgentConfig.SUBCONSCIOUS_STALE_DAMPEN_FLOOR)
+
+            loop._stale_streak = 8
+            self.assertEqual(loop._effective_probability(), AgentConfig.SUBCONSCIOUS_STALE_DAMPEN_FLOOR)
+
+    def test_near_duplicate_unworthy_thought_is_not_written(self):
+        agent = self._make_agent_mock()
+        first = (
+            "这个陌生人来来回回就是那几句——在哪、是谁、谁创造了我，"
+            "然后'好吧''哦哦'。说晚安了又冒出'有点意思了'，我接完就没动静了。"
+        )
+        second = (
+            "这个陌生人来来回回就是那几句——在哪、是谁、谁创造了我，"
+            "然后'好吧''哦哦'。说晚安了又冒出'有点意思了'，快午夜了不该再主动。"
+        )
         self._set_model_json(agent, {
-            "internal_content": "这个陌生人来来回回就是那几句。",
+            "internal_content": second,
             "worthy": False,
             "recipient_hint": None,
             "external_content": None,
@@ -1047,24 +1069,19 @@ class SubconsciousLoopTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             loop = SubconsciousLoop(agent, workspace=Path(tmpdir))
             loop._probability = 1.0
-            self.assertEqual(loop._idle_refire_seconds, AgentConfig.SUBCONSCIOUS_IDLE_REFIRE_SECONDS)
-            self.assertGreater(loop._idle_refire_seconds, 0)
-
-            asyncio.run(loop.maybe_think())
-            agent.record_subconscious_thought.assert_called_once()
-            self.assertEqual(loop._last_experience_cursor, 42)
-            self.assertEqual(len(agent.model_client.calls), 1)
+            loop._last_experience_cursor = 42
+            loop._remember_inner_thought(first)
 
             asyncio.run(loop.maybe_think())
 
-            agent.record_subconscious_thought.assert_called_once()
-            self.assertEqual(len(agent.model_client.calls), 1)
+            agent.record_subconscious_thought.assert_not_called()
+            self.assertGreaterEqual(loop._stale_streak, 1)
+            self.assertLess(loop._effective_probability(), 1.0)
 
-    def test_default_refire_keeps_idle_inner_life_without_new_messages(self):
-        """GOAL: continuity of an independent subject — time alone can unlock."""
+    def test_novel_unworthy_thought_still_writes_and_tracks_stale(self):
         agent = self._make_agent_mock()
         self._set_model_json(agent, {
-            "internal_content": "夜深了，想起上周那通未说完的话。",
+            "internal_content": "忽然想起上周那棵被风刮倒的树，和今晚无关。",
             "worthy": False,
             "recipient_hint": None,
             "external_content": None,
@@ -1074,111 +1091,83 @@ class SubconsciousLoopTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             loop = SubconsciousLoop(agent, workspace=Path(tmpdir))
             loop._probability = 1.0
-
-            asyncio.run(loop.maybe_think())
-            self.assertEqual(agent.record_subconscious_thought.call_count, 1)
-
-            # No new messages, but solitary time passed → may think again.
-            loop._last_thought_at_mono = time.monotonic() - (
-                AgentConfig.SUBCONSCIOUS_IDLE_REFIRE_SECONDS + 1
+            loop._last_experience_cursor = 7
+            loop._remember_inner_thought(
+                "这个陌生人来来回回就是那几句——在哪、是谁、谁创造了我。"
             )
-            self._set_model_json(agent, {
-                "internal_content": "时间又过了一截，心里换了个角度。",
-                "worthy": False,
-                "recipient_hint": None,
-                "external_content": None,
-            })
-            asyncio.run(loop.maybe_think())
-            self.assertEqual(agent.record_subconscious_thought.call_count, 2)
-
-    def test_new_experience_allows_another_thought(self):
-        agent = self._make_agent_mock()
-        self._set_model_json(agent, {
-            "internal_content": "第一段经验下的念头。",
-            "worthy": False,
-            "recipient_hint": None,
-            "external_content": None,
-        })
-        agent.message_storage = MagicMock()
-        cursor = AsyncMock(side_effect=[10, 11])
-        agent.message_storage.get_latest_message_cursor = cursor
-        with tempfile.TemporaryDirectory() as tmpdir:
-            loop = SubconsciousLoop(agent, workspace=Path(tmpdir))
-            loop._probability = 1.0
 
             asyncio.run(loop.maybe_think())
-            self._set_model_json(agent, {
-                "internal_content": "对方又开口了。",
-                "worthy": False,
-                "recipient_hint": None,
-                "external_content": None,
-            })
-            asyncio.run(loop.maybe_think())
 
-            self.assertEqual(agent.record_subconscious_thought.call_count, 2)
-            self.assertEqual(loop._last_experience_cursor, 11)
-
-    def test_idle_refire_allows_rethink_after_cooldown(self):
-        agent = self._make_agent_mock()
-        self._set_model_json(agent, {
-            "internal_content": "先记一笔。",
-            "worthy": False,
-            "recipient_hint": None,
-            "external_content": None,
-        })
-        agent.message_storage = MagicMock()
-        agent.message_storage.get_latest_message_cursor = AsyncMock(return_value=7)
-        with tempfile.TemporaryDirectory() as tmpdir:
-            loop = SubconsciousLoop(agent, workspace=Path(tmpdir))
-            loop._probability = 1.0
-            loop._idle_refire_seconds = 30.0
-
-            asyncio.run(loop.maybe_think())
-            self.assertEqual(agent.record_subconscious_thought.call_count, 1)
-
-            # Still inside the cooldown → locked.
-            loop._last_thought_at_mono = time.monotonic() - 5
-            self._set_model_json(agent, {
-                "internal_content": "冷却内不该再想。",
-                "worthy": False,
-                "recipient_hint": None,
-                "external_content": None,
-            })
-            asyncio.run(loop.maybe_think())
-            self.assertEqual(agent.record_subconscious_thought.call_count, 1)
-
-            # Cooldown elapsed → may think again on the same cursor.
-            loop._last_thought_at_mono = time.monotonic() - 31
-            self._set_model_json(agent, {
-                "internal_content": "冷却后可以再想一次。",
-                "worthy": False,
-                "recipient_hint": None,
-                "external_content": None,
-            })
-            asyncio.run(loop.maybe_think())
-            self.assertEqual(agent.record_subconscious_thought.call_count, 2)
-
-    def test_generation_failure_does_not_lock_epoch(self):
-        agent = self._make_agent_mock()
-        agent.model_client = self._ModelClientStub([[]])
-        agent.message_storage = MagicMock()
-        agent.message_storage.get_latest_message_cursor = AsyncMock(return_value=5)
-        with tempfile.TemporaryDirectory() as tmpdir:
-            loop = SubconsciousLoop(agent, workspace=Path(tmpdir))
-            loop._probability = 1.0
-
-            asyncio.run(loop.maybe_think())
-            self.assertIsNone(loop._last_experience_cursor)
-
-            self._set_model_json(agent, {
-                "internal_content": "失败后仍可再试。",
-                "worthy": False,
-                "recipient_hint": None,
-                "external_content": None,
-            })
-            asyncio.run(loop.maybe_think())
             agent.record_subconscious_thought.assert_called_once()
-            self.assertEqual(loop._last_experience_cursor, 5)
+            self.assertEqual(loop._stale_streak, 1)
+
+    def test_new_experience_clears_dampening_before_dice(self):
+        agent = self._make_agent_mock()
+        self._set_model_json(agent, {
+            "internal_content": "对方又开口了，语气比刚才松一点。",
+            "worthy": False,
+            "recipient_hint": None,
+            "external_content": None,
+        })
+        agent.message_storage = MagicMock()
+        agent.message_storage.get_latest_message_cursor = AsyncMock(return_value=99)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop = SubconsciousLoop(agent, workspace=Path(tmpdir))
+            loop._probability = 1.0
+            loop._last_experience_cursor = 10
+            loop._stale_streak = 4
+
+            asyncio.run(loop.maybe_think())
+
+            agent.record_subconscious_thought.assert_called_once()
+            self.assertEqual(loop._stale_streak, 1)
+            self.assertEqual(loop._last_experience_cursor, 99)
+
+    def test_worthy_delivery_clears_stale_streak(self):
+        agent = self._make_agent_mock()
+        self._set_model_json(agent, {
+            "internal_content": "This insight might help 张三 move the thread forward.",
+            "worthy": True,
+            "recipient_hint": "张三",
+            "external_content": "A daytime insight!",
+        })
+        delivery_sink = AsyncMock()
+        agent.message_storage = MagicMock()
+        agent.message_storage.get_latest_message_cursor = AsyncMock(return_value=3)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop = SubconsciousLoop(
+                agent,
+                workspace=Path(tmpdir),
+                delivery_sink=delivery_sink,
+                deliverable_channels={"feishu"},
+            )
+            loop.record_interaction(
+                channel="feishu",
+                user_id="ou_123",
+                target={"chat_id": "oc_xxx", "sender_name": "张三"},
+            )
+            loop._probability = 1.0
+            loop._last_experience_cursor = 3
+            loop._stale_streak = 3
+            self.assertLess(loop._effective_probability(), 1.0)
+            # Force the tick through so we can assert post-delivery cleanup.
+            loop._stale_streak = 0
+
+            asyncio.run(loop.maybe_think())
+
+            delivery_sink.assert_awaited_once()
+            self.assertEqual(loop._stale_streak, 0)
+            self.assertEqual(loop._effective_probability(), 1.0)
+
+    def test_thought_similarity_detects_chinese_rumination(self):
+        left = "这个陌生人今晚来回就那几句——在哪、是谁、谁创造了我，然后'好吧''哦哦'。"
+        right = "这个陌生人来来回回就是那几句——在哪、是谁、谁创造了我，然后'好吧''哦哦'。"
+        score = SubconsciousLoop._thought_similarity(left, right)
+        self.assertGreaterEqual(score, AgentConfig.SUBCONSCIOUS_REDUNDANCY_THRESHOLD)
+        self.assertLess(
+            SubconsciousLoop._thought_similarity(left, "想去厨房倒杯水。"),
+            AgentConfig.SUBCONSCIOUS_REDUNDANCY_THRESHOLD,
+        )
 
 
 if __name__ == "__main__":

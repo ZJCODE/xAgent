@@ -199,14 +199,17 @@ class AgentConfig:
     SUBCONSCIOUS_ENABLED = True
     # Probability of spontaneous thought per heartbeat tick.
     # 0=off, 1=very active. Suggested: 0.01~0.1
+    # This remains the primary intensity knob.
     SUBCONSCIOUS_ACTIVITY = 0.02
     SUBCONSCIOUS_MAX_CONTACTS = 10
-    # Refractory period for autonomous inner life (GOAL: independent subject +
-    # continuity). After a subconscious cycle, do not think again until either
-    # new messages arrive or this many seconds pass. Time alone counts as life
-    # continuing — do not require a human message. 0 disables time-based
-    # refire (message-unlock only; not recommended).
-    SUBCONSCIOUS_IDLE_REFIRE_SECONDS = 3600
+    # When recent experience has not moved, each consecutive empty / unworthy /
+    # near-duplicate thought halves the effective activity (floored by this
+    # factor). Softens dense rumination without replacing the activity knob.
+    SUBCONSCIOUS_STALE_DAMPEN_FLOOR = 0.0625  # 0.5**4
+    # Unworthy thoughts whose char-bigram Jaccard similarity to a recent
+    # inner thought is at or above this threshold are not written to the diary.
+    SUBCONSCIOUS_REDUNDANCY_THRESHOLD = 0.55
+    SUBCONSCIOUS_RECENT_THOUGHT_LIMIT = 8
 
     # ============================================================
     # 11. Tool Policy Baseline
