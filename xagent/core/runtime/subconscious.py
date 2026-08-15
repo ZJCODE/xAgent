@@ -223,9 +223,6 @@ class SubconsciousLoop:
         self._delivery_retry_delay_seconds = SUBCONSCIOUS_DELIVERY_RETRY_DELAY_SECONDS
         self._last_experience_cursor: Optional[int] = None
         self._stale_streak = 0
-        self._recent_inner_thoughts: List[str] = []
-        self._redundancy_threshold = float(AgentConfig.SUBCONSCIOUS_REDUNDANCY_THRESHOLD)
-        self._recent_thought_limit = max(1, int(AgentConfig.SUBCONSCIOUS_RECENT_THOUGHT_LIMIT))
         self._stale_dampen_floor = float(AgentConfig.SUBCONSCIOUS_STALE_DAMPEN_FLOOR)
 
     # ------------------------------------------------------------------
@@ -262,18 +259,13 @@ class SubconsciousLoop:
             )
 
     def should_trigger(self) -> bool:
-        """Return True if subconscious thought should fire this tick.
-
-        Base rate is ``subconscious_activity``. Intensity stays user-configured;
-        when recent experience has not moved, consecutive empty / unworthy /
-        near-duplicate cycles only dampen the effective probability so a dense
-        setting does not rehash the same observation every heartbeat.
-        """
+        """Return True if subconscious thought should fire this tick."""
         if not self._enabled:
             return False
         return random.random() < self._effective_probability()
 
     def _effective_probability(self) -> float:
+        """``activity`` tempered by habituation to unmoved experience."""
         probability = max(0.0, min(1.0, float(self._probability)))
         if self._stale_streak <= 0 or probability <= 0.0:
             return probability
@@ -284,10 +276,10 @@ class SubconsciousLoop:
     async def maybe_think(self) -> None:
         """Run one subconscious cycle if the dice roll passes.
 
-        ``subconscious_activity`` remains the intensity knob. This loop only
-        softens repeated rumination on unmoved experience: new experience
-        clears dampening before the dice roll; near-duplicate unworthy notes
-        are not written back into the diary.
+        Intensity is ``subconscious_activity``. The only extra rule is
+        habituation: each empty/unworthy reflection on unmoved experience
+        halves the next effective rate; new experience or a worthy impulse
+        clears it. The model is asked to return empty when nothing moved.
         """
         experience_cursor, experience_moved = await self._experience_state()
         if experience_moved:
@@ -316,13 +308,7 @@ class SubconsciousLoop:
         )
 
         if not internal_content and not external_content:
-            self._note_uneventful_cycle(experience_cursor, experience_moved)
-            return
-
-        if not worthy and internal_content and self._is_near_duplicate_thought(internal_content):
-            self._logger.info("Subconscious thought skipped as near-duplicate of recent inner notes")
-            self._remember_inner_thought(internal_content)
-            self._note_uneventful_cycle(experience_cursor, experience_moved)
+            self._habituate(experience_cursor)
             return
 
         diary_note = internal_content
@@ -337,71 +323,23 @@ class SubconsciousLoop:
 
         if diary_note:
             await self._write_subconscious_thought(diary_note)
-            self._remember_inner_thought(diary_note)
 
         if worthy:
-            # A speakable impulse (sent or held back) is progress, not rumination.
             self._stale_streak = 0
             self._last_experience_cursor = experience_cursor
         else:
-            self._note_uneventful_cycle(experience_cursor, experience_moved)
+            self._habituate(experience_cursor)
 
-    def _note_uneventful_cycle(
-        self,
-        experience_cursor: int,
-        experience_moved: bool,
-    ) -> None:
-        """Track idle rumination so the next dice roll can dampen."""
-        if experience_moved:
-            self._stale_streak = 1
-        else:
-            self._stale_streak = min(self._stale_streak + 1, 8)
+    def _habituate(self, experience_cursor: int) -> None:
+        """One more private reflection without movement — quiet down next time."""
+        self._stale_streak = min(self._stale_streak + 1, 8)
         self._last_experience_cursor = experience_cursor
 
-    def _remember_inner_thought(self, content: str) -> None:
-        note = str(content or "").strip()
-        if not note:
-            return
-        self._recent_inner_thoughts.append(note)
-        overflow = len(self._recent_inner_thoughts) - self._recent_thought_limit
-        if overflow > 0:
-            del self._recent_inner_thoughts[:overflow]
-
-    def _is_near_duplicate_thought(self, content: str) -> bool:
-        """Return True when *content* restates a recent inner thought."""
-        threshold = self._redundancy_threshold
-        if threshold <= 0.0:
-            return False
-        for previous in self._recent_inner_thoughts:
-            if self._thought_similarity(content, previous) >= threshold:
-                return True
-        return False
-
-    @staticmethod
-    def _thought_similarity(left: str, right: str) -> float:
-        """Char-bigram Jaccard; works for CJK monologues and short Latin notes."""
-        left_grams = SubconsciousLoop._char_bigrams(left)
-        right_grams = SubconsciousLoop._char_bigrams(right)
-        if not left_grams or not right_grams:
-            return 0.0
-        overlap = len(left_grams & right_grams)
-        union = len(left_grams | right_grams)
-        if union <= 0:
-            return 0.0
-        return overlap / union
-
-    @staticmethod
-    def _char_bigrams(text: str) -> set[str]:
-        normalized = "".join(ch.lower() for ch in text if not ch.isspace())
-        if len(normalized) < 2:
-            return {normalized} if normalized else set()
-        return {normalized[i : i + 2] for i in range(len(normalized) - 1)}
-
     async def _experience_state(self) -> tuple[int, bool]:
-        """Return ``(cursor, moved)`` describing whether external experience moved.
+        """Return ``(cursor, moved)`` for whether external experience changed.
 
         Without a message cursor, the first in-process cycle counts as movement
-        so consecutive idle ticks can still accumulate stale dampening.
+        so later idle ticks can accumulate habituation.
         """
         raw_cursor = await self._current_experience_cursor()
         if raw_cursor is None:
