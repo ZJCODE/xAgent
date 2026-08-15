@@ -35,6 +35,10 @@ class PromptAssembleContext:
     channel_instructions: str = ""
     task_mode: str = "reply"
     inbox_kind: str = ""
+    initiative_intent: str = ""
+    recipient_key: str = ""
+    recipient_display_name: str = ""
+    channel_available: bool = True
 
 
 @dataclass(frozen=True)
@@ -144,6 +148,21 @@ def _render_current_task(ctx: PromptAssembleContext) -> str:
     resolved_current_time = ctx.current_time or datetime.now().strftime("%Y-%m-%d %H:%M")
     if ctx.task_mode == "subconscious_json":
         return AgentConfig.build_subconscious_current_task(current_time=resolved_current_time)
+    if ctx.task_mode == "initiative_admission":
+        return AgentConfig.build_initiative_admission_task(
+            display_name=ctx.recipient_display_name or ctx.current_user_id,
+            recipient_key=ctx.recipient_key,
+            intent=ctx.initiative_intent,
+            current_time=resolved_current_time,
+            channel_available=ctx.channel_available,
+        )
+    if ctx.task_mode == "initiative_turn" or ctx.inbox_kind == "initiative_turn":
+        return AgentConfig.build_initiative_current_task(
+            display_name=ctx.recipient_display_name or ctx.current_user_id,
+            recipient_key=ctx.recipient_key,
+            intent=ctx.initiative_intent,
+            current_time=resolved_current_time,
+        )
     return AgentConfig.build_current_task(
         current_user_id=ctx.current_user_id,
         current_time=resolved_current_time,

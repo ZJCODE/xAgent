@@ -2,26 +2,19 @@
 
 from __future__ import annotations
 
-import json
+import inspect
 import logging
 import time
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Optional
 
 from ...core.agent import Agent
 from ...core.config import AgentConfig
-from ...core.runtime import ScheduledDeliveryContext, scheduled_delivery_context
-from ...interfaces.server.serializers import response_payload
-from ...schemas.attachment import dedupe_attachments
+from ...core.delivery import DeliveryContext
+from ...core.inbox import InboxItem, InboxKind
+from ...core.recipients import make_recipient_key
 from .chat_service import ChatService
 from .constants import CHANNEL_API
 from .delivery import DeliveryBus
-
-
-@dataclass(frozen=True)
-class ScheduledTaskResult:
-    content: str
-    attachments: List[Dict[str, Any]] = field(default_factory=list)
 
 
 class TaskDispatchService:
@@ -33,11 +26,13 @@ class TaskDispatchService:
         *,
         chat: ChatService,
         delivery: DeliveryBus,
+        open_session: Callable[[DeliveryContext], Any],
         logger: Optional[logging.Logger] = None,
     ) -> None:
         self.agent = agent
         self.chat = chat
         self.delivery = delivery
+        self.open_session = open_session
         self.logger = logger or logging.getLogger(self.__class__.__name__)
 
     def can_handle(self, task) -> bool:
@@ -46,9 +41,23 @@ class TaskDispatchService:
         return task.delivery_channel == CHANNEL_API
 
     async def dispatch(self, task) -> None:
-        result = await self._scheduled_task_result(task)
-        if not result.content and not result.attachments:
-            raise ValueError("scheduled task produced no content")
+        user_id = task.delivery_user_id or str(task.target.get("user_id") or AgentConfig.DEFAULT_USER_ID)
+        context = DeliveryContext(
+            channel=task.delivery_channel or CHANNEL_API,
+            user_id=user_id,
+            recipient_key=make_recipient_key(task.delivery_channel or CHANNEL_API, user_id),
+            display_name=str(task.target.get("display_name") or ""),
+            target=dict(task.target or {}),
+            metadata={
+                "source": "scheduled_task",
+                "task_id": task.task_id,
+                "task_name": task.name,
+                "task_type": task.task_type,
+                "run_at": task.run_at.isoformat(sep=" "),
+                "task": task,
+            },
+        )
+        session = self.open_session(context)
         metadata = {
             "scheduled_task": {
                 "id": task.task_id,
@@ -58,99 +67,70 @@ class TaskDispatchService:
                 "delivery": task.delivery,
             }
         }
-        stored_message = None
         if task.task_type == "message":
-            message_handler = getattr(self.agent, "message_handler", None)
-            store_model_reply = getattr(message_handler, "store_model_reply", None)
-            if callable(store_model_reply):
-                stored_message = await store_model_reply(
-                    result.content,
-                    getattr(self.agent, "_assistant_sender_id", "agent"),
-                    metadata=metadata,
-                    attachments=result.attachments,
+            if not str(task.content or "").strip():
+                raise ValueError("scheduled task produced no content")
+            deliver = getattr(self.agent, "deliver_prepared_message", None)
+            if callable(deliver):
+                stored = await deliver(
+                    session=session,
+                    content=task.content.strip(),
                     channel=CHANNEL_API,
-                    recipient_id=task.delivery_user_id or str(task.target.get("user_id") or ""),
+                    recipient_id=user_id,
+                    metadata=metadata,
                 )
-        await self.delivery.broadcast_scheduled_message(
-            task,
-            result.content,
-            stored_message=stored_message,
-            attachments=result.attachments,
-        )
+                if stored is None:
+                    raise RuntimeError("api scheduled send was not accepted")
+                return
+            ack = await session.consume({
+                "type": "message_done",
+                "phase": "final",
+                "content": task.content.strip(),
+            })
+            if not ack.accepted:
+                raise RuntimeError(ack.error or "api scheduled send was not accepted")
+            return
+        if task.task_type != "agent":
+            raise ValueError(f"unsupported scheduled task type: {task.task_type}")
 
-    async def _scheduled_task_result(self, task) -> ScheduledTaskResult:
-        task_type = task.task_type
-        if task_type == "message":
-            return ScheduledTaskResult(task.content.strip())
-        if task_type != "agent":
-            raise ValueError(f"unsupported scheduled task type: {task_type}")
-
-        user_id = task.delivery_user_id or str(task.target.get("user_id") or AgentConfig.DEFAULT_USER_ID)
-        prompt = str(task.content or "").strip()
-        context = ScheduledDeliveryContext(
-            channel=task.delivery_channel,
-            user_id=user_id,
-            target=task.delivery.get("target") if isinstance(task.delivery.get("target"), dict) else {},
-            metadata={
-                "source": "scheduled_task",
-                "task_id": task.task_id,
-                "task_name": task.name,
-                "task_type": task.task_type,
-            },
-        )
         await self.chat.acquire_slot()
         try:
+            submit = getattr(self.agent, "submit", None)
+            if callable(submit):
+                item = InboxItem(
+                    kind=InboxKind.SCHEDULED_TURN,
+                    content=str(task.content or "").strip(),
+                    user_id=user_id,
+                    channel=task.delivery_channel or CHANNEL_API,
+                    delivery=context,
+                    metadata={"source": "scheduled_task", "task_id": task.task_id},
+                )
+                deadline = time.monotonic() + self.chat._chat_timeout
+                async for _event in self.chat._iterate_before_deadline(
+                    submit(item, session=session),
+                    deadline,
+                ):
+                    pass
+                return
             chat_events = getattr(self.agent, "chat_events", None)
             if not callable(chat_events):
                 raise RuntimeError("Agent does not support chat_events().")
             deadline = time.monotonic() + self.chat._chat_timeout
-            with scheduled_delivery_context(context):
-                return await self._scheduled_agent_event_result(
-                    chat_events,
-                    prompt=prompt,
+            async for event in self.chat._iterate_before_deadline(
+                chat_events(
+                    user_message=str(task.content or "").strip(),
                     user_id=user_id,
+                    stream=False,
                     channel=task.delivery_channel or CHANNEL_API,
-                    deadline=deadline,
-                )
+                    inbox_kind="scheduled_turn",
+                    session=session,
+                ),
+                deadline,
+            ):
+                consume = getattr(session, "consume", None)
+                if callable(consume):
+                    result = consume(event)
+                    if inspect.isawaitable(result):
+                        await result
         finally:
             self.chat.release_slot()
-
-    async def _scheduled_agent_event_result(
-        self,
-        chat_events,
-        *,
-        prompt: str,
-        user_id: str,
-        channel: str,
-        deadline: float,
-    ) -> ScheduledTaskResult:
-        final_content = ""
-        final_attachments: List[Dict[str, Any]] = []
-        last_error = ""
-        async for event in self.chat._iterate_before_deadline(
-            chat_events(
-                user_message=prompt,
-                user_id=user_id,
-                stream=False,
-                channel=channel,
-                inbox_kind="scheduled_turn",
-            ),
-            deadline,
-        ):
-            event_type = event.get("type")
-            if event_type == "message_done" and str(event.get("phase") or "final") == "final":
-                final_content = str(event.get("content") or "").strip()
-                raw_attachments = event.get("attachments")
-                final_attachments = dedupe_attachments(raw_attachments if isinstance(raw_attachments, list) else [])
-            elif event_type == "error":
-                last_error = str(event.get("error") or "").strip()
-        if final_content or final_attachments:
-            return ScheduledTaskResult(final_content, final_attachments)
-        return ScheduledTaskResult(last_error)
-
-    @staticmethod
-    def _scheduled_response_result(response: Any) -> ScheduledTaskResult:
-        result = response_payload(response)
-        if isinstance(result, str):
-            return ScheduledTaskResult(result.strip())
-        return ScheduledTaskResult(json.dumps(result, ensure_ascii=False).strip())

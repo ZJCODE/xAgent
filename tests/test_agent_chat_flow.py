@@ -77,6 +77,9 @@ class FakeMemoryHandler:
     async def get_recent_context(self):
         return ""
 
+    async def get_relationship_context(self, **kwargs):
+        return ""
+
     def schedule_experience_write(self, messages):
         self.experience_messages = messages
 

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import queue
 import threading
@@ -12,14 +13,14 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Iterable, Iterator, Optional, Protocol
 
 from xagent.core.config import AgentConfig
+from xagent.core.delivery import DeliveryAck, DeliveryContext, ImmediateDeliverySession
+from xagent.core.inbox import InboxItem, InboxKind
+from xagent.core.recipients import make_recipient_key
 from xagent.core.runtime import (
     AsyncTaskScheduler,
     ScheduledDeliveryContext,
     ScheduledTaskRecord,
-    SubconsciousDelivery,
-    resolve_contacts_path,
     scheduled_delivery_context,
-    upsert_contact,
 )
 
 from .config import VoiceChannelConfig
@@ -114,6 +115,46 @@ class VoicePlayer(Protocol):
         """Play audio chunks."""
 
 
+class VoiceDeliverySession:
+    """Unified outbound session. Speaks only initiative and scheduled turns."""
+
+    def __init__(self, runtime: "VoiceRuntime", context: DeliveryContext) -> None:
+        self.runtime = runtime
+        self.context = context
+
+    def can_deliver(self) -> bool:
+        return not self.runtime.stop_event.is_set()
+
+    def _source(self) -> str:
+        return str((self.context.metadata or {}).get("source") or "").strip()
+
+    async def consume(self, event: dict) -> DeliveryAck:
+        if event.get("type") != "message_done":
+            return DeliveryAck(accepted=True)
+        source = self._source()
+        if source not in {"initiative", "scheduled_task"}:
+            return DeliveryAck(accepted=True)
+        text = str(event.get("content") or "").strip()
+        if not text:
+            return DeliveryAck(accepted=True)
+        if self.runtime.stop_event.is_set():
+            return DeliveryAck(accepted=False, error="voice session stopped")
+        try:
+            if source == "scheduled_task":
+                title = str((self.context.metadata or {}).get("task_name") or "Reminder")
+                self.runtime.output(f"\nScheduled task: {title}")
+            await self.runtime._speak(
+                _single_text_stream(text),
+                language=self.runtime.config.tts_language_for(""),
+            )
+            return DeliveryAck(accepted=True)
+        except Exception as exc:
+            return DeliveryAck(accepted=False, error=str(exc))
+
+    async def aclose(self) -> None:
+        return None
+
+
 class VoiceRuntime:
     """Run the single half-duplex listen, think, speak state machine."""
 
@@ -144,15 +185,15 @@ class VoiceRuntime:
         self.stop_event = threading.Event()
         self._playback_lock = asyncio.Lock()
         self.task_scheduler: AsyncTaskScheduler | None = None
-        self._contacts_file: Optional[Path] = None
+        register = getattr(agent, "register_delivery", None)
+        if callable(register):
+            register("voice", self.open_delivery_session)
         if self.options.tasks_dir is not None:
             self.task_scheduler = AsyncTaskScheduler(
                 self.options.tasks_dir,
                 can_handle=self._can_handle_scheduled_task,
                 dispatch=self._dispatch_scheduled_task,
             )
-            runtime_root = Path(self.options.tasks_dir).parent
-            self._contacts_file = resolve_contacts_path(runtime_root)
 
     async def run_forever(self) -> None:
         """Run until stopped or a non-recoverable STT error is raised."""
@@ -335,12 +376,13 @@ class VoiceRuntime:
             self.pause_event.clear()
 
     async def _agent_text_chunks(self, transcript: str) -> AsyncIterator[str]:
-        if self._contacts_file is not None:
+        recorder = getattr(self.agent, "record_direct_recipient", None)
+        if callable(recorder):
             try:
-                upsert_contact(
-                    self._contacts_file,
+                recorder(
                     channel="voice",
                     user_id=self.options.user_id,
+                    display_name=self.options.user_id,
                     target={"user_id": self.options.user_id},
                 )
             except Exception:
@@ -356,6 +398,7 @@ class VoiceRuntime:
                 stream=self.options.stream,
                 channel="voice",
                 inbox_kind="user_turn",
+                session=ImmediateDeliverySession(),
             ):
                 event_type = event.get("type")
                 message_id = str(event.get("message_id") or uuid.uuid4().hex)
@@ -404,87 +447,79 @@ class VoiceRuntime:
     def _can_handle_scheduled_task(self, task: ScheduledTaskRecord) -> bool:
         return task.kind == "task" and task.delivery_channel == "voice"
 
+    def open_delivery_session(self, context: DeliveryContext) -> VoiceDeliverySession:
+        return VoiceDeliverySession(self, context)
+
     async def _dispatch_scheduled_task(self, task: ScheduledTaskRecord) -> None:
-        text = await self._scheduled_task_text(task)
-        if not text:
-            raise ValueError("scheduled voice task produced no content")
-        self.output(f"\nScheduled task: {task.title or task.task_type or 'Reminder'}")
-        await self._speak(
-            _single_text_stream(text),
-            language=self.config.tts_language_for(""),
+        user_id = task.delivery_user_id or self.options.user_id or AgentConfig.DEFAULT_USER_ID
+        context = DeliveryContext(
+            channel="voice",
+            user_id=user_id,
+            recipient_key=make_recipient_key("voice", user_id),
+            display_name=str(user_id),
+            target={"user_id": user_id},
+            metadata={
+                "source": "scheduled_task",
+                "task_id": task.task_id,
+                "task_name": task.title or task.name or task.task_type or "Reminder",
+                "task_type": task.task_type,
+                "run_at": task.run_at.isoformat(sep=" "),
+            },
         )
-
-    async def deliver_subconscious_message(self, delivery: SubconsciousDelivery) -> None:
-        if delivery.recipient.channel != "voice":
-            raise ValueError(f"Voice runtime cannot deliver subconscious channel {delivery.recipient.channel!r}")
-        text = str(delivery.content or "").strip()
-        if not text:
-            raise ValueError("subconscious voice delivery produced no content")
-        self.output("\nSubconscious message")
-        await self._speak(
-            _single_text_stream(text),
-            language=self.config.tts_language_for(""),
-        )
-        message_handler = getattr(self.agent, "message_handler", None)
-        store_model_reply = getattr(message_handler, "store_model_reply", None)
-        if callable(store_model_reply):
-            try:
-                recipient_id = str(
-                    delivery.recipient.target.get("user_id")
-                    or delivery.recipient.user_id
-                    or self.options.user_id
-                )
-                await store_model_reply(
-                    text,
-                    getattr(self.agent, "_assistant_sender_id", "agent"),
-                    metadata={
-                        "subconscious": {
-                            "source": "subconscious",
-                            "created_at": delivery.created_at.isoformat(sep=" "),
-                            "recipient": {
-                                "channel": delivery.recipient.channel,
-                                "user_id": delivery.recipient.user_id,
-                                "target": delivery.recipient.target,
-                            },
-                        }
-                    },
-                    channel="voice",
-                    recipient_id=recipient_id,
-                )
-            except Exception:
-                self.logger.debug("Failed to persist voice subconscious delivery", exc_info=True)
-
-    async def _scheduled_task_text(self, task: ScheduledTaskRecord) -> str:
+        session = self.open_delivery_session(context)
         if task.task_type == "message":
-            return task.content.strip()
+            if not str(task.content or "").strip():
+                raise ValueError("scheduled voice task produced no content")
+            deliver = getattr(self.agent, "deliver_prepared_message", None)
+            if callable(deliver):
+                stored = await deliver(
+                    session=session,
+                    content=task.content.strip(),
+                    channel="voice",
+                    recipient_id=user_id,
+                )
+                if stored is None:
+                    raise RuntimeError("voice scheduled send was not accepted")
+                return
+            ack = await session.consume({
+                "type": "message_done",
+                "phase": "final",
+                "content": task.content.strip(),
+            })
+            if not ack.accepted:
+                raise RuntimeError(ack.error or "voice scheduled send was not accepted")
+            return
         if task.task_type != "agent":
             raise ValueError(f"unsupported scheduled voice task type: {task.task_type}")
-
-        prompt = str(task.content or "").strip()
-        with scheduled_delivery_context(self._delivery_context(task=task)):
-            parts: list[str] = []
-            message_delta_seen: set[str] = set()
-            async for event in self.agent.chat_events(
-                user_message=prompt,
-                user_id=task.delivery_user_id or self.options.user_id or AgentConfig.DEFAULT_USER_ID,
-                stream=self.options.stream,
+        submit = getattr(self.agent, "submit", None)
+        if callable(submit):
+            item = InboxItem(
+                kind=InboxKind.SCHEDULED_TURN,
+                content=str(task.content or "").strip(),
+                user_id=user_id,
                 channel="voice",
-                inbox_kind="scheduled_turn",
-            ):
-                event_type = event.get("type")
-                message_id = str(event.get("message_id") or uuid.uuid4().hex)
-                if event_type == "message_delta":
-                    delta = str(event.get("delta") or "")
-                    if delta:
-                        message_delta_seen.add(message_id)
-                        parts.append(delta)
-                elif event_type == "message_done" and message_id not in message_delta_seen:
-                    content = str(event.get("content") or "")
-                    if content:
-                        parts.append(content)
-                elif event_type == "error":
-                    raise RuntimeError(str(event.get("error") or "Agent processing error."))
-            return "".join(parts).strip()
+                delivery=context,
+                metadata={"source": "scheduled_task", "task_id": task.task_id},
+            )
+            async for _event in submit(item, session=session):
+                pass
+            return
+        chat_events = getattr(self.agent, "chat_events", None)
+        if not callable(chat_events):
+            raise RuntimeError("Agent does not support scheduled turns.")
+        async for event in chat_events(
+            user_message=str(task.content or "").strip(),
+            user_id=user_id,
+            stream=self.options.stream,
+            channel="voice",
+            inbox_kind="scheduled_turn",
+            session=session,
+        ):
+            consume = getattr(session, "consume", None)
+            if callable(consume):
+                result = consume(event)
+                if inspect.isawaitable(result):
+                    await result
 
 
 async def _single_text_stream(text: str) -> AsyncIterator[str]:

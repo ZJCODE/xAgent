@@ -12,11 +12,7 @@ from .admin_routes import register_admin_routes
 from .models import ChatInput
 from ...core.agent import Agent
 from ...core.config import AgentConfig
-from ...core.runtime import (
-    SubconsciousDelivery,
-    create_runtime_heartbeat,
-    resolve_contacts_path,
-)
+from ...core.runtime import create_runtime_heartbeat
 from ...integrations.api import ApiChannelAdapter, ChatLimits, input_attachments, input_image_sources
 
 
@@ -34,10 +30,8 @@ class AgentHTTPServer(AdminService):
         super().__init__(config_dir=config_dir, agent=agent)
 
         self.logger = logging.getLogger(f"{self.__class__.__name__}")
-        contacts_file = resolve_contacts_path(self.workspace)
         self.api = ApiChannelAdapter(
             self.agent,
-            contacts_file=contacts_file,
             tasks_dir=self.tasks_dir,
             limits=ChatLimits(
                 max_concurrent_chats=max_concurrent_chats,
@@ -54,9 +48,6 @@ class AgentHTTPServer(AdminService):
             allow_methods=["*"],
             allow_headers=["*"],
         )
-
-    async def deliver_subconscious_message(self, delivery: SubconsciousDelivery) -> None:
-        await self.api.deliver_subconscious_message(delivery)
 
     async def _register_task_subscriber(self, user_id: str, websocket: WebSocket) -> None:
         await self.api.delivery.register_subscriber(user_id, websocket)
@@ -106,8 +97,6 @@ class AgentHTTPServer(AdminService):
             self.agent,
             self.config.get("runtime") if isinstance(self.config, dict) else None,
             logger_=self.logger,
-            subconscious_delivery_sink=self.api.deliver_subconscious_message,
-            subconscious_deliverable_channels={"api"},
         )
         try:
             if heartbeat is not None:

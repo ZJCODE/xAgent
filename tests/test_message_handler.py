@@ -326,7 +326,7 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         messages = [
             Message.create("Hello", role=RoleType.USER, sender_id="Joy"),
         ]
-        relationships = "## Telos [user_id: telos]\nWe have an open thread about the trip."
+        relationships = "## Telos [recipient_key: feishu:telos]\nWe have an open thread about the trip."
 
         context_messages = MessageHandler.build_turn_context_messages(
             messages,
@@ -347,7 +347,7 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         relationship_message = context_messages[0]
         current_task = context_messages[2]
         self.assertIn("<subconscious_relationships>", relationship_message["content"])
-        self.assertIn("user_id: telos", relationship_message["content"])
+        self.assertIn("recipient_key: feishu:telos", relationship_message["content"])
         self.assertIn("open thread about the trip", relationship_message["content"])
         self.assertNotIn("subconscious_contacts", current_task["content"])
         self.assertNotIn("Telos", current_task["content"])

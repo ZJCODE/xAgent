@@ -1,13 +1,5 @@
 from .heartbeat import RuntimeHeartbeat, RuntimeHeartbeatConfig, create_runtime_heartbeat
-from .subconscious import (
-    ContactEntry,
-    SubconsciousDelivery,
-    SubconsciousLoop,
-    load_contacts,
-    resolve_contacts_path,
-    save_contacts,
-    upsert_contact,
-)
+from .subconscious import Impulse, SubconsciousLoop
 from .scheduler import (
     parse_run_at,
 )
@@ -38,13 +30,8 @@ __all__ = [
     "RuntimeHeartbeat",
     "RuntimeHeartbeatConfig",
     "create_runtime_heartbeat",
-    "ContactEntry",
-    "SubconsciousDelivery",
+    "Impulse",
     "SubconsciousLoop",
-    "load_contacts",
-    "resolve_contacts_path",
-    "save_contacts",
-    "upsert_contact",
     "parse_run_at",
     "AsyncTaskScheduler",
     "ScheduledDeliveryContext",

@@ -7,7 +7,9 @@ from fastapi.testclient import TestClient
 
 from xagent.components import MessageStorage
 from xagent.core.handlers import MessageHandler
-from xagent.core.runtime import AsyncTaskScheduler, ContactEntry, SubconsciousDelivery, enqueue_scheduled_task, list_task_records
+from xagent.core.runtime import AsyncTaskScheduler, enqueue_scheduled_task, list_task_records
+from xagent.core.delivery import DeliveryContext
+from xagent.core.delivery import DeliveryContext
 from xagent.interfaces.server import AgentHTTPServer
 
 
@@ -29,6 +31,7 @@ class _TaskAgent:
         return "agent scheduled result"
 
     async def chat_events(self, **kwargs):
+        kwargs.pop("session", None)
         self.chat_calls.append(kwargs)
         yield {
             "type": "message_done",
@@ -55,6 +58,7 @@ class _AttachmentTaskAgent(_TaskAgent):
         self.chat_event_calls = []
 
     async def chat_events(self, **kwargs):
+        kwargs.pop("session", None)
         self.chat_event_calls.append(kwargs)
         yield {
             "type": "message_done",
@@ -67,7 +71,7 @@ class _AttachmentTaskAgent(_TaskAgent):
 
 
 class TaskApiTests(unittest.TestCase):
-    def test_deliver_subconscious_message_broadcasts_to_subscriber(self):
+    def test_initiative_delivery_broadcasts_to_subscriber(self):
         async def run_test():
             class _Subscriber:
                 def __init__(self):
@@ -81,50 +85,37 @@ class TaskApiTests(unittest.TestCase):
                 server = AgentHTTPServer(agent=agent)
                 subscriber = _Subscriber()
                 await server._register_task_subscriber("web_user", subscriber)
-                delivery = SubconsciousDelivery(
-                    content="A direct subconscious note",
-                    recipient=ContactEntry(
-                        channel="api",
-                        user_id="web_user",
-                        target={"user_id": "web_user"},
-                        last_seen="2026-06-25 09:00:00",
-                    ),
-                    internal_content="The inner thought",
-                    created_at=datetime(2026, 6, 25, 9, 0, 0),
-                )
-
-                await server.deliver_subconscious_message(delivery)
+                session = server.api.open_delivery_session(DeliveryContext(
+                    channel="api",
+                    user_id="web_user",
+                    target={"user_id": "web_user"},
+                    metadata={"source": "initiative"},
+                ))
+                self.assertTrue(session.can_deliver())
+                ack = await session.consume({
+                    "type": "message_done",
+                    "phase": "final",
+                    "content": "A direct note",
+                })
+                self.assertTrue(ack.accepted)
+                silent = server.api.open_delivery_session(DeliveryContext(
+                    channel="api",
+                    user_id="nobody",
+                    target={"user_id": "nobody"},
+                    metadata={"source": "initiative"},
+                ))
+                self.assertFalse(silent.can_deliver())
+                rejected = await silent.consume({
+                    "type": "message_done",
+                    "phase": "final",
+                    "content": "should not send",
+                })
+                self.assertFalse(rejected.accepted)
 
             self.assertEqual(len(subscriber.payloads), 1)
             payload = subscriber.payloads[0]
-            self.assertEqual(payload["type"], "subconscious_message")
-            self.assertEqual(payload["content"], "A direct subconscious note")
-            self.assertIn("message", payload)
-            self.assertEqual(payload["message"]["role"], "assistant")
-
-        import asyncio
-
-        asyncio.run(run_test())
-
-    def test_http_subconscious_delivery_rejects_feishu_channel(self):
-        async def run_test():
-            with tempfile.TemporaryDirectory() as tmpdir:
-                agent = _TaskAgent(Path(tmpdir))
-                server = AgentHTTPServer(agent=agent)
-                delivery = SubconsciousDelivery(
-                    content="A direct subconscious note",
-                    recipient=ContactEntry(
-                        channel="feishu",
-                        user_id="ou_123",
-                        target={"chat_id": "oc_xxx", "sender_name": "张三"},
-                        last_seen="2026-06-25 09:00:00",
-                    ),
-                    internal_content="The inner thought",
-                    created_at=datetime(2026, 6, 25, 9, 0, 0),
-                )
-
-                with self.assertRaisesRegex(ValueError, "api runtime cannot deliver"):
-                    await server.deliver_subconscious_message(delivery)
+            self.assertEqual(payload["type"], "assistant_message")
+            self.assertEqual(payload["content"], "A direct note")
 
         import asyncio
 

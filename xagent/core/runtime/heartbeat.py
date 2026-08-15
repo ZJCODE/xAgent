@@ -7,7 +7,7 @@ import logging
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping, Optional
+from typing import Any, Callable, Mapping, Optional
 
 from ..config import AgentConfig
 
@@ -155,14 +155,11 @@ def create_runtime_heartbeat(
     runtime_config: Optional[Mapping[str, Any]],
     *,
     logger_: Optional[logging.Logger] = None,
-    subconscious_delivery_sink: Optional[Callable[..., Any]] = None,
-    subconscious_deliverable_channels: Optional[Iterable[str]] = None,
 ) -> Optional[RuntimeHeartbeat]:
     config = RuntimeHeartbeatConfig.from_mapping(runtime_config)
     if not config.enabled:
         return None
 
-    # Resolve workspace path for the subconscious loop
     workspace = _resolve_agent_workspace(agent)
     subconscious_loop = None
     if workspace is not None and AgentConfig.SUBCONSCIOUS_ENABLED:
@@ -172,8 +169,6 @@ def create_runtime_heartbeat(
             agent,
             workspace=workspace,
             probability=getattr(agent, "subconscious_activity", None),
-            delivery_sink=subconscious_delivery_sink,
-            deliverable_channels=subconscious_deliverable_channels,
             logger_=logger_,
         )
 
@@ -199,7 +194,6 @@ def _resolve_agent_workspace(agent: Any) -> Optional[Path]:
     workspace_dir = getattr(agent, "workspace_dir", None)
     if workspace_dir is not None:
         workspace_path = Path(workspace_dir)
-        # workspace_dir is typically <root>/workspace; contacts live at <root>.
         if workspace_path.name == AgentConfig.WORKSPACE_DIRNAME:
             return workspace_path.parent
         return workspace_path

@@ -9,12 +9,13 @@ from typing import Optional
 from fastapi import FastAPI
 
 from ...core.agent import Agent
-from ...core.runtime import AsyncTaskScheduler, SubconsciousDelivery
+from ...core.delivery import DeliveryContext
+from ...core.runtime import AsyncTaskScheduler
 from ...interfaces.server.runtime_routes import register_runtime_routes
 from .chat_service import ChatService
 from .config import ChatLimits
 from .constants import CHANNEL_API
-from .delivery import DeliveryBus
+from .delivery import ApiDeliverySession, DeliveryBus
 from .task_dispatch import TaskDispatchService
 
 
@@ -28,20 +29,17 @@ class ApiChannelAdapter:
         self,
         agent: Agent,
         *,
-        contacts_file: Path,
         tasks_dir: Path,
         limits: ChatLimits | None = None,
         logger: Optional[logging.Logger] = None,
     ) -> None:
         self.agent = agent
-        self.contacts_file = contacts_file
         self.tasks_dir = tasks_dir
         self.limits = limits or ChatLimits()
         self.logger = logger or logging.getLogger(self.__class__.__name__)
         self.delivery = DeliveryBus(logger=self.logger)
         self.chat = ChatService(
             agent,
-            contacts_file=contacts_file,
             limits=self.limits,
             logger=self.logger,
         )
@@ -49,9 +47,16 @@ class ApiChannelAdapter:
             agent,
             chat=self.chat,
             delivery=self.delivery,
+            open_session=self.open_delivery_session,
             logger=self.logger,
         )
         self._task_scheduler: Optional[AsyncTaskScheduler] = None
+        register = getattr(agent, "register_delivery", None)
+        if callable(register):
+            register(CHANNEL_API, self.open_delivery_session)
+
+    def open_delivery_session(self, context: DeliveryContext) -> ApiDeliverySession:
+        return ApiDeliverySession(self.delivery, context)
 
     async def start(self) -> None:
         scheduler = AsyncTaskScheduler(
@@ -69,9 +74,6 @@ class ApiChannelAdapter:
             await self._task_scheduler.stop()
             self._task_scheduler = None
             self.logger.info("Scheduled task runtime stopped")
-
-    async def deliver_subconscious_message(self, delivery: SubconsciousDelivery) -> None:
-        await self.delivery.deliver_subconscious(delivery, agent=self.agent)
 
     def register_routes(self, app: FastAPI) -> None:
         register_runtime_routes(app, self)

@@ -8,11 +8,10 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from xagent.core.runtime import (
-    ContactEntry,
-    SubconsciousDelivery,
     enqueue_scheduled_task,
     list_active_task_records,
 )
+from xagent.core.delivery import DeliveryContext
 from xagent.interfaces.voice.config import (
     SONIOX_ENDPOINT_LATENCY_LEVEL,
     SONIOX_ENDPOINT_SENSITIVITY,
@@ -92,6 +91,7 @@ class FakePlayer:
 
 class FakeAgent:
     async def chat_events(self, **kwargs):
+        kwargs.pop("session", None)
         self.kwargs = kwargs
         yield {"type": "message_delta", "message_id": "m1", "delta": "hello "}
         yield {"type": "message_delta", "message_id": "m1", "delta": "there."}
@@ -103,6 +103,7 @@ class FailingFirstAgent:
         self.calls = 0
 
     async def chat_events(self, **kwargs):
+        kwargs.pop("session", None)
         self.calls += 1
         if self.calls == 1:
             yield {"type": "error", "error": "model unavailable"}
@@ -544,25 +545,31 @@ class VoiceRuntimeTests(unittest.TestCase):
 
         asyncio.run(run_task())
 
-    def test_subconscious_delivery_uses_shared_speak_path(self):
+    def test_delivery_session_uses_shared_speak_path(self):
         async def run_delivery():
-            agent = FakeAgent()
-            agent.message_handler = SimpleNamespace(store_model_reply=AsyncMock())
-            runtime = self.make_runtime(agent=agent)
+            runtime = self.make_runtime()
             runtime._speak = AsyncMock()
-            delivery = SubconsciousDelivery(
-                content="background thought",
-                recipient=ContactEntry(
-                    channel="voice",
-                    user_id="alice",
-                    target={"user_id": "alice"},
-                    last_seen="2026-08-09 10:00:00",
-                ),
-                internal_content="inner",
-                created_at=datetime(2026, 8, 9, 10, 0, 0),
-            )
-            await runtime.deliver_subconscious_message(delivery)
+            session = runtime.open_delivery_session(DeliveryContext(
+                channel="voice",
+                user_id="alice",
+                target={"user_id": "alice"},
+                metadata={"source": "initiative"},
+            ))
+            self.assertTrue(session.can_deliver())
+            ack = await session.consume({
+                "type": "message_done",
+                "phase": "final",
+                "content": "background thought",
+            })
+            self.assertTrue(ack.accepted)
             runtime._speak.assert_awaited_once()
+            runtime.stop_event.set()
+            stopped = runtime.open_delivery_session(DeliveryContext(
+                channel="voice",
+                user_id="alice",
+                metadata={"source": "initiative"},
+            ))
+            self.assertFalse(stopped.can_deliver())
 
         asyncio.run(run_delivery())
 

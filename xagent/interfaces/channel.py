@@ -1,7 +1,8 @@
 """Shared inbound turn payload for channel adapters.
 
 Adapters convert native messages into ``ChatTurnRequest`` and unpack it into
-``Agent.chat_events``. This is a typing/composition seam, not a new runtime.
+``Agent.chat_events`` or ``Agent.submit``. This is a typing/composition seam,
+not a new runtime.
 """
 
 from __future__ import annotations
@@ -9,8 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Optional, Protocol, Union
 
+from ..core.delivery import DeliveryContext, DeliverySession
 from ..core.inbox import InboxKind
-from ..core.runtime.subconscious import SubconsciousDelivery
 
 
 @dataclass
@@ -48,15 +49,11 @@ class ChatTurnRequest:
 
 
 class Channel(Protocol):
-    """Duck-typed channel adapter surface used by heartbeat and CLI.
-
-    Adapters map native inbound payloads to ``ChatTurnRequest`` (typically a
-    private ``_chat_kwargs`` helper) rather than sharing one inbound type.
-    """
+    """Duck-typed channel adapter surface used by heartbeat and CLI."""
 
     @property
     def channel_name(self) -> str:
         ...
 
-    async def deliver_subconscious_message(self, delivery: SubconsciousDelivery) -> None:
+    def open_delivery_session(self, context: DeliveryContext) -> DeliverySession:
         ...
