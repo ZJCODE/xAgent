@@ -975,26 +975,26 @@ def _prompt_model_reasoning(
         if same_provider_api and isinstance(current_provider_config.get("reasoning"), dict)
         else None
     )
-    current_mode = "automatic"
+    current_mode = "default"
     if current_reasoning is not None:
-        current_mode = "enabled" if current_reasoning.get("enabled") is True else "disabled"
-    modes = ("automatic", "enabled")
+        current_mode = "custom" if current_reasoning.get("enabled") is True else "disabled"
+    modes = ("default", "custom")
     choice = ui.select_menu(
         title="xAgent Setup / Reasoning",
         subtitle="Choose whether xAgent sends explicit reasoning controls.",
         options=[
             MenuOption(
-                "automatic",
-                "Automatic (follow model)",
-                "Send no reasoning controls; best compatibility (recommended).",
+                "default",
+                "Default",
+                "Follow the model default without sending reasoning controls (recommended).",
             ),
-            MenuOption("enabled", "Enabled", "Enable reasoning with an explicit strength."),
+            MenuOption("custom", "Custom", "Enable reasoning with an explicit strength."),
         ],
         default_index=modes.index(current_mode) if current_mode in modes else 0,
     )
     if choice is None:
         return False, None
-    if choice.key == "automatic":
+    if choice.key == "default":
         return True, None
 
     control = capability.controls[0]

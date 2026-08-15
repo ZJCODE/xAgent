@@ -874,14 +874,14 @@ def _collect_reasoning_config(
 
     mode = surface.select_option(
         "Reasoning mode",
-        ("automatic", "enabled"),
+        ("default", "custom"),
         descriptions={
-            "automatic": "Follow the model default without sending reasoning controls (recommended).",
-            "enabled": "Enable reasoning with an explicit strength.",
+            "default": "Follow the model default without sending reasoning controls (recommended).",
+            "custom": "Enable reasoning with an explicit strength.",
         },
         default_index=0,
     )
-    if mode == "automatic":
+    if mode == "default":
         return None
 
     control = capability.controls[0]

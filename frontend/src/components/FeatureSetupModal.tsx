@@ -29,7 +29,7 @@ function reasoningCapabilityFor(
   return schema.model.reasoning.providers[provider] || null;
 }
 
-function defaultEnabledReasoning(capability: ReasoningCapability): ReasoningConfigInput {
+function buildCustomReasoning(capability: ReasoningCapability): ReasoningConfigInput {
   if (capability.controls.includes("effort")) {
     const effort = capability.effort_values.includes("medium")
       ? "medium"
@@ -99,7 +99,7 @@ export function FeatureSetupModal({ open, feature, schema, onClose, onSaved }: F
     () => (feature === "model" ? reasoningCapabilityFor(schema, provider, modelApi) : null),
     [feature, schema, provider, modelApi],
   );
-  const reasoningMode = reasoning ? (reasoning.enabled ? "enabled" : "disabled") : "automatic";
+  const reasoningMode = reasoning?.enabled ? "custom" : "default";
   const reasoningControl = reasoning?.budget_tokens !== undefined ? "budget_tokens" : "effort";
   const showFeatureKey =
     (feature === "search" || feature === "image") && needsFeatureKey(schema.model_provider, provider);
@@ -365,15 +365,15 @@ export function FeatureSetupModal({ open, feature, schema, onClose, onSaved }: F
                   value={reasoningMode}
                   onChange={(event) => {
                     const mode = event.target.value;
-                    if (mode === "automatic") setReasoning(null);
-                    else setReasoning(defaultEnabledReasoning(capability));
+                    if (mode === "default") setReasoning(null);
+                    else setReasoning(buildCustomReasoning(capability));
                   }}
                 >
-                  <option value="automatic">Automatic (follow model)</option>
-                  <option value="enabled">Enabled</option>
+                  <option value="default">Default</option>
+                  <option value="custom">Custom</option>
                 </select>
               </WizardField>
-              {reasoningMode === "enabled" && capability.controls.length > 1 ? (
+              {reasoningMode === "custom" && capability.controls.length > 1 ? (
                 <WizardField label="Reasoning strength control">
                   <select
                     value={reasoningControl}
@@ -384,7 +384,7 @@ export function FeatureSetupModal({ open, feature, schema, onClose, onSaved }: F
                           budget_tokens: Math.max(capability.min_budget_tokens || 1, 4096),
                         });
                       } else {
-                        setReasoning(defaultEnabledReasoning(capability));
+                        setReasoning(buildCustomReasoning(capability));
                       }
                     }}
                   >
@@ -396,7 +396,7 @@ export function FeatureSetupModal({ open, feature, schema, onClose, onSaved }: F
                   </select>
                 </WizardField>
               ) : null}
-              {reasoningMode === "enabled" && reasoningControl === "effort" ? (
+              {reasoningMode === "custom" && reasoningControl === "effort" ? (
                 <WizardField label="Reasoning effort">
                   <select
                     value={reasoning?.effort || capability.effort_values[0] || ""}
@@ -410,7 +410,7 @@ export function FeatureSetupModal({ open, feature, schema, onClose, onSaved }: F
                   </select>
                 </WizardField>
               ) : null}
-              {reasoningMode === "enabled" && reasoningControl === "budget_tokens" ? (
+              {reasoningMode === "custom" && reasoningControl === "budget_tokens" ? (
                 <WizardField label="Reasoning token budget">
                   <input
                     type="number"

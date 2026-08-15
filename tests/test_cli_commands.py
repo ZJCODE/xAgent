@@ -1432,7 +1432,7 @@ class CLICommandTests(unittest.TestCase):
                 if title == "xAgent Setup / Model":
                     return SimpleNamespace(key="qwen")
                 if title == "xAgent Setup / Reasoning":
-                    return SimpleNamespace(key="automatic")
+                    return SimpleNamespace(key="default")
                 raise AssertionError(f"Unexpected menu: {title}")
 
             def ask_text(self, label, *, default=None, secret=False, subtitle=""):
