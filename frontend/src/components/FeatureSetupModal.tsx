@@ -99,7 +99,7 @@ export function FeatureSetupModal({ open, feature, schema, onClose, onSaved }: F
     () => (feature === "model" ? reasoningCapabilityFor(schema, provider, modelApi) : null),
     [feature, schema, provider, modelApi],
   );
-  const reasoningMode = reasoning?.enabled ? "enabled" : "automatic";
+  const reasoningMode = reasoning ? (reasoning.enabled ? "enabled" : "disabled") : "automatic";
   const reasoningControl = reasoning?.budget_tokens !== undefined ? "budget_tokens" : "effort";
   const showFeatureKey =
     (feature === "search" || feature === "image") && needsFeatureKey(schema.model_provider, provider);

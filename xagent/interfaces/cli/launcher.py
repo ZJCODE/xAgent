@@ -975,7 +975,9 @@ def _prompt_model_reasoning(
         if same_provider_api and isinstance(current_provider_config.get("reasoning"), dict)
         else None
     )
-    current_mode = "enabled" if current_reasoning and current_reasoning.get("enabled") is True else "automatic"
+    current_mode = "automatic"
+    if current_reasoning is not None:
+        current_mode = "enabled" if current_reasoning.get("enabled") is True else "disabled"
     modes = ("automatic", "enabled")
     choice = ui.select_menu(
         title="xAgent Setup / Reasoning",
@@ -988,7 +990,7 @@ def _prompt_model_reasoning(
             ),
             MenuOption("enabled", "Enabled", "Enable reasoning with an explicit strength."),
         ],
-        default_index=modes.index(current_mode),
+        default_index=modes.index(current_mode) if current_mode in modes else 0,
     )
     if choice is None:
         return False, None
