@@ -916,14 +916,12 @@ class MessageHandler:
         supports_vision: bool = True,
         workspace_context: str = "",
         is_subconscious: bool = False,
-        task_mode: str = "reply",
     ) -> list[dict]:
         """Build static named system layers for the model input.
 
         When *is_subconscious* is True a private-reflection notice is
         appended to the core prompt so the model knows it cannot execute
-        tasks or use tools during this turn. *task_mode* selects private-only
-        vs initiative wording for subconscious turns.
+        tasks or use tools during this turn.
         """
         ctx = PromptAssembleContext(
             system_prompt=self.system_prompt,
@@ -932,7 +930,6 @@ class MessageHandler:
             workspace_context=workspace_context,
             supports_vision=supports_vision,
             is_subconscious=is_subconscious,
-            task_mode=task_mode,
         )
         return self.prompt_registry.assemble(KIND_INSTRUCTIONS, ctx)
 

@@ -86,10 +86,7 @@ def _render_core_interaction_rules(ctx: PromptAssembleContext) -> str:
     if not ctx.supports_vision:
         core_prompt += AgentConfig.NO_VISION_NOTICE.rstrip()
     if ctx.is_subconscious:
-        if ctx.task_mode == "subconscious_private":
-            core_prompt += AgentConfig.SUBCONSCIOUS_PRIVATE_MODE_NOTICE.rstrip()
-        else:
-            core_prompt += AgentConfig.SUBCONSCIOUS_MODE_NOTICE.rstrip()
+        core_prompt += AgentConfig.SUBCONSCIOUS_MODE_NOTICE.rstrip()
     return core_prompt
 
 
@@ -116,14 +113,14 @@ def _render_skills(ctx: PromptAssembleContext) -> str:
 
 def _render_relationship(ctx: PromptAssembleContext) -> str:
     relationships = (ctx.relationship_context or "").strip()
-    if not relationships or AgentConfig.is_subconscious_task_mode(ctx.task_mode):
+    if not relationships or ctx.task_mode == "subconscious_json":
         return ""
     return AgentConfig.build_relationship_context(relationships)
 
 
 def _render_subconscious_relationships(ctx: PromptAssembleContext) -> str:
     relationships = (ctx.relationship_context or "").strip()
-    if not relationships or not AgentConfig.is_subconscious_task_mode(ctx.task_mode):
+    if not relationships or ctx.task_mode != "subconscious_json":
         return ""
     return AgentConfig.build_subconscious_relationships_context(relationships)
 
@@ -145,11 +142,8 @@ def _render_experience(ctx: PromptAssembleContext) -> str:
 
 def _render_current_task(ctx: PromptAssembleContext) -> str:
     resolved_current_time = ctx.current_time or datetime.now().strftime("%Y-%m-%d %H:%M")
-    if AgentConfig.is_subconscious_task_mode(ctx.task_mode):
-        return AgentConfig.build_subconscious_current_task(
-            current_time=resolved_current_time,
-            private_only=ctx.task_mode == "subconscious_private",
-        )
+    if ctx.task_mode == "subconscious_json":
+        return AgentConfig.build_subconscious_current_task(current_time=resolved_current_time)
     return AgentConfig.build_current_task(
         current_user_id=ctx.current_user_id,
         current_time=resolved_current_time,
@@ -159,7 +153,7 @@ def _render_current_task(ctx: PromptAssembleContext) -> str:
 
 def _render_channel_instructions(ctx: PromptAssembleContext) -> str:
     text = (ctx.channel_instructions or "").strip()
-    if not text or AgentConfig.is_subconscious_task_mode(ctx.task_mode):
+    if not text or ctx.task_mode == "subconscious_json":
         return ""
     return (
         f"<{AgentConfig.CHANNEL_INSTRUCTIONS_NAME}>\n"
