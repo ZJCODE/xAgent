@@ -223,6 +223,42 @@ class ScheduledTaskTests(unittest.TestCase):
 
         asyncio.run(run_test())
 
+    def test_async_scheduler_reschedules_monthly_task_to_next_month_day(self):
+        async def run_test():
+            with tempfile.TemporaryDirectory() as tmpdir:
+                original = enqueue_scheduled_task(
+                    task_type="message",
+                    content="发工资提醒",
+                    run_at=datetime(2026, 6, 1, 9, 0, 0),
+                    tasks_dir=tmpdir,
+                    channel="api",
+                    target={"user_id": "web_user"},
+                    user_id="web_user",
+                    recurrence=[{"kind": "monthly", "time": "09:00:00", "day": 1}],
+                    title="月初提醒",
+                )
+                delivered = []
+                scheduler = AsyncTaskScheduler(
+                    tmpdir,
+                    can_handle=lambda task: task.delivery_channel == "api",
+                    dispatch=lambda task: _append_delivered(delivered, task.content),
+                    now_provider=lambda: datetime(2026, 6, 1, 10, 0, 0),
+                )
+
+                await scheduler.tick()
+                records = list_task_records(tmpdir, include_failed=False)
+
+            self.assertEqual(delivered, ["发工资提醒"])
+            self.assertEqual(len(records), 1)
+            self.assertEqual(records[0].task_id, original.task_id)
+            self.assertEqual(records[0].recurrence, [{"kind": "monthly", "time": "09:00:00", "day": 1}])
+            self.assertEqual(records[0].run_at, datetime(2026, 7, 1, 9, 0, 0))
+
+        async def _append_delivered(delivered, message):
+            delivered.append(message)
+
+        asyncio.run(run_test())
+
     def test_async_scheduler_reschedules_interval_task_until_end_at(self):
         async def run_test():
             with tempfile.TemporaryDirectory() as tmpdir:
@@ -918,6 +954,12 @@ class ScheduledTaskTests(unittest.TestCase):
                     action="create",
                     task_type="message",
                     content="写日报",
+                    recurrence=[{"kind": "cron", "time": "10:00:00"}],
+                )
+                incomplete_monthly = await tool(
+                    action="create",
+                    task_type="message",
+                    content="写月报",
                     recurrence=[{"kind": "monthly", "time": "10:00:00"}],
                 )
                 interval_too_short = await tool(
@@ -973,6 +1015,8 @@ class ScheduledTaskTests(unittest.TestCase):
             self.assertIn("weekdays", invalid_weekly_missing_weekdays["error"])
             self.assertFalse(invalid_recurrence_kind["ok"])
             self.assertIn("kind must be one of", invalid_recurrence_kind["error"])
+            self.assertFalse(incomplete_monthly["ok"])
+            self.assertIn("day, or weekday and nth", incomplete_monthly["error"])
             self.assertFalse(interval_too_short["ok"])
             self.assertIn("at least", interval_too_short["error"])
             self.assertFalse(interval_missing_end["ok"])
@@ -1167,6 +1211,85 @@ class ScheduledTaskTests(unittest.TestCase):
                 ],
                 now=datetime(2026, 7, 10, 15, 0, 0),
             )
+
+
+class MonthlyRecurrenceTests(unittest.TestCase):
+    def test_normalize_monthly_day_and_nth_weekday(self):
+        from xagent.core.runtime.scheduler import normalize_recurrence_rules
+
+        self.assertEqual(
+            normalize_recurrence_rules({"kind": "monthly", "time": "9:00", "day": 1}),
+            [{"kind": "monthly", "time": "09:00:00", "day": 1}],
+        )
+        self.assertEqual(
+            normalize_recurrence_rules({"kind": "monthly", "time": "18:00:00", "day": -1}),
+            [{"kind": "monthly", "time": "18:00:00", "day": -1}],
+        )
+        self.assertEqual(
+            normalize_recurrence_rules(
+                {"kind": "monthly", "time": "10:00", "weekday": "Monday", "nth": 2}
+            ),
+            [{"kind": "monthly", "time": "10:00:00", "weekday": "mon", "nth": 2}],
+        )
+
+    def test_normalize_monthly_rejects_invalid_fields(self):
+        from xagent.core.runtime.scheduler import normalize_recurrence_rules
+
+        with self.assertRaisesRegex(ValueError, "1..31 or -1"):
+            normalize_recurrence_rules({"kind": "monthly", "time": "09:00:00", "day": 0})
+        with self.assertRaisesRegex(ValueError, "1..4 or -1"):
+            normalize_recurrence_rules(
+                {"kind": "monthly", "time": "09:00:00", "weekday": "mon", "nth": 5}
+            )
+        with self.assertRaisesRegex(ValueError, "cannot combine"):
+            normalize_recurrence_rules(
+                {"kind": "monthly", "time": "09:00:00", "day": 1, "weekday": "mon", "nth": 1}
+            )
+        with self.assertRaisesRegex(ValueError, "both weekday and nth"):
+            normalize_recurrence_rules({"kind": "monthly", "time": "09:00:00", "weekday": "mon"})
+
+    def test_resolve_monthly_day_last_day_and_skip_short_month(self):
+        from xagent.core.runtime.scheduler import resolve_monthly_run_at
+
+        self.assertEqual(
+            resolve_monthly_run_at(
+                {"kind": "monthly", "time": "09:00:00", "day": 1},
+                now=datetime(2026, 5, 15, 12, 0, 0),
+            ),
+            datetime(2026, 6, 1, 9, 0, 0),
+        )
+        self.assertEqual(
+            resolve_monthly_run_at(
+                {"kind": "monthly", "time": "18:00:00", "day": -1},
+                now=datetime(2024, 2, 10, 12, 0, 0),
+            ),
+            datetime(2024, 2, 29, 18, 0, 0),
+        )
+        self.assertEqual(
+            resolve_monthly_run_at(
+                {"kind": "monthly", "time": "09:00:00", "day": 31},
+                now=datetime(2026, 1, 31, 10, 0, 0),
+            ),
+            datetime(2026, 3, 31, 9, 0, 0),
+        )
+
+    def test_resolve_monthly_nth_weekday(self):
+        from xagent.core.runtime.scheduler import resolve_monthly_run_at
+
+        self.assertEqual(
+            resolve_monthly_run_at(
+                {"kind": "monthly", "time": "10:00:00", "weekday": "mon", "nth": 2},
+                now=datetime(2026, 6, 1, 8, 0, 0),
+            ),
+            datetime(2026, 6, 8, 10, 0, 0),
+        )
+        self.assertEqual(
+            resolve_monthly_run_at(
+                {"kind": "monthly", "time": "10:00:00", "weekday": "fri", "nth": -1},
+                now=datetime(2026, 6, 1, 8, 0, 0),
+            ),
+            datetime(2026, 6, 26, 10, 0, 0),
+        )
 
 
 if __name__ == "__main__":
