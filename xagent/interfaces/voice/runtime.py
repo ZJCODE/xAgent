@@ -460,7 +460,7 @@ class VoiceRuntime:
         if task.task_type != "agent":
             raise ValueError(f"unsupported scheduled voice task type: {task.task_type}")
 
-        prompt = AgentConfig.scheduled_agent_prompt(task.content)
+        prompt = str(task.content or "").strip()
         with scheduled_delivery_context(self._delivery_context(task=task)):
             parts: list[str] = []
             message_delta_seen: set[str] = set()

@@ -4,10 +4,18 @@ import unittest
 from xagent.core.agent import Agent
 from xagent.core.config import AgentConfig, ReplyType
 from xagent.core.handlers.message import MessageHandler
-from xagent.core.inbox import INBOX_KIND_METADATA_KEY, InboxItem, InboxKind
+from xagent.core.inbox import (
+    INBOX_KIND_METADATA_KEY,
+    SCHEDULED_AGENT_PROMPT_PREFIX,
+    TASK_CONTENT_METADATA_KEY,
+    InboxItem,
+    InboxKind,
+    scheduled_task_display_content,
+)
 from xagent.core.runtime import ScheduledDeliveryContext, scheduled_delivery_context
 from xagent.integrations.langfuse import NoopObservabilityRuntime
-from xagent.schemas import MessageType, RoleType
+from xagent.schemas import Message, MessageType, RoleType
+from xagent.interfaces.server.serializers import message_item
 
 from tests.test_agent_chat_flow import (
     CapturingModelClient,
@@ -16,6 +24,60 @@ from tests.test_agent_chat_flow import (
     FakeToolManager,
     InMemoryMessageStorage,
 )
+
+
+class ScheduledTaskDisplayContentTests(unittest.TestCase):
+    def test_prefers_task_content_metadata(self):
+        wrapped = AgentConfig.scheduled_agent_prompt("ping the room")
+        self.assertEqual(
+            scheduled_task_display_content(
+                wrapped,
+                {TASK_CONTENT_METADATA_KEY: "ping the room"},
+            ),
+            "ping the room",
+        )
+
+    def test_strips_legacy_wrapper_prefix(self):
+        wrapped = SCHEDULED_AGENT_PROMPT_PREFIX + "看下 CPU"
+        self.assertEqual(scheduled_task_display_content(wrapped), "看下 CPU")
+        self.assertEqual(scheduled_task_display_content("plain task"), "plain task")
+
+    def test_frontend_prefix_stays_in_sync(self):
+        from pathlib import Path
+
+        source = Path("/workspace/frontend/src/lib/scheduledMessage.ts").read_text(encoding="utf-8")
+        self.assertIn(SCHEDULED_AGENT_PROMPT_PREFIX.replace("\n", "\\n"), source)
+
+    def test_message_metadata_records_task_body(self):
+        wrapped = InboxItem(
+            kind=InboxKind.SCHEDULED_TURN,
+            content=AgentConfig.scheduled_agent_prompt("ping the room"),
+            user_id="web_user",
+        ).message_metadata()
+        unwrapped = InboxItem(
+            kind=InboxKind.SCHEDULED_TURN,
+            content="ping the room",
+            user_id="web_user",
+        ).message_metadata()
+        self.assertEqual(wrapped[TASK_CONTENT_METADATA_KEY], "ping the room")
+        self.assertEqual(unwrapped[TASK_CONTENT_METADATA_KEY], "ping the room")
+
+    def test_message_item_exposes_inbox_kind_and_task_content(self):
+        message = Message.create("ping the room", role=RoleType.USER, sender_id="web_user")
+        message.channel = "api"
+        message.metadata.update(
+            InboxItem(
+                kind=InboxKind.SCHEDULED_TURN,
+                content="ping the room",
+                user_id="web_user",
+                channel="api",
+            ).message_metadata()
+        )
+        item = message_item(message)
+        self.assertEqual(item["role"], "user")
+        self.assertEqual(item["content"], "ping the room")
+        self.assertEqual(item["metadata"][INBOX_KIND_METADATA_KEY], "scheduled_turn")
+        self.assertEqual(item["metadata"][TASK_CONTENT_METADATA_KEY], "ping the room")
 
 
 class AgentInboxTests(unittest.IsolatedAsyncioTestCase):
@@ -65,7 +127,7 @@ class AgentInboxTests(unittest.IsolatedAsyncioTestCase):
         events = [
             event
             async for event in agent.chat_events(
-                user_message=AgentConfig.scheduled_agent_prompt("ping the room"),
+                user_message="ping the room",
                 user_id="web_user",
                 channel="api",
                 inbox_kind=InboxKind.SCHEDULED_TURN,
@@ -74,8 +136,10 @@ class AgentInboxTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(any(event.get("type") == "done" for event in events))
         user_msg = storage.messages[0]
+        self.assertEqual(user_msg.content, "ping the room")
         self.assertEqual(user_msg.metadata.get(INBOX_KIND_METADATA_KEY), InboxKind.SCHEDULED_TURN.value)
         self.assertEqual(user_msg.metadata.get("source"), "scheduled_task")
+        self.assertEqual(user_msg.metadata.get(TASK_CONTENT_METADATA_KEY), "ping the room")
         self.assertEqual(len(model_client.calls), 1)
 
     async def test_delivery_context_upgrades_user_turn_to_scheduled_turn(self):
@@ -141,7 +205,7 @@ class AgentInboxTests(unittest.IsolatedAsyncioTestCase):
         events = [
             event
             async for event in agent.chat_events(
-                user_message=AgentConfig.scheduled_agent_prompt("ping the room"),
+                user_message="ping the room",
                 user_id="web_user",
                 channel="api",
                 inbox_kind=InboxKind.SCHEDULED_TURN,
@@ -158,6 +222,7 @@ class AgentInboxTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("[speaker=web_user]", rendered)
         self.assertIn("due scheduled task", rendered)
         self.assertNotIn("what web_user just said", rendered)
+        self.assertNotIn("This scheduled task is now due", rendered)
 
     async def test_overlapping_chat_events_run_serially(self):
         storage = InMemoryMessageStorage()

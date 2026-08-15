@@ -2380,7 +2380,7 @@ class FeishuAdapter:
         with scheduled_delivery_context(context):
             return await self._scheduled_task_event_result(
                 chat_events,
-                prompt=AgentConfig.scheduled_agent_prompt(task.content),
+                prompt=str(task.content or "").strip(),
                 user_id=user_id,
             )
 

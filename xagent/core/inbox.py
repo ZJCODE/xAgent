@@ -12,6 +12,11 @@ from enum import Enum
 from typing import Any, Dict, List, Optional, Union
 
 INBOX_KIND_METADATA_KEY = "inbox_kind"
+TASK_CONTENT_METADATA_KEY = "task_content"
+SCHEDULED_AGENT_PROMPT_PREFIX = (
+    "This scheduled task is now due. Execute it and return the message to deliver.\n\n"
+    "Task: "
+)
 
 
 class InboxKind(str, Enum):
@@ -34,6 +39,21 @@ def is_scheduled_work(metadata: Optional[Dict[str, Any]] = None) -> bool:
     if kind == InboxKind.SCHEDULED_TURN.value:
         return True
     return str(payload.get("source") or "").strip() == "scheduled_task"
+
+
+def scheduled_task_display_content(
+    content: str = "",
+    metadata: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Return the task body, without the model-instruction wrapper."""
+    payload = metadata or {}
+    stored = str(payload.get(TASK_CONTENT_METADATA_KEY) or "").strip()
+    if stored:
+        return stored
+    text = str(content or "")
+    if text.startswith(SCHEDULED_AGENT_PROMPT_PREFIX):
+        return text[len(SCHEDULED_AGENT_PROMPT_PREFIX) :].strip()
+    return text.strip()
 
 
 def normalize_inbox_kind(
@@ -80,6 +100,10 @@ class InboxItem:
         payload[INBOX_KIND_METADATA_KEY] = self.kind.value
         if self.kind is InboxKind.SCHEDULED_TURN:
             payload.setdefault("source", "scheduled_task")
+            payload.setdefault(
+                TASK_CONTENT_METADATA_KEY,
+                scheduled_task_display_content(self.content, payload),
+            )
         return payload
 
 

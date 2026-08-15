@@ -302,6 +302,26 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         self.assertNotIn("what Joy just said", current_task)
         self.assertNotIn("Current speaker: Joy", current_task)
 
+    def test_unwrapped_scheduled_task_body_is_still_not_human_speech(self):
+        due = Message.create("看下 CPU", role=RoleType.USER, sender_id="Joy")
+        due.channel = "api"
+        due.metadata[INBOX_KIND_METADATA_KEY] = InboxKind.SCHEDULED_TURN.value
+        due.metadata["source"] = "scheduled_task"
+        due.metadata["task_content"] = "看下 CPU"
+
+        context_messages = MessageHandler.build_turn_context_messages(
+            [due],
+            current_user_id="Joy",
+            current_time="2026-05-14 09:30",
+            current_message=due,
+        )
+
+        experience = context_messages[0]["content"]
+        self.assertIn("[scheduled task]", experience)
+        self.assertIn("看下 CPU", experience)
+        self.assertNotIn("[speaker=Joy]", experience)
+        self.assertNotIn("This scheduled task is now due", experience)
+
     def test_subconscious_mode_has_no_contacts_layer_and_injects_relationships(self):
         messages = [
             Message.create("Hello", role=RoleType.USER, sender_id="Joy"),

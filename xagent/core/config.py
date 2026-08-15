@@ -477,11 +477,10 @@ class AgentConfig:
 
     @staticmethod
     def scheduled_agent_prompt(content: str) -> str:
-        """Shared prompt wrapper for scheduled agent tasks across all channels."""
-        return (
-            "This scheduled task is now due. Execute it and return the message to deliver.\n\n"
-            f"Task: {content.strip()}"
-        )
+        """Legacy wrapper kept to unwrap already-stored scheduled turns."""
+        from .inbox import SCHEDULED_AGENT_PROMPT_PREFIX
+
+        return SCHEDULED_AGENT_PROMPT_PREFIX + content.strip()
 
 # ================================================================
 # Reply Type Enum

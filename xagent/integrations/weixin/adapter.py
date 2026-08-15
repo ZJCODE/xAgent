@@ -721,7 +721,7 @@ class WeixinAdapter:
         chat_events = getattr(self.agent, "chat_events", None)
         if not callable(chat_events):
             raise RuntimeError("Agent does not support chat_events().")
-        prompt = AgentConfig.scheduled_agent_prompt(task.content)
+        prompt = str(task.content or "").strip()
         context = ScheduledDeliveryContext(
             channel="weixin",
             user_id=user_id,

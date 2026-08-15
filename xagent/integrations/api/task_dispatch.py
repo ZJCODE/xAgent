@@ -86,7 +86,7 @@ class TaskDispatchService:
             raise ValueError(f"unsupported scheduled task type: {task_type}")
 
         user_id = task.delivery_user_id or str(task.target.get("user_id") or AgentConfig.DEFAULT_USER_ID)
-        prompt = AgentConfig.scheduled_agent_prompt(task.content)
+        prompt = str(task.content or "").strip()
         context = ScheduledDeliveryContext(
             channel=task.delivery_channel,
             user_id=user_id,
