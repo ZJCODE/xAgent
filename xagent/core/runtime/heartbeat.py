@@ -193,7 +193,14 @@ def _resolve_agent_workspace(agent: Any) -> Optional[Path]:
         if root is not None:
             # root is the memory/ directory; workspace is its parent
             return Path(root).parent
+    workspace = getattr(agent, "workspace", None)
+    if workspace is not None:
+        return Path(workspace)
     workspace_dir = getattr(agent, "workspace_dir", None)
     if workspace_dir is not None:
-        return Path(workspace_dir)
+        workspace_path = Path(workspace_dir)
+        # workspace_dir is typically <root>/workspace; contacts live at <root>.
+        if workspace_path.name == AgentConfig.WORKSPACE_DIRNAME:
+            return workspace_path.parent
+        return workspace_path
     return None

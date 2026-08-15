@@ -4,9 +4,8 @@ import asyncio
 import json
 import tempfile
 import unittest
-from datetime import datetime
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 from xagent.core.config import AgentConfig
 from xagent.core.agent import Agent
@@ -237,25 +236,59 @@ class SubconsciousLoopTests(unittest.TestCase):
         self.assertEqual(result["internal_content"], "['not', 'a dict']")
         self.assertIsNone(result["external_content"])
 
-    def test_is_appropriate_time_default_config(self):
-        """Default quiet hours 22–8: 8 AM to <10 PM is appropriate."""
-        with patch.object(AgentConfig, 'SUBCONSCIOUS_QUIET_HOURS_START', 22), \
-             patch.object(AgentConfig, 'SUBCONSCIOUS_QUIET_HOURS_END', 8):
-            self.assertFalse(SubconsciousLoop._is_appropriate_time(datetime(2026, 6, 22, 7, 0)))
-            self.assertTrue(SubconsciousLoop._is_appropriate_time(datetime(2026, 6, 22, 8, 0)))
-            self.assertTrue(SubconsciousLoop._is_appropriate_time(datetime(2026, 6, 22, 12, 0)))
-            self.assertTrue(SubconsciousLoop._is_appropriate_time(datetime(2026, 6, 22, 21, 59)))
-            self.assertFalse(SubconsciousLoop._is_appropriate_time(datetime(2026, 6, 22, 22, 0)))
-            self.assertFalse(SubconsciousLoop._is_appropriate_time(datetime(2026, 6, 22, 23, 0)))
+    def test_parse_subconscious_json_embedded_in_prose(self):
+        result = SubconsciousLoop._parse_subconscious_json(
+            "A private note first.\n"
+            + json.dumps({
+                "internal_content": "This should still count.",
+                "worthy": True,
+                "recipient_hint": "web_user",
+                "external_content": "Hello from the inner voice.",
+            })
+            + "\nThanks."
+        )
+        self.assertTrue(result["worthy"])
+        self.assertEqual(result["internal_content"], "This should still count.")
+        self.assertEqual(result["external_content"], "Hello from the inner voice.")
+        self.assertEqual(result["recipient_hint"], "web_user")
 
-    def test_is_appropriate_time_simple_range(self):
-        """Simple range: quiet 0–6, only midnight to 6 AM is blocked."""
-        with patch.object(AgentConfig, 'SUBCONSCIOUS_QUIET_HOURS_START', 0), \
-             patch.object(AgentConfig, 'SUBCONSCIOUS_QUIET_HOURS_END', 6):
-            self.assertFalse(SubconsciousLoop._is_appropriate_time(datetime(2026, 6, 22, 3, 0)))
-            self.assertTrue(SubconsciousLoop._is_appropriate_time(datetime(2026, 6, 22, 6, 0)))
-            self.assertTrue(SubconsciousLoop._is_appropriate_time(datetime(2026, 6, 22, 12, 0)))
-            self.assertTrue(SubconsciousLoop._is_appropriate_time(datetime(2026, 6, 22, 23, 0)))
+    def test_parse_subconscious_json_normalizes_string_worthy_and_aliases(self):
+        result = SubconsciousLoop._parse_subconscious_json(
+            json.dumps({
+                "thought": "Alias thought",
+                "worthy": "true",
+                "recipient": "Alice",
+                "outward_content": "Alias message",
+            })
+        )
+        self.assertTrue(result["worthy"])
+        self.assertEqual(result["internal_content"], "Alias thought")
+        self.assertEqual(result["recipient_hint"], "Alice")
+        self.assertEqual(result["external_content"], "Alias message")
+
+        false_result = SubconsciousLoop._parse_subconscious_json(
+            json.dumps({
+                "internal_content": "Keep this inside.",
+                "worthy": "false",
+                "recipient_hint": None,
+                "external_content": None,
+            })
+        )
+        self.assertFalse(false_result["worthy"])
+
+    def test_held_back_diary_note_matches_thought_language(self):
+        self.assertEqual(
+            SubconsciousLoop._held_back_diary_note("This should reach Telos."),
+            "This should reach Telos.\nI didn't send this.",
+        )
+        self.assertEqual(
+            SubconsciousLoop._held_back_diary_note("这个念头还在心里转。"),
+            "这个念头还在心里转。\n我没有发出去。",
+        )
+        self.assertEqual(
+            SubconsciousLoop._held_back_diary_note("Already held.\nI didn't send this."),
+            "Already held.\nI didn't send this.",
+        )
 
     def test_record_interaction(self):
         agent = self._make_agent_mock()
@@ -306,10 +339,18 @@ class SubconsciousLoopTests(unittest.TestCase):
             self.assertIn("worthy=true", current_task["content"])
             self.assertIn("recipient_hint", current_task["content"])
             self.assertIn("exact user_id", current_task["content"])
+            self.assertIn("diary is only yours", current_task["content"])
+            self.assertIn("did not send it", current_task["content"])
+            self.assertIn("avoid unsolicited messages", current_task["content"])
+            self.assertIn("already talking with you", current_task["content"])
+            self.assertIn("would speak now", current_task["content"])
+            self.assertIn("will be sent", current_task["content"])
             self.assertIn(
                 "Write internal_content and external_content in the recent conversation language",
                 current_task["content"],
             )
+            self.assertNotIn("replay the same thought", current_task["content"])
+            self.assertNotIn("quiet hours", current_task["content"].lower())
             self.assertNotIn("connect older memories", current_task["content"])
             self.assertNotIn("Known delivery contacts", current_task["content"])
 
@@ -361,6 +402,24 @@ class SubconsciousLoopTests(unittest.TestCase):
         kwargs = memory_handler.get_relationship_context.await_args.kwargs
         self.assertEqual(kwargs["speaker_keys"], ["feishu:alice"])
         self.assertTrue(kwargs["include_routing_id"])
+
+    def test_collect_relationship_context_skips_undeliverable_channel_cards(self):
+        agent = self._make_agent_mock()
+        memory_handler = MagicMock()
+        memory_handler.relationship_store.list_keys = AsyncMock(
+            return_value=["feishu:alice", "api:web_user"]
+        )
+        memory_handler.get_relationship_context = AsyncMock(return_value="## Web user\nReachable here.")
+        agent.memory_handler = memory_handler
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop = SubconsciousLoop(agent, workspace=Path(tmpdir), deliverable_channels={"api"})
+            context = asyncio.run(loop._collect_relationship_context())
+
+        self.assertIn("Reachable here", context)
+        kwargs = memory_handler.get_relationship_context.await_args.kwargs
+        self.assertEqual(kwargs["speaker_keys"], ["api:web_user"])
+        self.assertNotIn("feishu:alice", kwargs["speaker_keys"])
 
     def test_deliverable_filter_keeps_declared_channels_only(self):
         agent = self._make_agent_mock()
@@ -421,6 +480,9 @@ class SubconsciousLoopTests(unittest.TestCase):
 
             contents = [i["content"] for i in instructions]
             self.assertTrue(any("Context and Attribution" in c for c in contents))
+            self.assertTrue(any("avoid unsolicited messages" in c for c in contents))
+            self.assertTrue(any("would speak now" in c for c in contents))
+            self.assertFalse(any("quiet hours" in c.lower() for c in contents))
             self.assertFalse(any("All available tools are defined" in c for c in contents))
             self.assertEqual(agent.model_client.calls[0]["tool_specs"], [])
             agent._workspace_context.assert_not_called()
@@ -495,8 +557,7 @@ class SubconsciousLoopTests(unittest.TestCase):
             )
             loop._probability = 1.0
 
-            with patch.object(SubconsciousLoop, '_is_appropriate_time', return_value=True):
-                asyncio.run(loop.maybe_think())
+            asyncio.run(loop.maybe_think())
 
             agent.tool_executor.handle_tool_calls.assert_not_awaited()
             agent.record_subconscious_thought.assert_called_once()
@@ -554,18 +615,23 @@ class SubconsciousLoopTests(unittest.TestCase):
             agent.message_handler.store_context_event.assert_not_called()
 
 
-    def test_nighttime_worthy_writes_subconscious_thought(self):
-        """During quiet hours, worthy thoughts are written to diary but not delivered."""
+    def test_worthy_delivers_without_clock_gate(self):
+        """A worthy thought is delivered; night is a prompt judgment, not a send skip."""
         agent = self._make_agent_mock()
         self._set_model_json(agent, {
-            "internal_content": "The timing matters, but this can wait.",
+            "internal_content": "The timing matters, but I would speak now.",
             "worthy": True,
             "recipient_hint": "张三",
-            "external_content": "A 3 AM revelation!",
+            "external_content": "A 3 AM follow-up.",
         })
+        delivery_sink = AsyncMock()
         with tempfile.TemporaryDirectory() as tmpdir:
-            loop = SubconsciousLoop(agent, workspace=Path(tmpdir), deliverable_channels={"feishu"})
-            # Add a contact so routing has a recipient
+            loop = SubconsciousLoop(
+                agent,
+                workspace=Path(tmpdir),
+                delivery_sink=delivery_sink,
+                deliverable_channels={"feishu"},
+            )
             loop.record_interaction(
                 channel="feishu",
                 user_id="ou_123",
@@ -573,12 +639,15 @@ class SubconsciousLoopTests(unittest.TestCase):
             )
             loop._probability = 1.0
 
-            with patch.object(SubconsciousLoop, '_is_appropriate_time', return_value=False):
-                asyncio.run(loop.maybe_think())
+            asyncio.run(loop.maybe_think())
 
+            delivery_sink.assert_awaited_once()
             agent.record_subconscious_thought.assert_called_once()
-            call_args = agent.record_subconscious_thought.call_args
-            self.assertEqual(call_args[0][0], "The timing matters, but this can wait.")
+            self.assertEqual(
+                agent.record_subconscious_thought.call_args[0][0],
+                "The timing matters, but I would speak now.",
+            )
+            self.assertNotIn("I didn't send this.", agent.record_subconscious_thought.call_args[0][0])
             agent.message_handler.store_context_event.assert_not_called()
 
     def test_daytime_worthy_delivers_to_sink(self):
@@ -605,8 +674,7 @@ class SubconsciousLoopTests(unittest.TestCase):
             )
             loop._probability = 1.0
 
-            with patch.object(SubconsciousLoop, '_is_appropriate_time', return_value=True):
-                asyncio.run(loop.maybe_think())
+            asyncio.run(loop.maybe_think())
 
             agent.record_subconscious_thought.assert_called_once()
             self.assertEqual(
@@ -644,12 +712,14 @@ class SubconsciousLoopTests(unittest.TestCase):
             )
             loop._probability = 1.0
 
-            with patch.object(SubconsciousLoop, '_is_appropriate_time', return_value=True):
-                asyncio.run(loop.maybe_think())
+            asyncio.run(loop.maybe_think())
 
             delivery_sink.assert_not_awaited()
             agent.record_subconscious_thought.assert_called_once()
-            self.assertEqual(agent.record_subconscious_thought.call_args[0][0], "This should not pretend to reach Feishu.")
+            self.assertEqual(
+                agent.record_subconscious_thought.call_args[0][0],
+                "This should not pretend to reach Feishu.\nI didn't send this.",
+            )
             agent.message_handler.store_context_event.assert_not_called()
 
     def test_hint_to_undeliverable_contact_does_not_fallback_to_other_contact(self):
@@ -684,12 +754,78 @@ class SubconsciousLoopTests(unittest.TestCase):
             ])
             loop._probability = 1.0
 
-            with patch.object(SubconsciousLoop, '_is_appropriate_time', return_value=True):
-                asyncio.run(loop.maybe_think())
+            asyncio.run(loop.maybe_think())
 
             delivery_sink.assert_not_awaited()
             agent.record_subconscious_thought.assert_called_once()
-            self.assertEqual(agent.record_subconscious_thought.call_args[0][0], "This was meant for 张三 only.")
+            self.assertEqual(
+                agent.record_subconscious_thought.call_args[0][0],
+                "This was meant for 张三 only.\n我没有发出去。",
+            )
+
+    def test_display_name_hint_matches_api_contact_via_relationship_card(self):
+        agent = self._make_agent_mock()
+        self._set_model_json(agent, {
+            "internal_content": "This is for Alice, even if her routing id is web_user.",
+            "worthy": True,
+            "recipient_hint": "Alice",
+            "external_content": "A note for Alice.",
+        })
+        card = MagicMock()
+        card.key = "api:web_user"
+        card.display_name = "Alice"
+        agent.memory_handler.relationship_store.read_cards = AsyncMock(return_value=[card])
+        delivery_sink = AsyncMock()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop = SubconsciousLoop(
+                agent,
+                workspace=Path(tmpdir),
+                delivery_sink=delivery_sink,
+                deliverable_channels={"api"},
+            )
+            loop.record_interaction(
+                channel="api",
+                user_id="web_user",
+                target={"user_id": "web_user"},
+            )
+            loop._probability = 1.0
+
+            asyncio.run(loop.maybe_think())
+
+            delivery_sink.assert_awaited_once()
+            delivery = delivery_sink.await_args.args[0]
+            self.assertEqual(delivery.recipient.channel, "api")
+            self.assertEqual(delivery.recipient.user_id, "web_user")
+            self.assertEqual(delivery.content, "A note for Alice.")
+
+    def test_channel_prefixed_hint_matches_deliverable_contact(self):
+        agent = self._make_agent_mock()
+        self._set_model_json(agent, {
+            "internal_content": "Address this with the relationship key.",
+            "worthy": True,
+            "recipient_hint": "api:web_user",
+            "external_content": "A keyed note.",
+        })
+        delivery_sink = AsyncMock()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop = SubconsciousLoop(
+                agent,
+                workspace=Path(tmpdir),
+                delivery_sink=delivery_sink,
+                deliverable_channels={"api"},
+            )
+            loop.record_interaction(
+                channel="api",
+                user_id="web_user",
+                target={"user_id": "web_user"},
+            )
+            loop._probability = 1.0
+
+            asyncio.run(loop.maybe_think())
+
+            delivery_sink.assert_awaited_once()
+            delivery = delivery_sink.await_args.args[0]
+            self.assertEqual(delivery.recipient.user_id, "web_user")
 
     def test_empty_hint_defaults_to_most_recent_deliverable_contact(self):
         agent = self._make_agent_mock()
@@ -729,8 +865,7 @@ class SubconsciousLoopTests(unittest.TestCase):
             ])
             loop._probability = 1.0
 
-            with patch.object(SubconsciousLoop, '_is_appropriate_time', return_value=True):
-                asyncio.run(loop.maybe_think())
+            asyncio.run(loop.maybe_think())
 
             delivery_sink.assert_awaited_once()
             delivery = delivery_sink.await_args.args[0]
@@ -767,12 +902,14 @@ class SubconsciousLoopTests(unittest.TestCase):
             )
             loop._probability = 1.0
 
-            with patch.object(SubconsciousLoop, '_is_appropriate_time', return_value=True):
-                asyncio.run(loop.maybe_think())
+            asyncio.run(loop.maybe_think())
 
             self.assertEqual(delivery_sink.await_count, 3)
             agent.record_subconscious_thought.assert_called_once()
-            self.assertEqual(agent.record_subconscious_thought.call_args[0][0], "This should not be lost.")
+            self.assertEqual(
+                agent.record_subconscious_thought.call_args[0][0],
+                "This should not be lost.\nI didn't send this.",
+            )
 
     def test_delivery_sink_transient_failure_retries_with_diary_thought(self):
         """A transient direct delivery failure is retried while the thought remains in diary."""
@@ -799,8 +936,7 @@ class SubconsciousLoopTests(unittest.TestCase):
             )
             loop._probability = 1.0
 
-            with patch.object(SubconsciousLoop, '_is_appropriate_time', return_value=True):
-                asyncio.run(loop.maybe_think())
+            asyncio.run(loop.maybe_think())
 
             self.assertEqual(delivery_sink.await_count, 2)
             agent.record_subconscious_thought.assert_called_once()
@@ -822,12 +958,14 @@ class SubconsciousLoopTests(unittest.TestCase):
             loop = SubconsciousLoop(agent, workspace=Path(tmpdir))
             loop._probability = 1.0
 
-            with patch.object(SubconsciousLoop, '_is_appropriate_time', return_value=True):
-                asyncio.run(loop.maybe_think())
+            asyncio.run(loop.maybe_think())
 
             agent.record_subconscious_thought.assert_called_once()
             call_args = agent.record_subconscious_thought.call_args
-            self.assertEqual(call_args[0][0], "This is for someone, but I do not know who yet.")
+            self.assertEqual(
+                call_args[0][0],
+                "This is for someone, but I do not know who yet.\nI didn't send this.",
+            )
 
     def test_worthy_without_external_content_writes_subconscious_thought(self):
         """A worthy decision without outward wording does not deliver an empty message."""
@@ -847,8 +985,7 @@ class SubconsciousLoopTests(unittest.TestCase):
             )
             loop._probability = 1.0
 
-            with patch.object(SubconsciousLoop, '_is_appropriate_time', return_value=True):
-                asyncio.run(loop.maybe_think())
+            asyncio.run(loop.maybe_think())
 
             agent.record_subconscious_thought.assert_called_once()
             call_args = agent.record_subconscious_thought.call_args
