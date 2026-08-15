@@ -473,13 +473,17 @@ class SubconsciousLoop:
             return "(memory read failed)"
 
     async def _collect_relationship_context(self) -> str:
-        """Collect relationship cards to ground subconscious thought."""
+        """Collect relationship cards to ground subconscious thought.
+
+        Cards are people the agent knows, not a send-list. Delivery still
+        filters to channels this runtime can reach.
+        """
         memory_handler = getattr(self._agent, "memory_handler", None)
         if memory_handler is None or not callable(
             getattr(memory_handler, "get_relationship_context", None)
         ):
             return ""
-        contacts = self._filter_deliverable_contacts(load_contacts(self._contacts_file))
+        contacts = load_contacts(self._contacts_file)
         from ...components.memory import RelationshipStore
 
         keys: list[str] = []
@@ -495,9 +499,7 @@ class SubconsciousLoop:
                     stored_keys = await stored_keys
                 if isinstance(stored_keys, list):
                     for key in stored_keys:
-                        channel, _user_id = RelationshipStore.split_key(str(key))
-                        if str(channel or "").strip().lower() in self._deliverable_channels:
-                            self._append_unique_key(keys, str(key))
+                        self._append_unique_key(keys, str(key))
             except Exception:
                 self._logger.warning("Failed to list relationship cards for subconscious", exc_info=True)
 

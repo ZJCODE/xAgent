@@ -420,23 +420,44 @@ class SubconsciousLoopTests(unittest.TestCase):
         self.assertEqual(kwargs["speaker_keys"], ["feishu:alice"])
         self.assertTrue(kwargs["include_routing_id"])
 
-    def test_collect_relationship_context_skips_undeliverable_channel_cards(self):
+    def test_collect_relationship_context_includes_other_channel_cards(self):
+        """Thought can see people on other channels; sending still cannot."""
         agent = self._make_agent_mock()
         memory_handler = MagicMock()
         memory_handler.relationship_store.list_keys = AsyncMock(
             return_value=["feishu:alice", "api:web_user"]
         )
-        memory_handler.get_relationship_context = AsyncMock(return_value="## Web user\nReachable here.")
+        memory_handler.get_relationship_context = AsyncMock(
+            return_value="## Alice\nJust spoke on Feishu.\n## Web user\nReachable here."
+        )
         agent.memory_handler = memory_handler
 
         with tempfile.TemporaryDirectory() as tmpdir:
             loop = SubconsciousLoop(agent, workspace=Path(tmpdir), deliverable_channels={"api"})
             context = asyncio.run(loop._collect_relationship_context())
 
-        self.assertIn("Reachable here", context)
+        self.assertIn("Just spoke on Feishu", context)
         kwargs = memory_handler.get_relationship_context.await_args.kwargs
-        self.assertEqual(kwargs["speaker_keys"], ["api:web_user"])
-        self.assertNotIn("feishu:alice", kwargs["speaker_keys"])
+        self.assertEqual(kwargs["speaker_keys"], ["feishu:alice", "api:web_user"])
+
+    def test_collect_relationship_context_includes_just_seen_other_channel_contact(self):
+        agent = self._make_agent_mock()
+        memory_handler = MagicMock()
+        memory_handler.relationship_store.list_keys = AsyncMock(return_value=[])
+        memory_handler.get_relationship_context = AsyncMock(return_value="## Telos\nJust spoke.")
+        agent.memory_handler = memory_handler
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop = SubconsciousLoop(agent, workspace=Path(tmpdir), deliverable_channels={"api"})
+            loop.record_interaction(
+                channel="feishu",
+                user_id="ou_telos",
+                target={"chat_id": "oc_xxx", "sender_name": "Telos"},
+            )
+            asyncio.run(loop._collect_relationship_context())
+
+        kwargs = memory_handler.get_relationship_context.await_args.kwargs
+        self.assertEqual(kwargs["speaker_keys"], ["feishu:ou_telos"])
 
     def test_deliverable_filter_keeps_declared_channels_only(self):
         agent = self._make_agent_mock()
