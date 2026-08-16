@@ -231,11 +231,17 @@ Return JSON only: an object mapping each person key to their full updated card t
         transcript: str,
     ) -> str:
         people_blocks: List[str] = []
+        from ..components.memory import human_display_name
+
         for participant in participants:
             key = str(participant.get("key") or "").strip()
             if not key:
                 continue
-            name = str(participant.get("display_name") or "").strip() or key
+            name = human_display_name(
+                participant.get("display_name"),
+                user_id=str(participant.get("user_id") or ""),
+                key=key,
+            ) or "(unnamed)"
             existing = str(existing_cards.get(key) or "").strip()
             existing_text = existing if existing else "(no card yet)"
             people_blocks.append(
@@ -322,8 +328,10 @@ New experience:
 
         if message_type == "context_event":
             header = JournalLLMService._append_timestamp_marker("[ambient context]", timestamp)
-            speaker = JournalLLMService._sanitize_marker_field(message.get("sender_id"))
-            if speaker:
+            speaker = JournalLLMService._sanitize_marker_field(
+                JournalLLMService._normalize_transcript_speaker(message)
+            )
+            if speaker and speaker != "ME":
                 header += f"[from={speaker}]"
             if channel:
                 header += f"[channel={channel}]"
@@ -356,12 +364,17 @@ New experience:
 
     @staticmethod
     def _normalize_transcript_speaker(message: dict) -> str:
+        from ..components.memory import format_speaker_label
+
         sender = JournalLLMService._sanitize_marker_field(message.get("sender_id"))
         role = str(message.get("role", "unknown")).strip().lower()
         if JournalLLMService._is_self_speaker(sender=sender, role=role):
             return "ME"
-        if sender:
-            return sender
+        metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else {}
+        label = format_speaker_label(sender, str((metadata or {}).get("sender_name") or ""))
+        label = JournalLLMService._sanitize_marker_field(label)
+        if label:
+            return label
         fallback = JournalLLMService._sanitize_marker_field(role)
         return fallback or "unknown"
 

@@ -114,6 +114,19 @@ class AgentSubconsciousThoughtTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(entries), 1)
             self.assertIn("raw inner thought", entries[0][1])
 
+    async def test_record_subconscious_thought_skips_json_payload(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            agent = Agent(client=object(), workspace=tmpdir)
+            blob = (
+                '{"internal_content": "secret", "worthy": true, '
+                '"recipient_hint": "ou_d988", "external_content": "draft"}'
+            )
+
+            await agent.record_subconscious_thought(blob)
+
+            entries = await agent.markdown_memory.read_recent_dailies(days=1)
+            self.assertEqual(entries, [])
+
 
 class SubconsciousLoopTests(unittest.TestCase):
     """Tests for the SubconsciousLoop class."""
@@ -234,8 +247,29 @@ class SubconsciousLoopTests(unittest.TestCase):
     def test_parse_subconscious_json_non_dict_fallback(self):
         result = SubconsciousLoop._parse_subconscious_json('["not", "a dict"]')
         self.assertFalse(result.get("worthy"))
-        self.assertEqual(result["internal_content"], "['not', 'a dict']")
+        self.assertEqual(result["internal_content"], "")
         self.assertIsNone(result["external_content"])
+
+    def test_parse_subconscious_json_accepts_curly_quotes(self):
+        result = SubconsciousLoop._parse_subconscious_json(
+            '{“internal_content”: “hello”, “worthy”: false, “recipient_hint”: null, “external_content”: null}'
+        )
+        self.assertFalse(result["worthy"])
+        self.assertEqual(result["internal_content"], "hello")
+        self.assertIsNone(result["external_content"])
+
+    def test_parse_subconscious_json_does_not_keep_broken_payload(self):
+        blob = (
+            '{“internal_content”:“他问到点子上了,那两堵"墙"怎么来的。”,'
+            '“worthy”:true,“recipient_hint”:“ou_d988”,“external_content”:"问到关键处了\n'
+            "画一个单位圆"
+        )
+        result = SubconsciousLoop._parse_subconscious_json(blob)
+        self.assertFalse(result["worthy"])
+        self.assertEqual(result["internal_content"], "")
+        self.assertIsNone(result["external_content"])
+        self.assertNotIn("ou_d988", result["internal_content"])
+        self.assertNotIn("external_content", result["internal_content"])
 
     def test_parse_subconscious_json_embedded_in_prose(self):
         result = SubconsciousLoop._parse_subconscious_json(
@@ -307,6 +341,25 @@ class SubconsciousLoopTests(unittest.TestCase):
             "web_user",
         )
 
+    def test_pick_recipient_does_not_let_short_hint_match_longer_name(self):
+        contacts = [
+            ContactEntry(
+                channel="feishu",
+                user_id="ou_liming",
+                target={"sender_name": "李明"},
+                last_seen="2026-08-16 00:00:00",
+            ),
+        ]
+        self.assertIsNone(SubconsciousLoop._pick_recipient(contacts, "李"))
+        self.assertEqual(
+            SubconsciousLoop._pick_recipient(contacts, "李明").user_id,
+            "ou_liming",
+        )
+        self.assertEqual(
+            SubconsciousLoop._pick_recipient(contacts, "李明 (feishu)").user_id,
+            "ou_liming",
+        )
+
     def test_record_interaction(self):
         agent = self._make_agent_mock()
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -363,6 +416,7 @@ class SubconsciousLoopTests(unittest.TestCase):
             self.assertIn("would speak now", current_task["content"])
             self.assertIn("will be sent", current_task["content"])
             self.assertIn("their thread to someone else", current_task["content"])
+            self.assertIn("people on this channel only", current_task["content"])
             self.assertIn("recent diary already holds this observation", current_task["content"])
             self.assertIn("return empty internal_content", current_task["content"])
             self.assertIn("nothing in life has moved", current_task["content"])
@@ -425,15 +479,15 @@ class SubconsciousLoopTests(unittest.TestCase):
         self.assertEqual(kwargs["speaker_keys"], ["feishu:alice"])
         self.assertTrue(kwargs["include_routing_id"])
 
-    def test_collect_relationship_context_includes_other_channel_cards(self):
-        """Thought can see people on other channels; sending still cannot."""
+    def test_collect_relationship_context_omits_other_channel_cards(self):
+        """This runtime only sees people it can send to; Feishu ids stay off the API loop."""
         agent = self._make_agent_mock()
         memory_handler = MagicMock()
         memory_handler.relationship_store.list_keys = AsyncMock(
             return_value=["feishu:alice", "api:web_user"]
         )
         memory_handler.get_relationship_context = AsyncMock(
-            return_value="## Alice\nJust spoke on Feishu.\n## Web user\nReachable here."
+            return_value="## Web user [user_id: web_user]\nReachable here."
         )
         agent.memory_handler = memory_handler
 
@@ -441,15 +495,15 @@ class SubconsciousLoopTests(unittest.TestCase):
             loop = SubconsciousLoop(agent, workspace=Path(tmpdir), deliverable_channels={"api"})
             context = asyncio.run(loop._collect_relationship_context())
 
-        self.assertIn("Just spoke on Feishu", context)
+        self.assertIn("Reachable here", context)
         kwargs = memory_handler.get_relationship_context.await_args.kwargs
-        self.assertEqual(kwargs["speaker_keys"], ["feishu:alice", "api:web_user"])
+        self.assertEqual(kwargs["speaker_keys"], ["api:web_user"])
 
-    def test_collect_relationship_context_includes_just_seen_other_channel_contact(self):
+    def test_collect_relationship_context_omits_just_seen_other_channel_contact(self):
         agent = self._make_agent_mock()
         memory_handler = MagicMock()
         memory_handler.relationship_store.list_keys = AsyncMock(return_value=[])
-        memory_handler.get_relationship_context = AsyncMock(return_value="## Telos\nJust spoke.")
+        memory_handler.get_relationship_context = AsyncMock(return_value="## Web user\nJust spoke.")
         agent.memory_handler = memory_handler
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -459,10 +513,32 @@ class SubconsciousLoopTests(unittest.TestCase):
                 user_id="ou_telos",
                 target={"chat_id": "oc_xxx", "sender_name": "Telos"},
             )
-            asyncio.run(loop._collect_relationship_context())
+            loop.record_interaction(
+                channel="api",
+                user_id="web_user",
+                target={"user_id": "web_user"},
+            )
+            context = asyncio.run(loop._collect_relationship_context())
 
         kwargs = memory_handler.get_relationship_context.await_args.kwargs
-        self.assertEqual(kwargs["speaker_keys"], ["feishu:ou_telos"])
+        self.assertEqual(kwargs["speaker_keys"], ["api:web_user"])
+        self.assertIn("Just spoke", context)
+
+    def test_collect_relationship_context_empty_without_deliverable_channels(self):
+        agent = self._make_agent_mock()
+        memory_handler = MagicMock()
+        memory_handler.relationship_store.list_keys = AsyncMock(
+            return_value=["feishu:alice", "api:web_user"]
+        )
+        memory_handler.get_relationship_context = AsyncMock(return_value="should not be used")
+        agent.memory_handler = memory_handler
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop = SubconsciousLoop(agent, workspace=Path(tmpdir))
+            context = asyncio.run(loop._collect_relationship_context())
+
+        self.assertEqual(context, "")
+        memory_handler.get_relationship_context.assert_not_awaited()
 
     def test_deliverable_filter_keeps_declared_channels_only(self):
         agent = self._make_agent_mock()
@@ -523,6 +599,7 @@ class SubconsciousLoopTests(unittest.TestCase):
 
             contents = [i["content"] for i in instructions]
             self.assertTrue(any("Context and Attribution" in c for c in contents))
+            self.assertTrue(any("already know what to call them" in c for c in contents))
             self.assertTrue(any("avoid unsolicited messages" in c for c in contents))
             self.assertTrue(any("would speak now" in c for c in contents))
             self.assertTrue(any("must not be spoken to another" in c for c in contents))
@@ -606,6 +683,22 @@ class SubconsciousLoopTests(unittest.TestCase):
             agent.tool_executor.handle_tool_calls.assert_not_awaited()
             agent.record_subconscious_thought.assert_called_once()
             self.assertEqual(agent.record_subconscious_thought.call_args[0][0], "not json")
+
+    def test_broken_json_payload_is_not_written_to_diary(self):
+        agent = self._make_agent_mock()
+        blob = (
+            '{“internal_content”:“他问到点子上了。”,“worthy”:true,'
+            '“recipient_hint”:“ou_d988”,“external_content”:"问到关键处了\n画一个单位圆'
+        )
+        self._set_model_events(agent, [[ModelStreamEvent(type="text", delta=blob)]])
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop = SubconsciousLoop(agent, workspace=Path(tmpdir))
+            loop._probability = 1.0
+
+            asyncio.run(loop.maybe_think())
+
+            agent.record_subconscious_thought.assert_not_called()
 
     def test_maybe_think_not_triggered(self):
         agent = self._make_agent_mock()

@@ -120,6 +120,35 @@ class MemoryToolTests(unittest.IsolatedAsyncioTestCase):
         finally:
             os.unlink(db_path)
 
+    async def test_search_memory_keyword_finds_feishu_display_name(self):
+        """A name that lives in sender_name, not message text, is still searchable."""
+        with tempfile.NamedTemporaryFile(suffix=".sqlite3", delete=False) as tmp:
+            db_path = tmp.name
+        try:
+            msg_storage = MessageStorage(path=db_path)
+            msg = Message.create(
+                content="你知道我是谁不",
+                role=RoleType.USER,
+                sender_id="ou_d988df0a30ef9202a01bd962d8c07c21",
+            )
+            msg.channel = "feishu"
+            msg.metadata = {"sender_name": "Telos"}
+            await msg_storage.add_messages(msg)
+
+            tool = create_search_memory_tool(
+                self.memory,
+                is_enabled=True,
+                message_storage=msg_storage,
+            )
+            result = await tool(query=["Telos"])
+
+            self.assertIn("Telos", result["results"])
+            self.assertIn("你知道我是谁不", result["results"])
+            self.assertIn("speaker=Telos(", result["results"])
+            self.assertTrue(result["enabled"])
+        finally:
+            os.unlink(db_path)
+
     async def test_search_memory_keyword_merges_diary_and_sqlite(self):
         """Results from both diary files and SQLite messages are merged."""
         await self.memory.append_daily("Morning standup: decided to refactor auth module")

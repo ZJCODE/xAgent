@@ -4,7 +4,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from xagent.components.memory import RelationshipCard, RelationshipStore
+from xagent.components.memory import (
+    RelationshipCard,
+    RelationshipStore,
+    human_display_name,
+)
 from xagent.core.config import AgentConfig
 from xagent.core.handlers.memory import MemoryHandler
 from xagent.core.handlers.message import MessageHandler
@@ -24,6 +28,30 @@ class RelationshipStoreTests(unittest.IsolatedAsyncioTestCase):
 
     def tearDown(self):
         self._tmpdir.cleanup()
+
+    def test_human_display_name_rejects_ids_and_generic_fallbacks(self):
+        self.assertEqual(human_display_name("Alice", user_id="ou_1"), "Alice")
+        self.assertEqual(human_display_name("ou_1", user_id="ou_1"), "")
+        self.assertEqual(human_display_name("Feishu User", user_id="ou_1"), "")
+        self.assertEqual(human_display_name("feishu:ou_1", key="feishu:ou_1"), "")
+        self.assertEqual(human_display_name("  "), "")
+
+    def test_format_speaker_label_joins_name_and_id(self):
+        from xagent.components.memory import format_speaker_label
+
+        self.assertEqual(format_speaker_label("ou_1", "Jun"), "Jun(ou_1)")
+        self.assertEqual(format_speaker_label("ou_1", "ou_1"), "ou_1")
+        self.assertEqual(format_speaker_label("ou_1", "Feishu User"), "ou_1")
+        self.assertEqual(format_speaker_label("alice", ""), "alice")
+        self.assertEqual(format_speaker_label("", "Jun"), "Jun")
+
+    def test_speaker_address_name_prefers_display_name(self):
+        from xagent.components.memory import speaker_address_name
+
+        self.assertEqual(speaker_address_name("ou_1", "Jun"), "Jun")
+        self.assertEqual(speaker_address_name("ou_1", "ou_1"), "ou_1")
+        self.assertEqual(speaker_address_name("ou_1", "Feishu User"), "ou_1")
+        self.assertEqual(speaker_address_name("alice", ""), "alice")
 
     def test_make_key_and_split_key_roundtrip(self):
         key = RelationshipStore.make_key("feishu", "ou_123")
@@ -66,6 +94,48 @@ class RelationshipStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(loaded.user_id, "ou_1")
         self.assertEqual(loaded.updated, "2026-06-27")
         self.assertIn("we trust each other", loaded.body)
+        rendered = (self.store.root / "feishu" / "ou_1.md").read_text(encoding="utf-8")
+        self.assertIn('key="feishu:ou_1"', rendered)
+        self.assertIn('name="Alice"', rendered)
+        self.assertNotIn("channel=", rendered)
+        self.assertNotIn("user_id=", rendered)
+
+    async def test_header_omits_name_when_only_platform_id_is_known(self):
+        await self.store.write_card(
+            RelationshipCard(
+                key="feishu:ou_d988df0a30ef9202a01bd962d8c07c21",
+                body="A new Feishu contact; they have not given a name yet.",
+                display_name="ou_d988df0a30ef9202a01bd962d8c07c21",
+                channel="feishu",
+                user_id="ou_d988df0a30ef9202a01bd962d8c07c21",
+                updated="2026-08-16",
+            )
+        )
+        rendered = (
+            self.store.root / "feishu" / "ou_d988df0a30ef9202a01bd962d8c07c21.md"
+        ).read_text(encoding="utf-8")
+        self.assertEqual(
+            rendered.splitlines()[0],
+            '<!-- rel key="feishu:ou_d988df0a30ef9202a01bd962d8c07c21" updated="2026-08-16" -->',
+        )
+        loaded = await self.store.read_card("feishu:ou_d988df0a30ef9202a01bd962d8c07c21")
+        self.assertEqual(loaded.display_name, "")
+        self.assertEqual(loaded.channel, "feishu")
+        self.assertEqual(loaded.user_id, "ou_d988df0a30ef9202a01bd962d8c07c21")
+
+    async def test_parse_legacy_header_drops_id_used_as_name(self):
+        path = self.store.card_path("feishu:ou_legacy")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            '<!-- rel key="feishu:ou_legacy" name="ou_legacy" channel="feishu" '
+            'user_id="ou_legacy" updated="2026-08-16" -->\n\nStill probing.\n',
+            encoding="utf-8",
+        )
+        loaded = await self.store.read_card("feishu:ou_legacy")
+        self.assertIsNotNone(loaded)
+        self.assertEqual(loaded.display_name, "")
+        self.assertEqual(loaded.channel, "feishu")
+        self.assertEqual(loaded.user_id, "ou_legacy")
 
     async def test_metadata_escaping_handles_quotes(self):
         card = RelationshipCard(
@@ -124,6 +194,21 @@ class RelationshipDerivationPromptTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('key="feishu:b" name="Bob"', prompt)
         self.assertIn("(no card yet)", prompt)
         self.assertIn("[speaker=Alice]: hi", prompt)
+
+    def test_user_prompt_does_not_treat_missing_name_as_the_key(self):
+        prompt = JournalLLMService.build_relationship_update_user_prompt(
+            participants=[
+                {
+                    "key": "feishu:ou_new",
+                    "display_name": "ou_new",
+                    "user_id": "ou_new",
+                },
+            ],
+            existing_cards={},
+            transcript="[speaker=ou_new]: 早啊",
+        )
+        self.assertIn('key="feishu:ou_new" name="(unnamed)"', prompt)
+        self.assertNotIn('name="ou_new"', prompt)
 
     def test_parse_relationship_cards_filters_unknown_keys(self):
         parsed = JournalLLMService._parse_relationship_cards(
@@ -257,6 +342,19 @@ class MemoryHandlerRelationshipTests(unittest.IsolatedAsyncioTestCase):
         participants = MemoryHandler._extract_participants(messages)
         keys = {p["key"] for p in participants}
         self.assertEqual(keys, {"feishu:alice", "feishu:bob"})
+        self.assertEqual({p["display_name"] for p in participants}, {""})
+
+    def test_extract_participants_keeps_real_sender_name_not_user_id(self):
+        named = Message.create(content="hi", role=RoleType.USER, sender_id="ou_new")
+        named.channel = "feishu"
+        named.metadata = {"sender_name": "Alice"}
+        unnamed = Message.create(content="again", role=RoleType.USER, sender_id="ou_new")
+        unnamed.channel = "feishu"
+        unnamed.metadata = {"sender_name": "ou_new"}
+
+        participants = MemoryHandler._extract_participants([unnamed, named])
+        self.assertEqual(participants[0]["display_name"], "Alice")
+        self.assertEqual(participants[0]["user_id"], "ou_new")
 
     def test_extract_participants_skips_empty_channel(self):
         with_channel = Message.create(content="hi", role=RoleType.USER, sender_id="web_user")
@@ -328,6 +426,28 @@ class MemoryHandlerRelationshipTests(unittest.IsolatedAsyncioTestCase):
             speaker_keys=["feishu:alice"], include_routing_id=True
         )
         self.assertIn("[user_id: alice]", subconscious_view)
+
+    async def test_get_relationship_context_does_not_title_cards_with_platform_ids(self):
+        await self.store.write_card(
+            RelationshipCard(
+                key="feishu:ou_new",
+                body="They have not given a name yet.",
+                display_name="ou_new",
+                channel="feishu",
+                user_id="ou_new",
+            )
+        )
+        storage = _FakeMessageStorage()
+        handler = self._make_handler(storage, _FakeDiaryLLMService())
+
+        reply_view = await handler.get_relationship_context(speaker_keys=["feishu:ou_new"])
+        self.assertIn("## Feishu contact", reply_view)
+        self.assertNotIn("## ou_new", reply_view)
+
+        subconscious_view = await handler.get_relationship_context(
+            speaker_keys=["feishu:ou_new"], include_routing_id=True
+        )
+        self.assertIn("## Feishu contact [user_id: ou_new]", subconscious_view)
 
     async def test_relationship_store_keys_can_feed_subconscious_context(self):
         await self.store.write_card(

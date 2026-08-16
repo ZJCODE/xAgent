@@ -109,6 +109,12 @@ class _MessageDeduplicator:
         return False
 
 
+class _UserChatLock:
+    def __init__(self) -> None:
+        self.lock = asyncio.Lock()
+        self.waiters = 0
+
+
 class WeixinAdapter:
     """Bridge iLink direct messages to an in-process xAgent instance."""
 
@@ -133,7 +139,7 @@ class WeixinAdapter:
         self._owns_client = client is None
         self._credentials: Optional[WeixinCredentials] = None
         self._context_tokens: dict[str, str] = {}
-        self._chat_locks: dict[str, asyncio.Lock] = {}
+        self._chat_locks: dict[str, _UserChatLock] = {}
         self._processing_tasks: set[asyncio.Task[None]] = set()
         self._processing_tasks_lock = asyncio.Lock()
         self._typing_cache = _TypingTicketCache(config.typing_ticket_ttl_seconds)
@@ -296,14 +302,18 @@ class WeixinAdapter:
         if not self._should_route_message(message):
             return
         user_id = str(message.get("from_user_id") or "").strip()
-        lock = self._chat_locks.get(user_id)
-        if lock is None:
-            lock = asyncio.Lock()
-            self._chat_locks[user_id] = lock
-        async with lock:
-            await self._handle_dm(message, user_id=user_id)
-        # Evict lock after processing to prevent unbounded dict growth.
-        self._chat_locks.pop(user_id, None)
+        entry = self._chat_locks.get(user_id)
+        if entry is None:
+            entry = _UserChatLock()
+            self._chat_locks[user_id] = entry
+        entry.waiters += 1
+        try:
+            async with entry.lock:
+                await self._handle_dm(message, user_id=user_id)
+        finally:
+            entry.waiters -= 1
+            if entry.waiters <= 0 and self._chat_locks.get(user_id) is entry:
+                self._chat_locks.pop(user_id, None)
 
     def _should_route_message(self, message: dict[str, Any]) -> bool:
         if int(message.get("message_type") or 0) != 1:

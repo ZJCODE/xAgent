@@ -19,6 +19,10 @@ from ...utils.search_terms import normalize_terms, score_text
 MessageBatch = Union[Message, Sequence[Message]]
 
 
+class IncompatibleMessageSchemaError(RuntimeError):
+    """Raised when an existing messages table cannot be used without data loss."""
+
+
 class MessageStorageConfig:
     """Configuration constants for ``MessageStorage``."""
 
@@ -67,15 +71,15 @@ class MessageStorage:
 
             if not columns:
                 self._create_current_schema(connection)
-            elif columns == MessageStorageConfig.CURRENT_COLUMNS:
+            elif MessageStorageConfig.CURRENT_COLUMNS.issubset(columns):
                 self._ensure_current_indexes(connection)
             else:
-                self.logger.warning(
-                    "Unexpected messages schema at %s; recreating storage table.",
-                    self.path,
+                raise IncompatibleMessageSchemaError(
+                    f"Refusing to open messages store at {self.path}: "
+                    f"table {MessageStorageConfig.TABLE_NAME!r} has columns {sorted(columns)}, "
+                    f"expected at least {sorted(MessageStorageConfig.CURRENT_COLUMNS)}. "
+                    "The existing table was left untouched."
                 )
-                connection.execute(f"DROP TABLE IF EXISTS {MessageStorageConfig.TABLE_NAME}")
-                self._create_current_schema(connection)
 
             connection.commit()
 
@@ -325,11 +329,18 @@ class MessageStorage:
     ) -> str:
         from datetime import datetime, timezone
 
-        like_clauses = [
-            f"json_extract(message_json, '$.content') LIKE ? ESCAPE '\\'"
-            for _ in terms
-        ]
-        params: list = [f"%{self._escape_like(term)}%" for term in terms]
+        like_clauses = []
+        params: list = []
+        for term in terms:
+            pattern = f"%{self._escape_like(term)}%"
+            like_clauses.append(
+                "("
+                "json_extract(message_json, '$.content') LIKE ? ESCAPE '\\' "
+                "OR json_extract(message_json, '$.sender_id') LIKE ? ESCAPE '\\' "
+                "OR json_extract(message_json, '$.metadata.sender_name') LIKE ? ESCAPE '\\'"
+                ")"
+            )
+            params.extend([pattern, pattern, pattern])
         conditions = [f"({' OR '.join(like_clauses)})"]
 
         if date_start:
@@ -375,7 +386,7 @@ class MessageStorage:
                 msg = Message.model_validate_json(row["message_json"])
             except Exception:
                 continue
-            hit_score = score_text(msg.content or "", terms)
+            hit_score = score_text(self._searchable_message_text(msg), terms)
             if hit_score <= 0:
                 continue
             scored.append((hit_score, float(msg.timestamp), int(row["id"]), msg))
@@ -449,9 +460,27 @@ class MessageStorage:
         return normalized_count, normalized_offset
 
     @staticmethod
+    def _searchable_message_text(message: Message) -> str:
+        metadata = message.metadata or {}
+        return "\n".join(
+            part
+            for part in (
+                message.content or "",
+                message.sender_id or "",
+                str(metadata.get("sender_name") or ""),
+            )
+            if str(part).strip()
+        )
+
+    @staticmethod
     def _format_search_match(message: Message) -> str:
+        from ...components.memory.relationship_memory import format_speaker_label
+
         ts = datetime.fromtimestamp(message.timestamp).strftime("%Y-%m-%d %H:%M:%S")
-        sender = message.sender_id or message.role.value
+        sender = format_speaker_label(
+            message.sender_id or "",
+            str((message.metadata or {}).get("sender_name") or ""),
+        ) or message.role.value
         header = f"[{ts}][speaker={sender}]"
         if message.channel:
             header += f"[channel={message.channel}]"

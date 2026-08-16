@@ -45,12 +45,37 @@ function messageDisplayContent(message: MessageItem): string {
   return message.content;
 }
 
-/** Extract channel / name / group from a message for display as meta chips. */
-function messageMetaChips(message: MessageItem): { channel?: string; name?: string; group?: string } {
+function messageSenderName(message: MessageItem): string {
+  if (typeof message.sender_name === "string" && message.sender_name.trim()) {
+    return message.sender_name.trim();
+  }
+  const metaName = message.metadata?.sender_name;
+  return typeof metaName === "string" ? metaName.trim() : "";
+}
+
+function isDistinctDisplayName(name: string, identity?: string): boolean {
+  const trimmed = name.trim();
+  if (!trimmed) return false;
+  if (identity && trimmed === identity.trim()) return false;
+  return !/^(ou_|on_|cli_|oc_)/.test(trimmed);
+}
+
+/** Extract channel / name / id / group from a message for display as meta chips. */
+function messageMetaChips(message: MessageItem): {
+  channel?: string;
+  name?: string;
+  identity?: string;
+  group?: string;
+} {
+  const identity = message.sender_id || undefined;
+  const displayName = messageSenderName(message);
+  const named = isDistinctDisplayName(displayName, identity) ? displayName : undefined;
+
   if (isScheduledWork(message.metadata)) {
     return {
       channel: message.channel,
-      name: message.sender_id ? `for ${message.sender_id}` : undefined,
+      name: named ? `for ${named}` : identity ? `for ${identity}` : undefined,
+      identity: named ? identity : undefined,
       group: message.room_name && message.room_name !== message.sender_id ? message.room_name : undefined,
     };
   }
@@ -58,7 +83,8 @@ function messageMetaChips(message: MessageItem): { channel?: string; name?: stri
   if (message.role === "user") {
     return {
       channel: message.channel,
-      name: message.sender_id || undefined,
+      name: named,
+      identity,
       group: message.room_name && message.room_name !== message.sender_id ? message.room_name : undefined,
     };
   }
@@ -242,6 +268,7 @@ export function MessagePage() {
                   <span className={classNames("meta-chip", roleChipClass)}>{messageRoleLabel(message)}</span>
                   {chips.channel ? <span className="meta-chip">{chips.channel}</span> : null}
                   {chips.name ? <span className="meta-chip">{chips.name}</span> : null}
+                  {chips.identity ? <span className="meta-chip">{chips.identity}</span> : null}
                   {chips.group ? <span className="meta-chip">{chips.group}</span> : null}
                   <span className="meta-chip">{formatTimestamp(message.timestamp)}</span>
                   {isSearchResult(message)

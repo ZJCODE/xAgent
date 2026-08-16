@@ -26,6 +26,7 @@ class ChatTurnRequest:
     image_source: Optional[Union[str, list[str]]] = None
     stream: bool = False
     inbox_kind: str = InboxKind.USER_TURN.value
+    sender_name: str = ""
 
     def to_chat_kwargs(self) -> dict[str, Any]:
         kwargs: dict[str, Any] = {
@@ -44,6 +45,8 @@ class ChatTurnRequest:
             kwargs["attachments"] = self.attachments
         if self.image_source is not None:
             kwargs["image_source"] = self.image_source
+        if self.sender_name:
+            kwargs["sender_name"] = self.sender_name
         return kwargs
 
 

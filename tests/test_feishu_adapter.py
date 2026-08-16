@@ -263,7 +263,7 @@ class FeishuAdapterTests(unittest.TestCase):
                 }
             )
 
-    def test_config_defaults_hide_sender_ids(self):
+    def test_config_defaults_allow_unmentioned_group_replies(self):
         cfg = FeishuAdapterConfig.from_dict(
             {
                 "app_id": "cli_test",
@@ -558,6 +558,7 @@ class FeishuAdapterTests(unittest.TestCase):
         self.assertEqual(agent.chat_calls[0]["user_message"], "hello")
         self.assertEqual(agent.chat_calls[0]["inbox_kind"], "user_turn")
         self.assertEqual(agent.chat_calls[0]["channel"], "feishu")
+        self.assertNotIn("sender_name", agent.chat_calls[0])
         self.assertNotIn("private", agent.chat_calls[0])
         self.assertEqual(adapter._channel.sent[0][2], {"uuid": "om_user"})
 
@@ -576,8 +577,37 @@ class FeishuAdapterTests(unittest.TestCase):
 
         asyncio.run(adapter._dispatch(msg))
 
-        self.assertEqual(agent.chat_calls[0]["user_id"], "Alice")
-        self.assertNotIn("ou_57abefd441c9b068703fa7b18543047e", repr(agent.chat_calls[0]))
+        self.assertEqual(agent.chat_calls[0]["user_id"], "ou_57abefd441c9b068703fa7b18543047e")
+        self.assertEqual(agent.chat_calls[0]["sender_name"], "Alice")
+
+    def test_direct_chat_keeps_same_display_name_users_distinct(self):
+        agent = _FakeAgent()
+        adapter = FeishuAdapter(agent=agent, config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret"))
+        adapter._channel = _FakeChannel()
+        adapter._user_resolver = _FakeUserResolver({
+            "ou_alice_one": "Alice",
+            "ou_alice_two": "Alice",
+        })
+
+        asyncio.run(adapter._dispatch(SimpleNamespace(
+            chat_type="p2p",
+            chat_id="oc_one",
+            message_id="om_one",
+            sender_id="ou_alice_one",
+            content_text="hello",
+        )))
+        asyncio.run(adapter._dispatch(SimpleNamespace(
+            chat_type="p2p",
+            chat_id="oc_two",
+            message_id="om_two",
+            sender_id="ou_alice_two",
+            content_text="hello",
+        )))
+
+        self.assertEqual(
+            [call["user_id"] for call in agent.chat_calls],
+            ["ou_alice_one", "ou_alice_two"],
+        )
 
     def test_direct_image_message_downloads_resource_for_vision_chat(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -850,7 +880,7 @@ class FeishuAdapterTests(unittest.TestCase):
 
         asyncio.run(adapter._dispatch(SimpleNamespace(**msg)))
 
-        self.assertEqual(agent.chat_calls[0]["user_id"], "Alice")
+        self.assertEqual(agent.chat_calls[0]["user_id"], "user_123")
         self.assertEqual(resolver.calls[0], ("user_123", None, "user_id", "user"))
 
     def test_group_mention_reads_receive_v1_nested_sender_and_mention_ids(self):
@@ -951,8 +981,8 @@ class FeishuAdapterTests(unittest.TestCase):
 
         asyncio.run(adapter._dispatch(msg))
 
-        self.assertEqual(agent.chat_calls[0]["user_id"], "Feishu User")
-        self.assertNotIn("ou_user", repr(agent.chat_calls[0]))
+        self.assertEqual(agent.chat_calls[0]["user_id"], "ou_user")
+        self.assertNotIn("sender_name", agent.chat_calls[0])
 
     def test_group_mention_detects_mentions_matching_bot_identity(self):
         agent = _FakeAgent()
@@ -971,7 +1001,7 @@ class FeishuAdapterTests(unittest.TestCase):
         asyncio.run(adapter._dispatch(msg))
 
         self.assertEqual(len(agent.chat_calls), 1)
-        self.assertEqual(agent.chat_calls[0]["user_id"], "Feishu User")
+        self.assertEqual(agent.chat_calls[0]["user_id"], "ou_user")
         self.assertEqual(adapter._channel.sent[0][2], {"uuid": "om_group_msg"})
         self.assertNotIn("reply_to", adapter._channel.sent[0][2])
         self.assertNotIn("reply_in_thread", adapter._channel.sent[0][2])
@@ -1059,6 +1089,7 @@ class FeishuAdapterTests(unittest.TestCase):
         self.assertIn("[room context]", agent.observe_calls[0]["context"])
         self.assertIn("ambient group message", agent.observe_calls[0]["context"])
         self.assertEqual(agent.observe_calls[0]["metadata"]["silence_reason"], "room is flowing")
+        self.assertEqual(agent.observe_calls[0]["user_id"], "ou_user")
         self.assertEqual(adapter._channel.sent, [])
 
     def test_unmentioned_group_message_replies_when_agent_decides_to_speak(self):
@@ -1085,6 +1116,7 @@ class FeishuAdapterTests(unittest.TestCase):
         self.assertEqual(len(agent.chat_calls), 1)
         self.assertEqual(agent.observe_calls, [])
         self.assertIn("ambient group message", agent.chat_calls[0]["user_message"])
+        self.assertEqual(agent.chat_calls[0]["user_id"], "ou_user")
         self.assertEqual(adapter._channel.sent[0][2], {"uuid": "om_ambient"})
 
     def test_unmentioned_group_message_observes_without_decision_in_conservative_mode(self):
@@ -1816,7 +1848,7 @@ class FeishuHistoryFetcherTests(unittest.TestCase):
         self.assertEqual(records[0].sender_name, "john的智能助手")
         self.assertEqual(resolver.calls[0], ("cli_john_agent", None, "app_id", "app"))
 
-    def test_format_group_history_does_not_expose_open_id_fallback(self):
+    def test_format_group_history_keeps_open_id_when_name_looks_like_an_id(self):
         from xagent.integrations.feishu.history import FeishuMessageRecord, format_feishu_timestamp, format_group_history
 
         text = format_group_history([FeishuMessageRecord("om_1", "ou_alice", "ou_alice", "hi", 1)])

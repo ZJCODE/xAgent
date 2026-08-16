@@ -17,7 +17,6 @@ from ...core.formatters import (
     RoomContextEntry,
     format_room_context as format_structured_room_context,
     format_room_context_body,
-    format_room_context_entry,
     format_room_context_timestamp,
     sanitize_room_context_field,
 )
@@ -349,17 +348,6 @@ def format_room_context(
         bot_app_id=bot_app_id,
     )
     return format_structured_room_context(room_id, entries, room_name=room_name)
-
-
-def format_room_context_line(speaker: str, create_time_ms: int, text: str) -> str:
-    """Return one compact room-context line."""
-    safe_speaker = sanitize_transcript_field(speaker) or FEISHU_USER_FALLBACK_NAME
-    entry = RoomContextEntry(
-        speaker_label=safe_speaker,
-        occurred_at=_feishu_timestamp_to_datetime(create_time_ms),
-        text=text,
-    )
-    return format_room_context_entry(entry) or ""
 
 
 def format_feishu_timestamp(create_time_ms: int) -> str:

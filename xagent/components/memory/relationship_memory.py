@@ -22,7 +22,7 @@ import re
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +31,65 @@ _META_PATTERN = re.compile(
 )
 _ATTR_PATTERN = re.compile(r'(\w+)="((?:[^"\\]|\\.)*)"')
 _SLUG_UNSAFE = re.compile(r"[^a-zA-Z0-9._-]+")
+_PLATFORM_ID_PREFIXES = ("ou_", "on_", "cli_", "oc_")
+_GENERIC_DISPLAY_NAMES = frozenset({
+    "feishu user",
+    "weixin user",
+    "wechat user",
+    "unknown",
+})
+_CHANNEL_CONTACT_LABELS = {
+    "feishu": "Feishu contact",
+    "weixin": "Weixin contact",
+    "wechat": "Weixin contact",
+    "api": "API contact",
+    "voice": "Voice contact",
+}
+_IDENTITY_CHANNELS = frozenset(_CHANNEL_CONTACT_LABELS)
+
+
+def human_display_name(value: Any, *, user_id: str = "", key: str = "") -> str:
+    """Return a personal name, or empty when the value is missing or an id."""
+    name = str(value or "").strip()
+    if not name:
+        return ""
+    if user_id and name == str(user_id).strip():
+        return ""
+    if key and name == str(key).strip():
+        return ""
+    if name.lower() in _GENERIC_DISPLAY_NAMES:
+        return ""
+    if name.startswith(_PLATFORM_ID_PREFIXES):
+        return ""
+    channel, separator, rest = name.partition(":")
+    if separator and channel in _IDENTITY_CHANNELS and rest.strip():
+        return ""
+    return name
+
+
+def anonymous_contact_label(channel: str = "") -> str:
+    """Fallback header when a card has no personal name yet."""
+    return _CHANNEL_CONTACT_LABELS.get((channel or "").strip().lower(), "contact")
+
+
+def format_speaker_label(user_id: str = "", display_name: str = "") -> str:
+    """Return ``Name(id)`` when both are known, otherwise whichever exists."""
+    stable_id = str(user_id or "").strip()
+    name = human_display_name(display_name, user_id=stable_id)
+    if name and stable_id and name != stable_id:
+        return f"{name}({stable_id})"
+    return name or stable_id
+
+
+def speaker_address_name(user_id: str = "", display_name: str = "") -> str:
+    """Name to call this person in prompts and replies.
+
+    ``Name(id)`` is a transcript marker. Gluing the id into ``Current speaker``
+    makes the model treat the whole blob as metadata it must not mention, then
+    claim it does not know them.
+    """
+    stable_id = str(user_id or "").strip()
+    return human_display_name(display_name, user_id=stable_id) or stable_id
 
 
 @dataclass(frozen=True)
@@ -146,29 +205,29 @@ class RelationshipStore:
 
     def _render(self, card: RelationshipCard) -> str:
         updated = card.updated or date.today().isoformat()
-        channel, user_id = card.channel, card.user_id
-        if not channel or not user_id:
-            split_channel, split_user = self.split_key(card.key)
-            channel = channel or split_channel
-            user_id = user_id or split_user
-        meta = (
-            f'<!-- rel key="{self._escape(card.key)}" '
-            f'name="{self._escape(card.display_name)}" '
-            f'channel="{self._escape(channel)}" '
-            f'user_id="{self._escape(user_id)}" '
-            f'updated="{self._escape(updated)}" -->'
-        )
-        return f"{meta}\n\n{card.body.strip()}\n"
+        attrs = [f'key="{self._escape(card.key)}"']
+        name = human_display_name(card.display_name, user_id=card.user_id, key=card.key)
+        if name:
+            attrs.append(f'name="{self._escape(name)}"')
+        attrs.append(f'updated="{self._escape(updated)}"')
+        return f"<!-- rel {' '.join(attrs)} -->\n\n{card.body.strip()}\n"
 
     def _parse(self, key: str, text: str) -> RelationshipCard:
         meta, body = self._parse_meta(text)
-        channel, user_id = self.split_key(meta.get("key", key))
+        resolved_key = meta.get("key", key)
+        channel, user_id = self.split_key(resolved_key)
+        channel = meta.get("channel", channel)
+        user_id = meta.get("user_id", user_id)
         return RelationshipCard(
-            key=meta.get("key", key),
+            key=resolved_key,
             body=body.strip(),
-            display_name=meta.get("name", ""),
-            channel=meta.get("channel", channel),
-            user_id=meta.get("user_id", user_id),
+            display_name=human_display_name(
+                meta.get("name", ""),
+                user_id=user_id,
+                key=resolved_key,
+            ),
+            channel=channel,
+            user_id=user_id,
             updated=meta.get("updated", ""),
         )
 

@@ -224,6 +224,52 @@ class WeixinAdapterTests(unittest.TestCase):
         metadata = agent.message_handler.store_model_reply.await_args.kwargs["metadata"]
         self.assertEqual(metadata["subconscious"]["source"], "subconscious")
 
+    def test_per_user_lock_keeps_overlapping_messages_serialized(self):
+        async def run_test():
+            with tempfile.TemporaryDirectory() as tmpdir:
+                adapter, agent, _client, _state = self._adapter(tmpdir)
+                started = []
+                finished = []
+                first_started = asyncio.Event()
+                release_first = asyncio.Event()
+
+                async def slow_handle(message, user_id):
+                    started.append(message["message_id"])
+                    if message["message_id"] == 201:
+                        first_started.set()
+                        await release_first.wait()
+                    finished.append(message["message_id"])
+
+                adapter._handle_dm = slow_handle
+
+                def message(message_id):
+                    return {
+                        "message_id": message_id,
+                        "from_user_id": "owner@im.wechat",
+                        "to_user_id": "bot@im.bot",
+                        "message_type": 1,
+                        "context_token": "ctx-owner",
+                        "item_list": [{"type": 1, "text_item": {"text": "hello"}}],
+                    }
+
+                first = asyncio.create_task(adapter._process_message(message(201)))
+                await first_started.wait()
+                second = asyncio.create_task(adapter._process_message(message(202)))
+                third = asyncio.create_task(adapter._process_message(message(203)))
+                await asyncio.sleep(0)
+
+                self.assertEqual(started, [201])
+                self.assertEqual(finished, [])
+                release_first.set()
+                await asyncio.gather(first, second, third)
+                return started, finished, agent.chat_calls
+
+        started, finished, chat_calls = asyncio.run(run_test())
+
+        self.assertEqual(started, [201, 202, 203])
+        self.assertEqual(finished, [201, 202, 203])
+        self.assertEqual(chat_calls, [])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1757,6 +1757,39 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(assistant_msg.role, RoleType.ASSISTANT)
         self.assertEqual(assistant_msg.channel, "api")
 
+    async def test_chat_events_persists_real_sender_name_not_platform_id(self):
+        storage = InMemoryMessageStorage()
+        model_client = CapturingModelClient([
+            (ReplyType.SIMPLE_REPLY, "ok"),
+            (ReplyType.SIMPLE_REPLY, "ok"),
+        ])
+        agent = self._build_agent(storage=storage, model_client=model_client)
+
+        async for _event in Agent.chat_events(
+            agent,
+            user_message="早啊",
+            user_id="ou_new",
+            channel="feishu",
+            sender_name="Alice",
+            stream=False,
+        ):
+            pass
+
+        self.assertEqual(storage.messages[0].metadata.get("sender_name"), "Alice")
+
+        storage.messages.clear()
+        async for _event in Agent.chat_events(
+            agent,
+            user_message="早啊",
+            user_id="ou_new",
+            channel="feishu",
+            sender_name="ou_new",
+            stream=False,
+        ):
+            pass
+
+        self.assertNotIn("sender_name", storage.messages[0].metadata)
+
     async def test_chat_updates_last_interaction_file(self):
         storage = InMemoryMessageStorage()
         model_client = CapturingModelClient([(ReplyType.SIMPLE_REPLY, "ok")])
@@ -2084,6 +2117,26 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(storage.messages[0].metadata["speaker_id"], "bob")
         self.assertEqual(model_client.calls, [])
         self.assertEqual(memory_handler.experience_messages, storage.messages)
+
+    async def test_observe_prefers_stable_sender_id_over_display_name(self):
+        storage = InMemoryMessageStorage()
+        memory_handler = FakeMemoryHandler()
+        model_client = CapturingModelClient([])
+        agent = self._build_agent(
+            storage=storage,
+            model_client=model_client,
+            memory_handler=memory_handler,
+        )
+
+        await Agent.observe(
+            agent,
+            context="Alice said hello in the group.",
+            source="feishu",
+            event_type="group_message",
+            metadata={"sender_id": "ou_user", "sender_name": "Alice"},
+        )
+
+        self.assertEqual(storage.messages[0].sender_id, "ou_user")
 
 
 class ToolExecutorTransientTests(unittest.IsolatedAsyncioTestCase):

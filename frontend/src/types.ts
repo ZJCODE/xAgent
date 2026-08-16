@@ -479,6 +479,7 @@ export interface MessageItem {
   type: string;
   content: string;
   sender_id?: string;
+  sender_name?: string | null;
   recipient_id?: string;
   timestamp?: number;
   metadata?: Record<string, unknown>;

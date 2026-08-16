@@ -239,7 +239,9 @@ class MessageHandler:
 
         # --- Runtime context ---
         transcript_lines.append(AgentConfig.DEFAULT_SYSTEM_PROMPT.rstrip())
-        transcript_lines.append(f"- Current speaker: {current_user_id}")
+        transcript_lines.append(
+            f"- Current speaker: {MessageHandler._speaker_address_for(messages, current_user_id)}"
+        )
         transcript_lines.append(f"- Date: {time.strftime('%Y-%m-%d')}")
         transcript_lines.append("")
 
@@ -343,11 +345,16 @@ class MessageHandler:
             inbox_kind = str(
                 (current_message.metadata or {}).get(INBOX_KIND_METADATA_KEY) or ""
             ).strip()
+        speaker_label = MessageHandler._speaker_address_for(
+            conversation_messages,
+            current_user_id,
+            current_message=current_message,
+        )
         ctx = PromptAssembleContext(
             relationship_context=relationship_context,
             memory_context=memory_context,
             recent_experience=recent_experience,
-            current_user_id=current_user_id,
+            current_user_id=speaker_label,
             current_time=resolved_current_time,
             channel_instructions=channel_instructions,
             task_mode=task_mode,
@@ -517,9 +524,12 @@ class MessageHandler:
     @staticmethod
     def _format_context_event_header(message: Message) -> str:
         header = f"[ambient context][timestamp={MessageHandler._format_transcript_timestamp(message)}]"
-        speaker = MessageHandler._sanitize_marker_field(message.sender_id)
-        if speaker:
-            header += f"[from={speaker}]"
+        if message.sender_id or str((message.metadata or {}).get("sender_name") or "").strip():
+            speaker = MessageHandler._sanitize_marker_field(
+                MessageHandler._format_transcript_speaker(message)
+            )
+            if speaker:
+                header += f"[from={speaker}]"
         if message.channel:
             header += f"[channel={message.channel}]"
         if message.room_name:
@@ -536,7 +546,9 @@ class MessageHandler:
             if target:
                 header += f"[for={target}]"
         else:
-            speaker = MessageHandler._format_transcript_speaker(message)
+            speaker = MessageHandler._sanitize_marker_field(
+                MessageHandler._format_transcript_speaker(message)
+            )
             header = f"[speaker={speaker}][timestamp={timestamp}]"
         if message.channel:
             header += f"[channel={message.channel}]"
@@ -670,7 +682,57 @@ class MessageHandler:
     def _format_transcript_speaker(message: Message) -> str:
         if message.role == RoleType.ASSISTANT:
             return "ME"
-        return message.sender_id or message.role.value
+        from ...components.memory import format_speaker_label
+
+        metadata = message.metadata or {}
+        return format_speaker_label(
+            message.sender_id or "",
+            str(metadata.get("sender_name") or ""),
+        ) or message.role.value
+
+    @staticmethod
+    def _speaker_display_name(
+        messages: List[Message],
+        user_id: str,
+        current_message: Optional[Message] = None,
+    ) -> str:
+        source = current_message
+        if source is None or (source.sender_id or "") != user_id:
+            for message in reversed(messages or []):
+                if message.role == RoleType.USER and (message.sender_id or "") == user_id:
+                    source = message
+                    break
+        if source is None:
+            return ""
+        return str((source.metadata or {}).get("sender_name") or "")
+
+    @staticmethod
+    def _speaker_label_for(
+        messages: List[Message],
+        user_id: str,
+        current_message: Optional[Message] = None,
+    ) -> str:
+        """Stable id plus display name when the current speaker has one."""
+        from ...components.memory import format_speaker_label
+
+        return format_speaker_label(
+            user_id,
+            MessageHandler._speaker_display_name(messages, user_id, current_message),
+        ) or user_id
+
+    @staticmethod
+    def _speaker_address_for(
+        messages: List[Message],
+        user_id: str,
+        current_message: Optional[Message] = None,
+    ) -> str:
+        """Name to address in the current-task prompt — display name, else id."""
+        from ...components.memory import speaker_address_name
+
+        return speaker_address_name(
+            user_id,
+            MessageHandler._speaker_display_name(messages, user_id, current_message),
+        ) or user_id
 
     @staticmethod
     def _latest_current_user_message(

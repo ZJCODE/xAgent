@@ -23,6 +23,17 @@ class ChatTurnRequestTests(unittest.TestCase):
         self.assertNotIn("attachments", kwargs)
         self.assertNotIn("image_source", kwargs)
         self.assertNotIn("stream", kwargs)
+        self.assertNotIn("sender_name", kwargs)
+
+    def test_to_chat_kwargs_includes_sender_name_when_present(self):
+        request = ChatTurnRequest(
+            user_message="hello",
+            user_id="ou_user",
+            channel="feishu",
+            sender_name="Alice",
+        )
+        kwargs = request.to_chat_kwargs()
+        self.assertEqual(kwargs["sender_name"], "Alice")
 
     def test_feishu_group_builder_shape_matches_chat_events(self):
         request = ChatTurnRequest(

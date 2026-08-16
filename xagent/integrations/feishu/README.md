@@ -172,12 +172,13 @@ still ignores messages sent by the current bot/app itself.
 > after scope changes. If `advanced.policy` is set, that explicit SDK policy
 > takes precedence over the adapter's default receive-all group policy.
 
-Before a message reaches xAgent, the adapter resolves Feishu sender IDs with
-the official `client.contact.v3.user.get(request)` API and passes the display
-name into `agent.chat`. This keeps internal IDs such as `ou_xxx` inside the
-Feishu layer instead of exposing them to prompts or memory keys. If the contact
-lookup is unavailable, the adapter falls back to a display name already present
-on the SDK event, then to a generic `Feishu User` label.
+Before a message reaches xAgent, the adapter uses the stable Feishu sender id
+(usually `open_id`) as `user_id` for `agent.chat`, memory keys, and contacts.
+Display names are resolved with `client.contact.v3.user.get(request)` and kept
+as annotation only (`sender_name`, room context). If the contact lookup is
+unavailable, the adapter falls back to a display name already present on the
+SDK event, then to a generic `Feishu User` label. The stable sender id is
+still used as `user_id` even when the display name cannot be resolved.
 
 For messages sent by other Feishu apps or bot agents, the adapter resolves the
 sender's `app_id` with `client.application.v6.application.get(request)`. Querying

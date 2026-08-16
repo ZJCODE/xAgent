@@ -76,8 +76,18 @@ class ScheduledTaskDisplayContentTests(unittest.TestCase):
         item = message_item(message)
         self.assertEqual(item["role"], "user")
         self.assertEqual(item["content"], "ping the room")
+        self.assertIsNone(item["sender_name"])
         self.assertEqual(item["metadata"][INBOX_KIND_METADATA_KEY], "scheduled_turn")
         self.assertEqual(item["metadata"][TASK_CONTENT_METADATA_KEY], "ping the room")
+
+    def test_message_item_exposes_feishu_sender_name(self):
+        message = Message.create("早啊", role=RoleType.USER, sender_id="ou_user")
+        message.channel = "feishu"
+        message.metadata = {"sender_name": "Jun"}
+        item = message_item(message)
+        self.assertEqual(item["sender_id"], "ou_user")
+        self.assertEqual(item["sender_name"], "Jun")
+        self.assertEqual(item["channel"], "feishu")
 
 
 class AgentInboxTests(unittest.IsolatedAsyncioTestCase):
