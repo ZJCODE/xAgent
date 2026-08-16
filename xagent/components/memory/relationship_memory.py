@@ -11,6 +11,10 @@ This class owns file layout and I/O only. Deciding *what* a relationship
 contains and *when* to update it lives in higher layers (journal service and
 memory handler), mirroring how :class:`MarkdownMemory` separates storage from
 policy.
+
+An empty stub file may exist before the journal LLM has anything durable to
+record. The file's presence is the identity record; the body is the derived
+projection and can stay blank until the next content update.
 """
 
 from __future__ import annotations
@@ -198,6 +202,21 @@ class RelationshipStore:
             await asyncio.to_thread(self._write_atomic_sync, path, rendered)
         logger.debug("Wrote relationship card: %s (%d chars)", path, len(card.body))
         return path
+
+    async def ensure_card(self, card: RelationshipCard) -> bool:
+        """Create a stub file if this person has no card yet.
+
+        Existing files are left untouched, including empty stubs. Returns True
+        when a new file was written.
+        """
+        path = self.card_path(card.key)
+        async with self._write_lock:
+            if await asyncio.to_thread(path.is_file):
+                return False
+            rendered = self._render(card)
+            await asyncio.to_thread(self._write_atomic_sync, path, rendered)
+        logger.debug("Created relationship stub: %s", path)
+        return True
 
     # ------------------------------------------------------------------
     # Render / parse

@@ -611,6 +611,8 @@ class Agent:
                 yield {"type": "done"}
                 return
 
+            await self._ensure_relationship_stubs([user_msg])
+
             tool_specs, instructions, iteration_messages, input_messages = await self._build_turn_context(
                 msg_handler=msg_handler,
                 user_msg=user_msg,
@@ -1067,6 +1069,17 @@ class Agent:
         self._schedule_experience_write(
             messages=[*triggering_messages, assistant_msg],
         )
+
+    async def _ensure_relationship_stubs(self, messages: List[Message]) -> None:
+        """Create empty relationship files as soon as a person first speaks."""
+        memory_handler = getattr(self, "memory_handler", None)
+        ensure = getattr(memory_handler, "ensure_relationship_stubs", None)
+        if not callable(ensure):
+            return
+        try:
+            await ensure(messages)
+        except Exception as exc:
+            logger.warning("Failed to ensure relationship stubs: %s", exc, exc_info=True)
 
     def _schedule_experience_write(
         self,

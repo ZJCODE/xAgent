@@ -163,6 +163,44 @@ class RelationshipStoreTests(unittest.IsolatedAsyncioTestCase):
         await self.store.write_card(RelationshipCard(key="weixin:b", body="y"))
         self.assertEqual(set(await self.store.list_keys()), {"feishu:a", "weixin:b"})
 
+    async def test_ensure_card_creates_empty_stub_once(self):
+        created = await self.store.ensure_card(
+            RelationshipCard(
+                key="feishu:ou_1",
+                body="",
+                display_name="Alice",
+                channel="feishu",
+                user_id="ou_1",
+                updated="2026-08-16",
+            )
+        )
+        self.assertTrue(created)
+        path = self.store.root / "feishu" / "ou_1.md"
+        self.assertTrue(path.is_file())
+        loaded = await self.store.read_card("feishu:ou_1")
+        self.assertIsNotNone(loaded)
+        self.assertTrue(loaded.is_empty)
+        self.assertEqual(loaded.display_name, "Alice")
+        self.assertIn("feishu:ou_1", await self.store.list_keys())
+
+        again = await self.store.ensure_card(
+            RelationshipCard(key="feishu:ou_1", body="should not overwrite")
+        )
+        self.assertFalse(again)
+        reloaded = await self.store.read_card("feishu:ou_1")
+        self.assertTrue(reloaded.is_empty)
+
+    async def test_ensure_card_does_not_overwrite_existing_body(self):
+        await self.store.write_card(
+            RelationshipCard(key="feishu:ou_1", body="We already know each other.")
+        )
+        created = await self.store.ensure_card(
+            RelationshipCard(key="feishu:ou_1", body="")
+        )
+        self.assertFalse(created)
+        loaded = await self.store.read_card("feishu:ou_1")
+        self.assertEqual(loaded.body, "We already know each other.")
+
 
 # ----------------------------------------------------------------------
 # JournalLLMService: relationship derivation prompts + parsing
@@ -472,6 +510,65 @@ class MemoryHandlerRelationshipTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("older thread about the trip", context)
         self.assertIn("[user_id: alice]", context)
 
+    async def test_ensure_relationship_stubs_creates_empty_file_without_llm(self):
+        message = Message.create(content="hi", role=RoleType.USER, sender_id="alice")
+        message.channel = "feishu"
+        message.metadata = {"sender_name": "Alice"}
+        llm = _FakeDiaryLLMService()
+        handler = self._make_handler(_FakeMessageStorage([message]), llm)
+
+        await handler.ensure_relationship_stubs([message])
+
+        card = await self.store.read_card("feishu:alice")
+        self.assertIsNotNone(card)
+        self.assertTrue(card.is_empty)
+        self.assertEqual(card.display_name, "Alice")
+        self.assertTrue(self.store.card_path("feishu:alice").is_file())
+        self.assertEqual(llm.relationship_calls, [])
+
+    async def test_ensure_relationship_stubs_does_not_overwrite_existing_card(self):
+        await self.store.write_card(
+            RelationshipCard(
+                key="feishu:alice",
+                body="We already know each other.",
+                display_name="Alice",
+            )
+        )
+        message = Message.create(content="hi again", role=RoleType.USER, sender_id="alice")
+        message.channel = "feishu"
+        handler = self._make_handler(_FakeMessageStorage(), _FakeDiaryLLMService())
+
+        await handler.ensure_relationship_stubs([message])
+
+        card = await self.store.read_card("feishu:alice")
+        self.assertEqual(card.body, "We already know each other.")
+
+    async def test_ensure_relationship_stubs_skips_scheduled_and_missing_channel(self):
+        human = Message.create(content="hi", role=RoleType.USER, sender_id="web_user")
+        human.channel = "api"
+        missing_channel = Message.create(content="later", role=RoleType.USER, sender_id="web_user")
+        work_order = Message.create(
+            content="This scheduled task is now due.",
+            role=RoleType.USER,
+            sender_id="web_user",
+        )
+        work_order.channel = "api"
+        work_order.metadata = {"source": "scheduled_task"}
+        handler = self._make_handler(_FakeMessageStorage(), _FakeDiaryLLMService())
+
+        await handler.ensure_relationship_stubs([missing_channel, work_order, human])
+
+        self.assertEqual(await self.store.list_keys(), ["api:web_user"])
+
+    async def test_get_relationship_context_skips_empty_stub(self):
+        await self.store.write_card(
+            RelationshipCard(key="feishu:alice", body="", display_name="Alice")
+        )
+        handler = self._make_handler(_FakeMessageStorage(), _FakeDiaryLLMService())
+
+        context = await handler.get_relationship_context(speaker_keys=["feishu:alice"])
+        self.assertEqual(context, "")
+
     async def test_maintenance_derives_relationship_cards(self):
         messages = [
             Message.create(content=f"message {index}", role=RoleType.USER, sender_id="alice")
@@ -490,6 +587,25 @@ class MemoryHandlerRelationshipTests(unittest.IsolatedAsyncioTestCase):
         card = await self.store.read_card("feishu:alice")
         self.assertIsNotNone(card)
         self.assertIn("Alice and I talk often.", card.body)
+
+    async def test_maintenance_keeps_stub_when_llm_returns_nothing(self):
+        messages = [
+            Message.create(content=f"message {index}", role=RoleType.USER, sender_id="alice")
+            for index in range(20)
+        ]
+        for message in messages:
+            message.channel = "feishu"
+        storage = _FakeMessageStorage(messages)
+        llm = _FakeDiaryLLMService(cards={})
+        handler = self._make_handler(storage, llm, journal_batch_size=20)
+
+        wrote = await handler.run_maintenance(force=True)
+        self.assertTrue(wrote)
+        self.assertEqual(len(llm.relationship_calls), 1)
+
+        card = await self.store.read_card("feishu:alice")
+        self.assertIsNotNone(card)
+        self.assertTrue(card.is_empty)
 
 
 # ----------------------------------------------------------------------

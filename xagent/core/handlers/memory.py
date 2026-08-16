@@ -351,6 +351,7 @@ class MemoryHandler:
             ):
                 return False
 
+        await self.ensure_relationship_stubs(recent_messages)
         await self._update_relationship_cards(recent_messages, new_records)
 
         if not await self._commit_processed_message_id(end_inclusive):
@@ -378,6 +379,55 @@ class MemoryHandler:
     # ------------------------------------------------------------------
     # Relationship cards (derived projection over the diary)
     # ------------------------------------------------------------------
+
+    async def ensure_relationship_stubs(self, messages: List[Message]) -> None:
+        """Create empty relationship files for newly seen people.
+
+        Card *content* still follows journal maintenance cadence. The stub
+        only records that this person has spoken, so the file exists from
+        the first inbound message even when there is nothing durable yet.
+        """
+        if self.relationship_store is None or not messages:
+            return
+        try:
+            participants = self._extract_participants(messages)
+            if not participants:
+                return
+
+            from ...components.memory import RelationshipCard, human_display_name
+
+            today_str = date.today().isoformat()
+            created: list[str] = []
+            for participant in participants:
+                key = str(participant.get("key") or "").strip()
+                if not key:
+                    continue
+                user_id = str(participant.get("user_id") or "")
+                display_name = human_display_name(
+                    participant.get("display_name"),
+                    user_id=user_id,
+                    key=key,
+                )
+                wrote = await self.relationship_store.ensure_card(
+                    RelationshipCard(
+                        key=key,
+                        body="",
+                        display_name=display_name,
+                        channel=str(participant.get("channel") or ""),
+                        user_id=user_id,
+                        updated=today_str,
+                    )
+                )
+                if wrote:
+                    created.append(key)
+            if created:
+                logger.info(
+                    "Created %d relationship stub(s): %s",
+                    len(created),
+                    ", ".join(created),
+                )
+        except Exception as exc:
+            logger.warning("Relationship stub create failed: %s", exc, exc_info=True)
 
     async def _update_relationship_cards(
         self,

@@ -157,6 +157,8 @@ class AgentConfig:
     # ------------------------------------------------------------------
     # Relationship memory (per-person cards derived from the diary)
     # ------------------------------------------------------------------
+    # Empty stub files are created on the first inbound message. Card content
+    # is still derived during journal maintenance (count / idle cadence).
     # Max relationship cards injected into a single turn (speaker + others).
     RELATIONSHIP_MAX_CARDS_PER_TURN = 4
     # Max cards summarised for the subconscious thinking layer.

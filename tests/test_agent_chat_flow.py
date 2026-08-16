@@ -71,11 +71,15 @@ class FakeToolManager:
 class FakeMemoryHandler:
     def __init__(self):
         self.experience_messages = None
+        self.relationship_stub_messages = None
         self.maintenance_calls = 0
         self.maintenance_force = None
 
     async def get_recent_context(self):
         return ""
+
+    async def ensure_relationship_stubs(self, messages):
+        self.relationship_stub_messages = list(messages)
 
     def schedule_experience_write(self, messages):
         self.experience_messages = messages
@@ -1789,6 +1793,36 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
             pass
 
         self.assertNotIn("sender_name", storage.messages[0].metadata)
+
+    async def test_chat_events_ensures_relationship_stub_on_first_inbound_message(self):
+        storage = InMemoryMessageStorage()
+        memory_handler = FakeMemoryHandler()
+        model_client = CapturingModelClient([
+            (ReplyType.SIMPLE_REPLY, "ok"),
+        ])
+        agent = self._build_agent(
+            storage=storage,
+            model_client=model_client,
+            memory_handler=memory_handler,
+        )
+
+        async for _event in Agent.chat_events(
+            agent,
+            user_message="早啊",
+            user_id="ou_new",
+            channel="feishu",
+            sender_name="Alice",
+            stream=False,
+        ):
+            pass
+
+        self.assertIsNotNone(memory_handler.relationship_stub_messages)
+        self.assertEqual(len(memory_handler.relationship_stub_messages), 1)
+        stub_msg = memory_handler.relationship_stub_messages[0]
+        self.assertEqual(stub_msg.sender_id, "ou_new")
+        self.assertEqual(stub_msg.channel, "feishu")
+        self.assertEqual(stub_msg.content, "早啊")
+        self.assertIs(stub_msg, storage.messages[0])
 
     async def test_chat_updates_last_interaction_file(self):
         storage = InMemoryMessageStorage()
