@@ -19,6 +19,10 @@ from ...utils.search_terms import normalize_terms, score_text
 MessageBatch = Union[Message, Sequence[Message]]
 
 
+class IncompatibleMessageSchemaError(RuntimeError):
+    """Raised when an existing messages table cannot be used without data loss."""
+
+
 class MessageStorageConfig:
     """Configuration constants for ``MessageStorage``."""
 
@@ -67,15 +71,15 @@ class MessageStorage:
 
             if not columns:
                 self._create_current_schema(connection)
-            elif columns == MessageStorageConfig.CURRENT_COLUMNS:
+            elif MessageStorageConfig.CURRENT_COLUMNS.issubset(columns):
                 self._ensure_current_indexes(connection)
             else:
-                self.logger.warning(
-                    "Unexpected messages schema at %s; recreating storage table.",
-                    self.path,
+                raise IncompatibleMessageSchemaError(
+                    f"Refusing to open messages store at {self.path}: "
+                    f"table {MessageStorageConfig.TABLE_NAME!r} has columns {sorted(columns)}, "
+                    f"expected at least {sorted(MessageStorageConfig.CURRENT_COLUMNS)}. "
+                    "The existing table was left untouched."
                 )
-                connection.execute(f"DROP TABLE IF EXISTS {MessageStorageConfig.TABLE_NAME}")
-                self._create_current_schema(connection)
 
             connection.commit()
 

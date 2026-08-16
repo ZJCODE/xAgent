@@ -2085,6 +2085,26 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(model_client.calls, [])
         self.assertEqual(memory_handler.experience_messages, storage.messages)
 
+    async def test_observe_prefers_stable_sender_id_over_display_name(self):
+        storage = InMemoryMessageStorage()
+        memory_handler = FakeMemoryHandler()
+        model_client = CapturingModelClient([])
+        agent = self._build_agent(
+            storage=storage,
+            model_client=model_client,
+            memory_handler=memory_handler,
+        )
+
+        await Agent.observe(
+            agent,
+            context="Alice said hello in the group.",
+            source="feishu",
+            event_type="group_message",
+            metadata={"sender_id": "ou_user", "sender_name": "Alice"},
+        )
+
+        self.assertEqual(storage.messages[0].sender_id, "ou_user")
+
 
 class ToolExecutorTransientTests(unittest.IsolatedAsyncioTestCase):
     async def test_execute_single_does_not_persist_tool_messages(self):

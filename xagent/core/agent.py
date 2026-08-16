@@ -868,8 +868,8 @@ class Agent:
         event_metadata.setdefault(INBOX_KIND_METADATA_KEY, InboxKind.OBSERVATION.value)
         sender_id = (
             str(user_id or "").strip()
-            or str(event_metadata.get("sender_name") or "").strip()
             or str(event_metadata.get("sender_id") or "").strip()
+            or str(event_metadata.get("sender_name") or "").strip()
             or None
         )
         event_msg = await self.message_handler.store_context_event(

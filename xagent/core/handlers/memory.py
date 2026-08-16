@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 from datetime import date, timedelta
 from pathlib import Path
@@ -789,7 +790,12 @@ class MemoryHandler:
     def _write_state_sync(self, cursor: int) -> None:
         path = self._state_path()
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(str(int(cursor)), encoding="utf-8")
+        tmp_path = path.with_name(f".{path.name}.tmp")
+        with tmp_path.open("w", encoding="utf-8") as handle:
+            handle.write(str(int(cursor)))
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, path)
 
     def _acquire_process_lock_sync(self) -> IO[str]:
         path = self._lock_path()

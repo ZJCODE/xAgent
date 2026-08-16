@@ -143,43 +143,63 @@ def _contacts_process_lock(contacts_file: Path):
         lock_handle.close()
 
 
+def _contact_identity_aliases(user_id: str, target: Dict[str, Any]) -> set[str]:
+    aliases = {str(user_id or "").strip()}
+    for key in ("sender_id", "sender_name", "display_name", "user_id"):
+        value = str((target or {}).get(key) or "").strip()
+        if value:
+            aliases.add(value)
+    aliases.discard("")
+    return aliases
+
+
+def _contacts_match_identity(
+    contact: ContactEntry,
+    channel: str,
+    user_id: str,
+    aliases: set[str],
+) -> bool:
+    if contact.channel != channel:
+        return False
+    if contact.user_id == user_id or contact.user_id in aliases:
+        return True
+    target_sender = str((contact.target or {}).get("sender_id") or "").strip()
+    return bool(target_sender) and target_sender == user_id
+
+
 def upsert_contact(
     contacts_file: Path,
     channel: str,
     user_id: str,
     target: Dict[str, Any],
 ) -> None:
-    """Record or update a contact after a user interaction."""
+    """Record or update a contact after a user interaction.
+
+    A later stable id (for example a Feishu ``open_id``) adopts an older
+    display-name row on the same channel instead of creating a second person.
+    """
     with _contacts_process_lock(contacts_file):
         contacts = load_contacts(contacts_file)
         now_iso = datetime.now().replace(microsecond=0).isoformat(sep=" ")
-        updated = False
-        for c in contacts:
-            if c.channel == channel and c.user_id == user_id:
-                # Update in place by rebuilding the list
-                updated = True
-                break
-        if updated:
-            contacts = [
-                ContactEntry(
-                    channel=channel,
-                    user_id=user_id,
-                    target=dict(target),
-                    last_seen=now_iso,
-                    interaction_count=c.interaction_count + 1,
-                )
-                if c.channel == channel and c.user_id == user_id
-                else c
-                for c in contacts
-            ]
-        else:
-            contacts.append(ContactEntry(
-                channel=channel,
-                user_id=user_id,
-                target=dict(target),
-                last_seen=now_iso,
-                interaction_count=1,
-            ))
+        aliases = _contact_identity_aliases(user_id, target)
+        matched = [
+            contact
+            for contact in contacts
+            if _contacts_match_identity(contact, channel, user_id, aliases)
+        ]
+        prior_count = sum(contact.interaction_count for contact in matched)
+        contacts = [
+            contact
+            for contact in contacts
+            if not _contacts_match_identity(contact, channel, user_id, aliases)
+        ]
+        contacts.append(ContactEntry(
+            channel=channel,
+            user_id=user_id,
+            target=dict(target),
+            last_seen=now_iso,
+            interaction_count=prior_count + 1,
+        ))
         save_contacts(contacts_file, contacts)
 
 
@@ -796,12 +816,11 @@ class SubconsciousLoop:
             exact_tokens, _partial = token_map[id(contact)]
             if hint in exact_tokens:
                 return contact
-        # -- pass 2: partial match (hint contains name, or name contains
-        #    hint).  The hint may carry channel annotations such as
-        #    "Telos (feishu)", and user / sender names may be prefixes.
+        # -- pass 2: the hint may wrap an exact token ("Telos (feishu)").
+        # A short hint must not match a longer name ("李" must not hit "李明").
         for contact in contacts:
             _exact, partial_tokens = token_map[id(contact)]
-            if any(token and (hint in token or token in hint) for token in partial_tokens):
+            if any(token and token in hint for token in partial_tokens):
                 return contact
         return None
 

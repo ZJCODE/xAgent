@@ -12,10 +12,10 @@ Routing is intentionally small:
 * Any other chat type is ignored.
 
 Before a Feishu message reaches the agent, the sender ID is resolved to a
-display name through the official contact API. By default, internal
-``ou_`` / ``on_`` IDs stay inside this adapter and are not passed into
-``agent.chat``. Group room context renders speakers as ``name(id)``
-when an ID is available.
+display name through the official contact API. The stable Feishu sender
+id (usually ``open_id``) is the ``user_id`` passed into ``agent.chat``;
+the display name is annotation only. Group room context renders speakers
+as ``name(id)`` when an ID is available.
 
 Group replies are sent as plain replies anchored to the source message
 (``reply_to``); never as Feishu topic/thread replies. p2p replies are sent
@@ -538,7 +538,7 @@ class FeishuAdapter:
             await self._handle_chat(
                 chat_id=chat_id,
                 message_id=message_id,
-                user_id=sender_name,
+                user_id=self._stable_user_id(sender_id, sender_name),
                 sender_id=sender_id,
                 sender_name=sender_name,
                 text=text,
@@ -704,7 +704,7 @@ class FeishuAdapter:
         await self._handle_chat(
             chat_id=chat_id,
             message_id=message_id,
-            user_id=sender_name,
+            user_id=self._stable_user_id(sender_id, sender_name),
             sender_id=sender_id,
             sender_name=sender_name,
             text=text,
@@ -746,6 +746,7 @@ class FeishuAdapter:
         room_name = await self._resolve_room_name(chat_id, raw_msg)
         if room_name:
             metadata["room_name"] = room_name
+        await self._adopt_feishu_identity(sender_id, sender_name)
         await observer(
             context=context,
             source="feishu",
@@ -753,7 +754,7 @@ class FeishuAdapter:
             metadata=metadata,
             room_name=room_name,
             channel="feishu",
-            user_id=sender_name or sender_id,
+            user_id=self._stable_user_id(sender_id, sender_name),
         )
 
     async def _decide_group_participation(
@@ -1892,6 +1893,35 @@ class FeishuAdapter:
             self._user_resolver = FeishuUserResolver(self._channel, self.logger)
         return self._user_resolver
 
+    @staticmethod
+    def _stable_user_id(sender_id: str, sender_name: str) -> str:
+        """Prefer the Feishu sender id; display names are never a stable key."""
+        stable = (sender_id or "").strip()
+        if stable:
+            return stable
+        return (sender_name or "").strip() or FEISHU_USER_FALLBACK_NAME
+
+    async def _adopt_feishu_identity(self, sender_id: str, sender_name: str) -> None:
+        """Move a display-name relationship card onto the stable sender id."""
+        user_id = self._stable_user_id(sender_id, sender_name)
+        display_name = (sender_name or "").strip()
+        if not user_id or not display_name or user_id == display_name:
+            return
+        store = getattr(self.agent, "relationship_store", None)
+        rekey = getattr(store, "rekey_card", None)
+        if not callable(rekey):
+            return
+        try:
+            result = rekey(
+                f"feishu:{display_name}",
+                f"feishu:{user_id}",
+                display_name=display_name,
+            )
+            if inspect.isawaitable(result):
+                await result
+        except Exception:
+            self.logger.debug("Failed to rekey Feishu relationship card", exc_info=True)
+
     async def _resolve_sender_name(
         self,
         sender_id: str,
@@ -2219,6 +2249,7 @@ class FeishuAdapter:
         )
         # Record contact for subconscious thought routing
         try:
+            await self._adopt_feishu_identity(sender_id, sender_name)
             upsert_contact(
                 self._contacts_file,
                 channel="feishu",

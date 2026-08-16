@@ -1,8 +1,9 @@
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
 
-from xagent.components.message import MessageStorage
+from xagent.components.message import IncompatibleMessageSchemaError, MessageStorage
 from xagent.schemas import Message, MessageType, RoleType
 
 
@@ -79,3 +80,48 @@ class MessageStorageTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(messages[0].metadata["event_type"], "presence")
             self.assertEqual(messages[0].metadata["memory_policy"], "always")
             self.assertEqual(messages[0].metadata["storage_cursor"], 1)
+
+    async def test_unexpected_schema_refuses_to_drop_existing_rows(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "messages.sqlite3"
+            with sqlite3.connect(str(db_path)) as connection:
+                connection.execute(
+                    "CREATE TABLE messages (id INTEGER PRIMARY KEY, payload TEXT NOT NULL)"
+                )
+                connection.execute(
+                    "INSERT INTO messages (payload) VALUES (?)",
+                    ("keep-me",),
+                )
+                connection.commit()
+
+            with self.assertRaises(IncompatibleMessageSchemaError):
+                MessageStorage(path=str(db_path))
+
+            with sqlite3.connect(str(db_path)) as connection:
+                rows = connection.execute("SELECT payload FROM messages").fetchall()
+            self.assertEqual([row[0] for row in rows], ["keep-me"])
+
+    async def test_compatible_superset_schema_keeps_existing_rows(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "messages.sqlite3"
+            message = Message.create("kept", role=RoleType.USER, sender_id="alice")
+            with sqlite3.connect(str(db_path)) as connection:
+                connection.execute(
+                    """
+                    CREATE TABLE messages (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        timestamp REAL NOT NULL,
+                        message_json TEXT NOT NULL,
+                        extra TEXT
+                    )
+                    """
+                )
+                connection.execute(
+                    "INSERT INTO messages (timestamp, message_json, extra) VALUES (?, ?, ?)",
+                    (message.timestamp, message.model_dump_json(), "note"),
+                )
+                connection.commit()
+
+            storage = MessageStorage(path=str(db_path))
+            messages = await storage.get_messages(10)
+            self.assertEqual([item.content for item in messages], ["kept"])

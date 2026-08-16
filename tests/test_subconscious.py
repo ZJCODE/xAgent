@@ -86,6 +86,26 @@ class ContactManagementTests(unittest.TestCase):
             self.assertEqual(loaded[0].interaction_count, 2)
             self.assertEqual(loaded[0].target["extra"], "value")
 
+    def test_upsert_contact_adopts_display_name_row_onto_stable_id(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            contacts_file = Path(tmpdir) / "contacts.json"
+            upsert_contact(
+                contacts_file,
+                channel="feishu",
+                user_id="Alice",
+                target={"chat_id": "oc_1", "sender_name": "Alice"},
+            )
+            upsert_contact(
+                contacts_file,
+                channel="feishu",
+                user_id="ou_1",
+                target={"chat_id": "oc_1", "sender_id": "ou_1", "sender_name": "Alice"},
+            )
+            loaded = load_contacts(contacts_file)
+            self.assertEqual(len(loaded), 1)
+            self.assertEqual(loaded[0].user_id, "ou_1")
+            self.assertEqual(loaded[0].interaction_count, 2)
+
     def test_upsert_contact_different_channels_independent(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             contacts_file = Path(tmpdir) / "contacts.json"
@@ -305,6 +325,25 @@ class SubconsciousLoopTests(unittest.TestCase):
         self.assertEqual(
             SubconsciousLoop._pick_recipient(contacts, "web_user").user_id,
             "web_user",
+        )
+
+    def test_pick_recipient_does_not_let_short_hint_match_longer_name(self):
+        contacts = [
+            ContactEntry(
+                channel="feishu",
+                user_id="ou_liming",
+                target={"sender_name": "李明"},
+                last_seen="2026-08-16 00:00:00",
+            ),
+        ]
+        self.assertIsNone(SubconsciousLoop._pick_recipient(contacts, "李"))
+        self.assertEqual(
+            SubconsciousLoop._pick_recipient(contacts, "李明").user_id,
+            "ou_liming",
+        )
+        self.assertEqual(
+            SubconsciousLoop._pick_recipient(contacts, "李明 (feishu)").user_id,
+            "ou_liming",
         )
 
     def test_record_interaction(self):
