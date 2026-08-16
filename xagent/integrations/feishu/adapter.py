@@ -746,7 +746,6 @@ class FeishuAdapter:
         room_name = await self._resolve_room_name(chat_id, raw_msg)
         if room_name:
             metadata["room_name"] = room_name
-        await self._adopt_feishu_identity(sender_id, sender_name)
         await observer(
             context=context,
             source="feishu",
@@ -1901,27 +1900,6 @@ class FeishuAdapter:
             return stable
         return (sender_name or "").strip() or FEISHU_USER_FALLBACK_NAME
 
-    async def _adopt_feishu_identity(self, sender_id: str, sender_name: str) -> None:
-        """Move a display-name relationship card onto the stable sender id."""
-        user_id = self._stable_user_id(sender_id, sender_name)
-        display_name = (sender_name or "").strip()
-        if not user_id or not display_name or user_id == display_name:
-            return
-        store = getattr(self.agent, "relationship_store", None)
-        rekey = getattr(store, "rekey_card", None)
-        if not callable(rekey):
-            return
-        try:
-            result = rekey(
-                f"feishu:{display_name}",
-                f"feishu:{user_id}",
-                display_name=display_name,
-            )
-            if inspect.isawaitable(result):
-                await result
-        except Exception:
-            self.logger.debug("Failed to rekey Feishu relationship card", exc_info=True)
-
     async def _resolve_sender_name(
         self,
         sender_id: str,
@@ -2249,7 +2227,6 @@ class FeishuAdapter:
         )
         # Record contact for subconscious thought routing
         try:
-            await self._adopt_feishu_identity(sender_id, sender_name)
             upsert_contact(
                 self._contacts_file,
                 channel="feishu",

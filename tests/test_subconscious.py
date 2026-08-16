@@ -86,26 +86,6 @@ class ContactManagementTests(unittest.TestCase):
             self.assertEqual(loaded[0].interaction_count, 2)
             self.assertEqual(loaded[0].target["extra"], "value")
 
-    def test_upsert_contact_adopts_display_name_row_onto_stable_id(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            contacts_file = Path(tmpdir) / "contacts.json"
-            upsert_contact(
-                contacts_file,
-                channel="feishu",
-                user_id="Alice",
-                target={"chat_id": "oc_1", "sender_name": "Alice"},
-            )
-            upsert_contact(
-                contacts_file,
-                channel="feishu",
-                user_id="ou_1",
-                target={"chat_id": "oc_1", "sender_id": "ou_1", "sender_name": "Alice"},
-            )
-            loaded = load_contacts(contacts_file)
-            self.assertEqual(len(loaded), 1)
-            self.assertEqual(loaded[0].user_id, "ou_1")
-            self.assertEqual(loaded[0].interaction_count, 2)
-
     def test_upsert_contact_different_channels_independent(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             contacts_file = Path(tmpdir) / "contacts.json"

@@ -67,45 +67,6 @@ class RelationshipStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(loaded.updated, "2026-06-27")
         self.assertIn("we trust each other", loaded.body)
 
-    async def test_rekey_card_moves_display_name_identity_onto_stable_id(self):
-        await self.store.write_card(
-            RelationshipCard(
-                key="feishu:Alice",
-                body="I know Alice from the office chat.",
-                display_name="Alice",
-                channel="feishu",
-                user_id="Alice",
-            )
-        )
-
-        moved = await self.store.rekey_card(
-            "feishu:Alice",
-            "feishu:ou_1",
-            display_name="Alice",
-        )
-
-        self.assertTrue(moved)
-        self.assertIsNone(await self.store.read_card("feishu:Alice"))
-        loaded = await self.store.read_card("feishu:ou_1")
-        self.assertIsNotNone(loaded)
-        self.assertEqual(loaded.user_id, "ou_1")
-        self.assertEqual(loaded.display_name, "Alice")
-        self.assertIn("office chat", loaded.body)
-
-    async def test_rekey_card_does_not_overwrite_existing_stable_card(self):
-        await self.store.write_card(
-            RelationshipCard(key="feishu:Alice", body="old name card", user_id="Alice", channel="feishu")
-        )
-        await self.store.write_card(
-            RelationshipCard(key="feishu:ou_1", body="stable card", user_id="ou_1", channel="feishu")
-        )
-
-        moved = await self.store.rekey_card("feishu:Alice", "feishu:ou_1")
-
-        self.assertFalse(moved)
-        self.assertEqual((await self.store.read_card("feishu:Alice")).body, "old name card")
-        self.assertEqual((await self.store.read_card("feishu:ou_1")).body, "stable card")
-
     async def test_metadata_escaping_handles_quotes(self):
         card = RelationshipCard(
             key='feishu:ou"x',

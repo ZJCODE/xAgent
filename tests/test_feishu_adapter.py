@@ -607,40 +607,6 @@ class FeishuAdapterTests(unittest.TestCase):
             ["ou_alice_one", "ou_alice_two"],
         )
 
-    def test_direct_chat_rekeys_display_name_relationship_card(self):
-        from xagent.components.memory import RelationshipCard, RelationshipStore
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            agent = _FakeAgent()
-            agent.relationship_store = RelationshipStore(str(Path(tmpdir) / "relationships"))
-            asyncio.run(agent.relationship_store.write_card(
-                RelationshipCard(
-                    key="feishu:Alice",
-                    body="I know Alice from Feishu.",
-                    display_name="Alice",
-                    channel="feishu",
-                    user_id="Alice",
-                )
-            ))
-            adapter = FeishuAdapter(agent=agent, config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret"))
-            adapter._channel = _FakeChannel()
-            adapter._user_resolver = _FakeUserResolver({"ou_alice": "Alice"})
-            adapter._contacts_file = Path(tmpdir) / "contacts.json"
-
-            asyncio.run(adapter._dispatch(SimpleNamespace(
-                chat_type="p2p",
-                chat_id="oc_dm",
-                message_id="om_user",
-                sender_id="ou_alice",
-                content_text="hello",
-            )))
-
-            self.assertIsNone(asyncio.run(agent.relationship_store.read_card("feishu:Alice")))
-            moved = asyncio.run(agent.relationship_store.read_card("feishu:ou_alice"))
-            self.assertIsNotNone(moved)
-            self.assertEqual(moved.user_id, "ou_alice")
-            self.assertEqual(moved.display_name, "Alice")
-
     def test_direct_image_message_downloads_resource_for_vision_chat(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace_dir = Path(tmpdir).resolve()

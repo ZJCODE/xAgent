@@ -140,43 +140,6 @@ class RelationshipStore:
         logger.debug("Wrote relationship card: %s (%d chars)", path, len(card.body))
         return path
 
-    async def rekey_card(
-        self,
-        old_key: str,
-        new_key: str,
-        *,
-        display_name: str = "",
-    ) -> bool:
-        """Move a card from *old_key* to *new_key* when the destination is empty.
-
-        Used to adopt a display-name identity onto a stable channel user id.
-        Returns True when a card was moved.
-        """
-        old_key = (old_key or "").strip()
-        new_key = (new_key or "").strip()
-        if not old_key or not new_key or old_key == new_key:
-            return False
-        old_card = await self.read_card(old_key)
-        if old_card is None or old_card.is_empty:
-            return False
-        existing = await self.read_card(new_key)
-        if existing is not None and not existing.is_empty:
-            return False
-        channel, user_id = self.split_key(new_key)
-        await self.write_card(
-            RelationshipCard(
-                key=new_key,
-                body=old_card.body,
-                display_name=display_name or old_card.display_name,
-                channel=channel or old_card.channel,
-                user_id=user_id or old_card.user_id,
-                updated=old_card.updated,
-            )
-        )
-        async with self._write_lock:
-            await asyncio.to_thread(self._delete_sync, self.card_path(old_key))
-        return True
-
     # ------------------------------------------------------------------
     # Render / parse
     # ------------------------------------------------------------------
@@ -242,13 +205,6 @@ class RelationshipStore:
             return path.read_text(encoding="utf-8", errors="replace")
         except FileNotFoundError:
             return ""
-
-    @staticmethod
-    def _delete_sync(path: Path) -> None:
-        try:
-            path.unlink()
-        except FileNotFoundError:
-            return
 
     @staticmethod
     def _write_atomic_sync(path: Path, content: str) -> None:
