@@ -1759,7 +1759,10 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_chat_events_persists_real_sender_name_not_platform_id(self):
         storage = InMemoryMessageStorage()
-        model_client = CapturingModelClient([(ReplyType.SIMPLE_REPLY, "ok")])
+        model_client = CapturingModelClient([
+            (ReplyType.SIMPLE_REPLY, "ok"),
+            (ReplyType.SIMPLE_REPLY, "ok"),
+        ])
         agent = self._build_agent(storage=storage, model_client=model_client)
 
         async for _event in Agent.chat_events(
