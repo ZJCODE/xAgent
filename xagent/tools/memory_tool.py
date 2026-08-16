@@ -64,8 +64,8 @@ def create_search_memory_tool(
         ),
         param_descriptions={
             "query": (
-                "List of verbatim search terms or short phrases (e.g. [\"Jun\", \"摄影\"] or "
-                "[\"三体\"]). Avoid synonym bags like [\"喜欢\", \"爱好\", \"兴趣\"]. "
+                "Concrete terms likely to appear in memory "
+                "(e.g. [\"Jun\", \"hiking\"], not [\"hobby\", \"interest\", \"pastime\"]). "
                 "Leave empty for date-only reads."
             ),
             "date": "Date or range: YYYY-MM-DD or YYYY-MM-DD to YYYY-MM-DD.",
