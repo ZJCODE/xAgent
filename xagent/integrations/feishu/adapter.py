@@ -219,7 +219,6 @@ class FeishuDeliverySession:
         if not chat_id:
             return DeliveryAck(accepted=False, error="missing chat_id")
         is_group = bool(self.context.target.get("is_group"))
-        source = str((self.context.metadata or {}).get("source") or "outbound")
         self._sent += 1
         meta = self.context.metadata or {}
         task_id = str(meta.get("task_id") or "").strip()
@@ -229,9 +228,14 @@ class FeishuDeliverySession:
             if self._sent > 1:
                 uuid_message_id = f"{uuid_message_id}:{self._sent}"
         else:
-            uuid_message_id = f"{source}:{task_id or self.context.user_id}:{self._sent}"
+            item_id = str((self.context.metadata or {}).get("item_id") or "").strip()
+            source = str((self.context.metadata or {}).get("source") or "outbound").strip() or "outbound"
+            if item_id:
+                uuid_message_id = f"{source}:{item_id}:{self._sent}"
+            else:
+                uuid_message_id = f"{source}:{task_id or self.context.user_id}:{self._sent}"
         try:
-            await self.adapter._send_markdown(
+            sent = await self.adapter._send_markdown(
                 chat_id=chat_id,
                 message_id=None,
                 uuid_message_id=uuid_message_id,
@@ -239,6 +243,8 @@ class FeishuDeliverySession:
                 is_group=is_group,
                 attachments=attachments,
             )
+            if not sent:
+                return DeliveryAck(accepted=False, error="feishu send was not accepted")
             return DeliveryAck(accepted=True)
         except Exception as exc:
             return DeliveryAck(accepted=False, error=str(exc))
@@ -2826,15 +2832,17 @@ class FeishuAdapter:
         is_group: bool,
         uuid_message_id: Optional[str] = None,
         attachments: Optional[list[_FeishuOutboundAttachment]] = None,
-    ) -> None:
+    ) -> bool:
         assert self._channel is not None
         explicit_attachments = self._dedupe_outbound_attachments(attachments or [])
         seen_paths = {attachment.path for attachment in explicit_attachments}
         text, parsed_attachments = self._split_outbound_attachments(text, seen_paths=seen_paths)
         outbound_attachments = [*explicit_attachments, *parsed_attachments]
+        if not text.strip() and not outbound_attachments:
+            return True
         try:
             if text.strip():
-                await send_message(
+                result = await send_message(
                     self._channel,
                     chat_id=chat_id,
                     payload={"markdown": text},
@@ -2843,6 +2851,8 @@ class FeishuAdapter:
                     logger=self.logger,
                     message_id=message_id,
                 )
+                if not self._send_result_success(result):
+                    return False
             if outbound_attachments:
                 await self._send_outbound_attachments(
                     chat_id=chat_id,
@@ -2851,8 +2861,10 @@ class FeishuAdapter:
                     attachments=outbound_attachments,
                     is_group=is_group,
                 )
+            return True
         except Exception:
             self.logger.exception("Failed to send Feishu message to %s", chat_id)
+            return False
 
     async def _send_outbound_attachments(
         self,

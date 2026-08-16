@@ -790,7 +790,7 @@ class Agent:
                             ack=ack,
                             trigger=persist_trigger,
                             content=visible_text,
-                            metadata={"turn_phase": "preface"},
+                            metadata=self._assistant_history_metadata(inbox_item, "preface"),
                             room_name=room_name,
                             channel=channel,
                             recipient_id=room_name or user_id,
@@ -832,7 +832,7 @@ class Agent:
                             ack=ack,
                             trigger=persist_trigger,
                             content=tool_result.description,
-                            metadata={"turn_phase": "final"},
+                            metadata=self._assistant_history_metadata(inbox_item, "final"),
                             attachments=tool_result.attachments,
                             room_name=room_name,
                             channel=channel,
@@ -866,7 +866,7 @@ class Agent:
                         ack=ack,
                         trigger=persist_trigger,
                         content=visible_text,
-                        metadata={"turn_phase": "final"},
+                        metadata=self._assistant_history_metadata(inbox_item, "final"),
                         room_name=room_name,
                         channel=channel,
                         recipient_id=room_name or user_id,
@@ -1025,6 +1025,12 @@ class Agent:
         route = directory.resolve(recipient_key)
         if route is None:
             return False
+        if not self.delivery.has_channel(route.channel):
+            logger.info(
+                "Impulse not queued: this process cannot deliver to %s",
+                route.channel,
+            )
+            return False
         if self.inbox.has_initiative():
             return False
         delivery = DeliveryContext.from_route(
@@ -1043,6 +1049,8 @@ class Agent:
                 "recipient_key": route.recipient_key,
             },
         )
+        delivery.metadata["item_id"] = item.item_id
+        item.metadata["item_id"] = item.item_id
         asyncio.create_task(self._run_initiative(item), name="xagent-initiative")
         await asyncio.sleep(0)
         return self.inbox.has_initiative()
@@ -1178,6 +1186,13 @@ class Agent:
             channel=inbox_item.channel,
             metadata=user_metadata,
         )
+
+    @staticmethod
+    def _assistant_history_metadata(inbox_item: InboxItem, phase: str) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {"turn_phase": phase}
+        if inbox_item.kind is InboxKind.INITIATIVE_TURN:
+            payload["source"] = "initiative"
+        return payload
 
     async def _persist_assistant_if_accepted(
         self,

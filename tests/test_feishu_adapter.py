@@ -421,6 +421,52 @@ class FeishuAdapterTests(unittest.TestCase):
         self.assertEqual(adapter._channel.sent[0][0], "oc_p2p")
         self.assertEqual(adapter._channel.sent[0][1], {"markdown": "A direct thought"})
 
+    def test_delivery_session_nacks_when_feishu_send_fails(self):
+        async def run_test():
+            agent = _FakeAgent()
+            adapter = FeishuAdapter(agent=agent, config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret"))
+            adapter._channel = _FakeChannel(results=[SimpleNamespace(success=False, error=None, raw=None)])
+            session = adapter.open_delivery_session(DeliveryContext(
+                channel="feishu",
+                user_id="ou_user",
+                target={"chat_id": "oc_p2p", "is_group": False},
+                metadata={"source": "initiative", "item_id": "abc123"},
+            ))
+            ack = await session.consume({
+                "type": "message_done",
+                "phase": "final",
+                "content": "A direct thought",
+            })
+            self.assertFalse(ack.accepted)
+            return adapter
+
+        adapter = asyncio.run(run_test())
+        self.assertEqual(len(adapter._channel.sent), 1)
+
+    def test_initiative_uuid_is_unique_per_item(self):
+        async def run_test():
+            agent = _FakeAgent()
+            adapter = FeishuAdapter(agent=agent, config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret"))
+            adapter._channel = _FakeChannel()
+            for item_id in ("item_one_hex", "item_two_hex"):
+                session = adapter.open_delivery_session(DeliveryContext(
+                    channel="feishu",
+                    user_id="ou_user",
+                    target={"chat_id": "oc_p2p", "is_group": False},
+                    metadata={"source": "initiative", "item_id": item_id},
+                ))
+                await session.consume({
+                    "type": "message_done",
+                    "phase": "final",
+                    "content": "hello",
+                })
+            return adapter
+
+        adapter = asyncio.run(run_test())
+        uuids = [entry[2]["uuid"] for entry in adapter._channel.sent]
+        self.assertEqual(len(set(uuids)), 2)
+        self.assertTrue(all(uuid.startswith("initiative:") for uuid in uuids))
+
     def test_scheduled_agent_task_dispatch_sends_agent_reply_to_feishu_chat(self):
         async def run_test():
             agent = _FakeAgent()

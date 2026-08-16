@@ -93,6 +93,33 @@ class ImmediateDeliverySession:
         return None
 
 
+class UnavailableDeliverySession:
+    """Fail-closed session when this process has no mouth for the channel.
+
+    ImmediateDeliverySession would ack without sending and leave a fake
+    assistant history. Initiative and scheduled turns must not do that.
+    """
+
+    def __init__(self, channel: str = "", reason: str = "") -> None:
+        self.channel = str(channel or "").strip()
+        self.reason = reason or (
+            f"this process cannot deliver to {self.channel or 'unknown'}"
+        )
+        self.events: list[dict] = []
+
+    def can_deliver(self) -> bool:
+        return False
+
+    async def consume(self, event: dict) -> DeliveryAck:
+        self.events.append(dict(event))
+        if event.get("type") != "message_done":
+            return DeliveryAck(accepted=True)
+        return DeliveryAck(accepted=False, error=self.reason)
+
+    async def aclose(self) -> None:
+        return None
+
+
 class RejectingDeliverySession:
     """Test double: reachable check may pass, but message_done is refused."""
 
@@ -141,8 +168,17 @@ class DeliveryCoordinator:
     async def open_session(self, context: Optional[DeliveryContext]) -> DeliverySession:
         if context is None:
             return ImmediateDeliverySession()
-        opener = self._openers.get(context.normalized_channel())
+        channel = context.normalized_channel()
+        opener = self._openers.get(channel) if channel else None
         if opener is None:
+            source = str((context.metadata or {}).get("source") or "").strip()
+            if source in {"initiative", "scheduled_task"}:
+                logger.warning(
+                    "No delivery opener for %s in this process; refusing %s",
+                    channel or "unknown",
+                    source,
+                )
+                return UnavailableDeliverySession(channel=channel)
             return ImmediateDeliverySession()
         session = opener(context)
         if inspect.isawaitable(session):

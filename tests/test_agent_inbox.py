@@ -1,6 +1,8 @@
 import asyncio
 import unittest
 
+from types import SimpleNamespace
+
 from xagent.core.agent import Agent
 from xagent.core.config import AgentConfig, ReplyType
 from xagent.core.handlers.message import MessageHandler
@@ -13,7 +15,7 @@ from xagent.core.inbox import (
     InboxKind,
     scheduled_task_display_content,
 )
-from xagent.core.delivery import ImmediateDeliverySession, RejectingDeliverySession
+from xagent.core.delivery import DeliveryContext, ImmediateDeliverySession, RejectingDeliverySession
 from xagent.core.runtime import ScheduledDeliveryContext, scheduled_delivery_context
 from xagent.integrations.langfuse import NoopObservabilityRuntime
 from xagent.schemas import Message, MessageType, RoleType
@@ -329,6 +331,49 @@ class AgentInboxTests(unittest.IsolatedAsyncioTestCase):
         assistant = [message for message in storage.messages if message.role == RoleType.ASSISTANT]
         self.assertEqual(user_msgs, [])
         self.assertEqual([message.content for message in assistant], ["checking in"])
+        self.assertEqual(assistant[0].metadata.get("source"), "initiative")
+
+    async def test_initiative_without_channel_opener_does_not_persist(self):
+        storage = InMemoryMessageStorage()
+        model_client = CapturingModelClient([
+            (ReplyType.SIMPLE_REPLY, '{"admit": true}'),
+            (ReplyType.SIMPLE_REPLY, "should not send"),
+        ])
+        agent = self._build_agent(storage, model_client)
+        item = InboxItem(
+            kind=InboxKind.INITIATIVE_TURN,
+            content="say hello",
+            user_id="ou_user",
+            channel="feishu",
+            delivery=DeliveryContext(
+                channel="feishu",
+                user_id="ou_user",
+                target={"chat_id": "oc_p2p"},
+                metadata={"source": "initiative"},
+            ),
+        )
+        events = [event async for event in agent.submit(item)]
+        self.assertEqual(events, [])
+        self.assertEqual(model_client.calls, [])
+        assistant = [message for message in storage.messages if message.role == RoleType.ASSISTANT]
+        self.assertEqual(assistant, [])
+
+    async def test_enqueue_initiative_requires_local_channel_opener(self):
+        storage = InMemoryMessageStorage()
+        agent = self._build_agent(storage, CapturingModelClient([]))
+        route = SimpleNamespace(
+            channel="feishu",
+            user_id="ou_1",
+            recipient_key="feishu:ou_1",
+            display_name="Telos",
+            target={"chat_id": "oc_1"},
+        )
+        agent._recipient_directory = SimpleNamespace(resolve=lambda key: route)
+        queued = await agent.enqueue_initiative(
+            SimpleNamespace(recipient_key="feishu:ou_1", intent="check in")
+        )
+        self.assertFalse(queued)
+        self.assertFalse(agent.inbox.has_initiative())
 
 
 class InitiativeQueueTests(unittest.IsolatedAsyncioTestCase):
@@ -379,3 +424,25 @@ class InitiativeQueueTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(lease.item.content, "one")
         await inbox.release_turn()
         self.assertFalse(inbox.has_initiative())
+
+
+class DeliveryCoordinatorTests(unittest.IsolatedAsyncioTestCase):
+    async def test_missing_opener_refuses_initiative_and_keeps_cli_immediate(self):
+        from xagent.core.delivery import (
+            DeliveryCoordinator,
+            ImmediateDeliverySession,
+            UnavailableDeliverySession,
+        )
+
+        coordinator = DeliveryCoordinator()
+        refused = await coordinator.open_session(
+            DeliveryContext(channel="feishu", metadata={"source": "initiative"})
+        )
+        self.assertIsInstance(refused, UnavailableDeliverySession)
+        self.assertFalse(refused.can_deliver())
+        ack = await refused.consume({"type": "message_done", "content": "hi"})
+        self.assertFalse(ack.accepted)
+
+        local = await coordinator.open_session(DeliveryContext(channel="cli"))
+        self.assertIsInstance(local, ImmediateDeliverySession)
+        self.assertTrue(local.can_deliver())

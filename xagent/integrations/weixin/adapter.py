@@ -105,7 +105,12 @@ class WeixinDeliverySession:
         if task_id and run_at:
             stable_key = f"scheduled:{task_id}:{run_at}"
         else:
-            stable_key = f"{meta.get('source') or 'weixin'}:{user_id}:{self._sent}"
+            item_id = str(meta.get("item_id") or "").strip()
+            source = str(meta.get("source") or "weixin").strip() or "weixin"
+            if item_id:
+                stable_key = f"{source}:{item_id}:{self._sent}"
+            else:
+                stable_key = f"{source}:{user_id}:{self._sent}"
         try:
             await self.adapter._send_text_and_attachments(
                 user_id=user_id,
