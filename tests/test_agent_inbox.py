@@ -1,6 +1,8 @@
 import asyncio
 import unittest
 
+from types import SimpleNamespace
+
 from xagent.core.agent import Agent
 from xagent.core.config import AgentConfig, ReplyType
 from xagent.core.handlers.message import MessageHandler
@@ -8,10 +10,12 @@ from xagent.core.inbox import (
     INBOX_KIND_METADATA_KEY,
     SCHEDULED_AGENT_PROMPT_PREFIX,
     TASK_CONTENT_METADATA_KEY,
+    AgentInbox,
     InboxItem,
     InboxKind,
     scheduled_task_display_content,
 )
+from xagent.core.delivery import DeliveryContext, ImmediateDeliverySession, RejectingDeliverySession
 from xagent.core.runtime import ScheduledDeliveryContext, scheduled_delivery_context
 from xagent.integrations.langfuse import NoopObservabilityRuntime
 from xagent.schemas import Message, MessageType, RoleType
@@ -284,3 +288,161 @@ class AgentInboxTests(unittest.IsolatedAsyncioTestCase):
             if message.role == RoleType.USER
         ]
         self.assertEqual(kinds, [InboxKind.USER_TURN.value, InboxKind.USER_TURN.value])
+
+    async def test_rejecting_delivery_does_not_persist_assistant(self):
+        storage = InMemoryMessageStorage()
+        model_client = CapturingModelClient([(ReplyType.SIMPLE_REPLY, "secret")])
+        agent = self._build_agent(storage, model_client)
+        session = RejectingDeliverySession()
+
+        events = [
+            event
+            async for event in agent.chat_events(
+                user_message="hello",
+                user_id="alice",
+                channel="cli",
+                session=session,
+            )
+        ]
+
+        self.assertTrue(any(event.get("type") == "message_done" for event in events))
+        assistant = [message for message in storage.messages if message.role == RoleType.ASSISTANT]
+        self.assertEqual(assistant, [])
+
+    async def test_initiative_does_not_store_user_message(self):
+        storage = InMemoryMessageStorage()
+        model_client = CapturingModelClient([
+            (ReplyType.SIMPLE_REPLY, '{"admit": true}'),
+            (ReplyType.SIMPLE_REPLY, "checking in"),
+        ])
+        agent = self._build_agent(storage, model_client)
+        item = InboxItem(
+            kind=InboxKind.INITIATIVE_TURN,
+            content="say hello",
+            user_id="alice",
+            channel="cli",
+        )
+        events = [
+            event
+            async for event in agent.submit(item, session=ImmediateDeliverySession())
+        ]
+        self.assertTrue(any(event.get("type") == "done" for event in events))
+        user_msgs = [message for message in storage.messages if message.role == RoleType.USER]
+        assistant = [message for message in storage.messages if message.role == RoleType.ASSISTANT]
+        self.assertEqual(user_msgs, [])
+        self.assertEqual([message.content for message in assistant], ["checking in"])
+        self.assertEqual(assistant[0].metadata.get("source"), "initiative")
+
+    async def test_initiative_without_channel_opener_does_not_persist(self):
+        storage = InMemoryMessageStorage()
+        model_client = CapturingModelClient([
+            (ReplyType.SIMPLE_REPLY, '{"admit": true}'),
+            (ReplyType.SIMPLE_REPLY, "should not send"),
+        ])
+        agent = self._build_agent(storage, model_client)
+        item = InboxItem(
+            kind=InboxKind.INITIATIVE_TURN,
+            content="say hello",
+            user_id="ou_user",
+            channel="feishu",
+            delivery=DeliveryContext(
+                channel="feishu",
+                user_id="ou_user",
+                target={"chat_id": "oc_p2p"},
+                metadata={"source": "initiative"},
+            ),
+        )
+        events = [event async for event in agent.submit(item)]
+        self.assertEqual(events, [])
+        self.assertEqual(model_client.calls, [])
+        assistant = [message for message in storage.messages if message.role == RoleType.ASSISTANT]
+        self.assertEqual(assistant, [])
+
+    async def test_enqueue_initiative_requires_local_channel_opener(self):
+        storage = InMemoryMessageStorage()
+        agent = self._build_agent(storage, CapturingModelClient([]))
+        route = SimpleNamespace(
+            channel="feishu",
+            user_id="ou_1",
+            recipient_key="feishu:ou_1",
+            display_name="Telos",
+            target={"chat_id": "oc_1"},
+        )
+        agent._recipient_directory = SimpleNamespace(resolve=lambda key: route)
+        queued = await agent.enqueue_initiative(
+            SimpleNamespace(recipient_key="feishu:ou_1", intent="check in")
+        )
+        self.assertFalse(queued)
+        self.assertFalse(agent.inbox.has_initiative())
+
+
+class InitiativeQueueTests(unittest.IsolatedAsyncioTestCase):
+    async def test_queued_human_overtakes_initiative(self):
+        inbox = AgentInbox()
+        blocker = InboxItem(kind=InboxKind.USER_TURN, content="busy", user_id="u")
+        initiative = InboxItem(kind=InboxKind.INITIATIVE_TURN, content="nudge", user_id="u")
+        human = InboxItem(kind=InboxKind.USER_TURN, content="hello", user_id="u")
+        await inbox.acquire_turn(blocker)
+        initiative_task = asyncio.create_task(inbox.acquire_turn(initiative))
+        await asyncio.sleep(0)
+        human_task = asyncio.create_task(inbox.acquire_turn(human))
+        await asyncio.sleep(0)
+        await inbox.release_turn()
+        human_lease = await human_task
+        self.assertEqual(human_lease.item.kind, InboxKind.USER_TURN)
+        await inbox.release_turn()
+        initiative_lease = await initiative_task
+        self.assertEqual(initiative_lease.item.kind, InboxKind.INITIATIVE_TURN)
+        await inbox.release_turn()
+
+    async def test_started_initiative_is_not_preempted(self):
+        inbox = AgentInbox()
+        initiative = InboxItem(kind=InboxKind.INITIATIVE_TURN, content="nudge", user_id="u")
+        human = InboxItem(kind=InboxKind.USER_TURN, content="hello", user_id="u")
+        lease = await inbox.acquire_turn(initiative)
+        self.assertEqual(lease.item.kind, InboxKind.INITIATIVE_TURN)
+        human_task = asyncio.create_task(inbox.acquire_turn(human))
+        await asyncio.sleep(0.01)
+        self.assertTrue(inbox.busy)
+        self.assertEqual(inbox._lease.item.kind, InboxKind.INITIATIVE_TURN)
+        self.assertFalse(human_task.done())
+        await inbox.release_turn()
+        human_lease = await human_task
+        self.assertEqual(human_lease.item.kind, InboxKind.USER_TURN)
+        await inbox.release_turn()
+
+    async def test_second_initiative_is_dropped(self):
+        inbox = AgentInbox()
+        first = InboxItem(kind=InboxKind.INITIATIVE_TURN, content="one", user_id="u")
+        second = InboxItem(kind=InboxKind.INITIATIVE_TURN, content="two", user_id="u")
+        task = asyncio.create_task(inbox.acquire_turn(first))
+        await asyncio.sleep(0)
+        dropped = await inbox.acquire_turn(second)
+        self.assertIsNone(dropped)
+        self.assertTrue(inbox.has_initiative())
+        lease = await task
+        self.assertEqual(lease.item.content, "one")
+        await inbox.release_turn()
+        self.assertFalse(inbox.has_initiative())
+
+
+class DeliveryCoordinatorTests(unittest.IsolatedAsyncioTestCase):
+    async def test_missing_opener_refuses_initiative_and_keeps_cli_immediate(self):
+        from xagent.core.delivery import (
+            DeliveryCoordinator,
+            ImmediateDeliverySession,
+            UnavailableDeliverySession,
+        )
+
+        coordinator = DeliveryCoordinator()
+        refused = await coordinator.open_session(
+            DeliveryContext(channel="feishu", metadata={"source": "initiative"})
+        )
+        self.assertIsInstance(refused, UnavailableDeliverySession)
+        self.assertFalse(refused.can_deliver())
+        ack = await refused.consume({"type": "message_done", "content": "hi"})
+        self.assertFalse(ack.accepted)
+
+        local = await coordinator.open_session(DeliveryContext(channel="cli"))
+        self.assertIsInstance(local, ImmediateDeliverySession)
+        self.assertTrue(local.can_deliver())

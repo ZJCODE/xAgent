@@ -8,20 +8,22 @@ from typing import Any, Dict, Optional
 
 from fastapi import WebSocket
 
-from ...core.agent import Agent
-from ...core.runtime import SubconsciousDelivery
+from ...core.delivery import DeliveryAck, DeliveryContext
 from ...interfaces.server.serializers import message_item
 from ...schemas.attachment import dedupe_attachments
 from .constants import CHANNEL_API
 
 
 class DeliveryBus:
-    """Broadcast scheduled and subconscious messages to WebSocket subscribers."""
+    """Broadcast scheduled and initiative messages to WebSocket subscribers."""
 
     def __init__(self, *, logger: Optional[logging.Logger] = None) -> None:
         self.logger = logger or logging.getLogger(self.__class__.__name__)
         self._subscribers: dict[str, set[WebSocket]] = {}
         self._lock = asyncio.Lock()
+
+    def has_subscribers(self, user_id: str) -> bool:
+        return bool(self._subscribers.get(str(user_id or "").strip()))
 
     async def register_subscriber(self, user_id: str, websocket: WebSocket) -> None:
         async with self._lock:
@@ -78,43 +80,66 @@ class DeliveryBus:
             payload["message"] = message_item(stored_message)
         await self.push(user_id, payload)
 
-    async def deliver_subconscious(self, delivery: SubconsciousDelivery, *, agent: Agent) -> None:
-        if delivery.recipient.channel != CHANNEL_API:
-            raise ValueError(f"api runtime cannot deliver subconscious channel {delivery.recipient.channel!r}")
-        target = delivery.recipient.target
-        user_id = str(target.get("user_id") or delivery.recipient.user_id or "").strip()
+
+class ApiDeliverySession:
+    """Unified outbound session for HTTP/WebSocket subscribers."""
+
+    def __init__(self, bus: DeliveryBus, context: DeliveryContext) -> None:
+        self.bus = bus
+        self.context = context
+
+    def _user_id(self) -> str:
+        return str(self.context.user_id or self.context.target.get("user_id") or "").strip()
+
+    def _source(self) -> str:
+        return str((self.context.metadata or {}).get("source") or "").strip()
+
+    def can_deliver(self) -> bool:
+        source = self._source()
+        if source in {"initiative", "scheduled_task"}:
+            return self.bus.has_subscribers(self._user_id())
+        return True
+
+    async def consume(self, event: dict) -> DeliveryAck:
+        if event.get("type") != "message_done":
+            return DeliveryAck(accepted=True)
+        source = self._source()
+        if source not in {"initiative", "scheduled_task"}:
+            return DeliveryAck(accepted=True)
+        user_id = self._user_id()
         if not user_id:
-            raise ValueError("subconscious delivery is missing user_id")
-
-        message_handler = getattr(agent, "message_handler", None)
-        store_model_reply = getattr(message_handler, "store_model_reply", None)
-        stored_message = None
-        if callable(store_model_reply):
-            stored_message = await store_model_reply(
-                delivery.content,
-                getattr(agent, "_assistant_sender_id", "agent"),
-                metadata={
-                    "subconscious": {
-                        "source": "subconscious",
-                        "created_at": delivery.created_at.isoformat(sep=" "),
-                        "recipient": {
-                            "channel": delivery.recipient.channel,
-                            "user_id": delivery.recipient.user_id,
-                            "target": delivery.recipient.target,
-                        },
-                    }
-                },
-                channel=delivery.recipient.channel,
-                recipient_id=user_id,
-            )
-
+            return DeliveryAck(accepted=False, error="missing user_id")
+        content = str(event.get("content") or "")
+        raw_attachments = event.get("attachments")
+        attachments = dedupe_attachments(raw_attachments if isinstance(raw_attachments, list) else [])
+        if source == "scheduled_task":
+            task = (self.context.metadata or {}).get("task")
+            if task is None:
+                await self.bus.push(
+                    user_id,
+                    {
+                        "type": "scheduled_message",
+                        "content": content,
+                        **({"attachments": attachments} if attachments else {}),
+                    },
+                )
+            else:
+                await self.bus.broadcast_scheduled_message(
+                    task,
+                    content,
+                    attachments=attachments,
+                )
+            return DeliveryAck(accepted=True)
+        if not self.bus.has_subscribers(user_id):
+            return DeliveryAck(accepted=False, error="no subscribers")
         payload: Dict[str, Any] = {
-            "type": "subconscious_message",
-            "content": delivery.content,
-            "subconscious": {
-                "created_at": delivery.created_at.isoformat(sep=" "),
-            },
+            "type": "assistant_message",
+            "content": content,
         }
-        if stored_message is not None:
-            payload["message"] = message_item(stored_message)
-        await self.push(user_id, payload)
+        if attachments:
+            payload["attachments"] = attachments
+        await self.bus.push(user_id, payload)
+        return DeliveryAck(accepted=True)
+
+    async def aclose(self) -> None:
+        return None

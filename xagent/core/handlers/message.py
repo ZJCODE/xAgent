@@ -303,6 +303,10 @@ class MessageHandler:
         working_summary: str = "",
         covers_through_cursor: int = 0,
         prompt_registry: Optional[PromptRegistry] = None,
+        initiative_intent: str = "",
+        recipient_key: str = "",
+        recipient_display_name: str = "",
+        channel_available: bool = True,
     ) -> list[dict]:
         """Build the per-turn model input context as named message layers."""
         conversation_messages = MessageHandler.filter_conversation_messages(messages)
@@ -352,6 +356,10 @@ class MessageHandler:
             channel_instructions=channel_instructions,
             task_mode=task_mode,
             inbox_kind=inbox_kind,
+            initiative_intent=initiative_intent,
+            recipient_key=recipient_key,
+            recipient_display_name=recipient_display_name,
+            channel_available=channel_available,
         )
         registry = prompt_registry or default_prompt_registry()
         context_messages = registry.assemble(KIND_TURN, ctx)

@@ -1,12 +1,10 @@
 import asyncio
 import tempfile
 import unittest
-from datetime import datetime
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import AsyncMock
 
-from xagent.core.runtime import ContactEntry, SubconsciousDelivery, enqueue_scheduled_task, list_task_records
+from xagent.core.runtime import enqueue_scheduled_task, list_task_records
+from xagent.core.delivery import DeliveryContext
 from xagent.integrations.weixin.adapter import WeixinAdapter
 from xagent.integrations.weixin.config import WeixinAdapterConfig
 from xagent.integrations.weixin.state import WeixinCredentials, WeixinStateStore
@@ -22,6 +20,7 @@ class _FakeAgent:
         self.workspace_dir = None
 
     async def chat_events(self, **kwargs):
+        kwargs.pop("session", None)
         self.chat_calls.append(kwargs)
         yield {"type": "message_done", "message_id": "m1", "phase": "final", "content": self.reply}
         yield {"type": "done"}
@@ -190,39 +189,37 @@ class WeixinAdapterTests(unittest.TestCase):
         self.assertEqual(sent_text[0]["context_token"], "ctx-owner")
         self.assertEqual(sent_text[0]["text"], "scheduled hello")
 
-    def test_deliver_subconscious_message_uses_cached_context(self):
+    def test_delivery_session_uses_cached_context(self):
         async def run_test():
             with tempfile.TemporaryDirectory() as tmpdir:
                 adapter, _agent, client, _state = self._adapter(tmpdir)
-                _agent.message_handler = SimpleNamespace(store_model_reply=AsyncMock())
                 adapter._context_tokens["owner@im.wechat"] = "ctx-owner"
-                delivery = SubconsciousDelivery(
-                    content="subconscious hello",
-                    recipient=ContactEntry(
-                        channel="weixin",
-                        user_id="owner@im.wechat",
-                        target={"user_id": "owner@im.wechat"},
-                        last_seen="2026-06-25 09:00:00",
-                    ),
-                    internal_content="inner",
-                    created_at=datetime(2026, 6, 25, 9, 0, 0),
-                )
+                session = adapter.open_delivery_session(DeliveryContext(
+                    channel="weixin",
+                    user_id="owner@im.wechat",
+                    target={"user_id": "owner@im.wechat"},
+                    metadata={"source": "initiative"},
+                ))
+                self.assertTrue(session.can_deliver())
+                ack = await session.consume({
+                    "type": "message_done",
+                    "phase": "final",
+                    "content": "initiative hello",
+                })
+                self.assertTrue(ack.accepted)
+                missing = adapter.open_delivery_session(DeliveryContext(
+                    channel="weixin",
+                    user_id="stranger@im.wechat",
+                    target={"user_id": "stranger@im.wechat"},
+                    metadata={"source": "initiative"},
+                ))
+                self.assertFalse(missing.can_deliver())
+                return client.sent_text
 
-                await adapter.deliver_subconscious_message(delivery)
-                return _agent, client.sent_text
-
-        agent, sent_text = asyncio.run(run_test())
-
+        sent_text = asyncio.run(run_test())
         self.assertEqual(sent_text[0]["to_user_id"], "owner@im.wechat")
         self.assertEqual(sent_text[0]["context_token"], "ctx-owner")
-        self.assertEqual(sent_text[0]["text"], "subconscious hello")
-        self.assertTrue(sent_text[0]["client_id"])
-        agent.message_handler.store_model_reply.assert_awaited_once()
-        self.assertEqual(agent.message_handler.store_model_reply.await_args.args[0], "subconscious hello")
-        self.assertEqual(agent.message_handler.store_model_reply.await_args.kwargs["channel"], "weixin")
-        self.assertEqual(agent.message_handler.store_model_reply.await_args.kwargs["recipient_id"], "owner@im.wechat")
-        metadata = agent.message_handler.store_model_reply.await_args.kwargs["metadata"]
-        self.assertEqual(metadata["subconscious"]["source"], "subconscious")
+        self.assertEqual(sent_text[0]["text"], "initiative hello")
 
 
 if __name__ == "__main__":

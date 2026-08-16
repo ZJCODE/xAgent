@@ -24,6 +24,7 @@ from xagent.core.providers import (
     PROVIDER_QWEN,
     ReasoningConfig,
 )
+from xagent.core.delivery import ImmediateDeliverySession
 from xagent.core.runtime import ScheduledDeliveryContext, scheduled_delivery_context
 from xagent.core.tooling.executor import ToolDisplayResult, ToolExecutor
 from xagent.core.working_context import WorkingContextView
@@ -75,6 +76,9 @@ class FakeMemoryHandler:
         self.maintenance_force = None
 
     async def get_recent_context(self):
+        return ""
+
+    async def get_relationship_context(self, **kwargs):
         return ""
 
     def schedule_experience_write(self, messages):
@@ -1743,6 +1747,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
                     user_message="This scheduled task is now due.",
                     user_id="web_user",
                     stream=False,
+                    session=ImmediateDeliverySession(),
                 )
             ]
 

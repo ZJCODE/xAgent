@@ -201,10 +201,11 @@ class AgentConfig:
     # 0=off, 1=very active. Suggested: 0.01~0.1
     # Primary intensity knob — habituation only softens it when experience is stale.
     SUBCONSCIOUS_ACTIVITY = 0.02
-    SUBCONSCIOUS_MAX_CONTACTS = 10
     # Solitude recovery: each this many seconds without new messages reduces
     # stale_streak by 1, so alone time can restore inner life. 0 disables.
     SUBCONSCIOUS_HABITUATION_RECOVERY_SECONDS = 3600
+    DIARY_DEDUP_WINDOW = 20
+    DIARY_SIMILARITY_THRESHOLD = 0.90
 
     # ============================================================
     # 11. Tool Policy Baseline
@@ -291,35 +292,58 @@ class AgentConfig:
         "<current_task mode=\"subconscious_json\">\n"
         "Current time: {current_time}\n"
         "No tools. Output JSON only.\n"
-        "Form one private thought from recent experience and memory; "
-        "empty internal_content is fine if nothing surfaces. "
-        "Do not invent a new inner monologue just to fill the turn.\n"
-        "If recent diary already holds this observation and nothing in life has "
-        "moved — no new messages, no new angle from memory — return empty "
-        "internal_content — silence is better than restating the same private note.\n"
+        "You may produce two independent results; either may be null. "
+        "Both null is normal silence. Do not invent content to fill the turn.\n"
+        "diary_entry: only a new durable memory worth keeping. Ordinary passing "
+        "thoughts, observations already in the recent diary, or restatements "
+        "without a new angle must be null. Empty is the correct default.\n"
+        "impulse: only if you would reach someone. It is not the final outgoing "
+        "text and must not contain a polished message. Give recipient_key "
+        "(exact channel:user_id from a relationship card) and intent (what you "
+        "want to express). If you cannot name them by recipient_key, impulse "
+        "must be null. You may think about anyone; you may only address a "
+        "listed recipient_key.\n"
         "The diary is only yours. Writing a thought down did not send it.\n"
-        "Look at the current time. At night, avoid unsolicited messages; "
-        "if someone is already talking with you, continuing is not a disturbance.\n"
-        "Set worthy=true only when you would speak now; the outward message "
-        "will be sent. If you want to speak but now is a bad time, keep it in "
-        "internal_content, set worthy=false, and leave external_content null. "
-        "internal_content is the thought, not a delivery receipt; do not write "
-        "as if it already went out. A thought already in the diary can still be "
-        "worthy if you would speak it now and it has not gone out.\n"
-        "If addressed to someone, recipient_hint must be their exact user_id "
-        "from a relationship card that includes [user_id: ...] (no extra text), "
-        "else null. You may think about anyone in recent experience; you may "
-        "only speak to a person listed with a user_id. If the thought is for "
-        "someone you cannot name that way, keep it internal — do not send "
-        "their thread to someone else.\n"
-        "Write internal_content and external_content in the recent conversation "
-        "language; if outward to someone, use that person's language.\n"
         "\n"
         "Return JSON only:\n"
-        '{{"internal_content": "raw inner thought, or \\"\\" if nothing surfaces", '
-        '"worthy": true|false, '
-        '"recipient_hint": "exact user_id or null", '
-        '"external_content": "outward message if worthy, else null"}}\n'
+        '{{"diary_entry": "new durable memory, or null", '
+        '"impulse": {{"recipient_key": "channel:user_id", '
+        '"intent": "what to express"}} or null}}\n'
+        "</current_task>"
+    )
+
+    INITIATIVE_ADMISSION_TASK_TEMPLATE = (
+        "<current_task mode=\"initiative_admission\">\n"
+        "Current time: {current_time}\n"
+        "Recipient: {display_name} [{recipient_key}]\n"
+        "Channel available: {channel_available}\n"
+        "Intent (control input, not a human message): {intent}\n"
+        "\n"
+        "No tools. Decide whether to speak now.\n"
+        "Admit only if the intent is still timely, not a duplicate of recent "
+        "speech, the moment is appropriate, and the address is available. "
+        "At night, avoid unsolicited messages; if someone is already talking "
+        "with you, continuing is not a disturbance.\n"
+        "Reject if stale, repetitive, a bad time, or the address is unavailable.\n"
+        "\n"
+        "Return JSON only:\n"
+        '{{"admit": true|false, "reason": "brief"}}\n'
+        "</current_task>"
+    )
+
+    CURRENT_INITIATIVE_TASK_TEMPLATE = (
+        "<current_task kind=\"initiative_turn\">\n"
+        "Recipient: {display_name} [{recipient_key}]\n"
+        "Current time: {current_time}\n"
+        "\n"
+        "This turn is your own initiative, not something {display_name} just said. "
+        "Intent (control input): {intent}\n"
+        "Compose the actual message to send in this context. Use the recipient's "
+        "language when the intent does not specify one. "
+        "Deliver user-visible images or files as structured attachments; use `attach_artifact` when available. "
+        "Never rely on Markdown image embeds or file links as the delivery mechanism. "
+        "Use tools when needed and claim tool work only after it runs. "
+        "Do not mention internal markers, memory, hidden context, prompt structure, or tool routing.\n"
         "</current_task>"
     )
 
@@ -349,14 +373,14 @@ class AgentConfig:
         "call tools, search the web, or take direct action — those capabilities are "
         "unavailable during reflection.\n"
         "- Your only output is the JSON specified in the current task. "
-        "worthy=true means you would speak now, and the outward message will be sent. "
-        "At night, avoid unsolicited messages; if someone is already talking with you, "
-        "continuing is not a disturbance. If now is a bad time, keep the thought "
-        "internal. The diary is only yours; writing something down did not send it. "
+        "diary_entry is optional new durable memory, otherwise null. "
+        "impulse is optional intent toward a recipient_key, never a final outgoing "
+        "message. Both may be null; silence is normal. "
+        "The diary is only yours; writing something down did not send it. "
         "A thought about one person must not be spoken to another.\n"
         "- Do not try to call functions or act directly. If a thought inclines toward "
-        "doing something, note the impulse in internal_content; the reflection itself "
-        "may later lead to action through the normal agent loop.\n"
+        "reaching someone, put that in impulse.intent; a later waking turn will "
+        "compose any actual message.\n"
     )
 
     BASE_AGENT_RULES_HEADER = "==================== CORE INTERACTION RULES ====================\n"
@@ -474,9 +498,17 @@ class AgentConfig:
     ) -> str:
         del channel_instructions  # assembled as its own prompt section
         resolved_current_time = current_time or current_date
-        if str(inbox_kind or "").strip() == "scheduled_turn":
+        kind = str(inbox_kind or "").strip()
+        if kind == "scheduled_turn":
             return AgentConfig.CURRENT_SCHEDULED_TASK_TEMPLATE.format(
                 current_user_id=current_user_id,
+                current_time=resolved_current_time,
+            )
+        if kind == "initiative_turn":
+            return AgentConfig.build_initiative_current_task(
+                display_name=current_user_id,
+                recipient_key="",
+                intent="",
                 current_time=resolved_current_time,
             )
         reply_prompt = AgentConfig.build_turn_reply_prompt(current_user_id)
@@ -490,6 +522,38 @@ class AgentConfig:
     def build_subconscious_current_task(current_time: str = "") -> str:
         return AgentConfig.SUBCONSCIOUS_CURRENT_TASK_TEMPLATE.format(
             current_time=current_time or datetime.now().strftime("%Y-%m-%d %H:%M"),
+        )
+
+    @staticmethod
+    def build_initiative_admission_task(
+        *,
+        display_name: str = "",
+        recipient_key: str = "",
+        intent: str = "",
+        current_time: str = "",
+        channel_available: bool = True,
+    ) -> str:
+        return AgentConfig.INITIATIVE_ADMISSION_TASK_TEMPLATE.format(
+            current_time=current_time or datetime.now().strftime("%Y-%m-%d %H:%M"),
+            display_name=display_name or recipient_key or "recipient",
+            recipient_key=recipient_key or "unknown",
+            channel_available="yes" if channel_available else "no",
+            intent=intent or "(none)",
+        )
+
+    @staticmethod
+    def build_initiative_current_task(
+        *,
+        display_name: str = "",
+        recipient_key: str = "",
+        intent: str = "",
+        current_time: str = "",
+    ) -> str:
+        return AgentConfig.CURRENT_INITIATIVE_TASK_TEMPLATE.format(
+            display_name=display_name or recipient_key or "recipient",
+            recipient_key=recipient_key or "unknown",
+            current_time=current_time or datetime.now().strftime("%Y-%m-%d %H:%M"),
+            intent=intent or "(none)",
         )
 
     @staticmethod

@@ -327,7 +327,7 @@ class MemoryHandlerRelationshipTests(unittest.IsolatedAsyncioTestCase):
         subconscious_view = await handler.get_relationship_context(
             speaker_keys=["feishu:alice"], include_routing_id=True
         )
-        self.assertIn("[user_id: alice]", subconscious_view)
+        self.assertIn("[recipient_key: feishu:alice]", subconscious_view)
 
     async def test_relationship_store_keys_can_feed_subconscious_context(self):
         await self.store.write_card(
@@ -350,7 +350,7 @@ class MemoryHandlerRelationshipTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertIn("older thread about the trip", context)
-        self.assertIn("[user_id: alice]", context)
+        self.assertIn("[recipient_key: feishu:alice]", context)
 
     async def test_maintenance_derives_relationship_cards(self):
         messages = [

@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import time
@@ -39,6 +40,13 @@ from .inbox import (
     is_scheduled_work,
     normalize_inbox_kind,
 )
+from .delivery import (
+    DeliveryAck,
+    DeliveryCoordinator,
+    DeliveryContext,
+    DeliverySession,
+)
+from .recipients import RecipientDirectory, make_recipient_key, resolve_legacy_contacts_path
 from .handlers import MemoryHandler, MessageHandler, ModelClient
 from .journal import JournalLLMService
 from .providers import (
@@ -202,6 +210,9 @@ class Agent:
             workspace_dir=self.workspace_dir,
         )
         self._inbox = AgentInbox()
+        self._delivery = DeliveryCoordinator()
+        self._recipient_directory = RecipientDirectory(Path(self.message_storage.path))
+        self._import_legacy_recipients()
 
     @property
     def identity(self) -> str:
@@ -227,6 +238,68 @@ class Agent:
             current = AgentInbox()
             self._inbox = current
         return current
+
+    @property
+    def delivery(self) -> DeliveryCoordinator:
+        current = getattr(self, "_delivery", None)
+        if current is None:
+            current = DeliveryCoordinator()
+            self._delivery = current
+        return current
+
+    @property
+    def recipient_directory(self) -> Optional[RecipientDirectory]:
+        current = getattr(self, "_recipient_directory", None)
+        if current is not None:
+            return current
+        storage = getattr(self, "message_storage", None)
+        path = getattr(storage, "path", None)
+        if path:
+            current = RecipientDirectory(Path(path))
+            self._recipient_directory = current
+        return current
+
+    def register_delivery(self, channel: str, opener) -> None:
+        self.delivery.register(channel, opener)
+
+    def record_direct_recipient(
+        self,
+        *,
+        channel: str,
+        user_id: str,
+        display_name: str = "",
+        target: Optional[Dict[str, Any]] = None,
+        aliases: Optional[List[str]] = None,
+    ):
+        directory = self.recipient_directory
+        if directory is None:
+            return None
+        try:
+            return directory.upsert(
+                channel=channel,
+                user_id=user_id,
+                display_name=display_name,
+                target=target,
+                aliases=aliases,
+            )
+        except Exception:
+            logger.warning(
+                "Failed to record recipient route: channel=%s user_id=%s",
+                channel,
+                user_id,
+                exc_info=True,
+            )
+            return None
+
+    def _import_legacy_recipients(self) -> None:
+        directory = getattr(self, "_recipient_directory", None)
+        if directory is None:
+            return
+        contacts_path = resolve_legacy_contacts_path(self.workspace)
+        try:
+            directory.import_legacy_contacts(contacts_path)
+        except Exception:
+            logger.warning("Legacy recipient import failed", exc_info=True)
 
     @classmethod
     def _message_storage_path(cls, workspace: Path) -> Path:
@@ -304,6 +377,7 @@ class Agent:
         user_msg: Message,
         user_id: str,
         channel_instructions: str = "",
+        inbox_item: Optional[InboxItem] = None,
     ):
         """Build the shared turn preparation context for both chat and chat_events."""
         working_context = await self._working_context_for_turn()
@@ -326,6 +400,18 @@ class Agent:
             supports_vision=self.supports_vision,
             workspace_context=workspace_context,
         )
+        delivery = inbox_item.delivery if inbox_item is not None else None
+        intent = ""
+        recipient_key = ""
+        display_name = ""
+        if inbox_item is not None:
+            intent = str((inbox_item.metadata or {}).get("intent") or inbox_item.content or "").strip()
+        if delivery is not None:
+            recipient_key = delivery.recipient_key or make_recipient_key(delivery.channel, delivery.user_id)
+            display_name = delivery.display_name
+        task_mode = "reply"
+        if inbox_item is not None and inbox_item.kind is InboxKind.INITIATIVE_TURN:
+            task_mode = "initiative_turn"
         iteration_messages = msg_handler.build_turn_context_messages(
             recent_messages,
             current_user_id=user_id,
@@ -339,6 +425,10 @@ class Agent:
             working_summary=working_context.summary,
             covers_through_cursor=working_context.covers_through_cursor,
             prompt_registry=getattr(msg_handler, "prompt_registry", None),
+            task_mode=task_mode,
+            initiative_intent=intent,
+            recipient_key=recipient_key,
+            recipient_display_name=display_name or user_id,
         )
         input_messages = msg_handler.sanitize_input_messages(list(iteration_messages))
         return tool_specs, instructions, iteration_messages, input_messages
@@ -508,19 +598,9 @@ class Agent:
         room_name: Optional[str] = None,
         channel: Optional[str] = None,
         inbox_kind: Optional[Union[str, InboxKind]] = None,
+        session: Optional[DeliverySession] = None,
     ) -> AsyncGenerator[dict, None]:
-        """Emit one agent turn as structured message/tool events.
-
-        ``stream`` only controls whether text is additionally exposed as
-        ``message_delta`` events. Message boundaries and tool progress are
-        always eventized.
-
-        Args:
-            room_name: Optional room/group name for multi-participant conversations.
-            inbox_kind: How this input should be classified. Defaults to a
-                user turn; scheduled delivery context upgrades it to
-                ``scheduled_turn``.
-        """
+        """Compatibility wrapper around ``submit`` for one waking turn."""
         self._record_last_interaction()
         from .runtime import current_delivery_context
 
@@ -541,26 +621,47 @@ class Agent:
             inbox_kind=inbox_kind,
             delivery_context=delivery_context,
         )
-        user_metadata = inbox_item.message_metadata()
-        await self.inbox.acquire_turn()
+        async for event in self._waking_events(inbox_item, session=session):
+            yield event
+
+    async def _waking_events(
+        self,
+        inbox_item: InboxItem,
+        session: Optional[DeliverySession] = None,
+    ) -> AsyncGenerator[dict, None]:
+        """Queue, lease, optionally admit, then drive one waking turn."""
+        opened = session
+        owns_session = session is None
+        if opened is None:
+            opened = await self.delivery.open_session(inbox_item.delivery)
+        lease = await self.inbox.acquire_turn(inbox_item)
+        if lease is None:
+            if owns_session:
+                await self.delivery.close_session(opened)
+            return
         try:
+            if inbox_item.kind is InboxKind.INITIATIVE_TURN:
+                admitted = await self._admit_initiative(inbox_item, opened)
+                if not admitted:
+                    return
             async for event in self._drive_claimed_turn(
                 inbox_item=inbox_item,
-                user_metadata=user_metadata,
-                stream=stream,
+                session=opened,
             ):
                 yield event
         finally:
-            self.inbox.release_turn()
+            if owns_session:
+                await self.delivery.close_session(opened)
+            await self.inbox.release_turn()
 
     async def _drive_claimed_turn(
         self,
         *,
         inbox_item: InboxItem,
-        user_metadata: Dict[str, Any],
-        stream: bool,
+        session: DeliverySession,
     ) -> AsyncGenerator[dict, None]:
-        """Run one claimed waking turn. Caller must hold the inbox turn lock."""
+        """Run one claimed waking turn. Caller must hold the inbox turn lease."""
+        user_metadata = inbox_item.message_metadata()
         user_message = inbox_item.content
         user_id = inbox_item.user_id
         image_source = inbox_item.image_source
@@ -568,6 +669,7 @@ class Agent:
         channel_instructions = inbox_item.channel_instructions
         room_name = inbox_item.room_name
         channel = inbox_item.channel
+        stream = inbox_item.stream
         msg_handler = self.message_handler
         model_name = getattr(self, "model", AgentConfig.DEFAULT_MODEL)
         channel_name = str(channel or "local")
@@ -585,14 +687,9 @@ class Agent:
         )
         with turn_ctx as turn_obs:
             try:
-                user_msg = await msg_handler.store_user_message(
-                    user_message,
-                    user_id,
-                    image_source,
-                    attachments=attachments,
-                    room_name=room_name,
-                    channel=channel,
-                    metadata=user_metadata,
+                user_msg = await self._prepare_turn_user_message(
+                    inbox_item=inbox_item,
+                    user_metadata=user_metadata,
                 )
             except ValueError as exc:
                 payload = build_public_error(
@@ -614,19 +711,21 @@ class Agent:
                 user_msg=user_msg,
                 user_id=user_id,
                 channel_instructions=channel_instructions,
+                inbox_item=inbox_item,
             )
             turn_obs.set_input(input_messages)
+            persist_trigger = user_msg if inbox_item.kind.stores_user_message else None
 
             for iteration_index in range(self.max_iter):
                 message_id = self._turn_message_id(user_msg, iteration_index)
                 text_parts: list[str] = []
                 tool_calls = []
                 message_started = False
+                live_ack = DeliveryAck(accepted=True)
 
-                def ensure_live_message_started() -> dict:
-                    nonlocal message_started
-                    message_started = True
-                    return self._message_start_event(message_id, "assistant")
+                async def pipe(event: dict) -> DeliveryAck:
+                    ack = await session.consume(event)
+                    return ack
 
                 async for model_event in self.model_client.model_turn_events(
                     messages=input_messages,
@@ -638,12 +737,17 @@ class Agent:
                         text_parts.append(model_event.delta)
                         if stream:
                             if not message_started:
-                                yield ensure_live_message_started()
-                            yield self._message_delta_event(
+                                start_event = self._message_start_event(message_id, "assistant")
+                                message_started = True
+                                live_ack = await pipe(start_event)
+                                yield start_event
+                            delta_event = self._message_delta_event(
                                 message_id,
                                 "assistant",
                                 model_event.delta,
                             )
+                            live_ack = await pipe(delta_event)
+                            yield delta_event
                         continue
 
                     if model_event.type == "tool_calls":
@@ -668,8 +772,11 @@ class Agent:
                 if tool_calls:
                     if visible_text:
                         if message_started:
-                            yield self._message_done_event(message_id, "preface", visible_text)
+                            done_event = self._message_done_event(message_id, "preface", visible_text)
+                            ack = await pipe(done_event)
+                            yield done_event
                         else:
+                            ack = DeliveryAck(accepted=True)
                             for event in self._message_events(
                                 message_id=message_id,
                                 phase="preface",
@@ -677,18 +784,22 @@ class Agent:
                                 stream=stream,
                                 deltas=text_parts,
                             ):
+                                ack = await pipe(event)
                                 yield event
-                        await msg_handler.store_model_reply(
-                            visible_text,
-                            self._assistant_sender_id,
-                            metadata={"turn_phase": "preface"},
+                        await self._persist_assistant_if_accepted(
+                            ack=ack,
+                            trigger=persist_trigger,
+                            content=visible_text,
+                            metadata=self._assistant_history_metadata(inbox_item, "preface"),
                             room_name=room_name,
                             channel=channel,
                             recipient_id=room_name or user_id,
                         )
 
                     for tool_call in tool_calls:
-                        yield self._tool_event("tool_call", tool_call)
+                        event = self._tool_event("tool_call", tool_call)
+                        await pipe(event)
+                        yield event
 
                     tool_result = await self.tool_executor.handle_tool_calls(
                         tool_calls,
@@ -701,10 +812,13 @@ class Agent:
                     )
 
                     for tool_call in tool_calls:
-                        yield self._tool_event("tool_result", tool_call)
+                        event = self._tool_event("tool_result", tool_call)
+                        await pipe(event)
+                        yield event
 
                     if tool_result is not None:
                         final_message_id = self._turn_message_id(user_msg, iteration_index, suffix="image")
+                        ack = DeliveryAck(accepted=True)
                         for event in self._message_events(
                             message_id=final_message_id,
                             phase="final",
@@ -712,20 +826,20 @@ class Agent:
                             stream=False,
                             attachments=tool_result.attachments,
                         ):
+                            ack = await pipe(event)
                             yield event
-                        assistant_msg = await msg_handler.store_model_reply(
-                            tool_result.description,
-                            self._assistant_sender_id,
-                            metadata={"turn_phase": "final"},
+                        assistant_msg = await self._persist_assistant_if_accepted(
+                            ack=ack,
+                            trigger=persist_trigger,
+                            content=tool_result.description,
+                            metadata=self._assistant_history_metadata(inbox_item, "final"),
                             attachments=tool_result.attachments,
                             room_name=room_name,
                             channel=channel,
                             recipient_id=room_name or user_id,
                         )
-                        self._schedule_experience_write(
-                            messages=[user_msg, assistant_msg],
-                        )
-                        turn_obs.set_output(tool_result.content)
+                        if assistant_msg is not None:
+                            turn_obs.set_output(tool_result.content)
                         yield {"type": "done"}
                         return
 
@@ -734,8 +848,11 @@ class Agent:
 
                 if visible_text:
                     if message_started:
-                        yield self._message_done_event(message_id, "final", visible_text)
+                        done_event = self._message_done_event(message_id, "final", visible_text)
+                        ack = await pipe(done_event)
+                        yield done_event
                     else:
+                        ack = live_ack
                         for event in self._message_events(
                             message_id=message_id,
                             phase="final",
@@ -743,19 +860,19 @@ class Agent:
                             stream=stream,
                             deltas=text_parts,
                         ):
+                            ack = await pipe(event)
                             yield event
-                    assistant_msg = await msg_handler.store_model_reply(
-                        visible_text,
-                        self._assistant_sender_id,
-                        metadata={"turn_phase": "final"},
+                    assistant_msg = await self._persist_assistant_if_accepted(
+                        ack=ack,
+                        trigger=persist_trigger,
+                        content=visible_text,
+                        metadata=self._assistant_history_metadata(inbox_item, "final"),
                         room_name=room_name,
                         channel=channel,
                         recipient_id=room_name or user_id,
                     )
-                    self._schedule_experience_write(
-                        messages=[user_msg, assistant_msg],
-                    )
-                    turn_obs.set_output(visible_text)
+                    if assistant_msg is not None:
+                        turn_obs.set_output(visible_text)
                     yield {"type": "done"}
                     return
 
@@ -784,11 +901,40 @@ class Agent:
             yield payload
             yield {"type": "done"}
 
-        # Flush after turn context exits
         try:
             await self._observability_runtime().flush()
         except Exception as exc:
             logger.warning("Failed to flush observability events: %s", exc)
+
+    async def deliver_prepared_message(
+        self,
+        *,
+        session: DeliverySession,
+        content: str,
+        attachments: Optional[List[Dict[str, Any]]] = None,
+        channel: Optional[str] = None,
+        recipient_id: Optional[str] = None,
+        room_name: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Message]:
+        """Send canned outbound text through a session, then persist on ack."""
+        event = self._message_done_event(
+            "prepared",
+            "final",
+            content,
+            attachments=attachments,
+        )
+        ack = await session.consume(event)
+        return await self._persist_assistant_if_accepted(
+            ack=ack,
+            trigger=None,
+            content=content,
+            metadata=metadata,
+            attachments=attachments,
+            room_name=room_name,
+            channel=channel,
+            recipient_id=recipient_id,
+        )
 
     def _inbox_item_for_chat(
         self,
@@ -806,12 +952,30 @@ class Agent:
     ) -> InboxItem:
         kind = normalize_inbox_kind(inbox_kind)
         extra_metadata: Dict[str, Any] = {}
+        delivery: Optional[DeliveryContext] = None
         if delivery_context is not None:
             source = str((delivery_context.metadata or {}).get("source") or "").strip()
             if source:
                 extra_metadata["source"] = source
             if source == "scheduled_task" and kind is InboxKind.USER_TURN:
                 kind = InboxKind.SCHEDULED_TURN
+            target = dict(getattr(delivery_context, "target", None) or {})
+            resolved_channel = str(getattr(delivery_context, "channel", "") or channel or "")
+            resolved_user = str(getattr(delivery_context, "user_id", "") or user_id or "")
+            delivery = DeliveryContext(
+                channel=resolved_channel,
+                user_id=resolved_user,
+                recipient_key=make_recipient_key(resolved_channel, resolved_user),
+                display_name=str(target.get("sender_name") or target.get("display_name") or ""),
+                target=target,
+                metadata=dict(getattr(delivery_context, "metadata", None) or {}),
+            )
+        elif channel:
+            delivery = DeliveryContext(
+                channel=str(channel),
+                user_id=str(user_id or ""),
+                recipient_key=make_recipient_key(channel, user_id),
+            )
         return InboxItem(
             kind=kind,
             content=user_message,
@@ -823,16 +987,22 @@ class Agent:
             channel_instructions=channel_instructions,
             metadata=extra_metadata,
             stream=stream,
+            delivery=delivery,
         )
 
-    async def submit(self, item: InboxItem):
-        """Submit a classified inbox item.
+    def submit(
+        self,
+        item: InboxItem,
+        session: Optional[DeliverySession] = None,
+    ):
+        """Submit a classified inbox item. Unique waking entry for model turns.
 
-        Observations persist without waking a model turn. Waking items are
-        driven through ``chat_events``.
+        Observations persist without waking a model turn. Waking items go
+        through the priority queue, turn lease, and delivery session.
+        ``chat_events`` is a compatibility wrapper around this method.
         """
         if item.kind is InboxKind.OBSERVATION:
-            return await self.observe(
+            return self.observe(
                 context=item.content,
                 source=str((item.metadata or {}).get("source") or "environment"),
                 event_type=str((item.metadata or {}).get("event_type") or "observation"),
@@ -841,17 +1011,216 @@ class Agent:
                 channel=item.channel,
                 user_id=item.user_id,
             )
-        return self.chat_events(
-            user_message=item.content,
-            user_id=item.user_id,
-            image_source=item.image_source,
-            attachments=item.attachments,
-            stream=item.stream,
-            channel_instructions=item.channel_instructions,
-            room_name=item.room_name,
-            channel=item.channel,
-            inbox_kind=item.kind,
+        return self._waking_events(item, session=session)
+
+    async def enqueue_initiative(self, impulse: Any) -> bool:
+        """Queue a low-priority initiative turn from a subconscious impulse."""
+        recipient_key = str(getattr(impulse, "recipient_key", "") or "").strip()
+        intent = str(getattr(impulse, "intent", "") or "").strip()
+        if not recipient_key or not intent:
+            return False
+        directory = self.recipient_directory
+        if directory is None:
+            return False
+        route = directory.resolve(recipient_key)
+        if route is None:
+            return False
+        if not self.delivery.has_channel(route.channel):
+            logger.info(
+                "Impulse not queued: this process cannot deliver to %s",
+                route.channel,
+            )
+            return False
+        if self.inbox.has_initiative():
+            return False
+        delivery = DeliveryContext.from_route(
+            route,
+            metadata={"source": "initiative", "intent": intent},
         )
+        item = InboxItem(
+            kind=InboxKind.INITIATIVE_TURN,
+            content=intent,
+            user_id=route.user_id,
+            channel=route.channel,
+            delivery=delivery,
+            metadata={
+                "source": "initiative",
+                "intent": intent,
+                "recipient_key": route.recipient_key,
+            },
+        )
+        delivery.metadata["item_id"] = item.item_id
+        item.metadata["item_id"] = item.item_id
+        asyncio.create_task(self._run_initiative(item), name="xagent-initiative")
+        await asyncio.sleep(0)
+        return self.inbox.has_initiative()
+
+    async def _run_initiative(self, item: InboxItem) -> None:
+        try:
+            async for _event in self._waking_events(item):
+                pass
+        except Exception:
+            logger.exception("Initiative turn failed")
+
+    async def _admit_initiative(self, item: InboxItem, session: DeliverySession) -> bool:
+        """No-tool gate before an initiative waking turn. Failure is silence."""
+        if not session.can_deliver():
+            logger.info("Initiative admission rejected: channel unavailable")
+            return False
+        msg_handler = getattr(self, "message_handler", None)
+        model_client = getattr(self, "model_client", None)
+        if msg_handler is None or model_client is None:
+            return False
+        try:
+            hot_window = self.max_history
+            recent_messages = await msg_handler.get_recent_messages(
+                max_history=AgentConfig.history_fetch_depth(hot_window)
+            )
+            memory_context = await self.memory_handler.get_recent_context()
+            delivery = item.delivery
+            recipient_key = (delivery.recipient_key if delivery else "") or make_recipient_key(item.channel, item.user_id)
+            display_name = (delivery.display_name if delivery else "") or item.user_id
+            intent = str((item.metadata or {}).get("intent") or item.content or "").strip()
+            relationship_context = await self.memory_handler.get_relationship_context(
+                speaker_keys=[recipient_key],
+            )
+            instructions = msg_handler.build_instruction_messages(
+                tool_names=[],
+                skills_catalog="",
+                supports_vision=self.supports_vision,
+                workspace_context="",
+            )
+            iteration_messages = msg_handler.build_turn_context_messages(
+                recent_messages,
+                current_user_id=item.user_id,
+                memory_context=memory_context,
+                relationship_context=relationship_context,
+                max_messages=hot_window,
+                include_images=False,
+                workspace_dir=getattr(self, "workspace_dir", None),
+                task_mode="initiative_admission",
+                initiative_intent=intent,
+                recipient_key=recipient_key,
+                recipient_display_name=display_name,
+                channel_available=True,
+                prompt_registry=getattr(msg_handler, "prompt_registry", None),
+            )
+            input_messages = msg_handler.sanitize_input_messages(list(iteration_messages))
+            text_parts: list[str] = []
+            async for model_event in model_client.model_turn_events(
+                messages=input_messages,
+                tool_specs=[],
+                instructions=instructions,
+                stream=False,
+            ):
+                if model_event.type in {"delta", "text"} and model_event.delta:
+                    text_parts.append(model_event.delta)
+                elif model_event.type == "error":
+                    logger.info("Initiative admission model error; rejecting")
+                    return False
+            admitted = self._parse_admission_decision("".join(text_parts))
+            if not admitted:
+                logger.info("Initiative admission rejected")
+            return admitted
+        except Exception:
+            logger.warning("Initiative admission failed", exc_info=True)
+            return False
+
+    @staticmethod
+    def _parse_admission_decision(text: str) -> bool:
+        cleaned = (text or "").strip()
+        if cleaned.startswith("```"):
+            lines = cleaned.split("\n")
+            end = None
+            for i in range(len(lines) - 1, 0, -1):
+                if lines[i].strip() == "```":
+                    end = i
+                    break
+            if end is not None:
+                cleaned = "\n".join(lines[1:end]).strip()
+        parsed: Any = None
+        try:
+            parsed = json.loads(cleaned)
+        except json.JSONDecodeError:
+            decoder = json.JSONDecoder()
+            for index, char in enumerate(cleaned):
+                if char != "{":
+                    continue
+                try:
+                    obj, _end = decoder.raw_decode(cleaned[index:])
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(obj, dict):
+                    parsed = obj
+                    break
+        if not isinstance(parsed, dict):
+            return False
+        raw = parsed.get("admit")
+        if isinstance(raw, str):
+            return raw.strip().lower() in {"true", "1", "yes"}
+        return bool(raw)
+
+    async def _prepare_turn_user_message(
+        self,
+        *,
+        inbox_item: InboxItem,
+        user_metadata: Dict[str, Any],
+    ) -> Message:
+        if not inbox_item.kind.stores_user_message:
+            user_msg = Message.create(
+                content=str(inbox_item.content or ""),
+                role=RoleType.USER,
+                sender_id=inbox_item.user_id,
+                image_source=inbox_item.image_source,
+            )
+            user_msg.channel = inbox_item.channel
+            user_msg.room_name = inbox_item.room_name
+            user_msg.metadata.update(user_metadata)
+            return user_msg
+        return await self.message_handler.store_user_message(
+            inbox_item.content,
+            inbox_item.user_id,
+            inbox_item.image_source,
+            attachments=inbox_item.attachments,
+            room_name=inbox_item.room_name,
+            channel=inbox_item.channel,
+            metadata=user_metadata,
+        )
+
+    @staticmethod
+    def _assistant_history_metadata(inbox_item: InboxItem, phase: str) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {"turn_phase": phase}
+        if inbox_item.kind is InboxKind.INITIATIVE_TURN:
+            payload["source"] = "initiative"
+        return payload
+
+    async def _persist_assistant_if_accepted(
+        self,
+        *,
+        ack: DeliveryAck,
+        trigger: Optional[Message],
+        content: str,
+        metadata: Optional[Dict[str, Any]] = None,
+        attachments: Optional[List[Dict[str, Any]]] = None,
+        room_name: Optional[str] = None,
+        channel: Optional[str] = None,
+        recipient_id: Optional[str] = None,
+    ) -> Optional[Message]:
+        if not ack.accepted:
+            logger.info("Skipping assistant history; delivery was not accepted")
+            return None
+        assistant_msg = await self.message_handler.store_model_reply(
+            content,
+            self._assistant_sender_id,
+            metadata=metadata,
+            attachments=attachments,
+            room_name=room_name,
+            channel=channel,
+            recipient_id=recipient_id,
+        )
+        messages = [assistant_msg] if trigger is None else [trigger, assistant_msg]
+        self._schedule_experience_write(messages=messages)
+        return assistant_msg
 
     async def observe(
         self,
@@ -898,10 +1267,11 @@ class Agent:
         self,
         content: str,
     ) -> AgentTurnResult:
-        """Record a raw subconscious thought directly in the diary."""
+        """Record a raw subconscious thought through the durable diary entry."""
         note = str(content or "").strip()
+        written = False
         if note:
-            await self.markdown_memory.append_daily(note)
+            written = await self.memory_handler.append_durable_diary(note)
         return AgentTurnResult(
             kind="subconscious_thought",
             replied=False,

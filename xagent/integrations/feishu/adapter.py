@@ -12,10 +12,9 @@ Routing is intentionally small:
 * Any other chat type is ignored.
 
 Before a Feishu message reaches the agent, the sender ID is resolved to a
-display name through the official contact API. By default, internal
-``ou_`` / ``on_`` IDs stay inside this adapter and are not passed into
-``agent.chat``. Group room context renders speakers as ``name(id)``
-when an ID is available.
+display name through the official contact API. Direct chats now pass the
+stable ``sender_id`` into ``agent.chat``; ``sender_name`` is display-only.
+Group room context renders speakers as ``name(id)`` when an ID is available.
 
 Group replies are sent as plain replies anchored to the source message
 (``reply_to``); never as Feishu topic/thread replies. p2p replies are sent
@@ -36,20 +35,23 @@ import mimetypes
 import re
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, AsyncGenerator, Optional, Union
 from urllib.parse import parse_qs, unquote, urlparse
 
 from ...core.agent import Agent
 from ...core.config import AgentConfig
+from ...core.delivery import (
+    DeliveryAck,
+    DeliveryContext,
+    DeliverySession,
+    ImmediateDeliverySession,
+)
 from ...core.runtime import (
     AsyncTaskScheduler,
     ScheduledDeliveryContext,
-    SubconsciousDelivery,
-    resolve_contacts_path,
     scheduled_delivery_context,
-    upsert_contact,
 )
 from ...interfaces.channel import ChatTurnRequest
 from .config import FeishuAdapterConfig
@@ -110,12 +112,6 @@ class _FeishuOutboundAttachment:
     path: Path
     caption: str = ""
     blob_url: str = ""
-
-
-@dataclass(frozen=True)
-class _FeishuScheduledTaskResult:
-    content: str
-    attachments: list[_FeishuOutboundAttachment] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -192,6 +188,71 @@ class FeishuArtifactRenderer:
         )
 
 
+class FeishuDeliverySession:
+    """Unified outbound session for Feishu cards/Markdown."""
+
+    def __init__(self, adapter: "FeishuAdapter", context: DeliveryContext) -> None:
+        self.adapter = adapter
+        self.context = context
+        self._sent = 0
+
+    def can_deliver(self) -> bool:
+        if self.adapter._channel is None:
+            return False
+        chat_id = str(self.context.target.get("chat_id") or "").strip()
+        if not chat_id:
+            return False
+        if bool(self.context.target.get("is_group")):
+            source = str((self.context.metadata or {}).get("source") or "")
+            if source == "initiative":
+                return False
+        return True
+
+    async def consume(self, event: dict) -> DeliveryAck:
+        if event.get("type") != "message_done":
+            return DeliveryAck(accepted=True)
+        content = str(event.get("content") or "").strip()
+        attachments = self.adapter._outbound_attachments_from_event(event)
+        if not content and not attachments:
+            return DeliveryAck(accepted=True)
+        chat_id = str(self.context.target.get("chat_id") or "").strip()
+        if not chat_id:
+            return DeliveryAck(accepted=False, error="missing chat_id")
+        is_group = bool(self.context.target.get("is_group"))
+        self._sent += 1
+        meta = self.context.metadata or {}
+        task_id = str(meta.get("task_id") or "").strip()
+        run_at = str(meta.get("run_at") or "").strip()
+        if task_id and run_at:
+            uuid_message_id = f"scheduled:{task_id}:{run_at}"
+            if self._sent > 1:
+                uuid_message_id = f"{uuid_message_id}:{self._sent}"
+        else:
+            item_id = str((self.context.metadata or {}).get("item_id") or "").strip()
+            source = str((self.context.metadata or {}).get("source") or "outbound").strip() or "outbound"
+            if item_id:
+                uuid_message_id = f"{source}:{item_id}:{self._sent}"
+            else:
+                uuid_message_id = f"{source}:{task_id or self.context.user_id}:{self._sent}"
+        try:
+            sent = await self.adapter._send_markdown(
+                chat_id=chat_id,
+                message_id=None,
+                uuid_message_id=uuid_message_id,
+                text=content,
+                is_group=is_group,
+                attachments=attachments,
+            )
+            if not sent:
+                return DeliveryAck(accepted=False, error="feishu send was not accepted")
+            return DeliveryAck(accepted=True)
+        except Exception as exc:
+            return DeliveryAck(accepted=False, error=str(exc))
+
+    async def aclose(self) -> None:
+        return None
+
+
 class FeishuAdapter:
     """Bridge between ``FeishuChannel`` events and an ``Agent`` instance."""
 
@@ -221,7 +282,9 @@ class FeishuAdapter:
         runtime_root = Path(getattr(agent, "workspace", AgentConfig.DEFAULT_WORKSPACE)).expanduser().resolve()
         self._tasks_dir = runtime_root / AgentConfig.TASKS_DIRNAME
         self._task_scheduler: Optional[AsyncTaskScheduler] = None
-        self._contacts_file = resolve_contacts_path(runtime_root)
+        register = getattr(agent, "register_delivery", None)
+        if callable(register):
+            register("feishu", self.open_delivery_session)
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -538,7 +601,7 @@ class FeishuAdapter:
             await self._handle_chat(
                 chat_id=chat_id,
                 message_id=message_id,
-                user_id=sender_name,
+                user_id=sender_id,
                 sender_id=sender_id,
                 sender_name=sender_name,
                 text=text,
@@ -704,7 +767,7 @@ class FeishuAdapter:
         await self._handle_chat(
             chat_id=chat_id,
             message_id=message_id,
-            user_id=sender_name,
+            user_id=sender_id,
             sender_id=sender_id,
             sender_name=sender_name,
             text=text,
@@ -753,7 +816,7 @@ class FeishuAdapter:
             metadata=metadata,
             room_name=room_name,
             channel="feishu",
-            user_id=sender_name or sender_id,
+            user_id=sender_id or sender_name,
         )
 
     async def _decide_group_participation(
@@ -2217,21 +2280,23 @@ class FeishuAdapter:
                 "chat_id": chat_id,
             },
         )
-        # Record contact for subconscious thought routing
-        try:
-            upsert_contact(
-                self._contacts_file,
-                channel="feishu",
-                user_id=user_id,
-                target={
-                    "chat_id": chat_id,
-                    "is_group": is_group,
-                    "sender_id": sender_id,
-                    "sender_name": sender_name,
-                },
-            )
-        except Exception:
-            self.logger.debug("Failed to record contact for subconscious", exc_info=True)
+        # Record a direct-session route. Groups are never initiative targets.
+        if not is_group:
+            recorder = getattr(self.agent, "record_direct_recipient", None)
+            if callable(recorder):
+                try:
+                    recorder(
+                        channel="feishu",
+                        user_id=sender_id or user_id,
+                        display_name=sender_name,
+                        target={
+                            "chat_id": chat_id,
+                            "sender_id": sender_id,
+                        },
+                        aliases=[sender_name] if sender_name else None,
+                    )
+                except Exception:
+                    self.logger.debug("Failed to record Feishu recipient route", exc_info=True)
 
         with scheduled_delivery_context(context):
             await self._send_event_replies(
@@ -2255,172 +2320,90 @@ class FeishuAdapter:
         chat_id = str(target.get("chat_id") or "").strip()
         if not chat_id:
             raise ValueError("scheduled Feishu task is missing chat_id")
-        result = await self._scheduled_task_result(task)
-        if not result.content and not result.attachments:
-            raise ValueError("scheduled Feishu task produced no content")
-        message_id = str(target.get("message_id") or "").strip() or None
-        is_group = bool(target.get("is_group"))
-        # Include run_at so recurring/interval dispatches are not Feishu-deduped
-        # by a stable task_id-only uuid across executions.
-        uuid_message_id = self._message_uuid(
-            f"scheduled:{task.task_id}:{task.run_at.isoformat(sep=' ')}"
-        )
-        if result.content:
-            send_result = await send_message(
-                self._channel,
-                chat_id=chat_id,
-                payload={"markdown": result.content},
-                reply_to=None,
-                uuid=uuid_message_id,
-                logger=self.logger,
-                message_id=message_id,
-            )
-            if getattr(send_result, "success", False) is False:
-                raise RuntimeError(f"Feishu scheduled send failed: {getattr(send_result, 'error', None)}")
-        if result.attachments:
-            await self._send_outbound_attachments(
-                chat_id=chat_id,
-                message_id=None,
-                uuid_message_id=uuid_message_id,
-                attachments=result.attachments,
-                is_group=is_group,
-            )
-        message_handler = getattr(self.agent, "message_handler", None)
-        store_model_reply = getattr(message_handler, "store_model_reply", None)
-        if callable(store_model_reply):
-            try:
-                await store_model_reply(
-                    result.content,
-                    getattr(self.agent, "_assistant_sender_id", "agent"),
-                    metadata={
-                        "scheduled_task": {
-                            "id": task.task_id,
-                            "name": task.name,
-                            "type": task.task_type,
-                            "run_at": task.run_at.isoformat(sep=" "),
-                            "delivery": task.delivery,
-                        }
-                    },
-                    attachments=[
-                        {
-                            "kind": attachment.kind,
-                            "path": self._workspace_blob_relative_path(attachment.blob_url),
-                            "blob_url": attachment.blob_url or self._path_to_workspace_blob_url(attachment.path),
-                            "caption": attachment.caption,
-                        }
-                        for attachment in result.attachments
-                    ],
-                    recipient_id=chat_id if is_group else (target.get("user_id") or target.get("sender_id")),
-                )
-            except Exception:
-                self.logger.debug("Failed to persist Feishu scheduled task result", exc_info=True)
-
-    async def deliver_subconscious_message(self, delivery: SubconsciousDelivery) -> None:
-        if delivery.recipient.channel != "feishu":
-            raise ValueError(f"Feishu runtime cannot deliver subconscious channel {delivery.recipient.channel!r}")
-        target = delivery.recipient.target
-        chat_id = str(target.get("chat_id") or "").strip()
-        if not chat_id:
-            raise ValueError("subconscious Feishu delivery is missing chat_id")
-        message_id = str(target.get("message_id") or "").strip() or None
-        is_group = bool(target.get("is_group"))
-        uuid_message_id = f"subconscious:{delivery.created_at.isoformat(sep=' ')}:{delivery.recipient.user_id}"
-        await self._send_markdown(
-            chat_id=chat_id,
-            message_id=message_id,
-            uuid_message_id=uuid_message_id,
-            text=delivery.content,
-            is_group=is_group,
-        )
-        message_handler = getattr(self.agent, "message_handler", None)
-        store_model_reply = getattr(message_handler, "store_model_reply", None)
-        if callable(store_model_reply):
-            try:
-                await store_model_reply(
-                    delivery.content,
-                    getattr(self.agent, "_assistant_sender_id", "agent"),
-                    metadata={
-                        "subconscious": {
-                            "source": "subconscious",
-                            "created_at": delivery.created_at.isoformat(sep=" "),
-                            "recipient": {
-                                "channel": delivery.recipient.channel,
-                                "user_id": delivery.recipient.user_id,
-                                "target": target,
-                            },
-                        }
-                    },
-                    recipient_id=chat_id if is_group else delivery.recipient.user_id,
-                )
-            except Exception:
-                self.logger.debug("Failed to persist Feishu subconscious delivery", exc_info=True)
-
-    async def _scheduled_task_result(self, task) -> _FeishuScheduledTaskResult:
-        task_type = task.task_type
-        if task_type == "message":
-            return _FeishuScheduledTaskResult(task.content.strip())
-        if task_type != "agent":
-            raise ValueError(f"unsupported scheduled Feishu task type: {task_type}")
-
-        chat_events = getattr(self.agent, "chat_events", None)
-        if not callable(chat_events):
-            raise RuntimeError("Agent does not support chat_events().")
-        user_id = task.delivery_user_id or str(task.target.get("sender_id") or AgentConfig.DEFAULT_USER_ID)
-        context = ScheduledDeliveryContext(
+        user_id = task.delivery_user_id or str(target.get("sender_id") or target.get("user_id") or AgentConfig.DEFAULT_USER_ID)
+        context = DeliveryContext(
             channel="feishu",
             user_id=user_id,
-            target=task.delivery.get("target") if isinstance(task.delivery.get("target"), dict) else {},
+            recipient_key=f"feishu:{user_id}",
+            display_name=str(target.get("sender_name") or target.get("display_name") or ""),
+            target=dict(target),
             metadata={
                 "source": "scheduled_task",
                 "task_id": task.task_id,
                 "task_name": task.name,
                 "task_type": task.task_type,
+                "run_at": task.run_at.isoformat(sep=" "),
             },
         )
-        with scheduled_delivery_context(context):
-            return await self._scheduled_task_event_result(
-                chat_events,
-                prompt=str(task.content or "").strip(),
-                user_id=user_id,
-            )
+        session = self.open_delivery_session(context)
+        metadata = {
+            "scheduled_task": {
+                "id": task.task_id,
+                "name": task.name,
+                "type": task.task_type,
+                "run_at": task.run_at.isoformat(sep=" "),
+                "delivery": task.delivery,
+            }
+        }
+        if task.task_type == "message":
+            if not str(task.content or "").strip():
+                raise ValueError("scheduled Feishu task produced no content")
+            deliver = getattr(self.agent, "deliver_prepared_message", None)
+            if callable(deliver):
+                stored = await deliver(
+                    session=session,
+                    content=task.content.strip(),
+                    channel="feishu",
+                    recipient_id=chat_id if bool(target.get("is_group")) else user_id,
+                    metadata=metadata,
+                )
+                if stored is None:
+                    raise RuntimeError("Feishu scheduled send was not accepted")
+                return
+            ack = await session.consume({
+                "type": "message_done",
+                "phase": "final",
+                "content": task.content.strip(),
+            })
+            if not ack.accepted:
+                raise RuntimeError(ack.error or "Feishu scheduled send was not accepted")
+            return
+        if task.task_type != "agent":
+            raise ValueError(f"unsupported scheduled Feishu task type: {task.task_type}")
+        from ...core.inbox import InboxItem, InboxKind
 
-    async def _scheduled_task_event_result(
-        self,
-        chat_events,
-        *,
-        prompt: str,
-        user_id: str,
-    ) -> _FeishuScheduledTaskResult:
-        final_content = ""
-        final_attachments: list[_FeishuOutboundAttachment] = []
-        last_error = ""
+        submit = getattr(self.agent, "submit", None)
+        if callable(submit):
+            item = InboxItem(
+                kind=InboxKind.SCHEDULED_TURN,
+                content=str(task.content or "").strip(),
+                user_id=user_id,
+                channel="feishu",
+                delivery=context,
+                metadata={"source": "scheduled_task", "task_id": task.task_id},
+            )
+            async for _event in submit(item, session=session):
+                pass
+            return
+        chat_events = getattr(self.agent, "chat_events", None)
+        if not callable(chat_events):
+            raise RuntimeError("Agent does not support scheduled turns.")
         async for event in chat_events(
-            user_message=prompt,
+            user_message=str(task.content or "").strip(),
             user_id=user_id,
             stream=False,
             channel="feishu",
             inbox_kind="scheduled_turn",
+            session=session,
         ):
-            event_type = event.get("type")
-            if event_type == "message_done" and str(event.get("phase") or "final") == "final":
-                final_content = str(event.get("content") or "").strip()
-                final_attachments = self._outbound_attachments_from_event(event)
-            elif event_type == "error":
-                last_error = str(event.get("error") or "").strip()
-        if final_content or final_attachments:
-            return _FeishuScheduledTaskResult(final_content, final_attachments)
-        return _FeishuScheduledTaskResult(last_error)
+            consume = getattr(session, "consume", None)
+            if callable(consume):
+                result = consume(event)
+                if inspect.isawaitable(result):
+                    await result
 
-    @staticmethod
-    def _stringify_scheduled_agent_response(response: Any) -> str:
-        if isinstance(response, str):
-            return response
-        if hasattr(response, "model_dump"):
-            try:
-                return json.dumps(response.model_dump(), ensure_ascii=False)
-            except Exception:
-                return str(response)
-        return str(response)
+    def open_delivery_session(self, context: DeliveryContext) -> "FeishuDeliverySession":
+        return FeishuDeliverySession(self, context)
 
     def _chat_kwargs(
         self,
@@ -2608,7 +2591,12 @@ class FeishuAdapter:
         anchor = self._reply_anchor(raw_msg=raw_msg, message_id=message_id)
         sent_count = 0
         room_name = chat_kwargs.pop("room_name", None)
-        async for event in chat_events(**chat_kwargs, stream=False, room_name=room_name):
+        async for event in chat_events(
+            **chat_kwargs,
+            stream=False,
+            room_name=room_name,
+            session=ImmediateDeliverySession(),
+        ):
             event_type = event.get("type")
             if event_type == "message_done":
                 content = str(event.get("content") or "").strip()
@@ -2722,7 +2710,12 @@ class FeishuAdapter:
                     is_group=is_group,
                 )
 
-        async for event in chat_events_fn(**chat_kwargs, stream=True, room_name=room_name):
+        async for event in chat_events_fn(
+            **chat_kwargs,
+            stream=True,
+            room_name=room_name,
+            session=ImmediateDeliverySession(),
+        ):
             event_type = event.get("type")
             if event_type == "message_start":
                 if active_queue is not None:
@@ -2839,15 +2832,17 @@ class FeishuAdapter:
         is_group: bool,
         uuid_message_id: Optional[str] = None,
         attachments: Optional[list[_FeishuOutboundAttachment]] = None,
-    ) -> None:
+    ) -> bool:
         assert self._channel is not None
         explicit_attachments = self._dedupe_outbound_attachments(attachments or [])
         seen_paths = {attachment.path for attachment in explicit_attachments}
         text, parsed_attachments = self._split_outbound_attachments(text, seen_paths=seen_paths)
         outbound_attachments = [*explicit_attachments, *parsed_attachments]
+        if not text.strip() and not outbound_attachments:
+            return True
         try:
             if text.strip():
-                await send_message(
+                result = await send_message(
                     self._channel,
                     chat_id=chat_id,
                     payload={"markdown": text},
@@ -2856,6 +2851,8 @@ class FeishuAdapter:
                     logger=self.logger,
                     message_id=message_id,
                 )
+                if not self._send_result_success(result):
+                    return False
             if outbound_attachments:
                 await self._send_outbound_attachments(
                     chat_id=chat_id,
@@ -2864,8 +2861,10 @@ class FeishuAdapter:
                     attachments=outbound_attachments,
                     is_group=is_group,
                 )
+            return True
         except Exception:
             self.logger.exception("Failed to send Feishu message to %s", chat_id)
+            return False
 
     async def _send_outbound_attachments(
         self,

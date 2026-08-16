@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
+import unicodedata
 from contextlib import asynccontextmanager
 from datetime import date, timedelta
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import IO, TYPE_CHECKING, List, Optional
 
@@ -39,6 +42,9 @@ class MemoryHandler:
     DEFAULT_JOURNAL_SOURCE_CHARS = 24000  # Soft per-batch source budget; records remain intact.
     SUBCONSCIOUS_SUMMARY_SCOPES = ("yearly", "monthly", "weekly")
     SUBCONSCIOUS_SUMMARY_CHARS_PER_SCOPE = 2000
+    DIARY_DEDUP_WINDOW = AgentConfig.DIARY_DEDUP_WINDOW
+    DIARY_SIMILARITY_THRESHOLD = AgentConfig.DIARY_SIMILARITY_THRESHOLD
+    _DAILY_ENTRY_SPLIT = re.compile(r"\n---\s*\n")
 
     def __init__(
         self,
@@ -171,6 +177,74 @@ class MemoryHandler:
             sections.append("Recent daily diary:\n" + recent.strip())
 
         return "\n\n".join(sections)
+
+    async def append_durable_diary(self, content: str) -> bool:
+        """Append a durable diary note after re-read/dedup under the journal lock.
+
+        Returns True only when a new entry was written. Empty input, exact
+        duplicates, and near-duplicates in the recent window are rejected.
+        """
+        note = str(content or "").strip()
+        if not note:
+            return False
+        async with self._maintenance_guard():
+            return await self._append_durable_diary_locked(note)
+
+    async def _append_durable_diary_locked(self, note: str) -> bool:
+        recent = await self._recent_diary_entry_bodies(self.DIARY_DEDUP_WINDOW)
+        if self._is_duplicate_diary(note, recent):
+            logger.info("Skipped duplicate diary entry (%d chars)", len(note))
+            return False
+        await self.memory.append_daily(note)
+        return True
+
+    async def _recent_diary_entry_bodies(self, limit: int) -> list[str]:
+        days = max(1, int(self.recent_days or self.RECENT_DAYS))
+        entries = await self.memory.read_recent_dailies(days=days)
+        bodies: list[str] = []
+        for _date_str, content in entries:
+            bodies.extend(self._split_daily_entries(content))
+        if limit <= 0:
+            return bodies
+        return bodies[-int(limit):]
+
+    @classmethod
+    def _split_daily_entries(cls, daily_text: str) -> list[str]:
+        chunks = cls._DAILY_ENTRY_SPLIT.split(daily_text or "")
+        bodies: list[str] = []
+        for chunk in chunks:
+            text = chunk.strip()
+            if not text:
+                continue
+            lines = text.splitlines()
+            if lines and lines[0].startswith("## "):
+                body = "\n".join(lines[1:]).strip()
+            else:
+                body = text
+            if body:
+                bodies.append(body)
+        return bodies
+
+    @classmethod
+    def _is_duplicate_diary(cls, candidate: str, existing: list[str]) -> bool:
+        normalized = cls._normalize_diary_text(candidate)
+        if not normalized:
+            return True
+        threshold = float(cls.DIARY_SIMILARITY_THRESHOLD)
+        for body in existing:
+            other = cls._normalize_diary_text(body)
+            if not other:
+                continue
+            if normalized == other:
+                return True
+            if SequenceMatcher(None, normalized, other).ratio() >= threshold:
+                return True
+        return False
+
+    @staticmethod
+    def _normalize_diary_text(text: str) -> str:
+        folded = unicodedata.normalize("NFKC", str(text or "")).casefold()
+        return " ".join(folded.split())
 
     async def _latest_summary_sections_for_subconscious(self) -> list[str]:
         sections: list[str] = []
@@ -460,9 +534,9 @@ class MemoryHandler:
 
         ``speaker_keys`` (the current speaker) are always included first;
         ``participant_keys`` (other people in the room) fill remaining budget.
-        ``include_routing_id`` appends each person's ``user_id`` to the header
-        so the subconscious can emit a deterministic ``recipient_hint``; reply
-        turns leave it off so the identifier is never exposed to users.
+        ``include_routing_id`` appends each person's ``recipient_key`` to the header
+        so the subconscious can emit a deterministic impulse; reply turns leave
+        it off so the identifier is never exposed to users.
         """
         if self.relationship_store is None:
             return ""
@@ -494,8 +568,8 @@ class MemoryHandler:
         for card in cards:
             name = card.display_name or card.user_id or card.key
             body = card.body.strip()
-            if include_routing_id and card.user_id:
-                header = f"## {name} [user_id: {card.user_id}]"
+            if include_routing_id and card.key:
+                header = f"## {name} [recipient_key: {card.key}]"
             else:
                 header = f"## {name}"
             blocks.append(f"{header}\n{body}")
@@ -536,7 +610,15 @@ class MemoryHandler:
                 journal_date=today_str,
             )
             if content.strip():
-                await self.memory.append_daily(content)
+                written = await self._append_durable_diary_locked(content)
+                if not written:
+                    logger.info(
+                        "Diary write skipped as duplicate [trigger=%s] cursor %d→%d",
+                        trigger,
+                        start_cursor,
+                        end_cursor,
+                    )
+                    return True
 
                 if trigger == "idle":
                     logger.info(

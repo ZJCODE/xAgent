@@ -386,14 +386,18 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(Path(self.memory.root / ".journal_cursor").exists())
 
     async def test_run_maintenance_retries_full_window_after_partial_batch_failure(self):
+        unique_bodies = (
+            "entry 0 first distinct journal body about weather and travel " + ("a" * 40),
+            "entry 1 second distinct journal body about cooking and music " + ("b" * 40),
+        )
         storage = _FakeMessageStorage([
             Message(
                 role=RoleType.USER,
                 sender_id="alice",
-                content=f"entry {index} " + ("x" * 80),
+                content=body,
                 timestamp=1712000000 + index,
             )
-            for index in range(2)
+            for index, body in enumerate(unique_bodies)
         ])
         failing_llm = _FakeLLMService()
         failing_llm.fail_on_diary_call_number = 2
@@ -424,7 +428,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(second_wrote)
         self.assertEqual(len(retry_llm.diary_calls), 2)
         today_text = await self.memory.read_file(self.memory.daily_path(date.today()))
-        self.assertEqual(today_text.count("entry 0"), 2)
+        self.assertEqual(today_text.count("entry 0"), 1)
         self.assertEqual(today_text.count("entry 1"), 1)
 
     async def test_run_maintenance_reads_plain_int_cursor(self):
@@ -759,6 +763,29 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(generated)
         summary_text = await self.memory.read_file(self.memory.yearly_path(2025))
         self.assertIn("[Summary: yearly 2025]", summary_text)
+
+    async def test_append_durable_diary_rejects_empty_and_duplicates(self):
+        self.assertFalse(await self.handler.append_durable_diary("   "))
+        self.assertTrue(await self.handler.append_durable_diary("A new durable observation."))
+        self.assertFalse(await self.handler.append_durable_diary("A new durable observation."))
+        self.assertFalse(await self.handler.append_durable_diary("a NEW   durable observation."))
+        self.assertTrue(await self.handler.append_durable_diary("A genuinely different durable note."))
+        long_note = (
+            "The kitchen light stayed on after midnight and the kettle clicked twice "
+            "while rain tapped the same window pane without changing anything else."
+        )
+        self.assertTrue(await self.handler.append_durable_diary(long_note))
+        near_duplicate = (
+            "The kitchen light stayed on after midnight and the kettle clicked twice "
+            "while rain tapped the same window pane without changing much else."
+        )
+        self.assertFalse(await self.handler.append_durable_diary(near_duplicate))
+        entries = await self.memory.read_recent_dailies(days=1)
+        bodies = "\n".join(content for _date, content in entries)
+        self.assertEqual(bodies.count("A new durable observation."), 1)
+        self.assertIn("A genuinely different durable note.", bodies)
+        self.assertIn(long_note, bodies)
+        self.assertNotIn("without changing much else", bodies)
 
 
 if __name__ == "__main__":

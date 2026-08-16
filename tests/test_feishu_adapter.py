@@ -17,7 +17,8 @@ except ImportError:  # pragma: no cover - optional dependency
 from xagent.integrations.feishu import adapter as feishu_adapter_module
 from xagent.integrations.feishu.adapter import FeishuAdapter, _FeishuOutboundAttachment
 from xagent.integrations.feishu.config import FeishuAdapterConfig
-from xagent.core.runtime import ContactEntry, SubconsciousDelivery, enqueue_scheduled_task, list_task_records
+from xagent.core.runtime import enqueue_scheduled_task, list_task_records
+from xagent.core.delivery import DeliveryContext
 
 
 class _FakeAgent:
@@ -33,6 +34,7 @@ class _FakeAgent:
         return "agent reply"
 
     async def chat_events(self, **kwargs):
+        kwargs.pop("session", None)
         self.chat_calls.append(kwargs)
         yield {"type": "message_start", "message_id": "m1", "phase": "final"}
         yield {"type": "message_done", "message_id": "m1", "phase": "final", "content": "agent reply"}
@@ -65,6 +67,7 @@ class _AttachmentEventAgent(_FakeAgent):
         self.attachments = attachments
 
     async def chat_events(self, **kwargs):
+        kwargs.pop("session", None)
         self.chat_calls.append(kwargs)
         yield {
             "type": "message_done",
@@ -89,6 +92,7 @@ class _SlowChatAgent(_FakeAgent):
         return "agent reply"
 
     async def chat_events(self, **kwargs):
+        kwargs.pop("session", None)
         self.chat_calls.append(kwargs)
         self.started.set()
         await self.release.wait()
@@ -386,37 +390,82 @@ class FeishuAdapterTests(unittest.TestCase):
 
         asyncio.run(run_test())
 
-    def test_deliver_subconscious_message_sends_markdown_and_persists(self):
+    def test_delivery_session_sends_markdown_and_rejects_group_initiative(self):
         async def run_test():
             agent = _FakeAgent()
-            agent.message_handler = SimpleNamespace(store_model_reply=AsyncMock())
             adapter = FeishuAdapter(agent=agent, config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret"))
             adapter._channel = _FakeChannel()
-            delivery = SubconsciousDelivery(
-                content="A direct thought",
-                recipient=ContactEntry(
+            p2p = adapter.open_delivery_session(DeliveryContext(
+                channel="feishu",
+                user_id="ou_user",
+                target={"chat_id": "oc_p2p", "is_group": False},
+                metadata={"source": "initiative"},
+            ))
+            self.assertTrue(p2p.can_deliver())
+            ack = await p2p.consume({
+                "type": "message_done",
+                "phase": "final",
+                "content": "A direct thought",
+            })
+            self.assertTrue(ack.accepted)
+            group = adapter.open_delivery_session(DeliveryContext(
+                channel="feishu",
+                user_id="ou_user",
+                target={"chat_id": "oc_group", "is_group": True},
+                metadata={"source": "initiative"},
+            ))
+            self.assertFalse(group.can_deliver())
+            return adapter
+
+        adapter = asyncio.run(run_test())
+        self.assertEqual(adapter._channel.sent[0][0], "oc_p2p")
+        self.assertEqual(adapter._channel.sent[0][1], {"markdown": "A direct thought"})
+
+    def test_delivery_session_nacks_when_feishu_send_fails(self):
+        async def run_test():
+            agent = _FakeAgent()
+            adapter = FeishuAdapter(agent=agent, config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret"))
+            adapter._channel = _FakeChannel(results=[SimpleNamespace(success=False, error=None, raw=None)])
+            session = adapter.open_delivery_session(DeliveryContext(
+                channel="feishu",
+                user_id="ou_user",
+                target={"chat_id": "oc_p2p", "is_group": False},
+                metadata={"source": "initiative", "item_id": "abc123"},
+            ))
+            ack = await session.consume({
+                "type": "message_done",
+                "phase": "final",
+                "content": "A direct thought",
+            })
+            self.assertFalse(ack.accepted)
+            return adapter
+
+        adapter = asyncio.run(run_test())
+        self.assertEqual(len(adapter._channel.sent), 1)
+
+    def test_initiative_uuid_is_unique_per_item(self):
+        async def run_test():
+            agent = _FakeAgent()
+            adapter = FeishuAdapter(agent=agent, config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret"))
+            adapter._channel = _FakeChannel()
+            for item_id in ("item_one_hex", "item_two_hex"):
+                session = adapter.open_delivery_session(DeliveryContext(
                     channel="feishu",
                     user_id="ou_user",
-                    target={"chat_id": "oc_group", "message_id": "om_anchor", "is_group": True},
-                    last_seen="2026-06-25 09:00:00",
-                ),
-                internal_content="inner",
-                created_at=datetime(2026, 6, 25, 9, 0, 0),
-            )
+                    target={"chat_id": "oc_p2p", "is_group": False},
+                    metadata={"source": "initiative", "item_id": item_id},
+                ))
+                await session.consume({
+                    "type": "message_done",
+                    "phase": "final",
+                    "content": "hello",
+                })
+            return adapter
 
-            await adapter.deliver_subconscious_message(delivery)
-
-            return agent, adapter
-
-        agent, adapter = asyncio.run(run_test())
-
-        self.assertEqual(adapter._channel.sent[0][0], "oc_group")
-        self.assertEqual(adapter._channel.sent[0][1], {"markdown": "A direct thought"})
-        self.assertEqual(adapter._channel.sent[0][2]["reply_to"], "om_anchor")
-        agent.message_handler.store_model_reply.assert_awaited_once()
-        self.assertEqual(agent.message_handler.store_model_reply.await_args.args[0], "A direct thought")
-        metadata = agent.message_handler.store_model_reply.await_args.kwargs["metadata"]
-        self.assertEqual(metadata["subconscious"]["source"], "subconscious")
+        adapter = asyncio.run(run_test())
+        uuids = [entry[2]["uuid"] for entry in adapter._channel.sent]
+        self.assertEqual(len(set(uuids)), 2)
+        self.assertTrue(all(uuid.startswith("initiative:") for uuid in uuids))
 
     def test_scheduled_agent_task_dispatch_sends_agent_reply_to_feishu_chat(self):
         async def run_test():
@@ -576,8 +625,7 @@ class FeishuAdapterTests(unittest.TestCase):
 
         asyncio.run(adapter._dispatch(msg))
 
-        self.assertEqual(agent.chat_calls[0]["user_id"], "Alice")
-        self.assertNotIn("ou_57abefd441c9b068703fa7b18543047e", repr(agent.chat_calls[0]))
+        self.assertEqual(agent.chat_calls[0]["user_id"], "ou_57abefd441c9b068703fa7b18543047e")
 
     def test_direct_image_message_downloads_resource_for_vision_chat(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -850,7 +898,7 @@ class FeishuAdapterTests(unittest.TestCase):
 
         asyncio.run(adapter._dispatch(SimpleNamespace(**msg)))
 
-        self.assertEqual(agent.chat_calls[0]["user_id"], "Alice")
+        self.assertEqual(agent.chat_calls[0]["user_id"], "user_123")
         self.assertEqual(resolver.calls[0], ("user_123", None, "user_id", "user"))
 
     def test_group_mention_reads_receive_v1_nested_sender_and_mention_ids(self):
@@ -951,8 +999,7 @@ class FeishuAdapterTests(unittest.TestCase):
 
         asyncio.run(adapter._dispatch(msg))
 
-        self.assertEqual(agent.chat_calls[0]["user_id"], "Feishu User")
-        self.assertNotIn("ou_user", repr(agent.chat_calls[0]))
+        self.assertEqual(agent.chat_calls[0]["user_id"], "ou_user")
 
     def test_group_mention_detects_mentions_matching_bot_identity(self):
         agent = _FakeAgent()
@@ -971,7 +1018,7 @@ class FeishuAdapterTests(unittest.TestCase):
         asyncio.run(adapter._dispatch(msg))
 
         self.assertEqual(len(agent.chat_calls), 1)
-        self.assertEqual(agent.chat_calls[0]["user_id"], "Feishu User")
+        self.assertEqual(agent.chat_calls[0]["user_id"], "ou_user")
         self.assertEqual(adapter._channel.sent[0][2], {"uuid": "om_group_msg"})
         self.assertNotIn("reply_to", adapter._channel.sent[0][2])
         self.assertNotIn("reply_in_thread", adapter._channel.sent[0][2])
