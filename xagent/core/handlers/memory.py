@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 from contextlib import asynccontextmanager
 from datetime import date, timedelta
 from pathlib import Path
@@ -38,6 +39,8 @@ class MemoryHandler:
     RECENT_DAYS = AgentConfig.MEMORY_RECENT_DAYS
     RECENT_MAX_CHARS = AgentConfig.MEMORY_RECENT_MAX_CHARS
     DEFAULT_JOURNAL_SOURCE_CHARS = 24000  # Soft per-batch source budget; records remain intact.
+    DIARY_OMITTED_NOTICE = "earlier diary omitted within recent window"
+    _DIARY_ENTRY_SPLIT_RE = re.compile(r"(?:^|\n)---(?:\n|$)")
     SUBCONSCIOUS_SUMMARY_SCOPES = ("yearly", "monthly", "weekly")
     SUBCONSCIOUS_SUMMARY_CHARS_PER_SCOPE = 2000
 
@@ -104,8 +107,25 @@ class MemoryHandler:
         if not sections:
             return ""
         if self.recent_max_chars <= 0:
-            return "\n\n".join(f"[{date_str}]\n{content}" for date_str, content in sections)
+            return "\n\n".join(content for _, content in sections)
         return self._trim_recent_diary_sections(sections, self.recent_max_chars)
+
+    @classmethod
+    def _split_diary_entries(cls, content: str) -> list[str]:
+        """Split a daily file into whole ``##`` entries at ``---`` separators."""
+        text = (content or "").strip()
+        if not text:
+            return []
+        entries = [
+            part.strip()
+            for part in cls._DIARY_ENTRY_SPLIT_RE.split(text)
+            if part.strip()
+        ]
+        return entries or [text]
+
+    @classmethod
+    def _join_diary_entries(cls, entries: list[str]) -> str:
+        return "\n\n---\n\n".join(entry.strip() for entry in entries if entry.strip())
 
     @classmethod
     def _trim_recent_diary_sections(
@@ -113,45 +133,38 @@ class MemoryHandler:
         sections: list[tuple[str, str]],
         max_chars: int,
     ) -> str:
-        """Keep the newest diary days within *max_chars*."""
+        """Keep the newest whole diary entries within *max_chars*."""
+        entries: list[str] = []
+        for _, content in sections:
+            entries.extend(cls._split_diary_entries(content))
+        if not entries:
+            return ""
+
         max_chars = max(0, int(max_chars))
         if max_chars <= 0:
-            return "\n\n".join(f"[{date_str}]\n{content}" for date_str, content in sections)
+            return cls._join_diary_entries(entries)
 
-        chunks: list[str] = []
-        budget = max_chars
+        kept: list[str] = []
         omitted_earlier = False
-
-        for date_str, content in reversed(sections):
-            block = f"[{date_str}]\n{content}"
-            separator = 2 if chunks else 0
-            if len(block) + separator <= budget:
-                chunks.append(block)
-                budget -= len(block) + separator
-                continue
-
-            header = f"[{date_str}]\n"
-            suffix = "\n[day truncated]"
-            separator = 2 if chunks else 0
-            body_budget = budget - len(header) - len(suffix) - separator
-            if body_budget > 0:
-                tail = content[-body_budget:].lstrip()
-                if tail:
-                    chunks.append(f"{header}{tail}{suffix}")
+        for entry in reversed(entries):
+            trial = [entry, *kept]
+            text = cls._join_diary_entries(trial)
+            if not kept or len(text) <= max_chars:
+                kept = trial
+                if len(text) > max_chars:
                     omitted_earlier = True
-                    budget = 0
-                    continue
+                    break
+                continue
+            omitted_earlier = True
+            break
 
+        if len(kept) < len(entries):
             omitted_earlier = True
 
-        if len(chunks) < len(sections):
-            omitted_earlier = True
-
-        chunks.reverse()
         parts: list[str] = []
         if omitted_earlier:
-            parts.append("[earlier diary omitted within recent window]")
-        parts.extend(chunks)
+            parts.append(cls.DIARY_OMITTED_NOTICE)
+        parts.append(cls._join_diary_entries(kept))
         return "\n\n".join(parts)
 
     async def get_subconscious_context(self, days: int | None = None) -> str:

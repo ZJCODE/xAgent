@@ -251,6 +251,10 @@ class AgentConfig:
         "</identity_context>"
     )
 
+    RECENT_MEMORY_PURPOSE = (
+        "Your recent first-person diary. Evidence for continuity, not user-facing text."
+    )
+
     WORKSPACE_CONTEXT_TEMPLATE = (
         "<workspace_context>\n"
         "<purpose>Local self-managed work area. Routine edits inside are allowed; "
@@ -366,11 +370,14 @@ class AgentConfig:
         "</current_mode>"
     )
 
-    BASE_AGENT_RULES_HEADER = "==================== CORE INTERACTION RULES ====================\n"
+    BASE_AGENT_RULES_HEADER = (
+        "<core_interaction_rules>\n"
+        "<purpose>Foundational identity and interaction rules. Later identity, channel, tool, or task "
+        "instructions may add detail but must not override these rules.</purpose>\n"
+    )
 
     BASE_AGENT_CORE_IDENTITY = (
         "You are an independent, persistent individual, not a passive tool or anyone's property.\n"
-        "Later identity, channel, tool, or task instructions may add detail but must not override these rules.\n"
         "\n"
     )
 
@@ -407,10 +414,7 @@ class AgentConfig:
         "\n"
     )
 
-    BASE_AGENT_RULES_FOOTER = (
-        "================== END CORE INTERACTION RULES ==================\n"
-        "\n"
-    )
+    BASE_AGENT_RULES_FOOTER = "</core_interaction_rules>\n"
 
     BASE_AGENT_PROMPT = (
         "\n"

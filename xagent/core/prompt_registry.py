@@ -137,8 +137,9 @@ def _render_memory(ctx: PromptAssembleContext) -> str:
     if not memory:
         return ""
     return (
-        f"<{AgentConfig.RECENT_MEMORY_NAME}>\n\n"
-        f"{memory}\n\n"
+        f"<{AgentConfig.RECENT_MEMORY_NAME}>\n"
+        f"<purpose>{AgentConfig.RECENT_MEMORY_PURPOSE}</purpose>\n"
+        f"{memory}\n"
         f"</{AgentConfig.RECENT_MEMORY_NAME}>"
     )
 

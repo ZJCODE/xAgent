@@ -100,6 +100,8 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
         await self.memory.append_daily("Today's diary entry", target_date=today)
         ctx = await self.handler.get_recent_context(days=1)
         self.assertIn(today.isoformat(), ctx)
+        self.assertIn(f"## {today.isoformat()}", ctx)
+        self.assertNotIn(f"[{today.isoformat()}]", ctx)
         self.assertIn("Today's diary entry", ctx)
 
     async def test_get_recent_context_respects_zero_recent_days(self):
@@ -137,7 +139,47 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertLessEqual(len(ctx), 6100)
         self.assertIn(today.isoformat(), ctx)
-        self.assertIn("[earlier diary omitted within recent window]", ctx)
+        self.assertIn("T" * 5000, ctx)
+        self.assertNotIn("Y" * 5000, ctx)
+        self.assertIn(MemoryHandler.DIARY_OMITTED_NOTICE, ctx)
+        self.assertNotIn("[day truncated]", ctx)
+        self.assertNotIn(f"[{today.isoformat()}]", ctx)
+        self.assertNotIn(f"[{yesterday.isoformat()}]", ctx)
+
+    async def test_get_recent_context_trims_by_whole_entries(self):
+        today = date.today()
+        await self.memory.append_daily("OLD-ENTRY " + ("A" * 400), target_date=today)
+        await self.memory.append_daily("NEW-ENTRY " + ("B" * 400), target_date=today)
+        handler = MemoryHandler(
+            memory=self.memory,
+            llm_service=self.llm,
+            message_storage=self.storage,
+            journal_batch_size=_TEST_JOURNAL_BATCH_SIZE,
+            recent_days=1,
+            recent_max_chars=500,
+        )
+
+        ctx = await handler.get_recent_context()
+
+        self.assertIn("NEW-ENTRY", ctx)
+        self.assertIn("B" * 400, ctx)
+        self.assertNotIn("OLD-ENTRY", ctx)
+        self.assertNotIn("A" * 400, ctx)
+        self.assertIn(MemoryHandler.DIARY_OMITTED_NOTICE, ctx)
+        self.assertNotIn("[day truncated]", ctx)
+        self.assertNotIn(f"[{today.isoformat()}]", ctx)
+
+    def test_split_diary_entries_uses_horizontal_rules(self):
+        content = (
+            "---\n\n"
+            "## 2026-08-16 18:01\n\n"
+            "first\n\n"
+            "---\n\n"
+            "## 2026-08-16 18:07\n\n"
+            "second\n"
+        )
+        entries = MemoryHandler._split_diary_entries(content)
+        self.assertEqual(entries, ["## 2026-08-16 18:01\n\nfirst", "## 2026-08-16 18:07\n\nsecond"])
 
     async def test_get_subconscious_context_includes_latest_summaries(self):
         today = date.today()

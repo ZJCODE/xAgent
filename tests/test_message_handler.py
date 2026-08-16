@@ -174,9 +174,16 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
             ],
         )
         self.assertEqual([message["role"] for message in messages], ["system", "system", "system"])
-        self.assertIn("CORE INTERACTION RULES", messages[0]["content"])
-        self.assertIn("Match the language used by the current human speaker", messages[0]["content"])
-        self.assertIn("subconscious wording, and memory writing", messages[0]["content"])
+        core = messages[0]["content"]
+        self.assertIn("<core_interaction_rules>", core)
+        self.assertIn("<purpose>", core)
+        self.assertLess(core.find("<core_interaction_rules>"), core.find("<purpose>"))
+        self.assertIn("must not override these rules", core)
+        self.assertNotIn("====", core)
+        self.assertNotIn("CORE INTERACTION RULES", core)
+        self.assertIn("**Self and Memory:**", core)
+        self.assertIn("Match the language used by the current human speaker", core)
+        self.assertIn("subconscious wording, and memory writing", core)
         self.assertEqual(messages[1]["content"], AgentConfig.TOOL_POLICY_BASELINE)
         self.assertNotIn("generate_memory_summary", messages[1]["content"])
         self.assertNotIn("<capability_limits>", messages[0]["content"])
@@ -324,7 +331,10 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         messages = [
             Message.create("Hello", role=RoleType.USER, sender_id="Joy"),
         ]
-        memory_context = "[2026-05-13]\n昨天聊过路线图。"
+        memory_context = (
+            "## 2026-05-13 09:00\n\n"
+            "昨天聊过路线图。"
+        )
 
         context_messages = MessageHandler.build_turn_context_messages(
             messages,
@@ -343,7 +353,12 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         )
         self.assertEqual([message["role"] for message in context_messages], ["user", "user", "user"])
         self.assertIn("<recent_memory>", context_messages[0]["content"])
-        self.assertIn("昨天聊过路线图。", context_messages[0]["content"])
+        memory = context_messages[0]["content"]
+        self.assertLess(memory.find("<recent_memory>"), memory.find("<purpose>"))
+        self.assertIn(AgentConfig.RECENT_MEMORY_PURPOSE, memory)
+        self.assertIn("昨天聊过路线图。", memory)
+        self.assertIn("## 2026-05-13 09:00", memory)
+        self.assertNotIn("[2026-05-13]", memory)
         self.assertIn("<recent_experience>", context_messages[1]["content"])
         self.assertIn("[speaker=Joy][timestamp=", context_messages[1]["content"])
         self.assertIn("<current_task>", context_messages[2]["content"])
