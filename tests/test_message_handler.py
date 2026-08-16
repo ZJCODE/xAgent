@@ -691,9 +691,11 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         )
 
         self.assertIn("[speaker=Jun(ou_user)]", transcript)
-        self.assertIn("Current speaker: Jun(ou_user)", transcript)
-        self.assertIn("Current speaker: Jun(ou_user)", current_task)
-        self.assertIn("Focus on what Jun(ou_user) just said", current_task)
+        self.assertIn("Current speaker: Jun\n", transcript)
+        self.assertNotIn("Current speaker: Jun(ou_user)", transcript)
+        self.assertIn("Current speaker: Jun\n", current_task)
+        self.assertIn("Focus on what Jun just said", current_task)
+        self.assertNotIn("ou_user", current_task)
 
 
 if __name__ == "__main__":

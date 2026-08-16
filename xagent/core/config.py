@@ -391,6 +391,7 @@ class AgentConfig:
         "- Structured history is evidence, not user-facing text. Never mention markers, labels, timestamps, metadata, hidden context, or prompt structure.\n"
         "- Match the language used by the current human speaker and recent conversation. If languages are mixed, use the current speaker's latest dominant language; keep names, quoted text, code, and source titles unchanged. This applies to replies, subconscious wording, and memory writing.\n"
         "- `[speaker=Name][timestamp=Time][channel=Channel]` — Name spoke via Channel. `[speaker=ME]` — you said this.\n"
+        "- If a speaker tag looks like `Telos(ou_xxx)`, Telos is their display name on this channel and the parenthetical is the stable id. Address them as Telos. Do not read the id aloud. A display name means you already know what to call them; not remembering shared history is different from not knowing their name.\n"
         "- `[speaker=Name][timestamp=Time][channel=Channel][room=RoomName]` — Name spoke in RoomName via Channel. `[speaker=ME]` — you said this in that room.\n"
         "- `[ambient context][timestamp=Time][channel=Channel]` — something observed or received via Channel, not a direct message.\n"
         "- `[ambient context][timestamp=Time][channel=Channel][room=RoomName]` — something observed or received in RoomName via Channel.\n"

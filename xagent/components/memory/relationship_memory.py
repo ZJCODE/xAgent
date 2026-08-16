@@ -81,6 +81,17 @@ def format_speaker_label(user_id: str = "", display_name: str = "") -> str:
     return name or stable_id
 
 
+def speaker_address_name(user_id: str = "", display_name: str = "") -> str:
+    """Name to call this person in prompts and replies.
+
+    ``Name(id)`` is a transcript marker. Gluing the id into ``Current speaker``
+    makes the model treat the whole blob as metadata it must not mention, then
+    claim it does not know them.
+    """
+    stable_id = str(user_id or "").strip()
+    return human_display_name(display_name, user_id=stable_id) or stable_id
+
+
 @dataclass(frozen=True)
 class RelationshipCard:
     """A single person's relationship card.

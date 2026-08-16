@@ -45,6 +45,14 @@ class RelationshipStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(format_speaker_label("alice", ""), "alice")
         self.assertEqual(format_speaker_label("", "Jun"), "Jun")
 
+    def test_speaker_address_name_prefers_display_name(self):
+        from xagent.components.memory import speaker_address_name
+
+        self.assertEqual(speaker_address_name("ou_1", "Jun"), "Jun")
+        self.assertEqual(speaker_address_name("ou_1", "ou_1"), "ou_1")
+        self.assertEqual(speaker_address_name("ou_1", "Feishu User"), "ou_1")
+        self.assertEqual(speaker_address_name("alice", ""), "alice")
+
     def test_make_key_and_split_key_roundtrip(self):
         key = RelationshipStore.make_key("feishu", "ou_123")
         self.assertEqual(key, "feishu:ou_123")

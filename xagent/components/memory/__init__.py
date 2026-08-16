@@ -7,6 +7,7 @@ from .relationship_memory import (
     anonymous_contact_label,
     format_speaker_label,
     human_display_name,
+    speaker_address_name,
 )
 
 __all__ = [
@@ -17,4 +18,5 @@ __all__ = [
     "anonymous_contact_label",
     "format_speaker_label",
     "human_display_name",
+    "speaker_address_name",
 ]

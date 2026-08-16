@@ -599,6 +599,7 @@ class SubconsciousLoopTests(unittest.TestCase):
 
             contents = [i["content"] for i in instructions]
             self.assertTrue(any("Context and Attribution" in c for c in contents))
+            self.assertTrue(any("already know what to call them" in c for c in contents))
             self.assertTrue(any("avoid unsolicited messages" in c for c in contents))
             self.assertTrue(any("would speak now" in c for c in contents))
             self.assertTrue(any("must not be spoken to another" in c for c in contents))

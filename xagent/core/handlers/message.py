@@ -240,7 +240,7 @@ class MessageHandler:
         # --- Runtime context ---
         transcript_lines.append(AgentConfig.DEFAULT_SYSTEM_PROMPT.rstrip())
         transcript_lines.append(
-            f"- Current speaker: {MessageHandler._speaker_label_for(messages, current_user_id)}"
+            f"- Current speaker: {MessageHandler._speaker_address_for(messages, current_user_id)}"
         )
         transcript_lines.append(f"- Date: {time.strftime('%Y-%m-%d')}")
         transcript_lines.append("")
@@ -345,7 +345,7 @@ class MessageHandler:
             inbox_kind = str(
                 (current_message.metadata or {}).get(INBOX_KIND_METADATA_KEY) or ""
             ).strip()
-        speaker_label = MessageHandler._speaker_label_for(
+        speaker_label = MessageHandler._speaker_address_for(
             conversation_messages,
             current_user_id,
             current_message=current_message,
@@ -691,6 +691,22 @@ class MessageHandler:
         ) or message.role.value
 
     @staticmethod
+    def _speaker_display_name(
+        messages: List[Message],
+        user_id: str,
+        current_message: Optional[Message] = None,
+    ) -> str:
+        source = current_message
+        if source is None or (source.sender_id or "") != user_id:
+            for message in reversed(messages or []):
+                if message.role == RoleType.USER and (message.sender_id or "") == user_id:
+                    source = message
+                    break
+        if source is None:
+            return ""
+        return str((source.metadata or {}).get("sender_name") or "")
+
+    @staticmethod
     def _speaker_label_for(
         messages: List[Message],
         user_id: str,
@@ -699,16 +715,24 @@ class MessageHandler:
         """Stable id plus display name when the current speaker has one."""
         from ...components.memory import format_speaker_label
 
-        source = current_message
-        if source is None or (source.sender_id or "") != user_id:
-            for message in reversed(messages or []):
-                if message.role == RoleType.USER and (message.sender_id or "") == user_id:
-                    source = message
-                    break
-        name = ""
-        if source is not None:
-            name = str((source.metadata or {}).get("sender_name") or "")
-        return format_speaker_label(user_id, name) or user_id
+        return format_speaker_label(
+            user_id,
+            MessageHandler._speaker_display_name(messages, user_id, current_message),
+        ) or user_id
+
+    @staticmethod
+    def _speaker_address_for(
+        messages: List[Message],
+        user_id: str,
+        current_message: Optional[Message] = None,
+    ) -> str:
+        """Name to address in the current-task prompt — display name, else id."""
+        from ...components.memory import speaker_address_name
+
+        return speaker_address_name(
+            user_id,
+            MessageHandler._speaker_display_name(messages, user_id, current_message),
+        ) or user_id
 
     @staticmethod
     def _latest_current_user_message(
