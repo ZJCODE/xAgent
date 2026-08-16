@@ -69,8 +69,7 @@ class MarkdownMemory:
     async def append_daily(self, content: str, target_date: Optional[date] = None) -> Path:
         """Append a diary entry to the daily markdown file.
 
-        Each entry is separated by ``---`` and starts with a ``## YYYY-MM-DD HH:MM``
-        heading.
+        Each entry starts with a ``## YYYY-MM-DD HH:MM`` heading.
         """
         entry_date = target_date or date.today()
         path = self.daily_path(entry_date)
@@ -80,7 +79,7 @@ class MarkdownMemory:
 
         now = datetime.now()
         timestamp_heading = f"## {entry_date.isoformat()} {now.hour:02d}:{now.minute:02d}"
-        block = f"\n---\n\n{timestamp_heading}\n\n{content.rstrip()}\n"
+        block = f"\n{timestamp_heading}\n\n{content.rstrip()}\n"
 
         async with self._write_lock:
             await self._append_file(path, block)

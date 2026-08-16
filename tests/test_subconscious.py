@@ -592,10 +592,12 @@ class SubconsciousLoopTests(unittest.TestCase):
 
             names = {i.get("name") for i in instructions}
             self.assertIn(AgentConfig.CORE_INTERACTION_RULES_NAME, names)
+            self.assertIn(AgentConfig.CURRENT_MODE_NAME, names)
             self.assertIn(AgentConfig.IDENTITY_CONTEXT_NAME, names)
             self.assertNotIn(AgentConfig.TOOL_POLICY_NAME, names)
             self.assertNotIn(AgentConfig.WORKSPACE_CONTEXT_NAME, names)
             self.assertNotIn(AgentConfig.SKILLS_CATALOG_NAME, names)
+            self.assertNotIn(AgentConfig.CAPABILITY_LIMITS_NAME, names)
 
             contents = [i["content"] for i in instructions]
             self.assertTrue(any("Context and Attribution" in c for c in contents))
@@ -612,6 +614,17 @@ class SubconsciousLoopTests(unittest.TestCase):
             identities = [i for i in instructions if i.get("name") == "identity_context"]
             self.assertEqual(len(identities), 1)
             self.assertIn("I am a test identity.", identities[0]["content"])
+
+            modes = [i for i in instructions if i.get("name") == AgentConfig.CURRENT_MODE_NAME]
+            self.assertEqual(len(modes), 1)
+            self.assertIn('<current_mode name="private_reflection">', modes[0]["content"])
+            self.assertIn("<purpose>", modes[0]["content"])
+            core = next(
+                i["content"] for i in instructions
+                if i.get("name") == AgentConfig.CORE_INTERACTION_RULES_NAME
+            )
+            self.assertNotIn("<current_mode", core)
+            self.assertNotIn("avoid unsolicited messages", core)
 
     def test_tool_call_without_text_is_not_executed(self):
         """Subconscious turns reject tool-only model turns without executing tools."""
