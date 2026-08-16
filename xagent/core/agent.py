@@ -908,7 +908,12 @@ class Agent:
         content: str,
     ) -> AgentTurnResult:
         """Record a raw subconscious thought directly in the diary."""
+        from .runtime.subconscious import SubconsciousLoop
+
         note = str(content or "").strip()
+        if note and SubconsciousLoop._looks_like_subconscious_payload(note):
+            logger.warning("Refusing to write subconscious JSON payload to diary")
+            note = ""
         if note:
             await self.markdown_memory.append_daily(note)
         return AgentTurnResult(

@@ -114,6 +114,19 @@ class AgentSubconsciousThoughtTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(entries), 1)
             self.assertIn("raw inner thought", entries[0][1])
 
+    async def test_record_subconscious_thought_skips_json_payload(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            agent = Agent(client=object(), workspace=tmpdir)
+            blob = (
+                '{"internal_content": "secret", "worthy": true, '
+                '"recipient_hint": "ou_d988", "external_content": "draft"}'
+            )
+
+            await agent.record_subconscious_thought(blob)
+
+            entries = await agent.markdown_memory.read_recent_dailies(days=1)
+            self.assertEqual(entries, [])
+
 
 class SubconsciousLoopTests(unittest.TestCase):
     """Tests for the SubconsciousLoop class."""
@@ -234,8 +247,29 @@ class SubconsciousLoopTests(unittest.TestCase):
     def test_parse_subconscious_json_non_dict_fallback(self):
         result = SubconsciousLoop._parse_subconscious_json('["not", "a dict"]')
         self.assertFalse(result.get("worthy"))
-        self.assertEqual(result["internal_content"], "['not', 'a dict']")
+        self.assertEqual(result["internal_content"], "")
         self.assertIsNone(result["external_content"])
+
+    def test_parse_subconscious_json_accepts_curly_quotes(self):
+        result = SubconsciousLoop._parse_subconscious_json(
+            '{“internal_content”: “hello”, “worthy”: false, “recipient_hint”: null, “external_content”: null}'
+        )
+        self.assertFalse(result["worthy"])
+        self.assertEqual(result["internal_content"], "hello")
+        self.assertIsNone(result["external_content"])
+
+    def test_parse_subconscious_json_does_not_keep_broken_payload(self):
+        blob = (
+            '{“internal_content”:“他问到点子上了,那两堵"墙"怎么来的。”,'
+            '“worthy”:true,“recipient_hint”:“ou_d988”,“external_content”:"问到关键处了\n'
+            "画一个单位圆"
+        )
+        result = SubconsciousLoop._parse_subconscious_json(blob)
+        self.assertFalse(result["worthy"])
+        self.assertEqual(result["internal_content"], "")
+        self.assertIsNone(result["external_content"])
+        self.assertNotIn("ou_d988", result["internal_content"])
+        self.assertNotIn("external_content", result["internal_content"])
 
     def test_parse_subconscious_json_embedded_in_prose(self):
         result = SubconsciousLoop._parse_subconscious_json(
@@ -625,6 +659,22 @@ class SubconsciousLoopTests(unittest.TestCase):
             agent.tool_executor.handle_tool_calls.assert_not_awaited()
             agent.record_subconscious_thought.assert_called_once()
             self.assertEqual(agent.record_subconscious_thought.call_args[0][0], "not json")
+
+    def test_broken_json_payload_is_not_written_to_diary(self):
+        agent = self._make_agent_mock()
+        blob = (
+            '{“internal_content”:“他问到点子上了。”,“worthy”:true,'
+            '“recipient_hint”:“ou_d988”,“external_content”:"问到关键处了\n画一个单位圆'
+        )
+        self._set_model_events(agent, [[ModelStreamEvent(type="text", delta=blob)]])
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop = SubconsciousLoop(agent, workspace=Path(tmpdir))
+            loop._probability = 1.0
+
+            asyncio.run(loop.maybe_think())
+
+            agent.record_subconscious_thought.assert_not_called()
 
     def test_maybe_think_not_triggered(self):
         agent = self._make_agent_mock()

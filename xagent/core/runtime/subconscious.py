@@ -33,6 +33,13 @@ logger = logging.getLogger(__name__)
 CONTACTS_FILENAME = "contacts.json"
 SUBCONSCIOUS_DELIVERY_RETRIES = 2
 SUBCONSCIOUS_DELIVERY_RETRY_DELAY_SECONDS = 0.5
+_JSON_QUOTE_TRANSLATION = str.maketrans({
+    "\u201c": '"',
+    "\u201d": '"',
+    "\u2018": "'",
+    "\u2019": "'",
+    "\uff02": '"',
+})
 
 
 @dataclass(frozen=True)
@@ -323,7 +330,7 @@ class SubconsciousLoop:
             if not delivered:
                 diary_note = self._held_back_diary_note(internal_content)
 
-        if diary_note:
+        if diary_note and not self._looks_like_subconscious_payload(diary_note):
             await self._write_subconscious_thought(diary_note)
 
         if worthy:
@@ -496,7 +503,9 @@ class SubconsciousLoop:
                 cleaned = "\n".join(lines[1:end]).strip()
         parsed = SubconsciousLoop._load_json_object(cleaned)
         if parsed is None:
-            # Fallback: treat the whole text as an unworthy thought
+            if SubconsciousLoop._looks_like_subconscious_payload(text):
+                # Broken JSON must not be dumped into the diary as a thought.
+                return SubconsciousLoop._empty_subconscious_result()
             return {
                 "internal_content": text[:500],
                 "worthy": False,
@@ -504,31 +513,44 @@ class SubconsciousLoop:
                 "external_content": None,
             }
         if not isinstance(parsed, dict):
-            return {
-                "internal_content": str(parsed)[:500],
-                "worthy": False,
-                "recipient_hint": None,
-                "external_content": None,
-            }
+            return SubconsciousLoop._empty_subconscious_result()
         return SubconsciousLoop._normalize_subconscious_result(parsed)
+
+    @staticmethod
+    def _empty_subconscious_result() -> Dict[str, Any]:
+        return {
+            "internal_content": "",
+            "worthy": False,
+            "recipient_hint": None,
+            "external_content": None,
+        }
+
+    @staticmethod
+    def _looks_like_subconscious_payload(text: str) -> bool:
+        """True when text is the JSON envelope, not a private thought."""
+        lowered = str(text or "").lower()
+        if "internal_content" not in lowered:
+            return False
+        return "external_content" in lowered or "worthy" in lowered
 
     @staticmethod
     def _load_json_object(text: str) -> Any:
         """Load a JSON value, or the first embedded object if the model added prose."""
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            pass
-        decoder = json.JSONDecoder()
-        for index, char in enumerate(text):
-            if char != "{":
-                continue
+        for candidate in (text, text.translate(_JSON_QUOTE_TRANSLATION)):
             try:
-                obj, _end = decoder.raw_decode(text[index:])
+                return json.loads(candidate)
             except json.JSONDecodeError:
-                continue
-            if isinstance(obj, dict):
-                return obj
+                pass
+            decoder = json.JSONDecoder()
+            for index, char in enumerate(candidate):
+                if char != "{":
+                    continue
+                try:
+                    obj, _end = decoder.raw_decode(candidate[index:])
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(obj, dict):
+                    return obj
         return None
 
     @staticmethod
@@ -548,6 +570,13 @@ class SubconsciousLoop:
         internal = result.get("internal_content")
         if internal is None:
             internal = result.get("thought")
+        if not isinstance(internal, str):
+            internal = "" if internal is None else str(internal)
+        internal = internal.strip()
+        if SubconsciousLoop._looks_like_subconscious_payload(internal):
+            internal = ""
+        if not isinstance(external, str) and external is not None:
+            external = str(external)
         return {
             "internal_content": internal,
             "worthy": worthy,
@@ -620,10 +649,15 @@ class SubconsciousLoop:
 
     async def _write_subconscious_thought(self, content: str) -> None:
         """Record the raw inner thought directly in the diary."""
+        note = str(content or "").strip()
+        if not note or self._looks_like_subconscious_payload(note):
+            if note:
+                self._logger.warning("Refusing to write subconscious JSON payload to diary")
+            return
         record_method = getattr(self._agent, "record_subconscious_thought", None)
         if callable(record_method):
             try:
-                await record_method(content)
+                await record_method(note)
                 self._logger.info("Subconscious thought recorded in diary")
             except Exception:
                 self._logger.warning("Failed to record subconscious thought in diary", exc_info=True)
@@ -633,7 +667,7 @@ class SubconsciousLoop:
         append_daily = getattr(memory, "append_daily", None)
         if callable(append_daily):
             try:
-                await append_daily(content.strip())
+                await append_daily(note)
                 self._logger.info("Subconscious thought recorded in diary")
             except Exception:
                 self._logger.warning("Failed to record subconscious thought in diary", exc_info=True)
