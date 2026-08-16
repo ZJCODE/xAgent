@@ -37,6 +37,7 @@ class MarkdownMemoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("## 2026-06-28 09:38", text)
         self.assertIn("\n\nPlain diary body\n", text)
         self.assertNotIn("## 09:38", text)
+        self.assertNotRegex(text, r"(?m)^---\s*$")
 
     async def test_append_daily_appends_multiple_entries(self):
         today = date.today()
@@ -45,6 +46,7 @@ class MarkdownMemoryTests(unittest.IsolatedAsyncioTestCase):
         text = await self.memory.read_file(self.memory.daily_path(today))
         self.assertIn("First entry", text)
         self.assertIn("Second entry", text)
+        self.assertNotRegex(text, r"(?m)^---\s*$")
 
     async def test_daily_path_format(self):
         d = date(2025, 3, 15)

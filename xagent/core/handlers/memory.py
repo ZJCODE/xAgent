@@ -40,7 +40,8 @@ class MemoryHandler:
     RECENT_MAX_CHARS = AgentConfig.MEMORY_RECENT_MAX_CHARS
     DEFAULT_JOURNAL_SOURCE_CHARS = 24000  # Soft per-batch source budget; records remain intact.
     DIARY_OMITTED_NOTICE = "earlier diary omitted within recent window"
-    _DIARY_ENTRY_SPLIT_RE = re.compile(r"(?:^|\n)---(?:\n|$)")
+    _DIARY_HR_RE = re.compile(r"(?m)^---\s*$")
+    _DIARY_ENTRY_HEADING_RE = re.compile(r"(?m)^## \d{4}-\d{2}-\d{2} \d{2}:\d{2}\s*$")
     SUBCONSCIOUS_SUMMARY_SCOPES = ("yearly", "monthly", "weekly")
     SUBCONSCIOUS_SUMMARY_CHARS_PER_SCOPE = 2000
 
@@ -106,37 +107,47 @@ class MemoryHandler:
         ]
         if not sections:
             return ""
+        diary_entries = [
+            entry
+            for _, content in sections
+            for entry in self._split_diary_entries(content)
+        ]
         if self.recent_max_chars <= 0:
-            return "\n\n".join(content for _, content in sections)
-        return self._trim_recent_diary_sections(sections, self.recent_max_chars)
+            return self._join_diary_entries(diary_entries)
+        return self._trim_recent_diary_entries(diary_entries, self.recent_max_chars)
 
     @classmethod
     def _split_diary_entries(cls, content: str) -> list[str]:
-        """Split a daily file into whole ``##`` entries at ``---`` separators."""
-        text = (content or "").strip()
+        """Split a daily file into whole ``## YYYY-MM-DD HH:MM`` entries.
+
+        Standalone ``---`` rules are ignored; they are leftover separators, not
+        part of the diary body.
+        """
+        text = cls._DIARY_HR_RE.sub("", content or "")
+        text = re.sub(r"\n{3,}", "\n\n", text).strip()
         if not text:
             return []
-        entries = [
-            part.strip()
-            for part in cls._DIARY_ENTRY_SPLIT_RE.split(text)
-            if part.strip()
-        ]
-        return entries or [text]
+        matches = list(cls._DIARY_ENTRY_HEADING_RE.finditer(text))
+        if not matches:
+            return [text]
+        entries: list[str] = []
+        preamble = text[: matches[0].start()].strip()
+        if preamble:
+            entries.append(preamble)
+        for index, match in enumerate(matches):
+            end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+            entry = text[match.start():end].strip()
+            if entry:
+                entries.append(entry)
+        return entries
 
     @classmethod
     def _join_diary_entries(cls, entries: list[str]) -> str:
-        return "\n\n---\n\n".join(entry.strip() for entry in entries if entry.strip())
+        return "\n\n".join(entry.strip() for entry in entries if entry.strip())
 
     @classmethod
-    def _trim_recent_diary_sections(
-        cls,
-        sections: list[tuple[str, str]],
-        max_chars: int,
-    ) -> str:
+    def _trim_recent_diary_entries(cls, entries: list[str], max_chars: int) -> str:
         """Keep the newest whole diary entries within *max_chars*."""
-        entries: list[str] = []
-        for _, content in sections:
-            entries.extend(cls._split_diary_entries(content))
         if not entries:
             return ""
 

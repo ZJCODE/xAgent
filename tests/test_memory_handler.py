@@ -103,6 +103,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(f"## {today.isoformat()}", ctx)
         self.assertNotIn(f"[{today.isoformat()}]", ctx)
         self.assertIn("Today's diary entry", ctx)
+        self.assertNotRegex(ctx, r"(?m)^---\s*$")
 
     async def test_get_recent_context_respects_zero_recent_days(self):
         today = date.today()
@@ -145,6 +146,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("[day truncated]", ctx)
         self.assertNotIn(f"[{today.isoformat()}]", ctx)
         self.assertNotIn(f"[{yesterday.isoformat()}]", ctx)
+        self.assertNotRegex(ctx, r"(?m)^---\s*$")
 
     async def test_get_recent_context_trims_by_whole_entries(self):
         today = date.today()
@@ -168,8 +170,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(MemoryHandler.DIARY_OMITTED_NOTICE, ctx)
         self.assertNotIn("[day truncated]", ctx)
         self.assertNotIn(f"[{today.isoformat()}]", ctx)
-
-    def test_split_diary_entries_uses_horizontal_rules(self):
+        self.assertNotRegex(ctx, r"(?m)^---\s*$")
         content = (
             "---\n\n"
             "## 2026-08-16 18:01\n\n"
@@ -179,7 +180,13 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             "second\n"
         )
         entries = MemoryHandler._split_diary_entries(content)
-        self.assertEqual(entries, ["## 2026-08-16 18:01\n\nfirst", "## 2026-08-16 18:07\n\nsecond"])
+        self.assertEqual(
+            entries,
+            ["## 2026-08-16 18:01\n\nfirst", "## 2026-08-16 18:07\n\nsecond"],
+        )
+        joined = MemoryHandler._join_diary_entries(entries)
+        self.assertEqual(joined, "## 2026-08-16 18:01\n\nfirst\n\n## 2026-08-16 18:07\n\nsecond")
+        self.assertNotRegex(joined, r"(?m)^---\s*$")
 
     async def test_get_subconscious_context_includes_latest_summaries(self):
         today = date.today()
