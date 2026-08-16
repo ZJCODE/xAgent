@@ -558,6 +558,7 @@ class FeishuAdapterTests(unittest.TestCase):
         self.assertEqual(agent.chat_calls[0]["user_message"], "hello")
         self.assertEqual(agent.chat_calls[0]["inbox_kind"], "user_turn")
         self.assertEqual(agent.chat_calls[0]["channel"], "feishu")
+        self.assertNotIn("sender_name", agent.chat_calls[0])
         self.assertNotIn("private", agent.chat_calls[0])
         self.assertEqual(adapter._channel.sent[0][2], {"uuid": "om_user"})
 
@@ -577,6 +578,7 @@ class FeishuAdapterTests(unittest.TestCase):
         asyncio.run(adapter._dispatch(msg))
 
         self.assertEqual(agent.chat_calls[0]["user_id"], "ou_57abefd441c9b068703fa7b18543047e")
+        self.assertEqual(agent.chat_calls[0]["sender_name"], "Alice")
 
     def test_direct_chat_keeps_same_display_name_users_distinct(self):
         agent = _FakeAgent()
@@ -980,6 +982,7 @@ class FeishuAdapterTests(unittest.TestCase):
         asyncio.run(adapter._dispatch(msg))
 
         self.assertEqual(agent.chat_calls[0]["user_id"], "ou_user")
+        self.assertNotIn("sender_name", agent.chat_calls[0])
 
     def test_group_mention_detects_mentions_matching_bot_identity(self):
         agent = _FakeAgent()

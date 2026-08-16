@@ -721,7 +721,7 @@ class SubconsciousLoop:
         read_cards = getattr(relationship_store, "read_cards", None)
         if not callable(read_cards):
             return contacts
-        from ...components.memory import RelationshipStore
+        from ...components.memory import RelationshipStore, human_display_name
 
         keys = [RelationshipStore.make_key(contact.channel, contact.user_id) for contact in contacts]
         try:
@@ -738,7 +738,11 @@ class SubconsciousLoop:
         for contact in contacts:
             key = RelationshipStore.make_key(contact.channel, contact.user_id)
             card = by_key.get(key)
-            display_name = str(getattr(card, "display_name", "") or "").strip()
+            display_name = human_display_name(
+                getattr(card, "display_name", ""),
+                user_id=contact.user_id,
+                key=key,
+            )
             if not display_name:
                 enriched.append(contact)
                 continue

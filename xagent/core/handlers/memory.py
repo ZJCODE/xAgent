@@ -374,9 +374,13 @@ class MemoryHandler:
 
             store = self.relationship_store
             existing_cards: dict[str, str] = {}
+            existing_by_key = {}
             for participant in participants:
                 card = await store.read_card(participant["key"])
-                if card is not None and not card.is_empty:
+                if card is None:
+                    continue
+                existing_by_key[participant["key"]] = card
+                if not card.is_empty:
                     existing_cards[participant["key"]] = card.body
 
             new_cards = await self.llm_service.update_relationship_cards(
@@ -392,19 +396,32 @@ class MemoryHandler:
                 )
                 return
 
-            from ...components.memory import RelationshipCard
+            from ...components.memory import RelationshipCard, human_display_name
 
             today_str = date.today().isoformat()
             participant_by_key = {p["key"]: p for p in participants}
             for key, body in new_cards.items():
                 participant = participant_by_key.get(key, {})
+                user_id = str(participant.get("user_id") or "")
+                display_name = human_display_name(
+                    participant.get("display_name"),
+                    user_id=user_id,
+                    key=key,
+                )
+                existing = existing_by_key.get(key)
+                if not display_name and existing is not None:
+                    display_name = human_display_name(
+                        existing.display_name,
+                        user_id=existing.user_id,
+                        key=existing.key,
+                    )
                 await store.write_card(
                     RelationshipCard(
                         key=key,
                         body=body,
-                        display_name=str(participant.get("display_name") or ""),
+                        display_name=display_name,
                         channel=str(participant.get("channel") or ""),
-                        user_id=str(participant.get("user_id") or ""),
+                        user_id=user_id,
                         updated=today_str,
                     )
                 )
@@ -419,7 +436,7 @@ class MemoryHandler:
     @staticmethod
     def _extract_participants(messages: List[Message]) -> List[dict]:
         """Collect distinct human participants (non-self) from a batch."""
-        from ...components.memory import RelationshipStore
+        from ...components.memory import RelationshipStore, human_display_name
 
         participants: dict[str, dict] = {}
         for message in messages:
@@ -439,9 +456,16 @@ class MemoryHandler:
                 continue
             metadata = message.metadata or {}
             key = RelationshipStore.make_key(channel, user_id)
-            if key in participants:
+            display_name = human_display_name(
+                metadata.get("sender_name"),
+                user_id=user_id,
+                key=key,
+            )
+            existing = participants.get(key)
+            if existing is not None:
+                if display_name and not existing["display_name"]:
+                    existing["display_name"] = display_name
                 continue
-            display_name = str(metadata.get("sender_name") or "").strip() or user_id
             participants[key] = {
                 "key": key,
                 "display_name": display_name,
@@ -491,9 +515,15 @@ class MemoryHandler:
         if not cards:
             return ""
 
+        from ...components.memory import anonymous_contact_label, human_display_name
+
         blocks: list[str] = []
         for card in cards:
-            name = card.display_name or card.user_id or card.key
+            name = human_display_name(
+                card.display_name,
+                user_id=card.user_id,
+                key=card.key,
+            ) or anonymous_contact_label(card.channel)
             body = card.body.strip()
             if include_routing_id and card.user_id:
                 header = f"## {name} [user_id: {card.user_id}]"

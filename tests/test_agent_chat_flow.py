@@ -1757,6 +1757,36 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(assistant_msg.role, RoleType.ASSISTANT)
         self.assertEqual(assistant_msg.channel, "api")
 
+    async def test_chat_events_persists_real_sender_name_not_platform_id(self):
+        storage = InMemoryMessageStorage()
+        model_client = CapturingModelClient([(ReplyType.SIMPLE_REPLY, "ok")])
+        agent = self._build_agent(storage=storage, model_client=model_client)
+
+        async for _event in Agent.chat_events(
+            agent,
+            user_message="早啊",
+            user_id="ou_new",
+            channel="feishu",
+            sender_name="Alice",
+            stream=False,
+        ):
+            pass
+
+        self.assertEqual(storage.messages[0].metadata.get("sender_name"), "Alice")
+
+        storage.messages.clear()
+        async for _event in Agent.chat_events(
+            agent,
+            user_message="早啊",
+            user_id="ou_new",
+            channel="feishu",
+            sender_name="ou_new",
+            stream=False,
+        ):
+            pass
+
+        self.assertNotIn("sender_name", storage.messages[0].metadata)
+
     async def test_chat_updates_last_interaction_file(self):
         storage = InMemoryMessageStorage()
         model_client = CapturingModelClient([(ReplyType.SIMPLE_REPLY, "ok")])

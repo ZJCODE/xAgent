@@ -231,11 +231,17 @@ Return JSON only: an object mapping each person key to their full updated card t
         transcript: str,
     ) -> str:
         people_blocks: List[str] = []
+        from ..components.memory import human_display_name
+
         for participant in participants:
             key = str(participant.get("key") or "").strip()
             if not key:
                 continue
-            name = str(participant.get("display_name") or "").strip() or key
+            name = human_display_name(
+                participant.get("display_name"),
+                user_id=str(participant.get("user_id") or ""),
+                key=key,
+            ) or "(unnamed)"
             existing = str(existing_cards.get(key) or "").strip()
             existing_text = existing if existing else "(no card yet)"
             people_blocks.append(

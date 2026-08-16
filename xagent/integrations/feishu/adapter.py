@@ -1947,6 +1947,7 @@ class FeishuAdapter:
 
         chat_kwargs = self._chat_kwargs(
             user_id=user_id,
+            sender_name=sender_name,
             text=chat_text,
             image_sources=image_sources,
             attachments=attachments,
@@ -2180,16 +2181,20 @@ class FeishuAdapter:
         *,
         user_id: str,
         text: str,
+        sender_name: str = "",
         image_sources: Optional[list[str]] = None,
         attachments: Optional[list[dict[str, Any]]] = None,
         room_name: Optional[str] = None,
         is_group: bool = False,
     ) -> ChatTurnRequest:
+        from ...components.memory import human_display_name
+
         return ChatTurnRequest(
             user_message=text,
             user_id=user_id,
             channel="feishu",
             inbox_kind="user_turn",
+            sender_name=human_display_name(sender_name, user_id=user_id),
             room_name=room_name,
             channel_instructions=(
                 "For mentions, use <at user_id=\"ou_xxx\">Name</at>, never plain @Name. "

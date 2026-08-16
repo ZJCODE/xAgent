@@ -508,6 +508,7 @@ class Agent:
         room_name: Optional[str] = None,
         channel: Optional[str] = None,
         inbox_kind: Optional[Union[str, InboxKind]] = None,
+        sender_name: str = "",
     ) -> AsyncGenerator[dict, None]:
         """Emit one agent turn as structured message/tool events.
 
@@ -539,6 +540,7 @@ class Agent:
             room_name=room_name,
             channel=channel,
             inbox_kind=inbox_kind,
+            sender_name=sender_name,
             delivery_context=delivery_context,
         )
         user_metadata = inbox_item.message_metadata()
@@ -802,8 +804,11 @@ class Agent:
         room_name: Optional[str],
         channel: Optional[str],
         inbox_kind: Optional[Union[str, InboxKind]],
+        sender_name: str = "",
         delivery_context: Any,
     ) -> InboxItem:
+        from ..components.memory import human_display_name
+
         kind = normalize_inbox_kind(inbox_kind)
         extra_metadata: Dict[str, Any] = {}
         if delivery_context is not None:
@@ -812,6 +817,9 @@ class Agent:
                 extra_metadata["source"] = source
             if source == "scheduled_task" and kind is InboxKind.USER_TURN:
                 kind = InboxKind.SCHEDULED_TURN
+        display_name = human_display_name(sender_name, user_id=user_id)
+        if display_name:
+            extra_metadata["sender_name"] = display_name
         return InboxItem(
             kind=kind,
             content=user_message,
@@ -851,6 +859,7 @@ class Agent:
             room_name=item.room_name,
             channel=item.channel,
             inbox_kind=item.kind,
+            sender_name=str((item.metadata or {}).get("sender_name") or ""),
         )
 
     async def observe(
