@@ -263,7 +263,7 @@ class FeishuAdapterTests(unittest.TestCase):
                 }
             )
 
-    def test_config_defaults_hide_sender_ids(self):
+    def test_config_defaults_allow_unmentioned_group_replies(self):
         cfg = FeishuAdapterConfig.from_dict(
             {
                 "app_id": "cli_test",
@@ -1845,7 +1845,7 @@ class FeishuHistoryFetcherTests(unittest.TestCase):
         self.assertEqual(records[0].sender_name, "john的智能助手")
         self.assertEqual(resolver.calls[0], ("cli_john_agent", None, "app_id", "app"))
 
-    def test_format_group_history_does_not_expose_open_id_fallback(self):
+    def test_format_group_history_keeps_open_id_when_name_looks_like_an_id(self):
         from xagent.integrations.feishu.history import FeishuMessageRecord, format_feishu_timestamp, format_group_history
 
         text = format_group_history([FeishuMessageRecord("om_1", "ou_alice", "ou_alice", "hi", 1)])
