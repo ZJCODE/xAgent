@@ -599,22 +599,25 @@ class SubconsciousLoop:
             return "(memory read failed)"
 
     async def _collect_relationship_context(self) -> str:
-        """Collect relationship cards to ground subconscious thought.
+        """Collect relationship cards for people this runtime can actually reach.
 
-        Cards are people the agent knows, not a send-list. Delivery still
-        filters to channels this runtime can reach.
+        Each channel process has its own heartbeat. Mixing in other-channel
+        cards (with ``[user_id: ...]``) makes the model address people it
+        cannot send to, and also collapses two strangers into one story.
         """
         memory_handler = getattr(self._agent, "memory_handler", None)
         if memory_handler is None or not callable(
             getattr(memory_handler, "get_relationship_context", None)
         ):
             return ""
-        contacts = load_contacts(self._contacts_file)
+        contacts = self._filter_deliverable_contacts(load_contacts(self._contacts_file))
         from ...components.memory import RelationshipStore
 
         keys: list[str] = []
         for contact in contacts:
-            self._append_unique_key(keys, RelationshipStore.make_key(contact.channel, contact.user_id))
+            self._append_unique_key(
+                keys, RelationshipStore.make_key(contact.channel, contact.user_id)
+            )
 
         relationship_store = getattr(memory_handler, "relationship_store", None)
         list_keys = getattr(relationship_store, "list_keys", None)
@@ -625,7 +628,8 @@ class SubconsciousLoop:
                     stored_keys = await stored_keys
                 if isinstance(stored_keys, list):
                     for key in stored_keys:
-                        self._append_unique_key(keys, str(key))
+                        if self._is_deliverable_relationship_key(str(key)):
+                            self._append_unique_key(keys, str(key))
             except Exception:
                 self._logger.warning("Failed to list relationship cards for subconscious", exc_info=True)
 
@@ -640,6 +644,12 @@ class SubconsciousLoop:
         except Exception:
             self._logger.warning("Failed to collect relationship context", exc_info=True)
             return ""
+
+    def _is_deliverable_relationship_key(self, key: str) -> bool:
+        from ...components.memory import RelationshipStore
+
+        channel, _user_id = RelationshipStore.split_key(key)
+        return str(channel or "").strip().lower() in self._deliverable_channels
 
     @staticmethod
     def _append_unique_key(keys: list[str], key: str) -> None:

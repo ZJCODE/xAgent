@@ -416,6 +416,7 @@ class SubconsciousLoopTests(unittest.TestCase):
             self.assertIn("would speak now", current_task["content"])
             self.assertIn("will be sent", current_task["content"])
             self.assertIn("their thread to someone else", current_task["content"])
+            self.assertIn("people on this channel only", current_task["content"])
             self.assertIn("recent diary already holds this observation", current_task["content"])
             self.assertIn("return empty internal_content", current_task["content"])
             self.assertIn("nothing in life has moved", current_task["content"])
@@ -478,15 +479,15 @@ class SubconsciousLoopTests(unittest.TestCase):
         self.assertEqual(kwargs["speaker_keys"], ["feishu:alice"])
         self.assertTrue(kwargs["include_routing_id"])
 
-    def test_collect_relationship_context_includes_other_channel_cards(self):
-        """Thought can see people on other channels; sending still cannot."""
+    def test_collect_relationship_context_omits_other_channel_cards(self):
+        """This runtime only sees people it can send to; Feishu ids stay off the API loop."""
         agent = self._make_agent_mock()
         memory_handler = MagicMock()
         memory_handler.relationship_store.list_keys = AsyncMock(
             return_value=["feishu:alice", "api:web_user"]
         )
         memory_handler.get_relationship_context = AsyncMock(
-            return_value="## Alice\nJust spoke on Feishu.\n## Web user\nReachable here."
+            return_value="## Web user [user_id: web_user]\nReachable here."
         )
         agent.memory_handler = memory_handler
 
@@ -494,15 +495,15 @@ class SubconsciousLoopTests(unittest.TestCase):
             loop = SubconsciousLoop(agent, workspace=Path(tmpdir), deliverable_channels={"api"})
             context = asyncio.run(loop._collect_relationship_context())
 
-        self.assertIn("Just spoke on Feishu", context)
+        self.assertIn("Reachable here", context)
         kwargs = memory_handler.get_relationship_context.await_args.kwargs
-        self.assertEqual(kwargs["speaker_keys"], ["feishu:alice", "api:web_user"])
+        self.assertEqual(kwargs["speaker_keys"], ["api:web_user"])
 
-    def test_collect_relationship_context_includes_just_seen_other_channel_contact(self):
+    def test_collect_relationship_context_omits_just_seen_other_channel_contact(self):
         agent = self._make_agent_mock()
         memory_handler = MagicMock()
         memory_handler.relationship_store.list_keys = AsyncMock(return_value=[])
-        memory_handler.get_relationship_context = AsyncMock(return_value="## Telos\nJust spoke.")
+        memory_handler.get_relationship_context = AsyncMock(return_value="## Web user\nJust spoke.")
         agent.memory_handler = memory_handler
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -512,10 +513,32 @@ class SubconsciousLoopTests(unittest.TestCase):
                 user_id="ou_telos",
                 target={"chat_id": "oc_xxx", "sender_name": "Telos"},
             )
-            asyncio.run(loop._collect_relationship_context())
+            loop.record_interaction(
+                channel="api",
+                user_id="web_user",
+                target={"user_id": "web_user"},
+            )
+            context = asyncio.run(loop._collect_relationship_context())
 
         kwargs = memory_handler.get_relationship_context.await_args.kwargs
-        self.assertEqual(kwargs["speaker_keys"], ["feishu:ou_telos"])
+        self.assertEqual(kwargs["speaker_keys"], ["api:web_user"])
+        self.assertIn("Just spoke", context)
+
+    def test_collect_relationship_context_empty_without_deliverable_channels(self):
+        agent = self._make_agent_mock()
+        memory_handler = MagicMock()
+        memory_handler.relationship_store.list_keys = AsyncMock(
+            return_value=["feishu:alice", "api:web_user"]
+        )
+        memory_handler.get_relationship_context = AsyncMock(return_value="should not be used")
+        agent.memory_handler = memory_handler
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop = SubconsciousLoop(agent, workspace=Path(tmpdir))
+            context = asyncio.run(loop._collect_relationship_context())
+
+        self.assertEqual(context, "")
+        memory_handler.get_relationship_context.assert_not_awaited()
 
     def test_deliverable_filter_keeps_declared_channels_only(self):
         agent = self._make_agent_mock()
