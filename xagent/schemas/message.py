@@ -146,7 +146,13 @@ class Message(BaseModel):
         if self.type == MessageType.MESSAGE:
             text_content = self.content
             if self.sender_id and self.role == RoleType.USER:
-                text_content = f"[{self.sender_id}] {text_content}"
+                name = str((self.metadata or {}).get("sender_name") or "").strip()
+                label = (
+                    f"{name}({self.sender_id})"
+                    if name and name != self.sender_id
+                    else self.sender_id
+                )
+                text_content = f"[{label}] {text_content}"
 
             if self.images:
                 content = [{"type": "text", "text": text_content}]

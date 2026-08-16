@@ -328,8 +328,10 @@ New experience:
 
         if message_type == "context_event":
             header = JournalLLMService._append_timestamp_marker("[ambient context]", timestamp)
-            speaker = JournalLLMService._sanitize_marker_field(message.get("sender_id"))
-            if speaker:
+            speaker = JournalLLMService._sanitize_marker_field(
+                JournalLLMService._normalize_transcript_speaker(message)
+            )
+            if speaker and speaker != "ME":
                 header += f"[from={speaker}]"
             if channel:
                 header += f"[channel={channel}]"
@@ -362,12 +364,17 @@ New experience:
 
     @staticmethod
     def _normalize_transcript_speaker(message: dict) -> str:
+        from ..components.memory import format_speaker_label
+
         sender = JournalLLMService._sanitize_marker_field(message.get("sender_id"))
         role = str(message.get("role", "unknown")).strip().lower()
         if JournalLLMService._is_self_speaker(sender=sender, role=role):
             return "ME"
-        if sender:
-            return sender
+        metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else {}
+        label = format_speaker_label(sender, str((metadata or {}).get("sender_name") or ""))
+        label = JournalLLMService._sanitize_marker_field(label)
+        if label:
+            return label
         fallback = JournalLLMService._sanitize_marker_field(role)
         return fallback or "unknown"
 

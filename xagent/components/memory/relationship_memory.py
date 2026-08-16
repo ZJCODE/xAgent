@@ -72,6 +72,15 @@ def anonymous_contact_label(channel: str = "") -> str:
     return _CHANNEL_CONTACT_LABELS.get((channel or "").strip().lower(), "contact")
 
 
+def format_speaker_label(user_id: str = "", display_name: str = "") -> str:
+    """Return ``Name(id)`` when both are known, otherwise whichever exists."""
+    stable_id = str(user_id or "").strip()
+    name = human_display_name(display_name, user_id=stable_id)
+    if name and stable_id and name != stable_id:
+        return f"{name}({stable_id})"
+    return name or stable_id
+
+
 @dataclass(frozen=True)
 class RelationshipCard:
     """A single person's relationship card.

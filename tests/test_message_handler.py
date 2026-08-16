@@ -669,6 +669,32 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         self.assertIn(long_observation, recent_experience)
         self.assertNotIn("[Content truncated:", recent_experience)
 
+    def test_feishu_transcript_includes_display_name_and_id(self):
+        message = Message.create("早啊", role=RoleType.USER, sender_id="ou_user")
+        message.channel = "feishu"
+        message.metadata = {"sender_name": "Jun"}
+
+        transcript = MessageHandler.build_recent_transcript_message(
+            [message],
+            current_user_id="ou_user",
+        )["content"]
+        context_messages = MessageHandler.build_turn_context_messages(
+            [message],
+            current_user_id="ou_user",
+            current_message=message,
+            current_time="2026-08-16 16:36",
+        )
+        current_task = next(
+            item["content"]
+            for item in context_messages
+            if item["name"] == AgentConfig.CURRENT_TASK_NAME
+        )
+
+        self.assertIn("[speaker=Jun(ou_user)]", transcript)
+        self.assertIn("Current speaker: Jun(ou_user)", transcript)
+        self.assertIn("Current speaker: Jun(ou_user)", current_task)
+        self.assertIn("Focus on what Jun(ou_user) just said", current_task)
+
 
 if __name__ == "__main__":
     unittest.main()

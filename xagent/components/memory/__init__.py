@@ -5,6 +5,7 @@ from .relationship_memory import (
     RelationshipCard,
     RelationshipStore,
     anonymous_contact_label,
+    format_speaker_label,
     human_display_name,
 )
 
@@ -14,5 +15,6 @@ __all__ = [
     "RelationshipCard",
     "RelationshipStore",
     "anonymous_contact_label",
+    "format_speaker_label",
     "human_display_name",
 ]

@@ -19,11 +19,15 @@ def response_payload(response: Any) -> Any:
 def message_item(message: Message) -> Dict[str, Any]:
     images = message_images(message)
     attachments = message_attachments(message)
+    sender_name = ""
+    if isinstance(message.metadata, dict):
+        sender_name = str(message.metadata.get("sender_name") or "").strip()
     item = {
         "role": message.role.value if hasattr(message.role, "value") else str(message.role),
         "type": message.type.value if hasattr(message.type, "value") else str(message.type),
         "content": message.content,
         "sender_id": message.sender_id,
+        "sender_name": sender_name or None,
         "recipient_id": message.recipient_id,
         "timestamp": message.timestamp,
         "metadata": message.metadata,
@@ -145,6 +149,7 @@ def _message_search_fields(message: Message) -> List[tuple[str, str]]:
     fields: List[tuple[str, str]] = [
         ("content", message.content or ""),
         ("sender", message.sender_id or ""),
+        ("sender_name", str((message.metadata or {}).get("sender_name") or "") if isinstance(message.metadata, dict) else ""),
         ("recipient", message.recipient_id or ""),
         ("role", role),
         ("type", message_type),
