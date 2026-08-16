@@ -81,13 +81,20 @@ class PromptRegistry:
         return messages
 
 
-def _render_core_interaction_rules(ctx: PromptAssembleContext) -> str:
-    core_prompt = AgentConfig.BASE_AGENT_PROMPT.strip()
-    if not ctx.supports_vision:
-        core_prompt += AgentConfig.NO_VISION_NOTICE.rstrip()
-    if ctx.is_subconscious:
-        core_prompt += AgentConfig.SUBCONSCIOUS_MODE_NOTICE.rstrip()
-    return core_prompt
+def _render_core_interaction_rules(_ctx: PromptAssembleContext) -> str:
+    return AgentConfig.BASE_AGENT_PROMPT.strip()
+
+
+def _render_current_mode(ctx: PromptAssembleContext) -> str:
+    if not ctx.is_subconscious:
+        return ""
+    return AgentConfig.CURRENT_MODE_PRIVATE_REFLECTION
+
+
+def _render_capability_limits(ctx: PromptAssembleContext) -> str:
+    if ctx.supports_vision:
+        return ""
+    return AgentConfig.CAPABILITY_LIMITS_TEMPLATE
 
 
 def _render_tool_policy(ctx: PromptAssembleContext) -> str:
@@ -176,6 +183,20 @@ def default_prompt_registry() -> PromptRegistry:
             order=-100,
             kind=KIND_INSTRUCTIONS,
             render=_render_core_interaction_rules,
+        ),
+        PromptSection(
+            name=AgentConfig.CURRENT_MODE_NAME,
+            role="system",
+            order=-90,
+            kind=KIND_INSTRUCTIONS,
+            render=_render_current_mode,
+        ),
+        PromptSection(
+            name=AgentConfig.CAPABILITY_LIMITS_NAME,
+            role="system",
+            order=-80,
+            kind=KIND_INSTRUCTIONS,
+            render=_render_capability_limits,
         ),
         PromptSection(
             name=AgentConfig.TOOL_POLICY_NAME,

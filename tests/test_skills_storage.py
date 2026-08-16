@@ -24,7 +24,11 @@ class SkillsStorageLocalTests(unittest.TestCase):
             self.assertEqual(storage.list_skills()[0].skill_file, "code-review/SKILL.md")
 
             catalog = storage.catalog_text(max_chars=2000)
-            self.assertIn("Available Skills", catalog)
+            self.assertIn("<available_skills>", catalog)
+            self.assertIn("<purpose>", catalog)
+            self.assertIn("Available Skills catalog", catalog)
+            self.assertLess(catalog.find("<available_skills>"), catalog.find("<purpose>"))
+            self.assertLess(catalog.find("<purpose>"), catalog.find("code-review"))
             self.assertIn("description:", catalog)
             self.assertIn("code-review", catalog)
             self.assertIn("Reviews code changes", catalog)

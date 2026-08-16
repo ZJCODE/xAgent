@@ -86,11 +86,10 @@ class SkillsStorageLocal(SkillsStorageBase):
             return ""
 
         header = (
-            "Available Skills\n"
-            "Enabled filesystem skills are listed by name and description. "
-            "Descriptions are discovery metadata, not full instructions. "
-            "When a skill matches the task, load SKILL.md with `read_skill`; read referenced files only when needed.\n\n"
-            "<available_skills>"
+            "<available_skills>\n"
+            "<purpose>Available Skills catalog: discovery metadata only, not full instructions. "
+            "If a skill matches, load SKILL.md with `read_skill`; "
+            "read referenced files only when needed.</purpose>"
         )
         footer = "</available_skills>"
         budget = max(0, int(max_chars) - len(header) - len(footer) - 4)

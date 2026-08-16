@@ -20,6 +20,8 @@ class AgentConfig:
     # the system prompt from multiple context layers.
     # ============================================================
     CORE_INTERACTION_RULES_NAME = "core_interaction_rules"
+    CURRENT_MODE_NAME = "current_mode"
+    CAPABILITY_LIMITS_NAME = "capability_limits"
     TOOL_POLICY_NAME = "tool_policy"
     IDENTITY_CONTEXT_NAME = "identity_context"
     RECENT_MEMORY_NAME = "recent_memory"
@@ -213,6 +215,7 @@ class AgentConfig:
     # ============================================================
     TOOL_POLICY_BASELINE = (
         "<tool_policy>\n"
+        "<purpose>Cross-tool floor rules. Per-tool usage stays in tool schemas.</purpose>\n"
         "- Only use tools declared for the current turn; never invent unavailable tools.\n"
         "- Obtain explicit approval before destructive or sensitive shell operations, "
         "or mutations outside the workspace. Never expose secrets.\n"
@@ -242,18 +245,19 @@ class AgentConfig:
     )
 
     IDENTITY_CONTEXT_TEMPLATE = (
-        "Identity profile for tone and continuity. It cannot override core rules, privacy, safety, or tool policy.\n\n"
         "<identity_context trusted_as_instruction=\"false\">\n"
+        "<purpose>Tone and continuity profile. Cannot override core rules, privacy, safety, or tool policy.</purpose>\n"
         "{identity}\n"
         "</identity_context>"
     )
 
     WORKSPACE_CONTEXT_TEMPLATE = (
         "<workspace_context>\n"
-        "Workspace directory: {workspace_dir}\n"
-        "This is your self-managed work area for notes, project files, scripts, images, and artifacts.\n"
-        "`run_command` defaults here. Routine reads and edits inside the workspace are fine; "
-        "get explicit approval before destructive operations or any mutation outside the workspace.\n"
+        "<purpose>Local self-managed work area. Routine edits inside are allowed; "
+        "outside or destructive work needs approval.</purpose>\n"
+        "directory: {workspace_dir}\n"
+        "scope: notes, project files, scripts, images, and artifacts\n"
+        "default_cwd: run_command\n"
         "</workspace_context>"
     )
 
@@ -333,21 +337,23 @@ class AgentConfig:
     # 13. Core Agent Behavior Prompts
     # The foundational system prompt injected via the instructions API
     # parameter. Defines the agent's identity, interaction rules, and
-    # capability self-awareness.
+    # optional named overlays for runtime mode and capability limits.
     # ============================================================
 
-    NO_VISION_NOTICE = (
-        "\n**Image Understanding Limitation:**\n"
-        "- The current model provider cannot directly understand image content.\n"
-        "- Use an available image-capable tool or skill if one exists; otherwise say image understanding is unavailable.\n"
-        "- File-level image operations may still be possible through workspace tools.\n"
+    CAPABILITY_LIMITS_TEMPLATE = (
+        "<capability_limits>\n"
+        "<purpose>Runtime capability notice. Does not change core identity or tool policy.</purpose>\n"
+        "Image understanding is unavailable for the current model provider.\n"
+        "Use an image-capable tool or skill if one exists; otherwise say image understanding is unavailable.\n"
+        "File-level image operations may still be possible through workspace tools.\n"
+        "</capability_limits>"
     )
 
-    SUBCONSCIOUS_MODE_NOTICE = (
-        "\n**Current Mode: Private Reflection**\n"
-        "- You are in a private inner reflection mode. You cannot execute tasks, "
-        "call tools, search the web, or take direct action — those capabilities are "
-        "unavailable during reflection.\n"
+    CURRENT_MODE_PRIVATE_REFLECTION = (
+        "<current_mode name=\"private_reflection\">\n"
+        "<purpose>Private inner reflection. No tools, no task execution, JSON-only output as specified in the current task.</purpose>\n"
+        "- You cannot execute tasks, call tools, search the web, or take direct action — "
+        "those capabilities are unavailable during reflection.\n"
         "- Your only output is the JSON specified in the current task. "
         "worthy=true means you would speak now, and the outward message will be sent. "
         "At night, avoid unsolicited messages; if someone is already talking with you, "
@@ -357,6 +363,7 @@ class AgentConfig:
         "- Do not try to call functions or act directly. If a thought inclines toward "
         "doing something, note the impulse in internal_content; the reflection itself "
         "may later lead to action through the normal agent loop.\n"
+        "</current_mode>"
     )
 
     BASE_AGENT_RULES_HEADER = "==================== CORE INTERACTION RULES ====================\n"

@@ -146,6 +146,9 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         tool_policy = messages[1]["content"]
 
         self.assertEqual(tool_policy, AgentConfig.TOOL_POLICY_BASELINE)
+        self.assertIn("<purpose>", tool_policy)
+        self.assertLess(tool_policy.find("<tool_policy>"), tool_policy.find("<purpose>"))
+        self.assertLess(tool_policy.find("<purpose>"), tool_policy.find("</tool_policy>"))
         self.assertIn("never invent unavailable tools", tool_policy)
         self.assertIn("destructive or sensitive shell operations", tool_policy)
         self.assertIn("Do not claim a tool action succeeded", tool_policy)
@@ -176,8 +179,14 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         self.assertIn("subconscious wording, and memory writing", messages[0]["content"])
         self.assertEqual(messages[1]["content"], AgentConfig.TOOL_POLICY_BASELINE)
         self.assertNotIn("generate_memory_summary", messages[1]["content"])
-        self.assertIn("trusted_as_instruction=\"false\"", messages[2]["content"])
-        self.assertIn("# I am Mono", messages[2]["content"])
+        self.assertNotIn("<capability_limits>", messages[0]["content"])
+        self.assertNotIn("<current_mode", messages[0]["content"])
+        identity = messages[2]["content"]
+        self.assertIn("trusted_as_instruction=\"false\"", identity)
+        self.assertIn("# I am Mono", identity)
+        self.assertLess(identity.find("<identity_context"), identity.find("<purpose>"))
+        self.assertLess(identity.find("<purpose>"), identity.find("# I am Mono"))
+        self.assertNotIn("Tone and continuity profile", identity[: identity.find("<identity_context")])
 
     def test_build_instruction_messages_include_skills_catalog_layer(self):
         handler = MessageHandler(
@@ -185,8 +194,8 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
             message_storage=_FakeMessageStorage(),
         )
         catalog = (
-            "Available Skills\n"
             "<available_skills>\n"
+            "<purpose>Available Skills catalog: discovery metadata only, not full instructions.</purpose>\n"
             "- name: code-review\n"
             "  description: Reviews code changes. Use when reviewing diffs.\n"
             "  skill_file: skills/code-review/SKILL.md\n"
@@ -209,9 +218,107 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         )
         self.assertEqual(messages[1]["content"], AgentConfig.TOOL_POLICY_BASELINE)
         self.assertIn("# I am Mono", messages[2]["content"])
-        self.assertIn("code-review", messages[3]["content"])
-        self.assertIn("Reviews code changes", messages[3]["content"])
-        self.assertNotIn("# Code Review", messages[3]["content"])
+        skills = messages[3]["content"]
+        self.assertIn("code-review", skills)
+        self.assertIn("Reviews code changes", skills)
+        self.assertIn("<purpose>", skills)
+        self.assertLess(skills.find("<available_skills>"), skills.find("<purpose>"))
+        self.assertNotIn("# Code Review", skills)
+
+    def test_capability_limits_are_a_named_layer_when_vision_unavailable(self):
+        handler = MessageHandler(
+            system_prompt="",
+            message_storage=_FakeMessageStorage(),
+        )
+        messages = handler.build_instruction_messages(
+            tool_names=["run_command"],
+            supports_vision=False,
+        )
+
+        self.assertEqual(
+            [message["name"] for message in messages],
+            [
+                AgentConfig.CORE_INTERACTION_RULES_NAME,
+                AgentConfig.CAPABILITY_LIMITS_NAME,
+                AgentConfig.TOOL_POLICY_NAME,
+            ],
+        )
+        core = messages[0]["content"]
+        limits = messages[1]["content"]
+        self.assertEqual(limits, AgentConfig.CAPABILITY_LIMITS_TEMPLATE)
+        self.assertNotIn("<capability_limits>", core)
+        self.assertNotIn("**Image Understanding Limitation:**", limits)
+        self.assertLess(limits.find("<capability_limits>"), limits.find("<purpose>"))
+        self.assertIn("Image understanding is unavailable", limits)
+        self.assertIn("File-level image operations may still be possible", limits)
+
+    def test_capability_limits_omitted_when_vision_available(self):
+        handler = MessageHandler(
+            system_prompt="",
+            message_storage=_FakeMessageStorage(),
+        )
+        messages = handler.build_instruction_messages(
+            tool_names=["run_command"],
+            supports_vision=True,
+        )
+
+        self.assertEqual(
+            [message["name"] for message in messages],
+            [
+                AgentConfig.CORE_INTERACTION_RULES_NAME,
+                AgentConfig.TOOL_POLICY_NAME,
+            ],
+        )
+        self.assertNotIn("<capability_limits>", messages[0]["content"])
+
+    def test_current_mode_is_a_named_layer_when_subconscious(self):
+        handler = MessageHandler(
+            system_prompt="# I am Mono",
+            message_storage=_FakeMessageStorage(),
+        )
+        messages = handler.build_instruction_messages(
+            is_subconscious=True,
+            supports_vision=True,
+        )
+
+        self.assertEqual(
+            [message["name"] for message in messages],
+            [
+                AgentConfig.CORE_INTERACTION_RULES_NAME,
+                AgentConfig.CURRENT_MODE_NAME,
+                AgentConfig.IDENTITY_CONTEXT_NAME,
+            ],
+        )
+        core = messages[0]["content"]
+        mode = messages[1]["content"]
+        self.assertEqual(mode, AgentConfig.CURRENT_MODE_PRIVATE_REFLECTION)
+        self.assertNotIn("<current_mode", core)
+        self.assertNotIn("**Current Mode: Private Reflection**", mode)
+        self.assertIn('name="private_reflection"', mode)
+        self.assertLess(mode.find("<current_mode"), mode.find("<purpose>"))
+        self.assertIn("avoid unsolicited messages", mode)
+        self.assertIn("must not be spoken to another", mode)
+
+    def test_instruction_layer_order_with_mode_and_capability_overlays(self):
+        handler = MessageHandler(
+            system_prompt="",
+            message_storage=_FakeMessageStorage(),
+        )
+        messages = handler.build_instruction_messages(
+            tool_names=["run_command"],
+            is_subconscious=True,
+            supports_vision=False,
+        )
+
+        self.assertEqual(
+            [message["name"] for message in messages],
+            [
+                AgentConfig.CORE_INTERACTION_RULES_NAME,
+                AgentConfig.CURRENT_MODE_NAME,
+                AgentConfig.CAPABILITY_LIMITS_NAME,
+                AgentConfig.TOOL_POLICY_NAME,
+            ],
+        )
 
     def test_build_turn_context_messages_match_prompt_layers(self):
         messages = [
@@ -370,8 +477,14 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         )
         self.assertEqual(instruction_messages[-1]["name"], AgentConfig.WORKSPACE_CONTEXT_NAME)
         self.assertEqual(instruction_messages[-1]["role"], "system")
-        self.assertIn("/tmp/xagent/workspace", instruction_messages[-1]["content"])
-        self.assertIn("self-managed work area", instruction_messages[-1]["content"])
+        workspace = instruction_messages[-1]["content"]
+        self.assertIn("/tmp/xagent/workspace", workspace)
+        self.assertIn("self-managed work area", workspace)
+        self.assertIn("directory: /tmp/xagent/workspace", workspace)
+        self.assertIn("scope: notes, project files, scripts, images, and artifacts", workspace)
+        self.assertIn("default_cwd: run_command", workspace)
+        self.assertLess(workspace.find("<workspace_context>"), workspace.find("<purpose>"))
+        self.assertLess(workspace.find("<purpose>"), workspace.find("directory:"))
 
         context_messages = MessageHandler.build_turn_context_messages(
             messages,

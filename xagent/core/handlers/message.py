@@ -981,9 +981,10 @@ class MessageHandler:
     ) -> list[dict]:
         """Build static named system layers for the model input.
 
-        When *is_subconscious* is True a private-reflection notice is
-        appended to the core prompt so the model knows it cannot execute
-        tasks or use tools during this turn.
+        When *is_subconscious* is True a ``current_mode`` layer is injected
+        so the model knows it cannot execute tasks or use tools this turn.
+        When *supports_vision* is False a ``capability_limits`` layer is
+        injected instead of appending a notice onto core rules.
         """
         ctx = PromptAssembleContext(
             system_prompt=self.system_prompt,
