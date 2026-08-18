@@ -94,7 +94,7 @@ class ScheduledTaskDisplayContentTests(unittest.TestCase):
 
 
 class AgentInboxTests(unittest.IsolatedAsyncioTestCase):
-    def _build_agent(self, storage, model_client, memory_handler=None):
+    def _build_agent(self, storage, model_client, memory_handler=None, tool_executor=None):
         agent = Agent.__new__(Agent)
         agent.model = AgentConfig.DEFAULT_MODEL
         agent.system_prompt = ""
@@ -109,7 +109,7 @@ class AgentInboxTests(unittest.IsolatedAsyncioTestCase):
         agent.message_storage = storage
         agent.message_handler = MessageHandler(message_storage=storage, system_prompt="")
         agent.memory_handler = memory_handler or FakeMemoryHandler()
-        agent.tool_executor = FakeToolExecutor()
+        agent.tool_executor = tool_executor or FakeToolExecutor()
         return agent
 
     async def test_user_turn_stores_inbox_kind_metadata(self):
