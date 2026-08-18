@@ -75,6 +75,13 @@ class ChatService:
         finally:
             self._semaphore.release()
 
+    def abort_turn(self) -> dict[str, bool]:
+        """Ask the in-flight agent turn to stop at the next iteration boundary."""
+        abort = getattr(self.agent, "abort", None)
+        if not callable(abort):
+            return {"stopped": False}
+        return {"stopped": bool(abort())}
+
     async def run_observe(self, input_data: ObserveInput) -> Any:
         try:
             await self._acquire_slot()

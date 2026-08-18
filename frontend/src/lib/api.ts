@@ -77,6 +77,10 @@ export async function getHealth(): Promise<{ status: string; service: string }> 
   return requestJson("/health", { signal: AbortSignal.timeout(5000) });
 }
 
+export async function stopChat(): Promise<{ stopped: boolean }> {
+  return requestJson("/chat/stop", { method: "POST" });
+}
+
 export async function getWebHealth(): Promise<{ status: string; web: boolean; api_reachable: boolean }> {
   return requestJson("/api/health", { signal: AbortSignal.timeout(5000) });
 }

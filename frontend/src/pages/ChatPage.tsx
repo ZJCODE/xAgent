@@ -1,4 +1,4 @@
-import { Activity, Eye, FileIcon, Paperclip, Play, RadioTower, Send, UserRound, Wifi, WifiOff, X } from "lucide-react";
+import { Activity, Eye, FileIcon, Paperclip, Play, RadioTower, Send, Square, UserRound, Wifi, WifiOff, X } from "lucide-react";
 import { FormEvent, useEffect, useRef, useState, type ReactNode } from "react";
 import { Markdown } from "../components/Markdown";
 import { Button, EmptyState, IconButton, StatusBadge } from "../components/ui";
@@ -271,7 +271,7 @@ function ChatPanel({
   statusReady: boolean;
   channelBlock?: ReactNode;
 }) {
-  const { updateSettings, addAttachments, removeAttachment, sendMessage, sendObservation, status: chatStatus } = useChat();
+  const { updateSettings, addAttachments, removeAttachment, sendMessage, stopTurn, sendObservation, status: chatStatus } = useChat();
   const health = useApiHealth();
   const [messageText, setMessageText] = useState("");
   const [observeText, setObserveText] = useState("");
@@ -440,10 +440,16 @@ function ChatPanel({
           rows={1}
           placeholder={!statusReady ? "Checking API channel..." : chatEnabled ? "Message xAgent..." : "Start the API channel to chat..."}
           value={messageText}
-          disabled={!statusReady || !chatEnabled || panel.sending}
+          disabled={!statusReady || !chatEnabled}
           onChange={(event) => setMessageText(event.target.value)}
           onKeyDown={(event) => {
-            if (event.key === "Enter" && !event.shiftKey) submitMessage(event);
+            if (event.key === "Enter" && !event.shiftKey) {
+              if (panel.sending) {
+                event.preventDefault();
+                return;
+              }
+              submitMessage(event);
+            }
           }}
         />
         <div className="composer-actions">
@@ -492,17 +498,30 @@ function ChatPanel({
               event.currentTarget.value = "";
             }}
           />
-          <Button
-            type="submit"
-            variant="primary"
-            className="send-button"
-            disabled={
-              !statusReady || !chatEnabled || panel.sending || (!messageText.trim() && !panel.pendingAttachments.length)
-            }
-          >
-            <Send size={16} />
-            Send
-          </Button>
+          {panel.sending ? (
+            <Button
+              type="button"
+              variant="danger"
+              className="send-button"
+              disabled={!statusReady || !chatEnabled}
+              onClick={() => void stopTurn()}
+            >
+              <Square size={16} />
+              Stop
+            </Button>
+          ) : (
+            <Button
+              type="submit"
+              variant="primary"
+              className="send-button"
+              disabled={
+                !statusReady || !chatEnabled || (!messageText.trim() && !panel.pendingAttachments.length)
+              }
+            >
+              <Send size={16} />
+              Send
+            </Button>
+          )}
         </div>
       </form>
     </section>

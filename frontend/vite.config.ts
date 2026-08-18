@@ -15,6 +15,7 @@ export default defineConfig({
     proxy: {
       "/api": WEB_CLIENT_ORIGIN,
       "/chat": WEB_CLIENT_ORIGIN,
+      "/chat/stop": WEB_CLIENT_ORIGIN,
       "/observe": WEB_CLIENT_ORIGIN,
       "/clear_messages": WEB_CLIENT_ORIGIN,
       "/health": WEB_CLIENT_ORIGIN,

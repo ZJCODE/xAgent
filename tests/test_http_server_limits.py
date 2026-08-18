@@ -98,6 +98,23 @@ class FlushTrackingAgent(FastStreamingAgent):
         self.flushed = True
 
 
+class AbortRecordingAgent:
+    model = "test-model"
+    tools = {}
+
+    def __init__(self):
+        self.message_storage = FakeMessageStorage()
+        self.busy = False
+        self.abort_calls = 0
+
+    def abort(self):
+        self.abort_calls += 1
+        if not self.busy:
+            return False
+        self.busy = False
+        return True
+
+
 class ObservingAgent:
     model = "test-model"
     tools = {}
@@ -436,6 +453,21 @@ class AgentWebSocketServerTests(unittest.TestCase):
 
         self.assertEqual(agent.observed_kwargs["context"], "灯开了。")
         self.assertEqual(agent.observed_kwargs["metadata"], {"room": "study"})
+
+    async def test_chat_stop_asks_the_agent_to_abort(self):
+        agent = AbortRecordingAgent()
+        agent.busy = True
+        server = AgentHTTPServer(agent=agent)
+
+        async with await self._client(server) as client:
+            response = await client.post("/chat/stop")
+            idle = await client.post("/chat/stop")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"stopped": True})
+        self.assertEqual(idle.status_code, 200)
+        self.assertEqual(idle.json(), {"stopped": False})
+        self.assertEqual(agent.abort_calls, 2)
 
 
 if __name__ == "__main__":

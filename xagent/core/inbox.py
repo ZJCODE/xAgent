@@ -112,14 +112,31 @@ class AgentInbox:
 
     def __init__(self) -> None:
         self._turn_lock = asyncio.Lock()
+        self._abort = asyncio.Event()
 
     @property
     def busy(self) -> bool:
         return self._turn_lock.locked()
 
+    def abort_requested(self) -> bool:
+        return self._abort.is_set()
+
+    def request_abort(self) -> bool:
+        """Ask the in-flight turn to stop at the next iteration boundary.
+
+        Returns True when a turn is busy and the request was recorded.
+        Idle calls are a no-op.
+        """
+        if not self._turn_lock.locked():
+            return False
+        self._abort.set()
+        return True
+
     async def acquire_turn(self) -> None:
         await self._turn_lock.acquire()
+        self._abort.clear()
 
     def release_turn(self) -> None:
+        self._abort.clear()
         if self._turn_lock.locked():
             self._turn_lock.release()

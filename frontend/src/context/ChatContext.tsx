@@ -8,7 +8,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { getAgentInfo, uploadWorkspaceFile, workspaceBlobUrl } from "../lib/api";
+import { getAgentInfo, stopChat, uploadWorkspaceFile, workspaceBlobUrl } from "../lib/api";
 import type { AgentCapabilities, AttachmentAsset, ChatEvent, ChatMessage, ChatPanelState, ChatSettings } from "../types";
 import { makeId } from "../lib/format";
 
@@ -38,6 +38,7 @@ interface ChatContextValue {
   addAttachments: (panelId: PanelId, files: FileList | File[]) => void;
   removeAttachment: (panelId: PanelId, index: number) => void;
   sendMessage: (panelId: PanelId, text: string) => Promise<void>;
+  stopTurn: () => Promise<void>;
   sendObservation: (panelId: PanelId, text: string) => Promise<void>;
   clearPanel: (panelId: PanelId) => void;
   clearVisiblePanels: () => void;
@@ -353,6 +354,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       const socket = new WebSocket(webSocketUrl("/ws/chat"));
       socketsRef.current[socketKey] = socket;
       let settled = false;
+      let aborted = false;
       const textByMessageId = new Map<string, string>();
       const localMessageIds = new Set<string>([assistantId]);
       const remoteToLocalMessageId = new Map<string, string>();
@@ -393,16 +395,16 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         patchPanel(panelId, (panel) => ({
           ...panel,
           sending: false,
-          messages: panel.messages.map((message) =>
-            localMessageIds.has(message.id) && message.pending
-              ? {
-                  ...message,
-                  pending: false,
-                  error: Boolean(error),
-                  content: error && !message.content ? `Error: ${error.message}` : message.content,
-                }
-              : message,
-          ),
+          messages: panel.messages.flatMap((message) => {
+            if (!localMessageIds.has(message.id) || !message.pending) return [message];
+            if (aborted && !message.content) return [];
+            return [{
+              ...message,
+              pending: false,
+              error: Boolean(error),
+              content: error && !message.content ? `Error: ${error.message}` : message.content,
+            }];
+          }),
         }));
         if (error) reject(error);
         else resolve();
@@ -418,6 +420,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           parsed = JSON.parse(event.data) as ChatEvent;
         } catch {
           finish(new Error("Invalid WebSocket response."));
+          return;
+        }
+
+        if (parsed.type === "aborted") {
+          aborted = true;
           return;
         }
 
@@ -543,6 +550,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     [capabilities, panel, patchPanel, runSocket],
   );
 
+  const stopTurn = useCallback(async () => {
+    if (!panel.sending) return;
+    await stopChat().catch(() => undefined);
+  }, [panel.sending]);
+
   const sendObservation = useCallback(
     async (panelId: PanelId, rawText: string) => {
       const text = rawText.trim();
@@ -626,6 +638,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       addAttachments,
       removeAttachment,
       sendMessage,
+      stopTurn,
       sendObservation,
       clearPanel,
       clearVisiblePanels,
@@ -638,6 +651,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       addAttachments,
       removeAttachment,
       sendMessage,
+      stopTurn,
       sendObservation,
       clearPanel,
       clearVisiblePanels,

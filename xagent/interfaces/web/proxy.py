@@ -37,7 +37,7 @@ def register_api_proxy(
     are served locally by the admin routes mounted directly on the web client,
     so those tabs work without any api channel running. Only the routes that
     require a live model/tool-executing agent are forwarded: chat, observe,
-    the scheduled-task/subconscious push socket, and health checks.
+    chat stop, the scheduled-task/subconscious push socket, and health checks.
     """
     logger = logger or logging.getLogger(__name__)
 
@@ -48,7 +48,7 @@ def register_api_proxy(
 
         return handler
 
-    for route_path in ("/chat", "/observe", "/health", "/i/health"):
+    for route_path in ("/chat", "/chat/stop", "/observe", "/health", "/i/health"):
         app.add_api_route(
             route_path,
             _make_root_proxy(route_path),

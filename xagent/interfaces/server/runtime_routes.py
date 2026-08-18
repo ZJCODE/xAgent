@@ -37,6 +37,12 @@ def register_runtime_routes(app: FastAPI, adapter: "ApiChannelAdapter") -> None:
             adapter.logger.error("Agent processing error for %s: %s", input_data.user_id, exc)
             raise HTTPException(status_code=500, detail=f"Agent processing error: {str(exc)}")
 
+    @app.post("/chat/stop")
+    async def stop_chat():
+        result = adapter.chat.abort_turn()
+        adapter.logger.info("Chat stop requested: stopped=%s", result.get("stopped"))
+        return result
+
     @app.websocket("/ws/chat")
     async def websocket_chat(websocket: WebSocket):
         await websocket.accept()

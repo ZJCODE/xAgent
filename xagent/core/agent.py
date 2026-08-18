@@ -228,6 +228,15 @@ class Agent:
             self._inbox = current
         return current
 
+    def abort(self) -> bool:
+        """Stop the in-flight turn after the current model call or tool batch.
+
+        Returns True when a turn was busy and will stop at the next boundary.
+        Does not roll back tools that already ran, and does not kill a running
+        shell command.
+        """
+        return self.inbox.request_abort()
+
     @classmethod
     def _message_storage_path(cls, workspace: Path) -> Path:
         return workspace / AgentConfig.MESSAGE_DIRNAME / AgentConfig.MESSAGE_DB_FILENAME
@@ -620,6 +629,11 @@ class Agent:
             turn_obs.set_input(input_messages)
 
             for iteration_index in range(self.max_iter):
+                if self.inbox.abort_requested():
+                    yield self._aborted_event()
+                    yield {"type": "done"}
+                    return
+
                 message_id = self._turn_message_id(user_msg, iteration_index)
                 text_parts: list[str] = []
                 tool_calls = []
@@ -667,6 +681,11 @@ class Agent:
                         return
 
                 visible_text = "".join(text_parts)
+                if self.inbox.abort_requested() and tool_calls:
+                    yield self._aborted_event()
+                    yield {"type": "done"}
+                    return
+
                 if tool_calls:
                     if visible_text:
                         if message_started:
@@ -728,6 +747,11 @@ class Agent:
                             messages=[user_msg, assistant_msg],
                         )
                         turn_obs.set_output(tool_result.content)
+                        yield {"type": "done"}
+                        return
+
+                    if self.inbox.abort_requested():
+                        yield self._aborted_event()
                         yield {"type": "done"}
                         return
 
@@ -1134,6 +1158,10 @@ class Agent:
             )
         events.append(cls._message_done_event(message_id, phase, content, attachments=attachments))
         return events
+
+    @staticmethod
+    def _aborted_event() -> dict:
+        return {"type": "aborted"}
 
     @staticmethod
     def _tool_event(event_type: str, tool_call: Any) -> dict:

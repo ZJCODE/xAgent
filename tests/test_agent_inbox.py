@@ -4,10 +4,12 @@ import unittest
 from xagent.core.agent import Agent
 from xagent.core.config import AgentConfig, ReplyType
 from xagent.core.handlers.message import MessageHandler
+from xagent.core.handlers.model import ChatToolCall, ModelStreamEvent
 from xagent.core.inbox import (
     INBOX_KIND_METADATA_KEY,
     SCHEDULED_AGENT_PROMPT_PREFIX,
     TASK_CONTENT_METADATA_KEY,
+    AgentInbox,
     InboxItem,
     InboxKind,
     scheduled_task_display_content,
@@ -20,6 +22,7 @@ from xagent.interfaces.server.serializers import message_item
 from tests.test_agent_chat_flow import (
     CapturingModelClient,
     FakeMemoryHandler,
+    FakeToolCall,
     FakeToolExecutor,
     FakeToolManager,
     InMemoryMessageStorage,
@@ -294,3 +297,111 @@ class AgentInboxTests(unittest.IsolatedAsyncioTestCase):
             if message.role == RoleType.USER
         ]
         self.assertEqual(kinds, [InboxKind.USER_TURN.value, InboxKind.USER_TURN.value])
+
+    async def test_abort_is_noop_when_idle(self):
+        agent = self._build_agent(InMemoryMessageStorage(), CapturingModelClient([]))
+        self.assertFalse(agent.abort())
+        self.assertFalse(agent.inbox.busy)
+
+    async def test_abort_skips_tools_returned_by_the_current_model_call(self):
+        storage = InMemoryMessageStorage()
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        class PausingToolCallModel(CapturingModelClient):
+            async def model_turn_events(self, messages, tool_specs, instructions=None, stream=False):
+                self.calls.append(messages)
+                started.set()
+                await release.wait()
+                yield ModelStreamEvent(
+                    type="tool_calls",
+                    tool_calls=[
+                        ChatToolCall(call_id="call-1", name="lookup", arguments="{}"),
+                    ],
+                )
+
+        model_client = PausingToolCallModel([(ReplyType.SIMPLE_REPLY, "unused")])
+        tool_executor = FakeToolExecutor()
+        agent = self._build_agent(storage, model_client, tool_executor=tool_executor)
+
+        async def run_turn():
+            return [
+                event
+                async for event in agent.chat_events(
+                    user_message="work",
+                    user_id="alice",
+                    channel="cli",
+                )
+            ]
+
+        task = asyncio.create_task(run_turn())
+        await started.wait()
+        self.assertTrue(agent.abort())
+        release.set()
+        events = await task
+        types = [event.get("type") for event in events]
+        self.assertEqual(types, ["aborted", "done"])
+        self.assertEqual(tool_executor.seen_input_messages, [])
+        self.assertEqual(len(model_client.calls), 1)
+
+    async def test_abort_stops_after_the_current_tool_batch(self):
+        storage = InMemoryMessageStorage()
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        class PausingToolExecutor(FakeToolExecutor):
+            async def handle_tool_calls(self, tool_calls, input_messages, max_concurrent_tools, **kwargs):
+                started.set()
+                await release.wait()
+                return await super().handle_tool_calls(
+                    tool_calls,
+                    input_messages,
+                    max_concurrent_tools,
+                    **kwargs,
+                )
+
+        model_client = CapturingModelClient([
+            (ReplyType.TOOL_CALL, [FakeToolCall()]),
+            (ReplyType.SIMPLE_REPLY, "should not run"),
+        ])
+        tool_executor = PausingToolExecutor()
+        agent = self._build_agent(storage, model_client, tool_executor=tool_executor)
+
+        async def run_turn():
+            return [
+                event
+                async for event in agent.chat_events(
+                    user_message="work",
+                    user_id="alice",
+                    channel="cli",
+                )
+            ]
+
+        task = asyncio.create_task(run_turn())
+        await started.wait()
+        self.assertTrue(agent.abort())
+        release.set()
+        events = await task
+        types = [event.get("type") for event in events]
+        self.assertIn("tool_call", types)
+        self.assertIn("tool_result", types)
+        self.assertEqual(types[-2:], ["aborted", "done"])
+        self.assertEqual(len(model_client.calls), 1)
+        self.assertEqual(len(model_client.responses), 1)
+
+
+class AgentInboxAbortTests(unittest.IsolatedAsyncioTestCase):
+    async def test_request_abort_is_noop_when_idle(self):
+        inbox = AgentInbox()
+        self.assertFalse(inbox.request_abort())
+        self.assertFalse(inbox.abort_requested())
+
+    async def test_request_abort_sets_flag_while_busy(self):
+        inbox = AgentInbox()
+        await inbox.acquire_turn()
+        try:
+            self.assertTrue(inbox.request_abort())
+            self.assertTrue(inbox.abort_requested())
+        finally:
+            inbox.release_turn()
+        self.assertFalse(inbox.abort_requested())
