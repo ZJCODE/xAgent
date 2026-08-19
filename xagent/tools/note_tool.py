@@ -147,9 +147,9 @@ def create_write_note_tool(store: NoteStore, is_enabled: bool = True):
             }
 
         today = date.today().isoformat()
-        note = NoteStore.normalize(
+        note = await store.create(
             Note(
-                id=store.next_id(),
+                id="",
                 title=title,
                 body=body,
                 kind=str(kind or "note"),
@@ -162,7 +162,6 @@ def create_write_note_tool(store: NoteStore, is_enabled: bool = True):
                 updated=today,
             )
         )
-        await store.write(note)
         return {"status": "ok", "note": _note_summary(note)}
 
     return write_note

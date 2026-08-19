@@ -1,5 +1,6 @@
 """Tests for notebook memory: store, tools, distillation, injection."""
 
+import asyncio
 import tempfile
 import unittest
 from datetime import datetime
@@ -91,6 +92,16 @@ class NoteStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.store.path_for(note.id).name, f"{note.id}.md")
         loaded = await self.store.read(note.id)
         self.assertEqual(loaded.title, "浓缩粉水比")
+
+    async def test_create_assigns_distinct_ids_under_concurrency(self):
+        created = await asyncio.gather(
+            *(
+                self.store.create(Note(id="", title=f"Note {index}", body="body"))
+                for index in range(5)
+            )
+        )
+        self.assertEqual(len({note.id for note in created}), 5)
+        self.assertEqual(await self.store.count(), 5)
 
     def test_next_id_walks_forward_on_collision(self):
         stamp = datetime(2026, 8, 19, 9, 30)
@@ -594,6 +605,9 @@ class MemoryHandlerNotebookTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(note.source.get("diary"))
         self.assertEqual(note.source.get("person"), "feishu:jun")
         self.assertEqual(note.sensitivity, "person-scoped")
+        # The cursor points at the batch the note came from, not the previous
+        # checkpoint, so provenance can be resolved back to those messages.
+        self.assertEqual(note.source.get("cursor"), 20)
 
     async def test_distilled_note_is_shareable_when_several_people_took_part(self):
         messages = [*self._batch(count=10, sender="jun"), *self._batch(count=10, sender="mei")]

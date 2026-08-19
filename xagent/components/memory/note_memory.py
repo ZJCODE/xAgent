@@ -364,13 +364,28 @@ class NoteStore:
     # Write
     # ------------------------------------------------------------------
 
+    async def create(self, note: Note) -> Note:
+        """Assign an id and write the note, holding one lock across both.
+
+        Allocating the id outside the lock would let two notes written in the
+        same minute claim the same id, and the second write would silently
+        replace the first.
+        """
+        async with self._write_lock:
+            prepared = self.normalize(replace(note, id=self.next_id()))
+            path = self.path_for(prepared.id, prepared.title)
+            await asyncio.to_thread(self._write_atomic_sync, path, self._render(prepared))
+            self._cache_signature = None
+        logger.debug("Created note %s (%d chars)", prepared.id, len(prepared.body))
+        return prepared
+
     async def write(self, note: Note) -> Path:
-        """Write (overwrite) one note atomically."""
+        """Write (overwrite) one note atomically. The note must already have an id."""
         path = self.path_for(note.id, note.title)
         rendered = self._render(note)
         async with self._write_lock:
             await asyncio.to_thread(self._write_atomic_sync, path, rendered)
-        self._cache_signature = None
+            self._cache_signature = None
         logger.debug("Wrote note %s (%d chars)", note.id, len(note.body))
         return path
 

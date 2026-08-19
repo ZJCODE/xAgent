@@ -362,7 +362,7 @@ class MemoryHandler:
                 return False
 
         await self._update_relationship_cards(recent_messages, new_records)
-        await self._distill_notes(recent_messages, new_records)
+        await self._distill_notes(recent_messages, new_records, cursor=end_inclusive)
 
         if not await self._commit_processed_message_id(end_inclusive):
             logger.warning(
@@ -575,6 +575,7 @@ class MemoryHandler:
         self,
         recent_messages: List[Message],
         new_records: List[dict],
+        cursor: int = 0,
     ) -> None:
         """Distil reusable conclusions from this batch into notes.
 
@@ -587,7 +588,6 @@ class MemoryHandler:
         try:
             from ...components.memory import (
                 Note,
-                NoteStore,
                 SENSITIVITY_PERSON_SCOPED,
                 SENSITIVITY_SHAREABLE,
             )
@@ -607,7 +607,7 @@ class MemoryHandler:
             participants = self._extract_participants(recent_messages)
             person_key = participants[0]["key"] if len(participants) == 1 else ""
             today_str = date.today().isoformat()
-            cursor = self._last_processed_message_id
+            cursor = self._non_negative_int(cursor, 0)
 
             written: list[str] = []
             for candidate in candidates[: AgentConfig.NOTES_DISTILL_MAX_PER_BATCH]:
@@ -633,9 +633,9 @@ class MemoryHandler:
                     source["person"] = person_key
                 if cursor > 0:
                     source["cursor"] = cursor
-                note = NoteStore.normalize(
+                note = await self.note_store.create(
                     Note(
-                        id=self.note_store.next_id(),
+                        id="",
                         title=title,
                         body=body,
                         tags=tuple(candidate.get("tags") or ()),
@@ -648,7 +648,6 @@ class MemoryHandler:
                         updated=today_str,
                     )
                 )
-                await self.note_store.write(note)
                 written.append(f"{note.id} ({len(note.body)} chars)")
             if written:
                 logger.info("Distilled %d note(s): %s", len(written), ", ".join(written))

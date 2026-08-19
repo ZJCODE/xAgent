@@ -136,6 +136,10 @@ Filenames are `<id>-<slug>.md`, sanitized the way `RelationshipStore._safe_segme
 CJK-only title yields no slug and the file is simply `<id>.md`. The frontmatter id is authoritative,
 never the filename, and rewriting a title does not rename the file.
 
+Ids are allocated and written under a single lock (`NoteStore.create`). Allocating first and writing
+afterwards lets concurrent tool calls in the same minute all claim the same id and produce several
+files claiming to be one note, which would make `read_note` arbitrary and links ambiguous.
+
 The parser tolerates human damage: unknown enum values and oversized fields are clamped, missing
 fields fall back to defaults, and broken or absent YAML degrades to a body-only note (id recovered
 from the filename, title from the first body line) rather than raising or dropping the note.
