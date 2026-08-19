@@ -53,7 +53,7 @@ xAgent can serve as a personal assistant in some scenarios, but that is a subset
 8. Diary-Anchored Memory Carrier Principle
 - The diary/journal is the authoritative memory carrier and must stay sufficient on its own.
 - Derived views over the diary, such as relationship cards and notes, are allowed. They are regenerable projections, not parallel sources of truth, and the system must keep working when they are empty or discarded.
-- Every derived record must be traceable to the diary. When the agent records something the diary did not originate, the diary must still note that it was recorded, so the diary remains the complete life stream.
+- Every derived record must carry its own provenance, so whatever it claims can be traced back to where it came from.
 - Do not require structured long-term memory schemas as a core requirement.
 
 ## Product Scope Implications
@@ -65,7 +65,7 @@ When adding new requirements, always check the following:
 - Does it work in both 1:1 and group/multi-user scenarios?
 - Does it preserve first-person memory/journal integrity?
 - Does it keep one unified memory stream instead of per-user memory isolation?
-- Does it keep the diary authoritative and sufficient, with any structured memory kept as a regenerable, diary-traceable projection?
+- Does it keep the diary authoritative and sufficient, with any structured memory kept as a regenerable projection that carries its own provenance?
 - Does it preserve agent-controlled sharing decisions?
 - Does it keep event attribution clear (who said what, where, and in which context)?
 - Does it support long-term continuity rather than single-session behavior only?
@@ -79,7 +79,7 @@ The memory model should be diary-first and unified:
 - Keep one continuous agent memory narrative, not per-user isolated stores.
 - Use diary/journal as the primary and sufficient memory carrier.
 - Keep raw conversation and observation traces for attribution, but memory expression stays diary-based.
-- Derived projections over the diary, such as relationship cards and notes, may exist for fast recall. Each one must stay regenerable and traceable to the diary.
+- Derived projections over the diary, such as relationship cards and notes, may exist for fast recall. Each one must stay regenerable and must record where its content came from.
 - The agent decides what can be disclosed from memory in each interaction context.
 
 At minimum, stored records should be able to answer:
