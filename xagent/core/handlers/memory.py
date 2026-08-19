@@ -26,7 +26,7 @@ from ..inbox import is_scheduled_work
 from ...schemas import Message, MessageType, RoleType
 
 if TYPE_CHECKING:
-    from ...components.memory import MarkdownMemory, RelationshipStore
+    from ...components.memory import MarkdownMemory, NoteStore, RelationshipStore
     from ...components.message import MessageStorage
     from ..journal import JournalLLMService
 
@@ -56,11 +56,13 @@ class MemoryHandler:
         recent_max_chars: Optional[int] = None,
         max_journal_source_chars: Optional[int] = None,
         relationship_store: Optional["RelationshipStore"] = None,
+        note_store: Optional["NoteStore"] = None,
     ) -> None:
         self.memory = memory
         self.llm_service = llm_service
         self.message_storage = message_storage
         self.relationship_store = relationship_store
+        self.note_store = note_store
         self.journal_batch_size = self._positive_int(
             journal_batch_size,
             AgentConfig.JOURNAL_BATCH_SIZE,
@@ -352,6 +354,7 @@ class MemoryHandler:
                 return False
 
         await self._update_relationship_cards(recent_messages, new_records)
+        await self._update_standing_notes(new_records)
 
         if not await self._commit_processed_message_id(end_inclusive):
             logger.warning(
@@ -456,6 +459,149 @@ class MemoryHandler:
             )
         except Exception as exc:
             logger.warning("Relationship card update failed: %s", exc, exc_info=True)
+
+    # ------------------------------------------------------------------
+    # Standing notes (derived ideas over the diary)
+    # ------------------------------------------------------------------
+
+    _NOTE_TERM_RE = re.compile(r"[^\W_]{2,}", re.UNICODE)
+
+    async def _update_standing_notes(self, new_records: List[dict]) -> None:
+        """Create or rewrite a few standing notes from this batch.
+
+        Best-effort: failures here must never break diary maintenance.
+        """
+        if self.note_store is None:
+            return
+        try:
+            transcript = "\n\n".join(
+                str(item.get("content") or "").strip()
+                for item in new_records
+                if str(item.get("content") or "").strip()
+            )
+            if not transcript:
+                return
+
+            store = self.note_store
+            pages = await store.list_pages()
+            catalog = [
+                {"slug": page.slug, "title": page.title, "summary": page.summary}
+                for page in pages
+            ]
+            working_set = self._select_note_working_set(
+                pages,
+                transcript,
+                AgentConfig.NOTE_MAINTENANCE_FULL_BODY_PAGES,
+            )
+            proposed = await self.llm_service.update_standing_notes(
+                messages=new_records,
+                catalog=catalog,
+                working_set=[
+                    {"slug": page.slug, "title": page.title, "body": page.body}
+                    for page in working_set
+                ],
+            )
+            await self._apply_standing_note_updates(proposed, pages, working_set)
+        except Exception as exc:
+            logger.warning("Standing note update failed: %s", exc, exc_info=True)
+
+    @classmethod
+    def _select_note_working_set(cls, pages, transcript: str, limit: int):
+        """Union of transcript hits and recently touched pages, capped at *limit*."""
+        if not pages or limit <= 0:
+            return []
+        terms = cls._transcript_terms(transcript)
+        by_score = sorted(
+            pages,
+            key=lambda page: (
+                cls._score_note_page(page, terms),
+                page.touched or "",
+                page.updated or "",
+                page.slug,
+            ),
+            reverse=True,
+        )
+        scored_hits = [page for page in by_score if cls._score_note_page(page, terms) > 0]
+        by_recency = sorted(
+            pages,
+            key=lambda page: (page.touched or "", page.updated or "", page.slug),
+            reverse=True,
+        )
+        selected = []
+        seen: set[str] = set()
+        for page in (*scored_hits, *by_recency):
+            if page.slug in seen:
+                continue
+            selected.append(page)
+            seen.add(page.slug)
+            if len(selected) >= limit:
+                break
+        return selected
+
+    @classmethod
+    def _transcript_terms(cls, transcript: str, *, limit: int = 48) -> list[str]:
+        seen: set[str] = set()
+        terms: list[str] = []
+        for match in cls._NOTE_TERM_RE.finditer(transcript or ""):
+            token = match.group(0).casefold()
+            if token in seen:
+                continue
+            seen.add(token)
+            terms.append(token)
+            if len(terms) >= limit:
+                break
+        return terms
+
+    @staticmethod
+    def _score_note_page(page, terms: list[str]) -> int:
+        from ...utils.search_terms import score_text
+
+        return score_text(f"{page.title}\n{page.body}", terms)
+
+    async def _apply_standing_note_updates(
+        self,
+        proposed: list,
+        pages,
+        working_set,
+    ) -> None:
+        if not proposed or self.note_store is None:
+            return
+
+        from ...components.memory import NoteStoreError, extract_wiki_links, slugify
+
+        existing_slugs = {page.slug for page in pages}
+        visible_slugs = {page.slug for page in working_set}
+        max_writes = AgentConfig.NOTE_MAINTENANCE_MAX_WRITES
+        applied: list[str] = []
+
+        for item in list(proposed)[:max_writes]:
+            title = str((item or {}).get("title") or "").strip()
+            body = str((item or {}).get("body") or "").strip()
+            if not title or not body:
+                continue
+            slug = slugify(str((item or {}).get("slug") or title))
+            is_new = slug not in existing_slugs
+            if not is_new and slug not in visible_slugs:
+                logger.info("Skipped standing note %s: existing page was not in the working set", slug)
+                continue
+            others = existing_slugs if is_new else (existing_slugs - {slug})
+            if others:
+                outgoing = [target for target in extract_wiki_links(body) if target != slug]
+                if not any(link in others for link in outgoing):
+                    logger.info("Skipped standing note %s: no [[slug]] link to an existing page", slug)
+                    continue
+            try:
+                page = await self.note_store.upsert_page(title=title, body=body, slug=slug)
+            except NoteStoreError as exc:
+                logger.info("Skipped standing note %s: %s", slug, exc)
+                continue
+            applied.append(page.slug)
+            existing_slugs.add(page.slug)
+
+        if applied:
+            logger.info("Updated %d standing note(s): %s", len(applied), ", ".join(applied))
+        else:
+            logger.info("Standing note update: no pages written")
 
     @staticmethod
     def _extract_participants(messages: List[Message]) -> List[dict]:

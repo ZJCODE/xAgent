@@ -462,7 +462,7 @@ def build_parser() -> argparse.ArgumentParser:
     for command_name in ("stats", "clear"):
         memory_cmd = memory_sub.add_parser(command_name, help=f"{command_name} memory")
         _add_agent_argument(memory_cmd)
-        memory_cmd.add_argument("--scope", default="all", choices=("daily", "weekly", "monthly", "yearly", "all"))
+        memory_cmd.add_argument("--scope", default="all", choices=("daily", "weekly", "monthly", "yearly", "notes", "all"))
         memory_cmd.add_argument("--yes", action="store_true", help="Confirm destructive operations")
         memory_cmd.set_defaults(handler=runtime.handle_memory)
     memory_list = memory_sub.add_parser("list", help="Show recent daily journals")
@@ -472,7 +472,7 @@ def build_parser() -> argparse.ArgumentParser:
     memory_search = memory_sub.add_parser("search", help="Search memory markdown files")
     _add_agent_argument(memory_search)
     memory_search.add_argument("query", help="Search query")
-    memory_search.add_argument("--scope", default="all", choices=("daily", "weekly", "monthly", "yearly", "all"))
+    memory_search.add_argument("--scope", default="all", choices=("daily", "weekly", "monthly", "yearly", "notes", "all"))
     memory_search.set_defaults(handler=runtime.handle_memory)
     _show_help_on_missing_action(memory_parser)
 

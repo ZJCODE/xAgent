@@ -8,12 +8,16 @@ from typing import List, Literal, Optional, Tuple, cast
 
 from xagent.utils.search_terms import normalize_terms, score_text
 
+from .note_memory import format_note_link_footer
+
 logger = logging.getLogger(__name__)
 
-MemoryScope = Literal["daily", "weekly", "monthly", "yearly", "all"]
+MemoryScope = Literal["daily", "weekly", "monthly", "yearly", "notes", "all"]
 
 _TIME_SCOPES: tuple[str, ...] = ("daily", "weekly", "monthly", "yearly")
-_VALID_SCOPES: set[str] = {*_TIME_SCOPES, "all"}
+_NOTE_SCOPE = "notes"
+_SEARCH_SCOPES: tuple[str, ...] = (*_TIME_SCOPES, _NOTE_SCOPE)
+_VALID_SCOPES: set[str] = {*_SEARCH_SCOPES, "all"}
 _DEFAULT_SEARCH_MAX_RESULTS = 20
 _DEFAULT_SEARCH_MAX_CHARS = 6000
 
@@ -230,7 +234,7 @@ class MarkdownMemory:
     def _scope_roots(self, scope: MemoryScope | str) -> List[Path]:
         normalized_scope = self._normalize_scope(scope)
         if normalized_scope == "all":
-            return [self.root / scope_name for scope_name in _TIME_SCOPES]
+            return [self.root / scope_name for scope_name in _SEARCH_SCOPES]
         return [self.root / normalized_scope]
 
     def _label_for_path(self, path: Path) -> str:
@@ -256,7 +260,29 @@ class MarkdownMemory:
             return f"[monthly {stem}]"
         if scope == "yearly":
             return f"[yearly {stem}]"
+        if scope == _NOTE_SCOPE:
+            return f"[note {stem}]"
         return "[memory]"
+
+    def _is_note_path(self, path: Path) -> bool:
+        try:
+            relative = path.resolve().relative_to(self.root.resolve())
+        except ValueError:
+            return False
+        return bool(relative.parts) and relative.parts[0] == _NOTE_SCOPE
+
+    def _active_note_catalog_sync(self) -> dict[str, str]:
+        notes_dir = self.root / _NOTE_SCOPE
+        if not notes_dir.is_dir():
+            return {}
+        catalog: dict[str, str] = {}
+        for path in sorted(notes_dir.glob("*.md")):
+            if not path.is_file() or path.name.startswith("."):
+                continue
+            text = self._read_text_sync(path)
+            if text.strip():
+                catalog[path.stem] = text
+        return catalog
 
     def _event_time_for_path(self, path: Path) -> float:
         """Return epoch seconds for ranking; newer memory sorts higher on ties."""
@@ -287,9 +313,13 @@ class MarkdownMemory:
                     event_date = date(year, month + 1, 1) - timedelta(days=1)
             elif scope == "yearly":
                 event_date = date(int(stem), 12, 31)
+            elif scope == _NOTE_SCOPE:
+                return path.stat().st_mtime
             else:
                 return 0.0
         except ValueError:
+            return 0.0
+        except OSError:
             return 0.0
 
         return datetime.combine(event_date, datetime.min.time()).timestamp()
@@ -356,6 +386,7 @@ class MarkdownMemory:
             return []
 
         scored_blocks: list[tuple[int, float, str, str, int, int, list[str]]] = []
+        note_catalog: dict[str, str] | None = None
         for path in sorted(search_dir.rglob("*.md")):
             if not path.is_file():
                 continue
@@ -367,6 +398,19 @@ class MarkdownMemory:
             label = self._label_for_path(path)
             event_time = self._event_time_for_path(path)
             path_key = str(path)
+            if self._is_note_path(path):
+                window_lines = lines
+                window = "\n".join(window_lines)
+                score = score_text(window, terms)
+                if score <= 0:
+                    continue
+                if note_catalog is None:
+                    note_catalog = self._active_note_catalog_sync()
+                footer = format_note_link_footer(path.stem, window, catalog=note_catalog)
+                scored_blocks.append(
+                    (score, event_time, label, path_key, 0, len(lines), [*window_lines, footer])
+                )
+                continue
             for index, line in enumerate(lines):
                 if score_text(line, terms) <= 0:
                     continue

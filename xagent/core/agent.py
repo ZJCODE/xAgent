@@ -7,6 +7,7 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, Union
 from ..components import (
     MarkdownMemory,
     MessageStorage,
+    NoteStore,
     RelationshipStore,
     SkillsStorageBase,
 )
@@ -22,7 +23,11 @@ from ..schemas import (
     ParticipationDecision,
     RoleType,
 )
-from ..tools import create_search_memory_tool, create_write_memory_tool
+from ..tools import (
+    create_search_memory_tool,
+    create_upsert_note_tool,
+    create_write_memory_tool,
+)
 from .config import AgentConfig, ReplyType
 from .errors import (
     ERROR_EMPTY_RESPONSE,
@@ -146,6 +151,9 @@ class Agent:
         self.relationship_store = RelationshipStore(
             relationships_dir=str(Path(memory_dir) / AgentConfig.RELATIONSHIPS_DIRNAME)
         )
+        self.note_store = NoteStore(
+            notes_dir=str(Path(memory_dir) / AgentConfig.NOTES_DIRNAME)
+        )
         self.llm_service = JournalLLMService(
             client=self.client,
             model=self.model,
@@ -160,6 +168,7 @@ class Agent:
             message_storage=self.message_storage,
             journal_batch_size=self.journal_batch_size,
             relationship_store=self.relationship_store,
+            note_store=self.note_store,
             recent_days=self.memory_recent_days,
         )
         self.working_context_compactor = self._build_working_context_compactor(
@@ -177,6 +186,10 @@ class Agent:
                 memory=self.markdown_memory,
                 is_enabled=True,
                 message_storage=self.message_storage,
+            ),
+            create_upsert_note_tool(
+                note_store=self.note_store,
+                is_enabled=True,
             ),
         ])
         self.tool_manager = ToolManager(tools=bound_tools)

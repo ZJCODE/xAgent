@@ -35,6 +35,12 @@ from .models import (
     WorkspaceWriteInput,
 )
 from .serializers import message_item, message_search_result
+from ...components.memory.note_memory import (
+    NOTE_ARCHIVE_DIRNAME,
+    NoteStore,
+    extract_wiki_links,
+    slugify,
+)
 from ...core.runtime import (
     count_archived_task_records,
     delete_scheduled_task,
@@ -538,11 +544,23 @@ def register_admin_routes(
             raise HTTPException(status_code=403, detail="Only markdown files can be read")
 
         content = requested.read_text(encoding="utf-8")
-        return {
+        payload: Dict[str, Any] = {
             "path": path,
             "content": content,
             "modified": requested.stat().st_mtime,
         }
+        relative = Path(path)
+        if (
+            relative.parts
+            and relative.parts[0] == "notes"
+            and NOTE_ARCHIVE_DIRNAME not in relative.parts
+            and requested.suffix == ".md"
+        ):
+            slug = slugify(requested.stem)
+            store = NoteStore(str(memory_dir / "notes"))
+            payload["links"] = [item for item in extract_wiki_links(content) if item != slug]
+            payload["backlinks"] = [page.slug for page in await store.backlinks(slug)]
+        return payload
 
     @app.get("/api/memory/search", tags=["Monitoring"])
     async def memory_search(

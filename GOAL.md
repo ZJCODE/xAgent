@@ -45,6 +45,7 @@ xAgent can serve as a personal assistant in some scenarios, but that is a subset
 6. Unified Memory Principle
 - The agent keeps one unified memory stream instead of user-isolated memory silos.
 - Memory is owned by the agent as a whole individual.
+- Standing notes are the agent's own idea graph with stable slug addresses, not a second diary.
 
 7. Agent-Governed Sharing Principle
 - The agent decides what can be shared, with whom, and in which context.
@@ -76,6 +77,7 @@ The memory model should be diary-first and unified:
 
 - Keep one continuous agent memory narrative, not per-user isolated stores.
 - Use diary/journal as the primary and sufficient memory carrier.
+- Notes are a personal idea graph with stable addresses (`[[slug]]` links), not a second diary. Diary remains the experience source of truth; relationship cards remain the person index.
 - Keep raw conversation and observation traces for attribution, but memory expression stays diary-based.
 - The agent decides what can be disclosed from memory in each interaction context.
 

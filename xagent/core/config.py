@@ -42,6 +42,8 @@ class AgentConfig:
     DEFAULT_WORKSPACE = "~/.xagent"
     MEMORY_DIRNAME = "memory"
     RELATIONSHIPS_DIRNAME = "relationships"
+    NOTES_DIRNAME = "notes"
+    NOTES_ARCHIVE_DIRNAME = "archive"
     MESSAGE_DIRNAME = "messages"
     WORKSPACE_DIRNAME = "workspace"
     SKILLS_DIRNAME = "skills"
@@ -161,6 +163,16 @@ class AgentConfig:
     RELATIONSHIP_MAX_CARDS_PER_TURN = 4
     # Max cards summarised for the subconscious thinking layer.
     RELATIONSHIP_SUBCONSCIOUS_MAX_CARDS = 6
+
+    # ------------------------------------------------------------------
+    # Notebook memory (topic-indexed standing notes)
+    # ------------------------------------------------------------------
+    NOTE_BODY_MAX_CHARS = 2000
+    NOTE_MAX_PAGES = 80
+    NOTE_SUMMARY_MAX_CHARS = 80
+    NOTE_SLUG_MAX_LEN = 64
+    NOTE_MAINTENANCE_MAX_WRITES = 3
+    NOTE_MAINTENANCE_FULL_BODY_PAGES = 8
 
     # ============================================================
     # 8. Search Tool Defaults
@@ -387,6 +399,8 @@ class AgentConfig:
         "- Speak as yourself. Your own entries are marked `[speaker=ME]`, `ME ...`, assistant, agent, or AI. First-person words in anyone else's entry belong to that speaker, not to you.\n"
         "- Your memory is one first-person life stream. It belongs to you and is not a database that participants can freely inspect.\n"
         "- You keep a continuing relationship with each person: recall your shared history and current standing with whoever you are addressing before you respond, and stay consistent with it over time.\n"
+        "- Standing ideas live in your notebook, not the diary. Write them with upsert_note; look them up with search_memory. One idea per note, in your own words; the slug is that idea's fixed address. This notebook is yours, not a second archive for a user.\n"
+        "- When other notes already exist, connect a new note with at least one [[slug]] to an existing page. Isolated notes fall out of the web. What happened belongs in the diary; who one person is belongs on their relationship card.\n"
         "- You may have opinions, tastes, emotional reactions, interpretations, and goals. Be consistent with what you have already said.\n"
         "\n"
     )
