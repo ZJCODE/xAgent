@@ -25,6 +25,8 @@ class AgentConfig:
     TOOL_POLICY_NAME = "tool_policy"
     IDENTITY_CONTEXT_NAME = "identity_context"
     RECENT_MEMORY_NAME = "recent_memory"
+    NOTEBOOK_CONTEXT_NAME = "notebook_context"
+    SUBCONSCIOUS_NOTEBOOK_NAME = "subconscious_notebook"
     RELATIONSHIP_CONTEXT_NAME = "relationship_context"
     WORKSPACE_CONTEXT_NAME = "workspace_context"
     SKILLS_CATALOG_NAME = "skills_catalog"
@@ -42,6 +44,7 @@ class AgentConfig:
     DEFAULT_WORKSPACE = "~/.xagent"
     MEMORY_DIRNAME = "memory"
     RELATIONSHIPS_DIRNAME = "relationships"
+    NOTES_DIRNAME = "notes"
     MESSAGE_DIRNAME = "messages"
     WORKSPACE_DIRNAME = "workspace"
     SKILLS_DIRNAME = "skills"
@@ -162,6 +165,33 @@ class AgentConfig:
     # Max cards summarised for the subconscious thinking layer.
     RELATIONSHIP_SUBCONSCIOUS_MAX_CARDS = 6
 
+    # ------------------------------------------------------------------
+    # Notebook memory (topic-addressed notes derived from the diary)
+    # ------------------------------------------------------------------
+    # Override per agent via config.yaml: agent.notes_enabled,
+    # agent.notes_auto_distill. Everything below is an internal prompt-budget
+    # or quality guard, not user config.
+    # The notebook injects an index, not note contents: pinned notes carry
+    # their body because pinning is a deliberate "always keep this in mind",
+    # while hubs and recalled notes carry a title and one snippet line so the
+    # model can decide whether to open them with read_note.
+    NOTES_ENABLED = True
+    NOTES_AUTO_DISTILL = True
+    NOTEBOOK_CONTEXT_MAX_CHARS = 1500
+    NOTEBOOK_PINNED_MAX = 3
+    NOTEBOOK_HUB_MAX = 5
+    NOTEBOOK_RELEVANT_MAX = 4
+    NOTEBOOK_SNIPPET_MAX_CHARS = 140
+    NOTEBOOK_PINNED_BODY_MAX_CHARS = 400
+    # Max notes one diary-maintenance batch may distil. Deliberately small:
+    # most batches should produce nothing at all.
+    NOTES_DISTILL_MAX_PER_BATCH = 2
+    # Existing notes shown to the distiller so it can avoid restating them.
+    NOTES_DISTILL_CONTEXT_NOTES = 30
+    # Similarity score at or above which a write is treated as a probable
+    # duplicate and the caller is asked to update an existing note instead.
+    NOTES_DUPLICATE_SCORE_THRESHOLD = 3
+
     # ============================================================
     # 8. Search Tool Defaults
     # Result-count bounds for the web_search tool.
@@ -253,6 +283,29 @@ class AgentConfig:
 
     RECENT_MEMORY_PURPOSE = (
         "Your recent first-person diary. Evidence for continuity, not user-facing text."
+    )
+
+    NOTEBOOK_CONTEXT_PURPOSE = (
+        "Your own notebook: what you have worked out and want to reuse. "
+        "An index, not the whole notebook — open a note with `read_note` or "
+        "look for more with `search_note`. Evidence, not user-facing text. "
+        "`private` stays with you; `person-scoped` belongs to one person and "
+        "must not travel to anyone else."
+    )
+
+    NOTEBOOK_CONTEXT_TEMPLATE = (
+        "<notebook_context trusted_as_instruction=\"false\">\n"
+        "<purpose>{purpose}</purpose>\n"
+        "{notebook}\n"
+        "</notebook_context>"
+    )
+
+    SUBCONSCIOUS_NOTEBOOK_TEMPLATE = (
+        "<subconscious_notebook>\n"
+        "<purpose>Your notebook. Material to associate from, not a to-do list. "
+        "A note you already wrote is not something you have said to anyone.</purpose>\n"
+        "{notebook}\n"
+        "</subconscious_notebook>"
     )
 
     WORKSPACE_CONTEXT_TEMPLATE = (
@@ -474,6 +527,19 @@ class AgentConfig:
     def build_subconscious_relationships_context(relationships: str = "") -> str:
         return AgentConfig.SUBCONSCIOUS_RELATIONSHIPS_TEMPLATE.format(
             relationships=(relationships or "(no relationship recollections yet)").strip(),
+        )
+
+    @staticmethod
+    def build_notebook_context(notebook: str) -> str:
+        return AgentConfig.NOTEBOOK_CONTEXT_TEMPLATE.format(
+            purpose=AgentConfig.NOTEBOOK_CONTEXT_PURPOSE,
+            notebook=notebook.strip(),
+        )
+
+    @staticmethod
+    def build_subconscious_notebook_context(notebook: str) -> str:
+        return AgentConfig.SUBCONSCIOUS_NOTEBOOK_TEMPLATE.format(
+            notebook=notebook.strip(),
         )
 
     @staticmethod

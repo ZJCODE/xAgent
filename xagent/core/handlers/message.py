@@ -291,6 +291,7 @@ class MessageHandler:
         current_user_id: str,
         memory_context: str = "",
         relationship_context: str = "",
+        notebook_context: str = "",
         workspace_context: str = "",
         context_events: Optional[List[Message]] = None,
         current_time: Optional[str] = None,
@@ -353,6 +354,7 @@ class MessageHandler:
         ctx = PromptAssembleContext(
             relationship_context=relationship_context,
             memory_context=memory_context,
+            notebook_context=notebook_context,
             recent_experience=recent_experience,
             current_user_id=speaker_label,
             current_time=resolved_current_time,

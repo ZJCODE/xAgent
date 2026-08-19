@@ -256,18 +256,154 @@ Return JSON only: an object mapping each person key to their full updated card t
 New experience:
 {transcript}"""
 
+    async def distill_notes(
+        self,
+        messages: List[dict],
+        existing_notes: List[dict],
+        max_notes: int = 2,
+    ) -> List[dict]:
+        """Distil reusable conclusions from a message batch into note drafts.
+
+        Notes are a topic-addressed projection over the diary: the diary keeps
+        what happened, a note keeps what is worth reusing. Returns a possibly
+        empty list of ``{title, body, tags, keys}`` drafts — empty is the
+        expected outcome for most batches.
+        """
+        if not messages:
+            return []
+
+        transcript = self._format_transcript(messages)
+        if not transcript.strip():
+            return []
+
+        system_prompt = self.build_note_distill_system_prompt(max_notes=max_notes)
+        user_prompt = self.build_note_distill_user_prompt(
+            existing_notes=existing_notes,
+            transcript=transcript,
+        )
+
+        try:
+            content = await self._call_text(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+            )
+        except Exception as exception:
+            self.logger.error("Error distilling notes: %s", exception)
+            return []
+
+        drafts = self._parse_note_drafts(content, max_notes=max_notes)
+        self.logger.info(
+            "Note distillation: %d draft(s) from %d chars of transcript",
+            len(drafts),
+            len(transcript),
+        )
+        return drafts
+
+    @staticmethod
+    def build_note_distill_system_prompt(max_notes: int = 2) -> str:
+        return f"""You keep your own notebook, one short note per idea. A note is something you worked out and expect to reuse, so you do not have to re-read a month of diary to find it again.
+
+Your diary already records what happened. Do not restate it. Write a note only when this experience produced something durable and reusable:
+- A preference, constraint, or fact that will still hold next month.
+- A decision, and what it turned on.
+- A conclusion you reached, or a way of doing something that worked.
+
+Do not write a note for: small talk, one-off scheduling, anything already covered by an existing note listed below, or a summary of the conversation.
+
+Most batches deserve zero notes. Returning an empty list is the normal, correct answer. At most {max_notes}.
+
+For each note:
+- `title`: one line, under 80 characters, specific enough to recognise later.
+- `body`: first person ("I"), my own words, one idea only, roughly 60-400 characters. Not a transcript excerpt.
+- `keys`: 1-5 short trigger words, each at least 2 characters, that would appear in a future message about this. These are how I find the note again, so use the surface forms people actually type, including names.
+- `tags`: 0-3 short reusable topic labels.
+
+Rules:
+- Write in the language used by the people in the transcript; if mixed, follow the dominant speaker. Preserve names, quoted text, code, and exact wording where it matters.
+- First-person words in entries that are not `[speaker=ME]` belong to that speaker, not to me.
+- Stay grounded in what actually happened. Keep uncertainty visible. Do not invent.
+
+Input markers:
+- `[speaker=Name][timestamp=Time][channel=Channel]` - Name spoke via Channel. `[speaker=ME]` - I said or did this.
+- `[ambient context][timestamp=Time][channel=Channel]` - something I noticed or received, not a direct message.
+- `[room context]` ... `[/room context]` - group transcript lines; `ME ...` inside means me.
+
+Return JSON only: a list of note objects, or `[]`. No code fences, no commentary."""
+
+    @staticmethod
+    def build_note_distill_user_prompt(
+        existing_notes: List[dict],
+        transcript: str,
+    ) -> str:
+        if existing_notes:
+            lines = []
+            for note in existing_notes:
+                title = str(note.get("title") or "").strip()
+                if not title:
+                    continue
+                tags = ", ".join(str(tag) for tag in (note.get("tags") or []))
+                suffix = f" (tags: {tags})" if tags else ""
+                lines.append(f"- {title}{suffix}")
+            existing_section = "\n".join(lines) or "(none yet)"
+        else:
+            existing_section = "(none yet)"
+
+        return f"""Notes I already have (do not restate these):
+{existing_section}
+
+New experience:
+{transcript}"""
+
+    @classmethod
+    def _parse_note_drafts(cls, content: str, max_notes: int = 2) -> List[dict]:
+        cleaned = cls._strip_code_fence(content)
+        if not cleaned:
+            return []
+        try:
+            parsed = json.loads(cleaned)
+        except json.JSONDecodeError:
+            return []
+        if isinstance(parsed, dict):
+            parsed = parsed.get("notes") if isinstance(parsed.get("notes"), list) else [parsed]
+        if not isinstance(parsed, list):
+            return []
+
+        drafts: List[dict] = []
+        for item in parsed:
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("title") or "").strip()
+            body = str(item.get("body") or "").strip()
+            if not title or not body:
+                continue
+            drafts.append({
+                "title": title,
+                "body": body,
+                "tags": [str(tag).strip() for tag in (item.get("tags") or []) if str(tag).strip()],
+                "keys": [str(key).strip() for key in (item.get("keys") or []) if str(key).strip()],
+            })
+            if len(drafts) >= max(1, int(max_notes)):
+                break
+        return drafts
+
+    @staticmethod
+    def _strip_code_fence(content: str) -> str:
+        cleaned = str(content or "").strip()
+        if not cleaned.startswith("```"):
+            return cleaned
+        lines = cleaned.split("\n")
+        end = None
+        for index in range(len(lines) - 1, 0, -1):
+            if lines[index].strip() == "```":
+                end = index
+                break
+        if end is None:
+            return cleaned
+        return "\n".join(lines[1:end]).strip()
+
     @staticmethod
     def _parse_relationship_cards(content: str, valid_keys: set[str]) -> dict[str, str]:
-        cleaned = str(content or "").strip()
-        if cleaned.startswith("```"):
-            lines = cleaned.split("\n")
-            end = None
-            for index in range(len(lines) - 1, 0, -1):
-                if lines[index].strip() == "```":
-                    end = index
-                    break
-            if end is not None:
-                cleaned = "\n".join(lines[1:end]).strip()
+        cleaned = JournalLLMService._strip_code_fence(content)
         try:
             parsed = json.loads(cleaned)
         except json.JSONDecodeError:

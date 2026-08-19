@@ -26,7 +26,7 @@ from ..inbox import is_scheduled_work
 from ...schemas import Message, MessageType, RoleType
 
 if TYPE_CHECKING:
-    from ...components.memory import MarkdownMemory, RelationshipStore
+    from ...components.memory import MarkdownMemory, Note, NoteStore, RelationshipStore
     from ...components.message import MessageStorage
     from ..journal import JournalLLMService
 
@@ -44,6 +44,12 @@ class MemoryHandler:
     _DIARY_ENTRY_HEADING_RE = re.compile(r"(?m)^## \d{4}-\d{2}-\d{2} \d{2}:\d{2}\s*$")
     SUBCONSCIOUS_SUMMARY_SCOPES = ("yearly", "monthly", "weekly")
     SUBCONSCIOUS_SUMMARY_CHARS_PER_SCOPE = 2000
+    NOTEBOOK_SECTIONS = (
+        ("pinned", "[pinned]"),
+        ("hubs", "[hubs]"),
+        ("relevant", "[relevant to the current message]"),
+    )
+    NOTEBOOK_OMITTED_NOTICE = "[notes omitted from index due to budget: {count}]"
 
     def __init__(
         self,
@@ -56,11 +62,15 @@ class MemoryHandler:
         recent_max_chars: Optional[int] = None,
         max_journal_source_chars: Optional[int] = None,
         relationship_store: Optional["RelationshipStore"] = None,
+        note_store: Optional["NoteStore"] = None,
+        notes_auto_distill: bool = AgentConfig.NOTES_AUTO_DISTILL,
     ) -> None:
         self.memory = memory
         self.llm_service = llm_service
         self.message_storage = message_storage
         self.relationship_store = relationship_store
+        self.note_store = note_store
+        self.notes_auto_distill = bool(notes_auto_distill)
         self.journal_batch_size = self._positive_int(
             journal_batch_size,
             AgentConfig.JOURNAL_BATCH_SIZE,
@@ -352,6 +362,7 @@ class MemoryHandler:
                 return False
 
         await self._update_relationship_cards(recent_messages, new_records)
+        await self._distill_notes(recent_messages, new_records)
 
         if not await self._commit_processed_message_id(end_inclusive):
             logger.warning(
@@ -555,6 +566,201 @@ class MemoryHandler:
                 header = f"## {name}"
             blocks.append(f"{header}\n{body}")
         return "\n\n".join(blocks)
+
+    # ------------------------------------------------------------------
+    # Notebook (topic-addressed projection over the diary)
+    # ------------------------------------------------------------------
+
+    async def _distill_notes(
+        self,
+        recent_messages: List[Message],
+        new_records: List[dict],
+    ) -> None:
+        """Distil reusable conclusions from this batch into notes.
+
+        Runs on records that just became a diary entry, so a note can only ever
+        come from experience the diary already holds. Best-effort like
+        relationship cards: a failure here must never break diary maintenance.
+        """
+        if self.note_store is None or not self.notes_auto_distill:
+            return
+        try:
+            from ...components.memory import (
+                Note,
+                NoteStore,
+                SENSITIVITY_PERSON_SCOPED,
+                SENSITIVITY_SHAREABLE,
+            )
+
+            existing = await self.note_store.list_notes()
+            candidates = await self.llm_service.distill_notes(
+                messages=new_records,
+                existing_notes=[
+                    {"id": note.id, "title": note.title, "tags": list(note.tags)}
+                    for note in existing[: AgentConfig.NOTES_DISTILL_CONTEXT_NOTES]
+                ],
+                max_notes=AgentConfig.NOTES_DISTILL_MAX_PER_BATCH,
+            )
+            if not candidates:
+                return
+
+            participants = self._extract_participants(recent_messages)
+            person_key = participants[0]["key"] if len(participants) == 1 else ""
+            today_str = date.today().isoformat()
+            cursor = self._last_processed_message_id
+
+            written: list[str] = []
+            for candidate in candidates[: AgentConfig.NOTES_DISTILL_MAX_PER_BATCH]:
+                title = str(candidate.get("title") or "").strip()
+                body = str(candidate.get("body") or "").strip()
+                if not title or not body:
+                    continue
+                similar = await self.note_store.find_similar(
+                    title=title,
+                    keys=candidate.get("keys"),
+                    tags=candidate.get("tags"),
+                    limit=1,
+                )
+                if similar:
+                    logger.debug(
+                        "Skipped distilled note %r; note %s already covers it",
+                        title,
+                        similar[0].id,
+                    )
+                    continue
+                source: dict = {"diary": [today_str]}
+                if person_key:
+                    source["person"] = person_key
+                if cursor > 0:
+                    source["cursor"] = cursor
+                note = NoteStore.normalize(
+                    Note(
+                        id=self.note_store.next_id(),
+                        title=title,
+                        body=body,
+                        tags=tuple(candidate.get("tags") or ()),
+                        keys=tuple(candidate.get("keys") or ()),
+                        sensitivity=(
+                            SENSITIVITY_PERSON_SCOPED if person_key else SENSITIVITY_SHAREABLE
+                        ),
+                        source=source,
+                        created=today_str,
+                        updated=today_str,
+                    )
+                )
+                await self.note_store.write(note)
+                written.append(f"{note.id} ({len(note.body)} chars)")
+            if written:
+                logger.info("Distilled %d note(s): %s", len(written), ", ".join(written))
+        except Exception as exc:
+            logger.warning("Note distillation failed: %s", exc, exc_info=True)
+
+    async def get_notebook_context(self, current_text: str = "") -> str:
+        """Render the notebook index for prompt injection.
+
+        Deliberately an index, not the notebook: pinned notes carry their body
+        because pinning means "keep this in mind", while hubs and recalled notes
+        carry a title and one snippet line so the model can decide whether to
+        open them with ``read_note``.
+        """
+        if self.note_store is None:
+            return ""
+
+        try:
+            pinned = await self.note_store.pinned(limit=AgentConfig.NOTEBOOK_PINNED_MAX)
+            hubs = await self.note_store.hubs(limit=AgentConfig.NOTEBOOK_HUB_MAX)
+            recalled = (
+                await self.note_store.recall(
+                    current_text,
+                    limit=AgentConfig.NOTEBOOK_RELEVANT_MAX,
+                )
+                if str(current_text or "").strip()
+                else []
+            )
+        except Exception as exc:
+            logger.warning("Failed to read notebook: %s", exc, exc_info=True)
+            return ""
+
+        return self._render_notebook_sections(pinned=pinned, hubs=hubs, recalled=recalled)
+
+    @classmethod
+    def _render_notebook_sections(
+        cls,
+        pinned: List["Note"],
+        hubs: List["Note"],
+        recalled: List["Note"],
+    ) -> str:
+        """Assemble notebook index rows within the prompt budget.
+
+        Rows are selected in priority order (pinned, then recalled, then hubs)
+        and rendered in reading order, so a tight budget drops navigation rows
+        before it drops a note the current message actually matched.
+        """
+        shown: set[str] = set()
+        candidates: list[tuple[str, "Note", int]] = []
+        for note in pinned:
+            if note.id in shown:
+                continue
+            shown.add(note.id)
+            candidates.append(("pinned", note, AgentConfig.NOTEBOOK_PINNED_BODY_MAX_CHARS))
+        for note in recalled:
+            if note.id in shown:
+                continue
+            shown.add(note.id)
+            candidates.append(("relevant", note, AgentConfig.NOTEBOOK_SNIPPET_MAX_CHARS))
+        for note in hubs:
+            if note.id in shown:
+                continue
+            shown.add(note.id)
+            candidates.append(("hubs", note, 0))
+
+        if not candidates:
+            return ""
+
+        # Reserve the framing (section headings plus a possible omission
+        # notice) before budgeting rows, so the returned block really does fit.
+        reserve = sum(len(heading) + 1 for _section, heading in cls.NOTEBOOK_SECTIONS)
+        reserve += len(cls.NOTEBOOK_OMITTED_NOTICE.format(count=len(candidates))) + 1
+        budget = max(1, int(AgentConfig.NOTEBOOK_CONTEXT_MAX_CHARS) - reserve)
+
+        rows: dict[str, list[str]] = {section: [] for section, _heading in cls.NOTEBOOK_SECTIONS}
+        used = 0
+        omitted = 0
+        for section, note, body_limit in candidates:
+            row = cls._format_notebook_row(note, body_limit)
+            if used + len(row) + 1 > budget:
+                omitted += 1
+                continue
+            rows[section].append(row)
+            used += len(row) + 1
+
+        blocks: list[str] = []
+        for section, heading in cls.NOTEBOOK_SECTIONS:
+            if rows[section]:
+                blocks.append("\n".join([heading, *rows[section]]))
+        if not blocks:
+            return ""
+        if omitted:
+            blocks.append(cls.NOTEBOOK_OMITTED_NOTICE.format(count=omitted))
+        return "\n".join(blocks)
+
+    @staticmethod
+    def _format_notebook_row(note: "Note", body_limit: int) -> str:
+        from ...components.memory import KIND_HUB, SENSITIVITY_SHAREABLE
+
+        header = f"- ({note.id}) {note.title}"
+        if note.sensitivity != SENSITIVITY_SHAREABLE:
+            header += f" [{note.sensitivity}]"
+        if note.kind == KIND_HUB and note.links:
+            header += f" [{len(note.links)} linked]"
+        if body_limit <= 0:
+            return header
+        text = " ".join((note.body or "").split())
+        if not text:
+            return header
+        if len(text) > body_limit:
+            text = text[:body_limit].rstrip() + "..."
+        return f"{header}\n  {text}"
 
     @staticmethod
     def _is_memory_worthy_experience(message: Message) -> bool:

@@ -29,6 +29,7 @@ class PromptAssembleContext:
     is_subconscious: bool = False
     relationship_context: str = ""
     memory_context: str = ""
+    notebook_context: str = ""
     recent_experience: str = ""
     current_user_id: str = ""
     current_time: str = ""
@@ -144,6 +145,20 @@ def _render_memory(ctx: PromptAssembleContext) -> str:
     )
 
 
+def _render_notebook(ctx: PromptAssembleContext) -> str:
+    notebook = (ctx.notebook_context or "").strip()
+    if not notebook or ctx.task_mode == "subconscious_json":
+        return ""
+    return AgentConfig.build_notebook_context(notebook)
+
+
+def _render_subconscious_notebook(ctx: PromptAssembleContext) -> str:
+    notebook = (ctx.notebook_context or "").strip()
+    if not notebook or ctx.task_mode != "subconscious_json":
+        return ""
+    return AgentConfig.build_subconscious_notebook_context(notebook)
+
+
 def _render_experience(ctx: PromptAssembleContext) -> str:
     return (ctx.recent_experience or "").strip()
 
@@ -247,6 +262,20 @@ def default_prompt_registry() -> PromptRegistry:
             order=10,
             kind=KIND_TURN,
             render=_render_memory,
+        ),
+        PromptSection(
+            name=AgentConfig.NOTEBOOK_CONTEXT_NAME,
+            role="user",
+            order=15,
+            kind=KIND_TURN,
+            render=_render_notebook,
+        ),
+        PromptSection(
+            name=AgentConfig.SUBCONSCIOUS_NOTEBOOK_NAME,
+            role="user",
+            order=15,
+            kind=KIND_TURN,
+            render=_render_subconscious_notebook,
         ),
         PromptSection(
             name=AgentConfig.RECENT_EXPERIENCE_NAME,
