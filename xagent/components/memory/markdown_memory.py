@@ -262,6 +262,13 @@ class MarkdownMemory:
             return f"[note {stem}]"
         return "[memory]"
 
+    def _is_note_path(self, path: Path) -> bool:
+        try:
+            relative = path.resolve().relative_to(self.root.resolve())
+        except ValueError:
+            return False
+        return bool(relative.parts) and relative.parts[0] == _NOTE_SCOPE
+
     def _event_time_for_path(self, path: Path) -> float:
         """Return epoch seconds for ranking; newer memory sorts higher on ties."""
         try:
@@ -375,6 +382,16 @@ class MarkdownMemory:
             label = self._label_for_path(path)
             event_time = self._event_time_for_path(path)
             path_key = str(path)
+            if self._is_note_path(path):
+                window_lines = lines
+                window = "\n".join(window_lines)
+                score = score_text(window, terms)
+                if score <= 0:
+                    continue
+                scored_blocks.append(
+                    (score, event_time, label, path_key, 0, len(lines), window_lines)
+                )
+                continue
             for index, line in enumerate(lines):
                 if score_text(line, terms) <= 0:
                     continue

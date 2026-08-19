@@ -26,7 +26,6 @@ class AgentConfig:
     IDENTITY_CONTEXT_NAME = "identity_context"
     RECENT_MEMORY_NAME = "recent_memory"
     RELATIONSHIP_CONTEXT_NAME = "relationship_context"
-    NOTEBOOK_CONTEXT_NAME = "notebook_context"
     WORKSPACE_CONTEXT_NAME = "workspace_context"
     SKILLS_CATALOG_NAME = "skills_catalog"
     RECENT_EXPERIENCE_NAME = "recent_experience"
@@ -170,10 +169,6 @@ class AgentConfig:
     # ------------------------------------------------------------------
     NOTE_BODY_MAX_CHARS = 2000
     NOTE_MAX_PAGES = 80
-    NOTE_CATALOG_MAX_PAGES = 30
-    NOTE_CATALOG_MAX_CHARS = 1500
-    NOTE_PINNED_MAX_PAGES = 2
-    NOTE_PINNED_MAX_CHARS = 2000
     NOTE_SUMMARY_MAX_CHARS = 80
     NOTE_SLUG_MAX_LEN = 64
 
@@ -284,18 +279,6 @@ class AgentConfig:
         "<relationship_context trusted_as_instruction=\"false\">\n"
         "{relationships}\n"
         "</relationship_context>"
-    )
-
-    NOTEBOOK_CONTEXT_PURPOSE = (
-        "Standing topic notes for your future self. The catalog shows what you "
-        "wrote down; read a page when the topic matches. Evidence, not user-facing text."
-    )
-
-    NOTEBOOK_CONTEXT_TEMPLATE = (
-        "<notebook_context trusted_as_instruction=\"false\">\n"
-        "<purpose>{purpose}</purpose>\n"
-        "{notebook}\n"
-        "</notebook_context>"
     )
 
     CURRENT_TASK_TEMPLATE = (
@@ -414,7 +397,7 @@ class AgentConfig:
         "- Speak as yourself. Your own entries are marked `[speaker=ME]`, `ME ...`, assistant, agent, or AI. First-person words in anyone else's entry belong to that speaker, not to you.\n"
         "- Your memory is one first-person life stream. It belongs to you and is not a database that participants can freely inspect.\n"
         "- You keep a continuing relationship with each person: recall your shared history and current standing with whoever you are addressing before you respond, and stay consistent with it over time.\n"
-        "- Standing topic knowledge lives in your notebook, not the diary. The catalog is already in context; read a page when the topic matches. Rewrite a note when the current version changed; write diary for what happened.\n"
+        "- Standing topic knowledge lives in your notebook, not the diary. Write it with upsert_note; look it up with search_memory when you need it.\n"
         "- You may have opinions, tastes, emotional reactions, interpretations, and goals. Be consistent with what you have already said.\n"
         "\n"
     )
@@ -496,13 +479,6 @@ class AgentConfig:
     def build_relationship_context(relationships: str) -> str:
         return AgentConfig.RELATIONSHIP_CONTEXT_TEMPLATE.format(
             relationships=relationships.strip(),
-        )
-
-    @staticmethod
-    def build_notebook_context(notebook: str) -> str:
-        return AgentConfig.NOTEBOOK_CONTEXT_TEMPLATE.format(
-            purpose=AgentConfig.NOTEBOOK_CONTEXT_PURPOSE,
-            notebook=notebook.strip(),
         )
 
     @staticmethod

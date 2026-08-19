@@ -24,9 +24,6 @@ from ..schemas import (
     RoleType,
 )
 from ..tools import (
-    create_archive_note_tool,
-    create_list_notes_tool,
-    create_read_note_tool,
     create_search_memory_tool,
     create_upsert_note_tool,
     create_write_memory_tool,
@@ -171,7 +168,6 @@ class Agent:
             message_storage=self.message_storage,
             journal_batch_size=self.journal_batch_size,
             relationship_store=self.relationship_store,
-            note_store=self.note_store,
             recent_days=self.memory_recent_days,
         )
         self.working_context_compactor = self._build_working_context_compactor(
@@ -191,18 +187,6 @@ class Agent:
                 message_storage=self.message_storage,
             ),
             create_upsert_note_tool(
-                note_store=self.note_store,
-                is_enabled=True,
-            ),
-            create_read_note_tool(
-                note_store=self.note_store,
-                is_enabled=True,
-            ),
-            create_list_notes_tool(
-                note_store=self.note_store,
-                is_enabled=True,
-            ),
-            create_archive_note_tool(
                 note_store=self.note_store,
                 is_enabled=True,
             ),
@@ -353,7 +337,6 @@ class Agent:
             user_id=user_id,
             recent_messages=recent_messages,
         )
-        notebook_context = await self._notebook_context_for_turn()
         tool_names = list(self.tool_manager._tools)
         tool_specs = self.tool_manager.cached_tool_specs
         workspace_context = self._workspace_context(tool_names)
@@ -369,7 +352,6 @@ class Agent:
             current_user_id=user_id,
             memory_context=memory_context,
             relationship_context=relationship_context,
-            notebook_context=notebook_context,
             max_messages=self.max_history,
             include_images=self.supports_vision,
             workspace_dir=getattr(self, "workspace_dir", None),
@@ -423,18 +405,6 @@ class Agent:
             speaker_keys=[speaker_key],
             participant_keys=participant_keys,
         )
-
-    async def _notebook_context_for_turn(self) -> str:
-        """Assemble the standing-note catalog (and any pinned bodies) for this turn."""
-        memory_handler = getattr(self, "memory_handler", None)
-        getter = getattr(memory_handler, "get_notebook_context", None)
-        if memory_handler is None or not callable(getter):
-            return ""
-        try:
-            return await getter()
-        except Exception as exc:
-            logger.warning("Failed to assemble notebook context: %s", exc, exc_info=True)
-            return ""
 
     async def run_memory_maintenance(self, trigger: str = "count") -> None:
         idle_timeout = AgentConfig.IDLE_DIARY_TIMEOUT_SECONDS

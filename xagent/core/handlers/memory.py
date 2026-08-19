@@ -9,7 +9,7 @@ import re
 from contextlib import asynccontextmanager
 from datetime import date, timedelta
 from pathlib import Path
-from typing import IO, TYPE_CHECKING, Any, List, Optional
+from typing import IO, TYPE_CHECKING, List, Optional
 
 try:
     import fcntl
@@ -26,22 +26,11 @@ from ..inbox import is_scheduled_work
 from ...schemas import Message, MessageType, RoleType
 
 if TYPE_CHECKING:
-    from ...components.memory import MarkdownMemory, NoteStore, RelationshipStore
+    from ...components.memory import MarkdownMemory, RelationshipStore
     from ...components.message import MessageStorage
     from ..journal import JournalLLMService
 
 logger = logging.getLogger(__name__)
-
-
-def _note_recency_sort_value(page: Any) -> int:
-    """Newer notes sort first when negated in an ascending key."""
-    text = str(getattr(page, "touched", "") or "")[:10]
-    if not text:
-        return 0
-    try:
-        return date.fromisoformat(text).toordinal()
-    except ValueError:
-        return 0
 
 
 class MemoryHandler:
@@ -67,13 +56,11 @@ class MemoryHandler:
         recent_max_chars: Optional[int] = None,
         max_journal_source_chars: Optional[int] = None,
         relationship_store: Optional["RelationshipStore"] = None,
-        note_store: Optional["NoteStore"] = None,
     ) -> None:
         self.memory = memory
         self.llm_service = llm_service
         self.message_storage = message_storage
         self.relationship_store = relationship_store
-        self.note_store = note_store
         self.journal_batch_size = self._positive_int(
             journal_batch_size,
             AgentConfig.JOURNAL_BATCH_SIZE,
@@ -568,75 +555,6 @@ class MemoryHandler:
                 header = f"## {name}"
             blocks.append(f"{header}\n{body}")
         return "\n\n".join(blocks)
-
-    async def get_notebook_context(self) -> str:
-        """Return a catalog of standing notes plus at most two pinned bodies.
-
-        Never injects every note body. Pages beyond the catalog budget remain
-        reachable through ``read_note`` / ``search_memory``.
-        """
-        if self.note_store is None:
-            return ""
-
-        try:
-            pages = await self.note_store.list_pages()
-        except Exception as exc:
-            logger.warning("Failed to read notebook pages: %s", exc, exc_info=True)
-            return ""
-
-        if not pages:
-            return ""
-
-        ranked = sorted(
-            pages,
-            key=lambda page: (not page.pinned, -_note_recency_sort_value(page), page.slug),
-        )
-        catalog_pages = ranked[: AgentConfig.NOTE_CATALOG_MAX_PAGES]
-        catalog_lines: list[str] = []
-        catalog_chars = 0
-        included = []
-        for page in catalog_pages:
-            summary = page.summary
-            pin_mark = "[pinned] " if page.pinned else ""
-            if summary:
-                line = f"- {pin_mark}{page.title} ({page.slug}) — {summary}"
-            else:
-                line = f"- {pin_mark}{page.title} ({page.slug})"
-            addition = len(line) + (1 if catalog_lines else 0)
-            if catalog_lines and catalog_chars + addition > AgentConfig.NOTE_CATALOG_MAX_CHARS:
-                break
-            if not catalog_lines and len(line) > AgentConfig.NOTE_CATALOG_MAX_CHARS:
-                catalog_lines.append(line[: AgentConfig.NOTE_CATALOG_MAX_CHARS])
-                included.append(page)
-                break
-            catalog_lines.append(line)
-            catalog_chars += addition
-            included.append(page)
-
-        if not catalog_lines:
-            return ""
-
-        sections = ["<catalog>", *catalog_lines, "</catalog>"]
-        pinned_budget = AgentConfig.NOTE_PINNED_MAX_CHARS
-        pinned_blocks: list[str] = []
-        used_pinned = 0
-        pinned_count = 0
-        for page in included:
-            if not page.pinned or pinned_count >= AgentConfig.NOTE_PINNED_MAX_PAGES:
-                continue
-            block = f"## {page.title}\n{page.body.strip()}"
-            addition = len(block) + (2 if pinned_blocks else 0)
-            if pinned_blocks and used_pinned + addition > pinned_budget:
-                break
-            if not pinned_blocks and len(block) > pinned_budget:
-                pinned_blocks.append(block[:pinned_budget])
-                break
-            pinned_blocks.append(block)
-            used_pinned += addition
-            pinned_count += 1
-        if pinned_blocks:
-            sections.extend(["", "<pinned>", *pinned_blocks, "</pinned>"])
-        return "\n".join(sections)
 
     @staticmethod
     def _is_memory_worthy_experience(message: Message) -> bool:
