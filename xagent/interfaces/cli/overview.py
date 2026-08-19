@@ -106,7 +106,6 @@ def build_runtime_overview(config_dir: Path) -> RuntimeOverview:
             (
                 _model_item(config),
                 _search_item(config),
-                _image_item(config),
                 _voice_item(config_dir, config),
                 _service_item(config_dir, CHANNEL_API, api_config(config)),
                 _web_client_item(config_dir, config),
@@ -173,18 +172,6 @@ def _search_item(config: dict[str, Any]) -> OverviewItem:
         return OverviewItem("Search", provider, STATUS_ERROR, _api_key_detail())
     detail = "Own key" if api_key and not is_placeholder_api_key(api_key) else "Model key"
     return OverviewItem("Search", provider, STATUS_OK, detail)
-
-
-def _image_item(config: dict[str, Any]) -> OverviewItem:
-    image = config.get("image_generation") if isinstance(config.get("image_generation"), dict) else {}
-    provider = str(image.get("provider") or "none").strip().lower() if isinstance(image, dict) else "none"
-    if provider == "none":
-        return OverviewItem("Image", "not set", STATUS_DISABLED)
-    api_key = str(image.get("api_key") or "").strip() if isinstance(image, dict) else ""
-    if _feature_needs_key(config, provider) and is_placeholder_api_key(api_key):
-        return OverviewItem("Image", provider, STATUS_ERROR, _api_key_detail())
-    detail = "Own key" if api_key and not is_placeholder_api_key(api_key) else "Model key"
-    return OverviewItem("Image", provider, STATUS_OK, detail)
 
 
 def _voice_item(config_dir: Path, config: dict[str, Any]) -> OverviewItem:

@@ -40,7 +40,6 @@ def _write_agent(root: Path, *, anthropic: bool = False) -> Path:
             {
                 "provider": provider,
                 "search": {"provider": "none"},
-                "image_generation": {"provider": "none"},
                 "channels": {"api": {"host": "127.0.0.1", "port": 8010}},
                 "web": {"api_url": "http://127.0.0.1:8010"},
             },
@@ -71,9 +70,9 @@ class AgentEditSetupHelperTests(unittest.TestCase):
 
         self.assertEqual(
             [row["id"] for row in schema["features"]],
-            ["model", "search", "image", "observability"],
+            ["model", "search", "observability"],
         )
-        self.assertFalse(schema["features"][3]["disabled"])
+        self.assertFalse(schema["features"][2]["disabled"])
 
     def test_observability_disabled_for_anthropic_model_api(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -84,11 +83,12 @@ class AgentEditSetupHelperTests(unittest.TestCase):
         self.assertTrue(observability["disabled"])
         self.assertFalse(schema["observability"]["available"])
 
-    def test_apply_search_and_image_and_observability(self):
+    def test_apply_search_and_observability(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             agent_dir = _write_agent(Path(tmpdir))
             search = apply_agent_edit_setup(agent_dir, "search", {"provider": "openai"})
-            image = apply_agent_edit_setup(agent_dir, "image", {"provider": "openai"})
+            with self.assertRaisesRegex(ValueError, "Unsupported setup feature"):
+                apply_agent_edit_setup(agent_dir, "image", {"provider": "openai"})
             observability = apply_agent_edit_setup(
                 agent_dir,
                 "observability",
@@ -102,10 +102,9 @@ class AgentEditSetupHelperTests(unittest.TestCase):
             config = load_config(agent_dir)
 
         self.assertTrue(search["restart_required"])
-        self.assertTrue(image["changed"])
         self.assertTrue(observability["changed"])
         self.assertEqual(config["search"]["provider"], "openai")
-        self.assertEqual(config["image_generation"]["provider"], "openai")
+        self.assertNotIn("image_generation", config)
         self.assertTrue(config["observability"]["enabled"])
 
     def test_apply_model_update(self):

@@ -254,7 +254,7 @@ export function AgentPage() {
       setConfigData(updated);
       setConfigEditorValue(updated.config);
       setConfigNotice(
-        "Config saved. Provider, model, search, image generation, and observability changes require an API restart.",
+        "Config saved. Provider, model, search, and observability changes require an API restart.",
       );
       await load();
     } catch (err) {
@@ -276,7 +276,7 @@ export function AgentPage() {
     }
     setSetupNotice(
       result.restart_required
-        ? "Setup saved. Restart the API channel for model, search, image, and observability changes to take effect."
+        ? "Setup saved. Restart the API channel for model, search, and observability changes to take effect."
         : "Setup saved.",
     );
     await load();

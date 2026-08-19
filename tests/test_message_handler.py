@@ -141,7 +141,7 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         )
 
         messages = handler.build_instruction_messages(
-            tool_names=["generate_image", "attach_artifact"],
+            tool_names=["run_command", "attach_artifact"],
         )
         tool_policy = messages[1]["content"]
 

@@ -68,8 +68,6 @@ export function FeatureSetupModal({ open, feature, schema, onClose, onSaved }: F
     setApiKey("");
     if (feature === "search") {
       setProvider(schema.search.current.provider || "none");
-    } else if (feature === "image") {
-      setProvider(schema.image.current.provider || "none");
     } else if (feature === "observability") {
       setObservabilityEnabled(schema.observability.current.enabled);
       setPublicKey("");
@@ -88,11 +86,9 @@ export function FeatureSetupModal({ open, feature, schema, onClose, onSaved }: F
   const title =
     feature === "search"
       ? "Edit Search"
-      : feature === "image"
-        ? "Edit Image generation"
-        : feature === "observability"
-          ? "Edit Observability"
-          : "Edit Model";
+      : feature === "observability"
+        ? "Edit Observability"
+        : "Edit Model";
 
   const models = schema.model.models[provider] || [];
   const capability = useMemo(
@@ -102,11 +98,10 @@ export function FeatureSetupModal({ open, feature, schema, onClose, onSaved }: F
   const reasoningMode = reasoning?.enabled ? "custom" : "default";
   const reasoningControl = reasoning?.budget_tokens !== undefined ? "budget_tokens" : "effort";
   const showFeatureKey =
-    (feature === "search" || feature === "image") && needsFeatureKey(schema.model_provider, provider);
+    feature === "search" && needsFeatureKey(schema.model_provider, provider);
 
   const isDirty = useMemo(() => {
     if (feature === "search") return provider !== schema.search.current.provider || Boolean(apiKey.trim());
-    if (feature === "image") return provider !== schema.image.current.provider || Boolean(apiKey.trim());
     if (feature === "observability") {
       return (
         observabilityEnabled !== schema.observability.current.enabled ||
@@ -157,7 +152,7 @@ export function FeatureSetupModal({ open, feature, schema, onClose, onSaved }: F
     setError("");
     try {
       let selection: Record<string, unknown> = {};
-      if (feature === "search" || feature === "image") {
+      if (feature === "search") {
         selection = {
           provider,
           api_key: apiKey.trim() || undefined,
@@ -214,25 +209,22 @@ export function FeatureSetupModal({ open, feature, schema, onClose, onSaved }: F
       onNext={() => undefined}
       onSubmit={() => void submit()}
     >
-      {feature === "search" || feature === "image" ? (
+      {feature === "search" ? (
         <div className="wizard-grid">
-          <WizardField label={feature === "search" ? "Search provider" : "Image generation provider"}>
+          <WizardField label="Search provider">
             <select value={provider} onChange={(event) => setProvider(event.target.value)}>
-              {(feature === "search" ? schema.search.providers : schema.image.providers).map((item) => (
+              {schema.search.providers.map((item) => (
                 <option key={item.id} value={item.id}>
                   {item.id}
                 </option>
               ))}
             </select>
           </WizardField>
-          {feature === "image" && provider !== schema.image.current.provider && provider !== "none" ? (
-            <p className="wizard-hint">Switching providers resets image defaults (model/size/quality).</p>
-          ) : null}
           {showFeatureKey ? (
             <WizardField
               label="API key"
               hint={
-                (feature === "search" ? schema.search.current.has_api_key : schema.image.current.has_api_key)
+                schema.search.current.has_api_key
                   ? "Leave blank to keep the current key."
                   : "Required because this differs from the model provider."
               }

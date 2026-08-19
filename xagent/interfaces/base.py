@@ -33,13 +33,6 @@ from ..tools import (
     create_web_search_tool,
     create_workspace_run_command_tool,
 )
-from ..tools.image_generation_tool import (
-    IMAGE_GENERATION_PROVIDER_NONE,
-    IMAGE_GENERATION_PROVIDER_OPENAI,
-    normalize_image_generation_provider,
-    IMAGE_GENERATION_PROVIDER_MINIMAX,
-    IMAGE_GENERATION_PROVIDER_QWEN,
-)
 from ..tools.search_tool import (
     DEFAULT_QWEN_SEARCH_MODEL,
     SEARCH_PROVIDER_MINIMAX,
@@ -167,7 +160,6 @@ class BaseAgentRunner:
             "agent",
             "provider",
             "search",
-            "image_generation",
             "channels",
             "runtime",
             "observability",
@@ -280,7 +272,6 @@ class BaseAgentRunner:
         self._validate_provider_config(provider_cfg)
 
         self._validate_search_config(config.get("search"), provider_cfg)
-        self._validate_image_generation_config(config.get("image_generation"), provider_cfg)
         
         return config
 
@@ -426,140 +417,6 @@ class BaseAgentRunner:
                 raise ValueError(
                     "search.provider 'minimax' requires search.api_key when provider is not MiniMax"
                 )
-
-    def _validate_image_generation_config(
-        self,
-        image_generation_cfg: Optional[Dict[str, Any]],
-        provider_cfg: Dict[str, Any],
-    ) -> None:
-        """Validate optional image generation configuration."""
-        if image_generation_cfg is None:
-            return
-        if not isinstance(image_generation_cfg, dict):
-            raise ValueError("image_generation must be a dictionary")
-
-        allowed_image_generation_keys = {
-            "provider",
-            "api_key",
-            "base_url",
-            "endpoint",
-            "model",
-            "size",
-            "quality",
-            "output_format",
-            "background",
-            "output_compression",
-            "moderation",
-            "negative_prompt",
-            "prompt_extend",
-            "watermark",
-            "aspect_ratio",
-            "width",
-            "height",
-            "n",
-            "seed",
-            "prompt_optimizer",
-            "aigc_watermark",
-            "reference_image_url",
-            "reference_image_urls",
-            "subject_reference",
-            "style",
-        }
-        unsupported_keys = sorted(set(image_generation_cfg) - allowed_image_generation_keys)
-        if unsupported_keys:
-            joined_keys = ", ".join(unsupported_keys)
-            raise ValueError(f"Unsupported image_generation key(s): {joined_keys}")
-
-        image_generation_provider = normalize_image_generation_provider(image_generation_cfg.get("provider"))
-        if image_generation_provider == IMAGE_GENERATION_PROVIDER_OPENAI and not self._is_openai_provider(provider_cfg):
-            api_key = str(image_generation_cfg.get("api_key") or "").strip()
-            if is_placeholder_api_key(api_key):
-                raise ValueError(
-                    "image_generation.provider 'openai' requires image_generation.api_key when provider is not OpenAI"
-                )
-        if image_generation_provider == IMAGE_GENERATION_PROVIDER_MINIMAX and not self._is_minimax_provider(provider_cfg):
-            api_key = str(image_generation_cfg.get("api_key") or "").strip()
-            if is_placeholder_api_key(api_key):
-                raise ValueError(
-                    "image_generation.provider 'minimax' requires image_generation.api_key when provider is not MiniMax"
-                )
-        if image_generation_provider == IMAGE_GENERATION_PROVIDER_QWEN and not self._is_qwen_provider(provider_cfg):
-            api_key = str(image_generation_cfg.get("api_key") or "").strip()
-            if is_placeholder_api_key(api_key):
-                raise ValueError(
-                    "image_generation.provider 'qwen' requires image_generation.api_key when provider is not Qwen"
-                )
-        if image_generation_provider not in {
-            IMAGE_GENERATION_PROVIDER_NONE,
-            IMAGE_GENERATION_PROVIDER_OPENAI,
-            IMAGE_GENERATION_PROVIDER_MINIMAX,
-            IMAGE_GENERATION_PROVIDER_QWEN,
-        }:
-            raise ValueError("image_generation.provider must be one of: none, openai, minimax, qwen")
-        if "size" in image_generation_cfg:
-            value = str(image_generation_cfg["size"] or "").strip().lower()
-            if image_generation_provider == IMAGE_GENERATION_PROVIDER_OPENAI:
-                allowed = {"auto", "1024x1024", "1024x1536", "1536x1024"}
-                if value not in allowed:
-                    raise ValueError("image_generation.size must be one of: auto, 1024x1024, 1024x1536, 1536x1024")
-            if image_generation_provider == IMAGE_GENERATION_PROVIDER_QWEN:
-                normalized = value.replace("x", "*")
-                if normalized != "auto" and "*" not in normalized:
-                    raise ValueError("image_generation.size must be auto or WIDTH*HEIGHT for Qwen")
-        if "quality" in image_generation_cfg:
-            value = str(image_generation_cfg["quality"] or "").strip().lower()
-            if image_generation_provider == IMAGE_GENERATION_PROVIDER_OPENAI and value not in {"auto", "low", "medium", "high"}:
-                raise ValueError("image_generation.quality must be one of: auto, low, medium, high")
-        if "output_format" in image_generation_cfg:
-            value = str(image_generation_cfg["output_format"] or "").strip().lower()
-            if value == "jpg":
-                value = "jpeg"
-            if value not in {"png", "jpeg", "webp"}:
-                raise ValueError("image_generation.output_format must be one of: png, jpeg, webp")
-        if "background" in image_generation_cfg:
-            value = str(image_generation_cfg["background"] or "").strip().lower()
-            if image_generation_provider == IMAGE_GENERATION_PROVIDER_OPENAI and value not in {"auto", "opaque", "transparent"}:
-                raise ValueError("image_generation.background must be one of: auto, opaque, transparent")
-        if "moderation" in image_generation_cfg:
-            value = str(image_generation_cfg["moderation"] or "").strip().lower()
-            if image_generation_provider == IMAGE_GENERATION_PROVIDER_OPENAI and value not in {"auto", "low"}:
-                raise ValueError("image_generation.moderation must be one of: auto, low")
-        if "aspect_ratio" in image_generation_cfg:
-            value = str(image_generation_cfg["aspect_ratio"] or "").strip()
-            allowed_aspect_ratios = {"1:1", "16:9", "4:3", "3:2", "2:3", "3:4", "9:16", "21:9"}
-            if image_generation_provider == IMAGE_GENERATION_PROVIDER_MINIMAX and value not in allowed_aspect_ratios:
-                raise ValueError("image_generation.aspect_ratio must be a supported MiniMax aspect ratio")
-        if "output_compression" in image_generation_cfg:
-            value = image_generation_cfg["output_compression"]
-            if isinstance(value, bool) or not isinstance(value, int) or value < 0 or value > 100:
-                raise ValueError("image_generation.output_compression must be an integer from 0 to 100")
-        if "n" in image_generation_cfg:
-            value = image_generation_cfg["n"]
-            if image_generation_provider == IMAGE_GENERATION_PROVIDER_MINIMAX:
-                max_images = 9
-            elif image_generation_provider == IMAGE_GENERATION_PROVIDER_QWEN:
-                max_images = 6
-            else:
-                max_images = 10
-            if isinstance(value, bool) or not isinstance(value, int) or value < 1 or value > max_images:
-                raise ValueError(f"image_generation.n must be an integer from 1 to {max_images}")
-        for key in ("width", "height"):
-            if key in image_generation_cfg:
-                value = image_generation_cfg[key]
-                if isinstance(value, bool) or not isinstance(value, int) or value < 512 or value > 2048 or value % 8 != 0:
-                    raise ValueError(f"image_generation.{key} must be an integer from 512 to 2048 and a multiple of 8")
-        for key in ("prompt_optimizer", "aigc_watermark"):
-            if key in image_generation_cfg and not isinstance(image_generation_cfg[key], bool):
-                raise ValueError(f"image_generation.{key} must be a boolean")
-        for key in ("prompt_extend", "watermark"):
-            if key in image_generation_cfg and not isinstance(image_generation_cfg[key], bool):
-                raise ValueError(f"image_generation.{key} must be a boolean")
-        if "reference_image_urls" in image_generation_cfg and not isinstance(image_generation_cfg["reference_image_urls"], list):
-            raise ValueError("image_generation.reference_image_urls must be a list")
-        if "subject_reference" in image_generation_cfg and not isinstance(image_generation_cfg["subject_reference"], list):
-            raise ValueError("image_generation.subject_reference must be a list")
-        if "style" in image_generation_cfg and not isinstance(image_generation_cfg["style"], dict):
-            raise ValueError("image_generation.style must be a dictionary")
 
     @staticmethod
     def _is_openai_provider(provider_cfg: Dict[str, Any]) -> bool:

@@ -147,12 +147,6 @@ SEARCH_PROVIDERS = (
     "qwen",
     "minimax",
 )
-IMAGE_GENERATION_PROVIDERS = (
-    "none",
-    "openai",
-    "minimax",
-    "qwen",
-)
 
 _PROVIDER_DESCRIPTIONS = {
     PROVIDER_OPENAI: "GPT family via the OpenAI platform.",
@@ -584,7 +578,6 @@ def _config_yaml(selection: InitSelection, port: int) -> str:
         },
     }
     config["search"] = {"provider": "none"}
-    config["image_generation"] = {"provider": "none"}
     yaml_str = yaml.safe_dump(config, sort_keys=False, allow_unicode=False)
     yaml_str = yaml_str.replace(
         f"max_history: {AgentConfig.DEFAULT_MAX_HISTORY}\n",

@@ -54,7 +54,6 @@ from ...schemas.attachment import (
     MAX_ATTACHMENT_BYTES,
     safe_attachment_filename,
 )
-from ...tools.image_generation_tool import normalize_image_generation_provider
 from ...utils.image_utils import (
     MAX_IMAGE_BYTES,
     SUPPORTED_UPLOAD_IMAGE_MIME_TYPES,
@@ -165,13 +164,6 @@ def register_admin_routes(
             identity_editable = False
         provider_cfg = server.config.get("provider") if isinstance(server.config, dict) else {}
         provider_name = provider_cfg.get("name") if isinstance(provider_cfg, dict) else None
-        image_generation_cfg = server.config.get("image_generation") if isinstance(server.config, dict) else {}
-        image_generation_provider = "none"
-        if isinstance(image_generation_cfg, dict):
-            try:
-                image_generation_provider = normalize_image_generation_provider(image_generation_cfg.get("provider"))
-            except ValueError:
-                image_generation_provider = str(image_generation_cfg.get("provider") or "none")
         tool_names = list(server.agent.tools.keys())
         supports_vision = bool(getattr(server.agent, "supports_vision", True))
         skills_root = server._get_skills_root()
@@ -188,9 +180,6 @@ def register_admin_routes(
                 "vision": supports_vision,
                 "vision_input": supports_vision,
                 "web_search": "web_search" in tool_names,
-                "image_generation": "generate_image" in tool_names,
-                "image_generation_provider": image_generation_provider if "generate_image" in tool_names else "none",
-                "image_editing": False,
             },
             "identity": identity,
             "identity_file": server.identity_path.name if hasattr(server, "identity_path") else "identity.md",
