@@ -102,6 +102,7 @@ class MarkdownMemoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("[note home-wifi]", result)
         self.assertIn("SSID orchard lives on the router.", result)
         self.assertIn('slug="home-wifi"', result)
+        self.assertIn("links: none | backlinks: none", result)
         self.assertNotIn(str(self.memory.root), result)
 
         listed = await self.memory.list_files(scope="notes")

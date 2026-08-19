@@ -8,6 +8,8 @@ from typing import List, Literal, Optional, Tuple, cast
 
 from xagent.utils.search_terms import normalize_terms, score_text
 
+from .note_memory import format_note_link_footer
+
 logger = logging.getLogger(__name__)
 
 MemoryScope = Literal["daily", "weekly", "monthly", "yearly", "notes", "all"]
@@ -269,6 +271,19 @@ class MarkdownMemory:
             return False
         return bool(relative.parts) and relative.parts[0] == _NOTE_SCOPE
 
+    def _active_note_catalog_sync(self) -> dict[str, str]:
+        notes_dir = self.root / _NOTE_SCOPE
+        if not notes_dir.is_dir():
+            return {}
+        catalog: dict[str, str] = {}
+        for path in sorted(notes_dir.glob("*.md")):
+            if not path.is_file() or path.name.startswith("."):
+                continue
+            text = self._read_text_sync(path)
+            if text.strip():
+                catalog[path.stem] = text
+        return catalog
+
     def _event_time_for_path(self, path: Path) -> float:
         """Return epoch seconds for ranking; newer memory sorts higher on ties."""
         try:
@@ -371,6 +386,7 @@ class MarkdownMemory:
             return []
 
         scored_blocks: list[tuple[int, float, str, str, int, int, list[str]]] = []
+        note_catalog: dict[str, str] | None = None
         for path in sorted(search_dir.rglob("*.md")):
             if not path.is_file():
                 continue
@@ -388,8 +404,11 @@ class MarkdownMemory:
                 score = score_text(window, terms)
                 if score <= 0:
                     continue
+                if note_catalog is None:
+                    note_catalog = self._active_note_catalog_sync()
+                footer = format_note_link_footer(path.stem, window, catalog=note_catalog)
                 scored_blocks.append(
-                    (score, event_time, label, path_key, 0, len(lines), window_lines)
+                    (score, event_time, label, path_key, 0, len(lines), [*window_lines, footer])
                 )
                 continue
             for index, line in enumerate(lines):

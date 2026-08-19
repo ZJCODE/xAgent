@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from xagent.components.memory import MarkdownMemory, NoteStore, NoteStoreError, slugify
-from xagent.components.memory.note_memory import NOTE_BODY_MAX_CHARS
+from xagent.components.memory.note_memory import NOTE_BODY_MAX_CHARS, extract_wiki_links
 from xagent.core.config import AgentConfig
 from xagent.tools.memory_tool import (
     create_search_memory_tool,
@@ -29,6 +29,13 @@ class NoteStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(slugify("Home Wi-Fi"), "home-wi-fi")
         self.assertEqual(slugify("  Release Process!!  "), "release-process")
         self.assertEqual(slugify(""), "note")
+
+    def test_extract_wiki_links_dedupes_and_slugifies(self):
+        body = "See [[home-wifi]] then [[Release Process|ship]] and [[home-wifi]] again."
+        self.assertEqual(extract_wiki_links(body), ["home-wifi", "release-process"])
+        self.assertEqual(extract_wiki_links("[[ 家里的网络 ]]"), ["家里的网络"])
+        self.assertEqual(extract_wiki_links("no links here"), [])
+        self.assertEqual(extract_wiki_links("[[|label only]]"), [])
 
     async def test_upsert_then_read_roundtrip(self):
         page = await self.store.upsert_page(
@@ -94,6 +101,20 @@ class NoteStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(archive_files), 1)
         self.assertIn("outdated standing fact", archive_files[0].read_text(encoding="utf-8"))
 
+    async def test_backlinks_are_derived_from_other_pages(self):
+        await self.store.upsert_page(title="Fire", body="Cooking starts with heat.")
+        await self.store.upsert_page(
+            title="Weeknight cooking",
+            body="Keep it simple. Heat lives on [[fire]].",
+        )
+        hits = await self.store.backlinks("fire")
+        self.assertEqual([page.slug for page in hits], ["weeknight-cooking"])
+        self.assertEqual(await self.store.backlinks("weeknight-cooking"), [])
+        fire = await self.store.read_page("fire")
+        self.assertEqual(fire.links, [])
+        cooking = await self.store.read_page("weeknight-cooking")
+        self.assertEqual(cooking.links, ["fire"])
+
 
 class NoteToolTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
@@ -109,8 +130,34 @@ class NoteToolTests(unittest.IsolatedAsyncioTestCase):
         saved = await upsert(title="Home wifi", content="SSID orchard.")
         self.assertEqual(saved["status"], "ok")
         self.assertEqual(saved["slug"], "home-wifi")
+        self.assertEqual(saved["links"], [])
+        self.assertEqual(saved["backlinks"], [])
+        self.assertNotIn("warning", saved)
         loaded = await self.store.read_page("home-wifi")
         self.assertIn("orchard", loaded.body)
+
+    async def test_upsert_note_tool_returns_links_and_orphan_warning(self):
+        upsert = create_upsert_note_tool(self.store)
+        first = await upsert(title="Fire", content="Cooking starts with heat.")
+        self.assertNotIn("warning", first)
+        orphan = await upsert(title="Unattached", content="A second idea with no links.")
+        self.assertEqual(orphan["status"], "ok")
+        self.assertEqual(orphan["warning"], "orphan")
+        self.assertEqual(orphan["links"], [])
+        linked = await upsert(
+            title="Weeknight cooking",
+            content="Keep it simple. Heat lives on [[fire]].",
+        )
+        self.assertNotIn("warning", linked)
+        self.assertEqual(linked["links"], ["fire"])
+        self.assertEqual(linked["backlinks"], [])
+        fire = await upsert(
+            title="Fire",
+            content="Cooking starts with heat. I use this in [[weeknight-cooking]].",
+            slug="fire",
+        )
+        self.assertEqual(fire["links"], ["weeknight-cooking"])
+        self.assertEqual(fire["backlinks"], ["weeknight-cooking"])
 
     async def test_write_memory_stays_on_diary(self):
         tool = create_write_memory_tool(self.memory)
@@ -130,7 +177,20 @@ class NoteToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Friday", result["results"])
         self.assertIn("Keep the changelog in the repo.", result["results"])
         self.assertIn("[note release-process]", result["results"])
+        self.assertIn("links: none | backlinks: none", result["results"])
         self.assertNotIn(str(self.memory.root), result["results"])
+
+    async def test_search_memory_note_hit_includes_derived_links(self):
+        await self.store.upsert_page(title="Fire", body="Cooking starts with heat.")
+        await self.store.upsert_page(
+            title="Weeknight cooking",
+            body="Keep it simple. Heat lives on [[fire]].",
+        )
+        tool = create_search_memory_tool(self.memory)
+        result = await tool(query=["Heat lives"], scope="notes")
+        self.assertIn("links: [[fire]] | backlinks: none", result["results"])
+        fire = await tool(query=["Cooking starts"], scope="notes")
+        self.assertIn("links: none | backlinks: [[weeknight-cooking]]", fire["results"])
 
     async def test_search_memory_all_includes_notes(self):
         await self.memory.append_daily("Went to lunch")
@@ -143,8 +203,11 @@ class NoteToolTests(unittest.IsolatedAsyncioTestCase):
 
 class NotebookPromptRuleTests(unittest.TestCase):
     def test_self_rules_mention_notebook(self):
-        self.assertIn("Standing topic knowledge lives in your notebook", AgentConfig.BASE_AGENT_PROMPT)
-        self.assertIn("look it up with search_memory", AgentConfig.BASE_AGENT_PROMPT)
+        prompt = AgentConfig.BASE_AGENT_PROMPT
+        self.assertIn("Standing ideas live in your notebook", prompt)
+        self.assertIn("One idea per note, in your own words", prompt)
+        self.assertIn("[[slug]]", prompt)
+        self.assertIn("look them up with search_memory", prompt)
 
 
 class AgentNotebookWiringTests(unittest.TestCase):

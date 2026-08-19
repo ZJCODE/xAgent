@@ -1107,6 +1107,43 @@ input::placeholder {
   line-height: 1.35;
 }
 
+.note-wiki-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin: -4px 0 12px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.note-wiki-links-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.note-wiki-links-label {
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.note-wiki-link {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 8px;
+  background: var(--bg-surface);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.note-wiki-link:hover {
+  border-color: var(--text);
+}
+
 .empty-state {
   display: flex;
   min-height: 180px;

@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Optional
 
-from xagent.components.memory.note_memory import NoteStoreError
+from xagent.components.memory.note_memory import (
+    NoteStoreError,
+    extract_wiki_links,
+)
 from xagent.utils.search_terms import normalize_terms, score_text
 from xagent.utils.tool_decorator import function_tool
 
@@ -27,9 +30,9 @@ def create_write_memory_tool(
         name="write_memory",
         description=(
             "Record a concise, attributable diary entry for what happened: events, "
-            "conversations, decisions, or context in time. Skip standing topic knowledge "
-            "— use upsert_note for current-version notes you will reuse; look them up "
-            "later with search_memory. Skip trivial or temporary notes."
+            "conversations, decisions, or context in time. Skip standing ideas — "
+            "those belong in the notebook via upsert_note (one idea per page, linked "
+            "with [[slug]], looked up with search_memory). Skip trivial or temporary notes."
         ),
         param_descriptions={
             "content": "Diary entry to record. Keep it concise, grounded, and attributed when needed.",
@@ -54,21 +57,25 @@ def create_upsert_note_tool(
     note_store: NoteStore,
     is_enabled: bool = True,
 ):
-    """Create a tool that writes standing topic notes."""
+    """Create a tool that writes standing idea notes."""
 
     @function_tool(
         name="upsert_note",
         description=(
-            "Create or rewrite a standing notebook page for current-version topic knowledge "
-            "you will reuse (procedures, checklists, cross-person conventions, your own "
-            "working habits). Overwrites the page in place. Do not use this for what happened "
-            "today (write_memory) or for who one person is (relationship cards). Skip anything "
-            "you are unsure you will reuse. Look notes up later with search_memory."
+            "Create or rewrite one standing idea in your notebook. One idea per page, "
+            "in your own words — not a paste, not today's events (write_memory), not who "
+            "one person is (relationship cards). The slug is the page's fixed address; "
+            "reuse it to rewrite that idea. When other notes exist, include at least one "
+            "[[slug]] to an existing page. Overwrites the page in place. Look notes up "
+            "later with search_memory."
         ),
         param_descriptions={
-            "title": "Short page title. Used to generate the slug when slug is omitted.",
-            "content": "Full current-version page body in first person. Replace the whole page.",
-            "slug": "Stable page id. Omit to derive from the title. Reuse a slug to rewrite that page.",
+            "title": "Short idea title. Used to generate the slug when slug is omitted.",
+            "content": (
+                "Full current-version body in first person, one idea, your own words. "
+                "Link related notes with [[slug]] or [[slug|label]]. Replace the whole page."
+            ),
+            "slug": "Stable page id. Omit to derive from the title. Reuse a slug to rewrite that idea; do not casually change it.",
         },
     )
     async def upsert_note(
@@ -87,12 +94,23 @@ def create_upsert_note_tool(
             )
         except NoteStoreError as exc:
             return {"status": exc.code, "message": str(exc)}
-        return {
+        outgoing = [target for target in extract_wiki_links(page.body) if target != page.slug]
+        backlinks = [item.slug for item in await note_store.backlinks(page.slug)]
+        others = {item.slug for item in await note_store.list_pages() if item.slug != page.slug}
+        payload = {
             "status": "ok",
             "slug": page.slug,
             "title": page.title,
+            "links": outgoing,
+            "backlinks": backlinks,
             "message": "Note saved.",
         }
+        if others and not any(link in others for link in outgoing):
+            payload["warning"] = "orphan"
+            payload["message"] = (
+                "Note saved. This page has no [[slug]] link to an existing note."
+            )
+        return payload
 
     return upsert_note
 
@@ -109,7 +127,8 @@ def create_search_memory_tool(
         description=(
             "Search older diary memory, standing notes, or raw messages by verbatim terms, date, or date range. "
             "Pass concrete words or short phrases likely to appear in memory; results OR-match "
-            "terms and rank by how many terms hit. Note matches return the whole page. "
+            "terms and rank by how many terms hit. Note matches return the whole page plus a "
+            "derived links/backlinks line. Follow [[slug]] by searching that slug. "
             "Prefer recent diary already in context when present; search when older continuity "
             "or standing notes are needed."
         ),

@@ -462,6 +462,8 @@ export interface FileReadResult extends FileNode {
   content: string;
   text?: boolean;
   blob_url?: string;
+  links?: string[];
+  backlinks?: string[];
 }
 
 export interface WorkspaceUploadResult extends FileNode {

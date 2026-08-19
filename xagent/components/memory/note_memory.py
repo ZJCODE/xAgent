@@ -1,14 +1,14 @@
-"""Topic-indexed standing notes for the agent's own notebook.
+"""Atomic standing notes for the agent's own notebook.
 
-Notes are a *current-version working copy* of topic knowledge the agent
-chooses to keep, not a second diary and not a structured long-term memory
-schema. The diary remains the authoritative carrier of experience;
-relationship cards remain the person index. A note is rewritten in place
-when the standing knowledge changes.
+Notes are idea cards the agent chooses to keep, not a second diary and not a
+structured long-term memory schema. The diary remains the authoritative
+carrier of experience; relationship cards remain the person index. A note is
+rewritten in place when that idea changes. Pages connect through ``[[slug]]``
+wiki links in the body; backlinks are derived at read time and never written
+back into the file.
 
-This class owns file layout and I/O only. Deciding *what* belongs in a note
-and *when* to inject the catalog lives in higher layers, mirroring
-:class:`RelationshipStore`.
+This class owns file layout, I/O, and link derivation only. Deciding *what*
+belongs in a note lives in higher layers, mirroring :class:`RelationshipStore`.
 """
 
 from __future__ import annotations
@@ -37,6 +37,7 @@ _META_PATTERN = re.compile(
 _ATTR_PATTERN = re.compile(r'(\w+)="((?:[^"\\]|\\.)*)"')
 _SLUG_UNSAFE = re.compile(r"[^\w.-]+", re.UNICODE)
 _SLUG_HYPHEN_RUN = re.compile(r"-{2,}")
+_WIKI_LINK_PATTERN = re.compile(r"\[\[([^\[\]]+)\]\]")
 _TRUE_VALUES = frozenset({"true", "1", "yes"})
 
 
@@ -75,6 +76,10 @@ class NotePage:
     def touched(self) -> str:
         return self.accessed or self.updated or ""
 
+    @property
+    def links(self) -> List[str]:
+        return [slug for slug in extract_wiki_links(self.body) if slug != self.slug]
+
 
 def catalog_summary(body: str, max_chars: int = NOTE_SUMMARY_MAX_CHARS) -> str:
     """First meaningful line of a note, trimmed for catalog injection."""
@@ -98,12 +103,46 @@ def slugify(value: str, *, fallback: str = "note") -> str:
     return slug or fallback
 
 
+def extract_wiki_links(body: str) -> List[str]:
+    """Return unique ``[[slug]]`` / ``[[slug|label]]`` targets in first-seen order."""
+    ordered: List[str] = []
+    seen = set()
+    for match in _WIKI_LINK_PATTERN.finditer(body or ""):
+        inner = match.group(1).strip()
+        if not inner:
+            continue
+        target = inner.split("|", 1)[0].strip()
+        if not target:
+            continue
+        slug = slugify(target)
+        if not slug or slug in seen:
+            continue
+        seen.add(slug)
+        ordered.append(slug)
+    return ordered
+
+
+def format_note_link_footer(slug: str, body: str, *, catalog: dict[str, str]) -> str:
+    """One derived ``links:`` / ``backlinks:`` line. Never written back to disk."""
+    own = slugify(slug)
+    outgoing = [target for target in extract_wiki_links(body) if target != own]
+    backlinks = [
+        other
+        for other, other_body in catalog.items()
+        if other != own and own in extract_wiki_links(other_body)
+    ]
+    links_text = ", ".join(f"[[{item}]]" for item in outgoing) or "none"
+    back_text = ", ".join(f"[[{item}]]" for item in backlinks) or "none"
+    return f"links: {links_text} | backlinks: {back_text}"
+
+
 class NoteStore:
-    """Store standing notes as one markdown file per topic.
+    """Store standing notes as one markdown file per idea.
 
     Active pages live under ``<root>/<slug>.md``. Archived pages move to
     ``<root>/archive/<slug>.md``. Each file starts with a metadata comment
-    owned by this store, followed by the agent-authored body.
+    owned by this store, followed by the agent-authored body. Wiki links
+    stay in that body; this store derives backlinks by scanning pages.
     """
 
     ARCHIVE_DIRNAME = NOTE_ARCHIVE_DIRNAME
@@ -190,6 +229,16 @@ class NoteStore:
     async def count_pages(self) -> int:
         paths = await asyncio.to_thread(self._list_active_paths_sync)
         return len(paths)
+
+    async def backlinks(self, slug: str) -> List[NotePage]:
+        """Pages that point at ``slug`` via ``[[slug]]``. Excludes the page itself."""
+        target = self._safe_slug(slug)
+        pages = await self.list_pages()
+        return [
+            page
+            for page in pages
+            if page.slug != target and target in extract_wiki_links(page.body)
+        ]
 
     # ------------------------------------------------------------------
     # Write

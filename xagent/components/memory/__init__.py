@@ -12,6 +12,8 @@ from .note_memory import (
     NoteStore,
     NoteStoreError,
     catalog_summary,
+    extract_wiki_links,
+    format_note_link_footer,
     slugify,
 )
 from .relationship_memory import (
@@ -39,6 +41,8 @@ __all__ = [
     "RelationshipStore",
     "anonymous_contact_label",
     "catalog_summary",
+    "extract_wiki_links",
+    "format_note_link_footer",
     "format_speaker_label",
     "human_display_name",
     "slugify",

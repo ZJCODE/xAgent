@@ -9,6 +9,35 @@ import type { AgentInfo, FileNode, FileReadResult, SearchResult } from "../types
 
 const TIME_SCOPES = new Set(["daily", "weekly", "monthly", "yearly"]);
 const NOTES_SCOPE = "notes";
+const WIKI_LINK_PATTERN = /\[\[([^[\]]+)\]\]/g;
+
+function slugifyNote(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/_/g, "-")
+    .replace(/[^\p{L}\p{N}.-]+/gu, "-")
+    .replace(/-{2,}/g, "-")
+    .replace(/^[-._]+|[-._]+$/g, "")
+    .slice(0, 64);
+}
+
+function parseWikiLinks(content: string, ownSlug = ""): string[] {
+  const seen = new Set<string>();
+  const links: string[] = [];
+  for (const match of content.matchAll(WIKI_LINK_PATTERN)) {
+    const slug = slugifyNote((match[1].split("|", 1)[0] || "").trim());
+    if (!slug || slug === ownSlug || seen.has(slug)) continue;
+    seen.add(slug);
+    links.push(slug);
+  }
+  return links;
+}
+
+function isActiveNotePath(path: string): boolean {
+  const parts = path.split("/").filter(Boolean);
+  return parts[0] === NOTES_SCOPE && !parts.includes("archive") && path.endsWith(".md");
+}
 
 export function MemoryPage() {
   const [info, setInfo] = useState<AgentInfo | null>(null);
@@ -75,6 +104,18 @@ export function MemoryPage() {
     }
     return { timeNodes: time, relNodes: rel, noteNodes: notes };
   }, [tree]);
+
+  const noteSlug = selected && isActiveNotePath(selected.path)
+    ? selected.path.replace(/^notes\//, "").replace(/\.md$/, "")
+    : "";
+  const noteLinks = selected && noteSlug
+    ? (selected.links ?? parseWikiLinks(selected.content, noteSlug))
+    : [];
+  const noteBacklinks = selected && noteSlug ? (selected.backlinks ?? []) : [];
+
+  const openNote = (slug: string) => {
+    void selectFile({ name: `${slug}.md`, path: `notes/${slug}.md`, type: "file" });
+  };
 
   return (
     <PageShell>
@@ -159,6 +200,40 @@ export function MemoryPage() {
                 <h3>{selected.name || selected.path}</h3>
                 <span>{formatTimestamp(selected.modified)}</span>
               </div>
+              {noteSlug && (noteLinks.length > 0 || noteBacklinks.length > 0) ? (
+                <div className="note-wiki-links">
+                  {noteLinks.length > 0 ? (
+                    <div className="note-wiki-links-group">
+                      <span className="note-wiki-links-label">Links</span>
+                      {noteLinks.map((slug) => (
+                        <button
+                          key={`link-${slug}`}
+                          type="button"
+                          className="note-wiki-link"
+                          onClick={() => openNote(slug)}
+                        >
+                          [[{slug}]]
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                  {noteBacklinks.length > 0 ? (
+                    <div className="note-wiki-links-group">
+                      <span className="note-wiki-links-label">Backlinks</span>
+                      {noteBacklinks.map((slug) => (
+                        <button
+                          key={`back-${slug}`}
+                          type="button"
+                          className="note-wiki-link"
+                          onClick={() => openNote(slug)}
+                        >
+                          [[{slug}]]
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
               <Markdown content={selected.content} />
             </>
           ) : (
