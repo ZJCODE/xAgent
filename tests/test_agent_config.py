@@ -217,6 +217,8 @@ provider:
             )
             self.assertEqual(runner.agent.provider_name, "anthropic")
             self.assertEqual(runner.agent.model_max_tokens, 16000)
+            self.assertFalse(runner.agent.supports_vision)
+            self.assertNotIn("see_image", runner.agent.tools)
 
     def test_maintenance_reasoning_does_not_inject_unconfigured_controls(self):
         self.assertIsNone(maintenance_reasoning_config(None))
@@ -302,6 +304,7 @@ provider:
             runner = BaseAgentRunner(config_dir=tmpdir)
 
             self.assertTrue(runner.agent.supports_vision)
+            self.assertIn("see_image", runner.agent.tools)
 
     def test_custom_provider_config_rejects_non_boolean_vision_support(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -341,6 +344,7 @@ provider:
 
             runner = BaseAgentRunner(config_dir=tmpdir)
             self.assertTrue(runner.agent.supports_vision)
+            self.assertIn("see_image", runner.agent.tools)
 
     def test_provider_config_builds_anthropic_client(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -366,6 +370,8 @@ search:
             self.assertEqual(runner.agent.model_api, MODEL_API_ANTHROPIC_MESSAGES)
             self.assertEqual(runner.agent.model_client.model_api, MODEL_API_ANTHROPIC_MESSAGES)
             self.assertEqual(str(runner.agent.client.base_url).rstrip("/"), "https://api.minimaxi.com/anthropic")
+            self.assertFalse(runner.agent.supports_vision)
+            self.assertNotIn("see_image", runner.agent.tools)
 
     def test_qwen_search_prefers_explicit_feature_key_even_for_qwen_provider(self):
         runner = BaseAgentRunner.__new__(BaseAgentRunner)
@@ -462,6 +468,8 @@ search:
 
             self.assertEqual(runner.agent.model_api, MODEL_API_OPENAI_CHAT_COMPLETIONS)
             self.assertEqual(runner.agent.model_client.model_api, MODEL_API_OPENAI_CHAT_COMPLETIONS)
+            self.assertFalse(runner.agent.supports_vision)
+            self.assertNotIn("see_image", runner.agent.tools)
 
     def test_custom_openai_runner_uses_chat_completions_protocol(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -485,6 +493,8 @@ search:
 
             self.assertEqual(runner.agent.model_api, MODEL_API_OPENAI_CHAT_COMPLETIONS)
             self.assertEqual(runner.agent.model_client.model_api, MODEL_API_OPENAI_CHAT_COMPLETIONS)
+            self.assertFalse(runner.agent.supports_vision)
+            self.assertNotIn("see_image", runner.agent.tools)
 
     def test_default_run_command_is_not_configured_in_yaml(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -503,6 +513,7 @@ provider:
 
             self.assertIn("run_command", runner.agent.tools)
             self.assertIn("manage_scheduled_tasks", runner.agent.tools)
+            self.assertIn("see_image", runner.agent.tools)
             self.assertNotIn("generate_image", runner.agent.tools)
             self.assertNotIn("schedule_task", runner.agent.tools)
             self.assertNotIn("schedule_message", runner.agent.tools)
@@ -1391,6 +1402,7 @@ provider:
             self.assertIn("write_note", runner.agent.tools)
             self.assertIn("read_note", runner.agent.tools)
             self.assertIn("search_memory", runner.agent.tools)
+            self.assertIn("see_image", runner.agent.tools)
             self.assertNotIn("write_memory", runner.agent.tools)
             self.assertNotIn("generate_image", runner.agent.tools)
 
@@ -1418,6 +1430,7 @@ agent:
             self.assertNotIn("search_note", runner.agent.tools)
             self.assertNotIn("write_memory", runner.agent.tools)
             self.assertIn("search_memory", runner.agent.tools)
+            self.assertIn("see_image", runner.agent.tools)
 
     def test_config_can_disable_only_note_auto_distillation(self):
         with tempfile.TemporaryDirectory() as tmpdir:

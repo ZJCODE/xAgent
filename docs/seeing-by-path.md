@@ -1,6 +1,6 @@
 # Seeing stored images by path
 
-Status: proposed, not implemented. This document is the design, not a changelog.
+Status: implemented. This document describes what the code does.
 
 ## 1. First principle
 

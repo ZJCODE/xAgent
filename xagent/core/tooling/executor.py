@@ -8,12 +8,13 @@ from ..config import AgentConfig
 from .manager import ToolManager
 from .guards import ToolCallContext, ToolDecision, ToolGuardResult
 from ...components import MessageStorage
-from ...utils.image_utils import is_image_output
+from ...utils.image_utils import MAX_IMAGES_PER_MESSAGE, is_image_output
 from ...tools.artifact_tool import (
     artifact_attachment_description,
     artifact_attachments,
     is_artifact_attachment_result,
 )
+from ...tools.see_image_tool import is_see_image_result, see_image_observation
 
 
 logger = logging.getLogger(__name__)
@@ -50,6 +51,29 @@ class ToolExecutor:
         self._turn_channel = None
         self._turn_room_name = None
         self._turn_inbox_kind = ""
+        self._see_image_already_visible = 0
+        self._see_image_paths: list[str] = []
+        self._see_image_lock = asyncio.Lock()
+
+    def begin_see_image_turn(self, already_visible: int = 0) -> None:
+        self._see_image_already_visible = max(0, int(already_visible))
+        self._see_image_paths = []
+
+    def pending_see_image_paths(self) -> list[str]:
+        return list(self._see_image_paths)
+
+    async def _queue_see_image_path(self, path: str) -> str | None:
+        relative = str(path or "").strip()
+        if not relative:
+            return "Image path is empty"
+        async with self._see_image_lock:
+            if relative in self._see_image_paths:
+                return None
+            visible = self._see_image_already_visible + len(self._see_image_paths)
+            if visible >= MAX_IMAGES_PER_MESSAGE:
+                return f"At most {MAX_IMAGES_PER_MESSAGE} images are allowed per message"
+            self._see_image_paths.append(relative)
+        return None
 
     async def handle_tool_calls(
         self,
@@ -216,6 +240,26 @@ class ToolExecutor:
                     description=model_output,
                     attachments=artifact_attachments(result),
                 )
+
+            if is_see_image_result(result):
+                overflow = await self._queue_see_image_path(str(result.get("path") or ""))
+                if overflow is not None:
+                    model_output = overflow
+                else:
+                    model_output = see_image_observation(result)
+                logger.info("Tool `%s` result: %s", name, self._format_preview(model_output))
+                tool_obs.set_output(model_output)
+                return self._tool_result_message(call_id, model_output), None
+
+            if (
+                isinstance(result, dict)
+                and result.get("type") == "see_image"
+                and result.get("status") == "error"
+            ):
+                model_output = str(result.get("message") or "see_image failed")
+                logger.info("Tool `%s` result: %s", name, self._format_preview(model_output))
+                tool_obs.set_output(model_output)
+                return self._tool_result_message(call_id, model_output), None
 
             result_str = json.dumps(result, ensure_ascii=False) if isinstance(result, (dict, list)) else str(result)
 

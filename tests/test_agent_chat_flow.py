@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import tempfile
 import time
 import unittest
@@ -26,9 +27,12 @@ from xagent.core.providers import (
 )
 from xagent.core.runtime import ScheduledDeliveryContext, scheduled_delivery_context
 from xagent.core.tooling.executor import ToolDisplayResult, ToolExecutor
+from xagent.core.tooling.manager import ToolManager
 from xagent.core.working_context import WorkingContextView
 from xagent.integrations.langfuse import NoopObservabilityRuntime
 from xagent.schemas import Message, MessageType, RoleType
+from xagent.tools.artifact_tool import create_attach_artifact_tool
+from xagent.tools.see_image_tool import create_see_image_tool
 
 
 class InMemoryMessageStorage:
@@ -198,6 +202,17 @@ class CapturingModelClient:
         self.calls.append(messages)
         self.instructions_calls.append(instructions)
         return self.responses.pop(0)
+
+
+class SnapshotModelClient(CapturingModelClient):
+    async def model_turn_events(self, messages, tool_specs, instructions=None, stream=False):
+        async for event in super().model_turn_events(
+            copy.deepcopy(messages),
+            tool_specs,
+            instructions,
+            stream,
+        ):
+            yield event
 
 
 class CapturingStreamingModelClient(CapturingModelClient):
@@ -1263,6 +1278,52 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         agent.tool_executor = tool_executor or FakeToolExecutor()
         return agent
 
+    def _write_png(self, path: Path) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(
+            b"\x89PNG\r\n\x1a\n"
+            b"\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89"
+            b"\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
+        )
+
+    def _vision_agent(self, workspace, storage, model_client, tools):
+        manager = ToolManager(tools=list(tools))
+        executor = ToolExecutor(
+            tool_manager=manager,
+            message_storage=storage,
+            client=None,
+            workspace_dir=workspace,
+        )
+        agent = self._build_agent(
+            storage=storage,
+            model_client=model_client,
+            tool_executor=executor,
+            tools=manager._tools,
+        )
+        agent.workspace_dir = workspace
+        agent.message_handler = MessageHandler(
+            message_storage=storage,
+            system_prompt="",
+            workspace_dir=workspace,
+        )
+        agent.max_iter = 3
+        return agent
+
+    @staticmethod
+    def _current_task_image_urls(messages):
+        task = next(
+            message for message in messages
+            if message.get("name") == AgentConfig.CURRENT_TASK_NAME
+        )
+        content = task.get("content")
+        if not isinstance(content, list):
+            return []
+        urls = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "image_url":
+                urls.append(str((block.get("image_url") or {}).get("url") or ""))
+        return urls
+
     def test_agent_init_passes_message_storage_to_memory_handler(self):
         captured = {}
 
@@ -2137,6 +2198,121 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(storage.messages[0].sender_id, "ou_user")
+
+    async def test_chat_events_injects_named_workspace_path_on_first_model_call(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir).resolve()
+            self._write_png(workspace / "assets" / "shot.png")
+            storage = InMemoryMessageStorage()
+            model_client = SnapshotModelClient([(ReplyType.SIMPLE_REPLY, "I can see the chart.")])
+            agent = self._vision_agent(
+                workspace,
+                storage,
+                model_client,
+                [create_see_image_tool(workspace_dir=str(workspace))],
+            )
+
+            events = [
+                event async for event in Agent.chat_events(
+                    agent,
+                    user_message="look at assets/shot.png",
+                    user_id="alice",
+                )
+            ]
+
+            self.assertEqual(len(model_client.calls), 1)
+            urls = self._current_task_image_urls(model_client.calls[0])
+            self.assertEqual(len(urls), 1)
+            self.assertTrue(urls[0].startswith("data:image/"))
+            self.assertTrue(any(
+                event.get("type") == "message_done" and "chart" in str(event.get("content") or "")
+                for event in events
+            ))
+
+    async def test_chat_events_see_image_opens_stored_file_on_followup(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir).resolve()
+            self._write_png(workspace / "assets" / "shot.png")
+            storage = InMemoryMessageStorage([
+                Message.create(
+                    "here is a screenshot\n\n![shot](/api/workspace/blob?path=assets/shot.png)",
+                    role=RoleType.USER,
+                    sender_id="alice",
+                ),
+                Message.create("Got it.", role=RoleType.ASSISTANT, sender_id="agent"),
+            ])
+            model_client = SnapshotModelClient([
+                (ReplyType.TOOL_CALL, [FakeToolCall(
+                    name="see_image",
+                    arguments='{"path": "assets/shot.png"}',
+                )]),
+                (ReplyType.SIMPLE_REPLY, "The label says login."),
+            ])
+            agent = self._vision_agent(
+                workspace,
+                storage,
+                model_client,
+                [create_see_image_tool(workspace_dir=str(workspace))],
+            )
+
+            events = [
+                event async for event in Agent.chat_events(
+                    agent,
+                    user_message="What does the label say?",
+                    user_id="alice",
+                )
+            ]
+
+            self.assertEqual(len(model_client.calls), 2)
+            self.assertEqual(self._current_task_image_urls(model_client.calls[0]), [])
+            second_urls = self._current_task_image_urls(model_client.calls[1])
+            self.assertEqual(len(second_urls), 1)
+            self.assertTrue(second_urls[0].startswith("data:image/"))
+            self.assertTrue(any(
+                event.get("type") == "tool_call" and event.get("name") == "see_image"
+                for event in events
+            ))
+            done_contents = [
+                str(event.get("content") or "")
+                for event in events
+                if event.get("type") == "message_done"
+            ]
+            self.assertTrue(any("The label says login." in content for content in done_contents))
+            self.assertFalse(any("Image is now visible" in content for content in done_contents))
+            self.assertFalse(any("login form" in content for content in done_contents))
+
+    async def test_chat_events_attach_artifact_does_not_put_pixels_on_the_model(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir).resolve()
+            self._write_png(workspace / "assets" / "shot.png")
+            storage = InMemoryMessageStorage()
+            model_client = SnapshotModelClient([
+                (ReplyType.TOOL_CALL, [FakeToolCall(
+                    name="attach_artifact",
+                    arguments='{"path": "assets/shot.png"}',
+                )]),
+            ])
+            agent = self._vision_agent(
+                workspace,
+                storage,
+                model_client,
+                [create_attach_artifact_tool(workspace_dir=str(workspace))],
+            )
+
+            events = [
+                event async for event in Agent.chat_events(
+                    agent,
+                    user_message="send me that screenshot",
+                    user_id="alice",
+                )
+            ]
+
+            self.assertEqual(len(model_client.calls), 1)
+            self.assertEqual(self._current_task_image_urls(model_client.calls[0]), [])
+            done = next(event for event in events if event.get("type") == "message_done")
+            self.assertTrue(done.get("attachments"))
+            self.assertEqual(done["attachments"][0]["path"], "assets/shot.png")
+            self.assertNotIn("image_url", repr(model_client.calls[0]))
 
 
 class ToolExecutorTransientTests(unittest.IsolatedAsyncioTestCase):

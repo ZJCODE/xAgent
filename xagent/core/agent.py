@@ -27,6 +27,7 @@ from ..tools import (
     create_read_note_tool,
     create_search_memory_tool,
     create_search_note_tool,
+    create_see_image_tool,
     create_update_note_tool,
     create_write_note_tool,
 )
@@ -200,6 +201,8 @@ class Agent:
                 create_search_note_tool(store=self.note_store),
                 create_read_note_tool(store=self.note_store),
             ])
+        if self.supports_vision:
+            bound_tools.append(create_see_image_tool(workspace_dir=str(self.workspace_dir)))
         self.tool_manager = ToolManager(tools=bound_tools)
         self.model_client = ModelClient(
             client=self.client,
@@ -669,6 +672,11 @@ class Agent:
                 channel_instructions=channel_instructions,
             )
             turn_obs.set_input(input_messages)
+            begin_see_image_turn = getattr(self.tool_executor, "begin_see_image_turn", None)
+            if callable(begin_see_image_turn):
+                begin_see_image_turn(
+                    already_visible=MessageHandler.count_current_task_images(iteration_messages),
+                )
 
             for iteration_index in range(self.max_iter):
                 if self.inbox.abort_requested():
@@ -762,6 +770,15 @@ class Agent:
                         room_name=room_name,
                         inbox_kind=inbox_item.kind.value,
                     )
+                    pending_see_image_paths = getattr(
+                        self.tool_executor, "pending_see_image_paths", None
+                    )
+                    if callable(pending_see_image_paths):
+                        MessageHandler.apply_see_image_paths(
+                            iteration_messages,
+                            pending_see_image_paths(),
+                            workspace_dir=getattr(self, "workspace_dir", None),
+                        )
 
                     for tool_call in tool_calls:
                         yield self._tool_event("tool_result", tool_call)

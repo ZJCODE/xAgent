@@ -4,10 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Optional
-from urllib.parse import unquote, urlparse
 
 from xagent.schemas.attachment import workspace_attachment_from_path
-from xagent.utils.image_utils import workspace_blob_relative_path
+from xagent.utils.image_utils import resolve_workspace_file_path
 from xagent.utils.tool_decorator import function_tool
 
 
@@ -83,24 +82,7 @@ def artifact_attachments(result: dict) -> list[dict]:
 
 
 def _resolve_workspace_artifact_path(source: str, workspace_root: Path) -> Optional[Path]:
-    source = str(source or "").strip().strip("<>")
-    if not source:
-        return None
-
-    relative_path = workspace_blob_relative_path(source)
-    if relative_path:
-        candidate = (workspace_root / relative_path).resolve()
-    else:
-        parsed = urlparse(source)
-        if parsed.scheme and parsed.scheme != "file":
-            return None
-        raw_path = unquote(parsed.path if parsed.scheme == "file" else source)
-        candidate_path = Path(raw_path).expanduser()
-        candidate = candidate_path.resolve() if candidate_path.is_absolute() else (workspace_root / raw_path).resolve()
-
-    if not candidate.is_relative_to(workspace_root):
-        return None
-    return candidate
+    return resolve_workspace_file_path(source, workspace_root)
 
 
 def _artifact_error(message: str) -> dict:

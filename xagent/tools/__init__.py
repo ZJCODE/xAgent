@@ -6,6 +6,7 @@ from .note_tool import (
     create_write_note_tool,
 )
 from .artifact_tool import create_attach_artifact_tool
+from .see_image_tool import create_see_image_tool
 from .search_tool import create_web_search_tool
 from .shell_tool import create_workspace_run_command_tool, run_command
 from .skills_tool import create_read_skill_tool
@@ -22,6 +23,7 @@ __all__ = [
     "create_search_note_tool",
     "create_read_note_tool",
     "create_attach_artifact_tool",
+    "create_see_image_tool",
     "create_web_search_tool",
     "create_read_skill_tool",
     "create_schedule_task_tool",
