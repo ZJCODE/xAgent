@@ -615,17 +615,16 @@ class MemoryHandler:
                 body = str(candidate.get("body") or "").strip()
                 if not title or not body:
                     continue
-                similar = await self.note_store.find_similar(
+                duplicate = await self._existing_note_covering(
                     title=title,
                     keys=candidate.get("keys"),
                     tags=candidate.get("tags"),
-                    limit=1,
                 )
-                if similar:
+                if duplicate is not None:
                     logger.debug(
                         "Skipped distilled note %r; note %s already covers it",
                         title,
-                        similar[0].id,
+                        duplicate.id,
                     )
                     continue
                 source: dict = {"diary": [today_str]}
@@ -653,6 +652,34 @@ class MemoryHandler:
                 logger.info("Distilled %d note(s): %s", len(written), ", ".join(written))
         except Exception as exc:
             logger.warning("Note distillation failed: %s", exc, exc_info=True)
+
+    async def _existing_note_covering(
+        self,
+        title: str,
+        keys=None,
+        tags=None,
+    ) -> Optional["Note"]:
+        """Return an existing note that already covers this idea, if any.
+
+        Uses the same threshold the write tool applies, so a draft the agent
+        would have been told to fold into an existing note is not quietly
+        written by the background path instead.
+        """
+        if self.note_store is None:
+            return None
+        from ...components.memory import NoteStore
+
+        candidates = await self.note_store.find_similar(
+            title=title,
+            keys=keys,
+            tags=tags,
+            limit=3,
+        )
+        for candidate in candidates:
+            score = NoteStore.identity_score(candidate, title, keys, tags)
+            if score >= AgentConfig.NOTES_DUPLICATE_SCORE_THRESHOLD:
+                return candidate
+        return None
 
     async def get_notebook_context(self, current_text: str = "") -> str:
         """Render the notebook index for prompt injection.

@@ -169,12 +169,14 @@ register as the existing `write_memory` tool: one idea per note, own words, only
 reusing, and explicitly not a summary of the conversation. Bodies over 2000 characters are rejected
 with an instruction to split, which enforces atomicity mechanically instead of by persuasion.
 
-**Duplicate guard, no LLM required.** Before creating, the tool runs a local neighbour search
-(`score_text` over titles, keys, and tags, weighted 3× title and 2× keys/tags) using the incoming
-title, keys, and tags as terms. If the top score clears `NOTES_DUPLICATE_SCORE_THRESHOLD`, the tool
-does *not* create; it returns `{"status": "similar_exists", "candidates": [...]}` and lets the model
-choose `update_note` or confirm a genuinely new note. This costs nothing and prevents note explosion
-far better than after-the-fact merging.
+**Duplicate guard, no LLM required.** Before creating, the tool asks the store for near neighbours
+and scores each with `NoteStore.identity_score` (3× title, 2× keys and tags, body deliberately
+excluded — a note that merely mentions the topic in passing is not another version of it). If the top
+score clears `NOTES_DUPLICATE_SCORE_THRESHOLD`, the tool does *not* create; it returns
+`{"status": "similar_exists", "candidates": [...]}` and lets the model choose `update_note` or
+confirm a genuinely new note. This costs nothing and prevents note explosion far better than
+after-the-fact merging. Channel B applies the same threshold, so a draft the agent would have been
+told to fold into an existing note is not quietly written by the background path instead.
 
 `source.diary` is set to the day the note was written. Tool-written notes get no `source.person`:
 the tool has no per-turn context, the same limitation the existing `write_memory` tool has.

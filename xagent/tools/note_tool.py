@@ -18,7 +18,7 @@ from xagent.components.memory.note_memory import (
     NoteStore,
 )
 from xagent.core.config import AgentConfig
-from xagent.utils.search_terms import normalize_terms, score_text
+from xagent.utils.search_terms import normalize_terms
 from xagent.utils.tool_decorator import function_tool
 
 _SEARCH_DEFAULT_LIMIT = 8
@@ -51,20 +51,6 @@ def _note_detail(note: Note) -> dict:
     if note.source:
         detail["source"] = dict(note.source)
     return detail
-
-
-def _duplicate_score(note: Note, title: str, keys, tags) -> int:
-    terms = normalize_terms([
-        str(title or ""),
-        *[str(key) for key in (keys or [])],
-        *[str(tag) for tag in (tags or [])],
-    ])
-    if not terms:
-        return 0
-    return (
-        3 * score_text(note.title, terms)
-        + 2 * score_text(" ".join((*note.keys, *note.tags)), terms)
-    )
 
 
 def create_write_note_tool(store: NoteStore, is_enabled: bool = True):
@@ -132,7 +118,7 @@ def create_write_note_tool(store: NoteStore, is_enabled: bool = True):
         duplicates = [
             note
             for note in similar
-            if _duplicate_score(note, title, keys, tags)
+            if NoteStore.identity_score(note, title, keys, tags)
             >= AgentConfig.NOTES_DUPLICATE_SCORE_THRESHOLD
         ]
         if duplicates:

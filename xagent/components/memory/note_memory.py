@@ -333,17 +333,48 @@ class NoteStore:
         """Find notes close enough that a new note would probably duplicate one.
 
         Used as a pre-write guard so the notebook does not accumulate five
-        variations of the same idea.
+        variations of the same idea. Callers decide how strong a match has to be
+        before they treat it as a duplicate; see :meth:`identity_score`.
         """
-        terms = normalize_terms([
+        terms = self.identity_terms(title, keys, tags)
+        if not terms:
+            return []
+        return await self.search(terms=terms, limit=max(1, int(limit)))
+
+    @staticmethod
+    def identity_terms(
+        title: str,
+        keys: Optional[Sequence[str]] = None,
+        tags: Optional[Sequence[str]] = None,
+    ) -> List[str]:
+        """Terms that describe what a note is about, for similarity checks."""
+        return normalize_terms([
             str(title or ""),
             *[str(key) for key in (keys or [])],
             *[str(tag) for tag in (tags or [])],
         ])
+
+    @classmethod
+    def identity_score(
+        cls,
+        note: Note,
+        title: str,
+        keys: Optional[Sequence[str]] = None,
+        tags: Optional[Sequence[str]] = None,
+    ) -> int:
+        """Score how much *note* is about the same thing as the given fields.
+
+        The body is deliberately excluded: a note that merely mentions the topic
+        in passing is not another version of it, so counting the body would
+        block legitimately new notes.
+        """
+        terms = cls.identity_terms(title, keys, tags)
         if not terms:
-            return []
-        candidates = await self.search(terms=terms, limit=max(1, int(limit)))
-        return candidates
+            return 0
+        return (
+            3 * score_text(note.title, terms)
+            + 2 * score_text(" ".join((*note.keys, *note.tags)), terms)
+        )
 
     async def pinned(self, limit: int = 3) -> List[Note]:
         """Return pinned notes, most recently updated first."""
@@ -627,9 +658,12 @@ class NoteStore:
                 notes.append(note)
         notes.sort(key=lambda note: note.id, reverse=True)
 
+        # Publish the notes before the signature they belong to. Loads run on
+        # worker threads, so a reader that saw a fresh signature next to stale
+        # notes would return them.
         loaded = tuple(notes)
-        self._cache_signature = signature
         self._cache_notes = loaded
+        self._cache_signature = signature
         return loaded
 
     def _signature_sync(self) -> Tuple[Any, ...]:

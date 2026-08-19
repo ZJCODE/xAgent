@@ -276,6 +276,22 @@ class NoteRetrievalTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(similar[0].id, self.espresso.id)
 
+    async def test_identity_score_ignores_a_passing_body_mention(self):
+        mentions = _note(
+            self.store,
+            "Kitchen inventory",
+            "We are low on beans, and the grinder needs descaling.",
+            keys=("inventory",),
+        )
+        await self.store.write(mentions)
+
+        self.assertEqual(
+            NoteStore.identity_score(mentions, "grinder offset", keys=["grinder"]), 0
+        )
+        self.assertGreater(
+            NoteStore.identity_score(self.grinder, "grinder offset", keys=["grinder"]), 0
+        )
+
     async def test_pinned_and_hubs_are_scoped_to_their_kind(self):
         hub = _note(self.store, "Coffee", "entry point", kind=KIND_HUB)
         await self.store.write(hub)
@@ -662,6 +678,32 @@ class MemoryHandlerNotebookTests(unittest.IsolatedAsyncioTestCase):
         await handler.run_maintenance(force=True)
 
         self.assertEqual(await self.notes.count(), 1)
+
+    async def test_distillation_keeps_a_draft_on_a_different_idea(self):
+        existing = _note(
+            self.notes,
+            "Jun takes espresso at 1:2.5",
+            "He said thinner has no spine.",
+            keys=("espresso", "Jun"),
+            tags=("coffee",),
+        )
+        await self.notes.write(existing)
+
+        storage = _FakeMessageStorage(self._batch())
+        llm = _FakeDiaryLLMService(
+            drafts=[
+                {
+                    "title": "The early train to Hangzhou is the only connection",
+                    "body": "Anything later misses the transfer.",
+                    "keys": ["train", "Hangzhou"],
+                    "tags": ["travel"],
+                }
+            ]
+        )
+        handler = self._make_handler(storage, llm)
+        await handler.run_maintenance(force=True)
+
+        self.assertEqual(await self.notes.count(), 2)
 
     async def test_distillation_can_be_switched_off(self):
         storage = _FakeMessageStorage(self._batch())
