@@ -9,6 +9,9 @@ from unittest.mock import patch
 from xagent.components.memory import MarkdownMemory, NoteStore, NoteStoreError, slugify
 from xagent.components.memory.note_memory import NOTE_BODY_MAX_CHARS, extract_wiki_links
 from xagent.core.config import AgentConfig
+from xagent.core.handlers.memory import MemoryHandler
+from xagent.core.journal import JournalLLMService
+from xagent.schemas import Message, RoleType
 from xagent.tools.memory_tool import (
     create_search_memory_tool,
     create_upsert_note_tool,
@@ -224,6 +227,219 @@ class AgentNotebookWiringTests(unittest.TestCase):
             self.assertNotIn("list_notes", agent.tools)
             self.assertNotIn("archive_note", agent.tools)
             self.assertEqual(agent.note_store.root, Path(tmpdir) / "memory" / "notes")
+            self.assertIs(agent.memory_handler.note_store, agent.note_store)
+
+
+class StandingNoteParseTests(unittest.IsolatedAsyncioTestCase):
+    def test_parse_standing_notes_object_and_list(self):
+        parsed = JournalLLMService._parse_standing_notes(
+            '{"notes": [{"slug": "fire", "title": "Fire", "body": "Heat first."}]}'
+        )
+        self.assertEqual(parsed, [{"slug": "fire", "title": "Fire", "body": "Heat first."}])
+        as_list = JournalLLMService._parse_standing_notes(
+            '[{"title": "Fire", "body": "Heat first."}]'
+        )
+        self.assertEqual(as_list, [{"slug": "", "title": "Fire", "body": "Heat first."}])
+
+    def test_parse_standing_notes_strips_code_fences(self):
+        parsed = JournalLLMService._parse_standing_notes(
+            '```json\n{"notes": [{"slug": "fire", "title": "Fire", "body": "Heat."}]}\n```'
+        )
+        self.assertEqual(parsed[0]["slug"], "fire")
+
+    def test_parse_standing_notes_handles_bad_json_and_empty(self):
+        self.assertEqual(JournalLLMService._parse_standing_notes("not json"), [])
+        self.assertEqual(JournalLLMService._parse_standing_notes('{"notes": []}'), [])
+        self.assertEqual(JournalLLMService._parse_standing_notes('{"notes": [{"title": "x"}]}'), [])
+
+    async def test_update_standing_notes_calls_model(self):
+        service = JournalLLMService(client=object())
+        captured = {}
+
+        async def fake_call_text(system_prompt, user_prompt):
+            captured["system"] = system_prompt
+            captured["user"] = user_prompt
+            return '{"notes": [{"slug": "fire", "title": "Fire", "body": "Heat first."}]}'
+
+        service._call_text = fake_call_text  # type: ignore[assignment]
+        result = await service.update_standing_notes(
+            messages=[{"role": "user", "sender_id": "a", "content": "we cook with fire"}],
+            catalog=[{"slug": "fire", "title": "Fire", "summary": "Heat first."}],
+            working_set=[{"slug": "fire", "title": "Fire", "body": "Old heat."}],
+        )
+        self.assertEqual(result[0]["slug"], "fire")
+        self.assertIn("one idea per page", captured["system"])
+        self.assertIn('slug="fire"', captured["user"])
+        self.assertIn("we cook with fire", captured["user"])
+
+    async def test_update_standing_notes_noops_without_messages(self):
+        service = JournalLLMService(client=object())
+        result = await service.update_standing_notes(messages=[], catalog=[], working_set=[])
+        self.assertEqual(result, [])
+
+
+class _FakeNoteMaintenanceLLM:
+    def __init__(self, notes=None, error=None):
+        self.notes = list(notes or [])
+        self.error = error
+        self.note_calls = []
+        self.diary_calls = []
+
+    async def format_diary_entry(self, messages, journal_date):
+        self.diary_calls.append({"journal_date": journal_date, "messages": list(messages)})
+        return "diary from batch"
+
+    async def generate_summary(self, source_content, period_type, period_label):
+        return ""
+
+    async def update_relationship_cards(self, participants, messages, existing_cards):
+        return {}
+
+    async def update_standing_notes(self, messages, catalog, working_set):
+        self.note_calls.append(
+            {"messages": messages, "catalog": catalog, "working_set": working_set}
+        )
+        if self.error is not None:
+            raise self.error
+        return list(self.notes)
+
+
+class _FakeNoteMessageStorage:
+    def __init__(self, messages=None):
+        self.messages = list(messages or [])
+
+    async def get_latest_message_cursor(self):
+        return len(self.messages)
+
+    async def get_messages_in_cursor_range(self, start_exclusive=0, end_inclusive=None):
+        start = max(0, int(start_exclusive or 0))
+        end = len(self.messages) if end_inclusive is None else max(0, int(end_inclusive))
+        if end <= start:
+            return []
+        return self.messages[start:end]
+
+
+class MemoryHandlerNoteMaintenanceTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        root = Path(self._tmpdir.name)
+        self.store = NoteStore(str(root / "notes"))
+        self.memory = MarkdownMemory(str(root / "memory"))
+
+    def tearDown(self):
+        self._tmpdir.cleanup()
+
+    def _messages(self, count=8, content="we talked about cooking with fire"):
+        messages = [
+            Message.create(content=content if index == 0 else f"filler {index}", role=RoleType.USER, sender_id="alice")
+            for index in range(count)
+        ]
+        for message in messages:
+            message.channel = "api"
+        return messages
+
+    def _handler(self, storage, llm, journal_batch_size=8):
+        return MemoryHandler(
+            memory=self.memory,
+            llm_service=llm,
+            message_storage=storage,
+            journal_batch_size=journal_batch_size,
+            note_store=self.store,
+        )
+
+    def test_working_set_prefers_transcript_hits_then_recency(self):
+        from types import SimpleNamespace
+
+        pages = [
+            SimpleNamespace(slug="old", title="Old", body="unrelated", touched="2026-01-01", updated="2026-01-01"),
+            SimpleNamespace(slug="hit", title="Fire", body="cooking with heat", touched="2026-01-02", updated="2026-01-02"),
+            SimpleNamespace(slug="recent", title="Recent", body="misc", touched="2026-08-19", updated="2026-08-19"),
+        ]
+        selected = MemoryHandler._select_note_working_set(pages, "cooking with fire", 2)
+        self.assertEqual([page.slug for page in selected], ["hit", "recent"])
+
+    async def test_empty_notebook_can_create_first_page(self):
+        llm = _FakeNoteMaintenanceLLM(
+            notes=[{"slug": "fire", "title": "Fire", "body": "Cooking starts with heat."}]
+        )
+        handler = self._handler(_FakeNoteMessageStorage(self._messages()), llm)
+        wrote = await handler.run_maintenance(force=True)
+        self.assertTrue(wrote)
+        self.assertEqual(len(llm.note_calls), 1)
+        page = await self.store.read_page("fire")
+        self.assertIsNotNone(page)
+        self.assertIn("Cooking starts with heat", page.body)
+
+    async def test_orphan_second_page_is_rejected(self):
+        await self.store.upsert_page(title="Fire", body="Cooking starts with heat.")
+        llm = _FakeNoteMaintenanceLLM(
+            notes=[{"slug": "unattached", "title": "Unattached", "body": "A second idea with no links."}]
+        )
+        handler = self._handler(_FakeNoteMessageStorage(self._messages()), llm)
+        wrote = await handler.run_maintenance(force=True)
+        self.assertTrue(wrote)
+        self.assertIsNone(await self.store.read_page("unattached"))
+        self.assertEqual(await self.store.count_pages(), 1)
+
+    async def test_linked_new_page_is_written(self):
+        await self.store.upsert_page(title="Fire", body="Cooking starts with heat.")
+        llm = _FakeNoteMaintenanceLLM(
+            notes=[{
+                "slug": "weeknight-cooking",
+                "title": "Weeknight cooking",
+                "body": "Keep it simple. Heat lives on [[fire]].",
+            }]
+        )
+        handler = self._handler(_FakeNoteMessageStorage(self._messages()), llm)
+        await handler.run_maintenance(force=True)
+        page = await self.store.read_page("weeknight-cooking")
+        self.assertIsNotNone(page)
+        self.assertEqual(page.links, ["fire"])
+
+    async def test_maintenance_caps_writes_per_batch(self):
+        llm = _FakeNoteMaintenanceLLM(
+            notes=[
+                {"slug": "n0", "title": "N0", "body": "First standing idea."},
+                {"slug": "n1", "title": "N1", "body": "Second idea. See [[n0]]."},
+                {"slug": "n2", "title": "N2", "body": "Third idea. See [[n0]]."},
+                {"slug": "n3", "title": "N3", "body": "Fourth idea. See [[n0]]."},
+            ]
+        )
+        handler = self._handler(_FakeNoteMessageStorage(self._messages()), llm)
+        await handler.run_maintenance(force=True)
+        self.assertEqual(await self.store.count_pages(), AgentConfig.NOTE_MAINTENANCE_MAX_WRITES)
+        self.assertIsNone(await self.store.read_page("n3"))
+
+    async def test_unseen_existing_slug_is_not_overwritten(self):
+        await self.store.upsert_page(title="Hidden idea", body="unique-hidden-token standing fact")
+        for index in range(8):
+            await self.store.upsert_page(title=f"Recent {index}", body=f"recent body {index} cooking")
+        original = await self.store.read_page("hidden-idea")
+        llm = _FakeNoteMaintenanceLLM(
+            notes=[{
+                "slug": "hidden-idea",
+                "title": "Hidden idea",
+                "body": "should not replace the hidden page [[recent-0]].",
+            }]
+        )
+        handler = self._handler(_FakeNoteMessageStorage(self._messages()), llm)
+        await handler.run_maintenance(force=True)
+        working_slugs = {item["slug"] for item in llm.note_calls[0]["working_set"]}
+        self.assertNotIn("hidden-idea", working_slugs)
+        loaded = await self.store.read_page("hidden-idea")
+        self.assertEqual(loaded.body, original.body)
+
+    async def test_note_update_failure_still_commits_diary(self):
+        llm = _FakeNoteMaintenanceLLM(error=RuntimeError("notes failed"))
+        storage = _FakeNoteMessageStorage(self._messages())
+        handler = self._handler(storage, llm)
+        wrote = await handler.run_maintenance(force=True)
+        self.assertTrue(wrote)
+        self.assertEqual(len(llm.note_calls), 1)
+        daily = await self.memory.read_file(self.memory.daily_path(date.today()))
+        self.assertIn("diary from batch", daily)
+        self.assertGreater(handler._last_processed_message_id, 0)
+        self.assertEqual(await self.store.count_pages(), 0)
 
 
 if __name__ == "__main__":

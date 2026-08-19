@@ -171,6 +171,8 @@ class AgentConfig:
     NOTE_MAX_PAGES = 80
     NOTE_SUMMARY_MAX_CHARS = 80
     NOTE_SLUG_MAX_LEN = 64
+    NOTE_MAINTENANCE_MAX_WRITES = 3
+    NOTE_MAINTENANCE_FULL_BODY_PAGES = 8
 
     # ============================================================
     # 8. Search Tool Defaults

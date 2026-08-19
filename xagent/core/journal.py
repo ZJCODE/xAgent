@@ -198,6 +198,55 @@ Period focus:
         )
         return result
 
+    async def update_standing_notes(
+        self,
+        messages: List[dict],
+        catalog: List[dict],
+        working_set: List[dict],
+    ) -> List[dict]:
+        """Decide whether new experience should create or rewrite standing notes.
+
+        Returns a list of ``{slug, title, body}`` dicts. An empty list means
+        nothing crystallized; callers must still validate links and working-set
+        visibility before writing.
+        """
+        if not messages:
+            return []
+
+        transcript = self._format_transcript(messages)
+        if not transcript.strip():
+            return []
+
+        system_prompt = self.build_standing_note_update_system_prompt()
+        user_prompt = self.build_standing_note_update_user_prompt(
+            catalog=catalog,
+            working_set=working_set,
+            transcript=transcript,
+        )
+        self.logger.info(
+            "Updating standing notes (catalog: %d, working set: %d, transcript: %d chars)",
+            len(catalog or []),
+            len(working_set or []),
+            len(transcript),
+        )
+
+        try:
+            content = await self._call_text(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+            )
+        except Exception as exception:
+            self.logger.error("Error updating standing notes: %s", exception)
+            return []
+
+        result = self._parse_standing_notes(content)
+        self.logger.info(
+            "Standing notes result: %d proposed — %s",
+            len(result),
+            ", ".join(item.get("slug") or item.get("title") or "?" for item in result) or "(none)",
+        )
+        return result
+
     @staticmethod
     def build_relationship_update_system_prompt() -> str:
         return """You keep your own private relationship notes: one short first-person card per person you know. A card is your evolving sense of who this person is to you — not a transcript, not a dossier they could read.
@@ -257,7 +306,89 @@ New experience:
 {transcript}"""
 
     @staticmethod
-    def _parse_relationship_cards(content: str, valid_keys: set[str]) -> dict[str, str]:
+    def build_standing_note_update_system_prompt() -> str:
+        return """You keep a private notebook of standing ideas: one idea per page, in your own words, with a stable slug address. This is not a second diary and not a dossier about people.
+
+From the new experience, decide whether any reusable idea crystallized or an existing idea changed. Most batches should change nothing.
+
+Rules:
+- One idea per note. Rewrite in your own words; do not paste the diary or transcript.
+- Who a person is belongs on a relationship card, not here. What happened belongs in the diary, not here.
+- When the catalog is not empty, a new note must include at least one [[existing-slug]] in the body.
+- To revise an existing note, reuse its slug and replace the whole page. You may only revise slugs whose full body is in the working set.
+- Keep each body first-person ("I"), grounded, and short. Prefer 200-800 characters; never dump a handbook.
+- If nothing durable crystallized, return {"notes": []}.
+
+Return JSON only, no code fences, no commentary:
+{"notes": [{"slug": "stable-id", "title": "Short title", "body": "Full page in first person, with [[slug]] links when other notes exist."}]}
+At most 3 notes. Omit the slug to derive it from the title."""
+
+    @staticmethod
+    def build_standing_note_update_user_prompt(
+        catalog: List[dict],
+        working_set: List[dict],
+        transcript: str,
+    ) -> str:
+        if catalog:
+            catalog_lines = []
+            for item in catalog:
+                slug = str(item.get("slug") or "").strip()
+                title = str(item.get("title") or slug).strip()
+                summary = str(item.get("summary") or "").strip()
+                line = f'- slug="{slug}" title="{title}"'
+                if summary:
+                    line += f" — {summary}"
+                catalog_lines.append(line)
+            catalog_section = "\n".join(catalog_lines)
+        else:
+            catalog_section = "(empty notebook; you may create the first page without [[slug]] links)"
+
+        if working_set:
+            working_blocks = []
+            for item in working_set:
+                slug = str(item.get("slug") or "").strip()
+                title = str(item.get("title") or slug).strip()
+                body = str(item.get("body") or "").strip()
+                working_blocks.append(f"### {slug}\ntitle: {title}\n{body}")
+            working_section = "\n\n".join(working_blocks)
+        else:
+            working_section = "(no full pages in the working set; you may only create new slugs)"
+
+        return f"""Notebook catalog (slug is the fixed address):
+{catalog_section}
+
+Working-set full pages (you may rewrite only these existing slugs):
+{working_section}
+
+New experience:
+{transcript}"""
+
+    @staticmethod
+    def _parse_standing_notes(content: str) -> List[dict]:
+        parsed = JournalLLMService._unwrap_json_content(content)
+        if isinstance(parsed, dict):
+            items = parsed.get("notes")
+        else:
+            items = parsed
+        if not isinstance(items, list):
+            return []
+        result: List[dict] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("title") or "").strip()
+            body = str(item.get("body") or "").strip()
+            if not title or not body:
+                continue
+            result.append({
+                "slug": str(item.get("slug") or "").strip(),
+                "title": title,
+                "body": body,
+            })
+        return result
+
+    @staticmethod
+    def _unwrap_json_content(content: str):
         cleaned = str(content or "").strip()
         if cleaned.startswith("```"):
             lines = cleaned.split("\n")
@@ -268,10 +399,16 @@ New experience:
                     break
             if end is not None:
                 cleaned = "\n".join(lines[1:end]).strip()
+            elif len(lines) > 1:
+                cleaned = "\n".join(lines[1:]).strip()
         try:
-            parsed = json.loads(cleaned)
+            return json.loads(cleaned)
         except json.JSONDecodeError:
-            return {}
+            return None
+
+    @staticmethod
+    def _parse_relationship_cards(content: str, valid_keys: set[str]) -> dict[str, str]:
+        parsed = JournalLLMService._unwrap_json_content(content)
         if not isinstance(parsed, dict):
             return {}
         result: dict[str, str] = {}

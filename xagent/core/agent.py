@@ -168,6 +168,7 @@ class Agent:
             message_storage=self.message_storage,
             journal_batch_size=self.journal_batch_size,
             relationship_store=self.relationship_store,
+            note_store=self.note_store,
             recent_days=self.memory_recent_days,
         )
         self.working_context_compactor = self._build_working_context_compactor(
