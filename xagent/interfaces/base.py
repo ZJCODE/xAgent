@@ -27,7 +27,6 @@ from ..components.skills import SkillsStorageBase, SkillsStorageLocal
 from ..integrations.langfuse import ObservabilityRuntime, create_observability_runtime
 from ..tools import (
     create_attach_artifact_tool,
-    create_image_generation_tool,
     create_read_skill_tool,
     create_schedule_task_tool,
     create_web_fetch_tool,
@@ -726,28 +725,6 @@ class BaseAgentRunner:
 
         return None
 
-    def _initialize_image_generation_client(
-        self,
-        agent_cfg: Dict[str, Any],
-        *,
-        model_client: Optional[Any],
-    ) -> Optional[Any]:
-        """Build the client used by OpenAI image generation."""
-        image_generation_cfg = agent_cfg.get("image_generation") or {}
-        if not isinstance(image_generation_cfg, dict):
-            return model_client
-
-        image_generation_provider = normalize_image_generation_provider(image_generation_cfg.get("provider"))
-        if image_generation_provider != IMAGE_GENERATION_PROVIDER_OPENAI:
-            return model_client
-
-        provider_cfg = agent_cfg.get("provider") or {}
-        return self._initialize_openai_feature_client(
-            image_generation_cfg,
-            provider_cfg,
-            model_client=model_client,
-        )
-
     def _initialize_openai_feature_client(
         self,
         feature_cfg: Dict[str, Any],
@@ -816,15 +793,6 @@ class BaseAgentRunner:
         )
         if search_tool is not None:
             tools.append(search_tool)
-        image_generation_client = self._initialize_image_generation_client(agent_cfg, model_client=client)
-        image_generation_config = self._image_generation_config_for_tools(agent_cfg)
-        image_generation_tool = create_image_generation_tool(
-            image_generation_config,
-            client=image_generation_client,
-            workspace_dir=str(self.workspace_dir),
-        )
-        if image_generation_tool is not None:
-            tools.append(image_generation_tool)
         if getattr(self, "skills_storage", None) is not None:
             tools.append(create_read_skill_tool(self.skills_storage))
         return tools
@@ -859,42 +827,6 @@ class BaseAgentRunner:
         provider_base_url_value = str(provider_cfg.get("base_url") or "").strip()
         if provider_base_url_value and not merged_config.get("base_url"):
             merged_config["base_url"] = provider_base_url_value
-
-        return merged_config
-
-    def _image_generation_config_for_tools(self, agent_cfg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        image_generation_cfg = agent_cfg.get("image_generation")
-        if not isinstance(image_generation_cfg, dict):
-            return image_generation_cfg
-
-        image_generation_provider = normalize_image_generation_provider(image_generation_cfg.get("provider"))
-        if image_generation_provider not in {IMAGE_GENERATION_PROVIDER_MINIMAX, IMAGE_GENERATION_PROVIDER_QWEN}:
-            return image_generation_cfg
-
-        configured_key = str(image_generation_cfg.get("api_key") or "").strip()
-        merged_config = dict(image_generation_cfg)
-
-        provider_cfg = agent_cfg.get("provider") or {}
-        if not isinstance(provider_cfg, dict):
-            return image_generation_cfg
-
-        provider_is_native = (
-            image_generation_provider == IMAGE_GENERATION_PROVIDER_MINIMAX and self._is_minimax_provider(provider_cfg)
-        ) or (
-            image_generation_provider == IMAGE_GENERATION_PROVIDER_QWEN and self._is_qwen_provider(provider_cfg)
-        )
-        if not provider_is_native:
-            return image_generation_cfg
-
-        if not configured_key or is_placeholder_api_key(configured_key):
-            provider_key = str(provider_cfg.get("api_key") or "").strip()
-            if not is_placeholder_api_key(provider_key):
-                merged_config["api_key"] = provider_key
-
-        if image_generation_provider == IMAGE_GENERATION_PROVIDER_QWEN:
-            provider_base_url = str(provider_cfg.get("base_url") or "").strip()
-            if provider_base_url and not merged_config.get("base_url") and not merged_config.get("endpoint"):
-                merged_config["base_url"] = provider_base_url
 
         return merged_config
 

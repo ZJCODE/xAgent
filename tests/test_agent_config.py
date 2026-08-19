@@ -503,6 +503,7 @@ provider:
 
             self.assertIn("run_command", runner.agent.tools)
             self.assertIn("manage_scheduled_tasks", runner.agent.tools)
+            self.assertNotIn("generate_image", runner.agent.tools)
             self.assertNotIn("schedule_task", runner.agent.tools)
             self.assertNotIn("schedule_message", runner.agent.tools)
             self.assertNotIn("schedule_command", runner.agent.tools)
@@ -1149,7 +1150,7 @@ search:
             self.assertEqual(search_provider.config["api_key"], "qwen-key")
             self.assertEqual(search_provider.config["base_url"], "https://dashscope.aliyuncs.com/compatible-mode/v1")
 
-    def test_config_loads_openai_image_generation_tool(self):
+    def test_config_does_not_bind_openai_image_generation_tool(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "config.yaml"
             config_path.write_text(
@@ -1167,10 +1168,10 @@ image_generation:
 
             runner = BaseAgentRunner(config_dir=tmpdir)
 
-            self.assertIn("generate_image", runner.agent.tools)
+            self.assertNotIn("generate_image", runner.agent.tools)
             self.assertTrue(runner.agent.supports_vision)
 
-    def test_config_loads_minimax_image_generation_tool_with_main_key(self):
+    def test_config_does_not_bind_minimax_image_generation_tool(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "config.yaml"
             config_path.write_text(
@@ -1188,19 +1189,11 @@ image_generation:
             write_identity(tmpdir)
 
             runner = BaseAgentRunner(config_dir=tmpdir)
-            image_tool = runner.agent.tools["generate_image"]
-            image_provider = next(
-                cell.cell_contents
-                for cell in image_tool.__closure__
-                if cell.cell_contents.__class__.__name__ == "ConfiguredImageGenerationProvider"
-            )
 
-            self.assertIn("generate_image", runner.agent.tools)
+            self.assertNotIn("generate_image", runner.agent.tools)
             self.assertFalse(runner.agent.supports_vision)
-            self.assertEqual(image_provider.provider, "minimax")
-            self.assertEqual(image_provider.config["api_key"], "minimax-key")
 
-    def test_config_loads_qwen_image_generation_tool_with_main_key(self):
+    def test_config_does_not_bind_qwen_image_generation_tool(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "config.yaml"
             config_path.write_text(
@@ -1218,18 +1211,9 @@ image_generation:
             write_identity(tmpdir)
 
             runner = BaseAgentRunner(config_dir=tmpdir)
-            image_tool = runner.agent.tools["generate_image"]
-            image_provider = next(
-                cell.cell_contents
-                for cell in image_tool.__closure__
-                if cell.cell_contents.__class__.__name__ == "ConfiguredImageGenerationProvider"
-            )
 
-            self.assertIn("generate_image", runner.agent.tools)
+            self.assertNotIn("generate_image", runner.agent.tools)
             self.assertTrue(runner.agent.supports_vision)
-            self.assertEqual(image_provider.provider, "qwen")
-            self.assertEqual(image_provider.config["api_key"], "qwen-key")
-            self.assertEqual(image_provider.config["base_url"], "https://dashscope.aliyuncs.com/compatible-mode/v1")
 
     def test_config_rejects_openai_image_generation_for_non_openai_provider(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1307,15 +1291,8 @@ image_generation:
             write_identity(tmpdir)
 
             runner = BaseAgentRunner(config_dir=tmpdir)
-            image_tool = runner.agent.tools["generate_image"]
-            image_provider = next(
-                cell.cell_contents
-                for cell in image_tool.__closure__
-                if cell.cell_contents.__class__.__name__ == "ConfiguredImageGenerationProvider"
-            )
 
-            self.assertEqual(image_provider.provider, "openai")
-            self.assertEqual(image_provider.config["api_key"], "openai-image-key")
+            self.assertNotIn("generate_image", runner.agent.tools)
 
     def test_config_accepts_minimax_image_generation_for_non_minimax_provider_with_key(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1336,15 +1313,8 @@ image_generation:
             write_identity(tmpdir)
 
             runner = BaseAgentRunner(config_dir=tmpdir)
-            image_tool = runner.agent.tools["generate_image"]
-            image_provider = next(
-                cell.cell_contents
-                for cell in image_tool.__closure__
-                if cell.cell_contents.__class__.__name__ == "ConfiguredImageGenerationProvider"
-            )
 
-            self.assertEqual(image_provider.provider, "minimax")
-            self.assertEqual(image_provider.config["api_key"], "minimax-image-key")
+            self.assertNotIn("generate_image", runner.agent.tools)
 
     def test_config_accepts_qwen_image_generation_for_non_qwen_provider_with_key(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1365,15 +1335,8 @@ image_generation:
             write_identity(tmpdir)
 
             runner = BaseAgentRunner(config_dir=tmpdir)
-            image_tool = runner.agent.tools["generate_image"]
-            image_provider = next(
-                cell.cell_contents
-                for cell in image_tool.__closure__
-                if cell.cell_contents.__class__.__name__ == "ConfiguredImageGenerationProvider"
-            )
 
-            self.assertEqual(image_provider.provider, "qwen")
-            self.assertEqual(image_provider.config["api_key"], "qwen-image-key")
+            self.assertNotIn("generate_image", runner.agent.tools)
 
     def test_config_rejects_name_key(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1599,6 +1562,7 @@ provider:
             self.assertIn("read_note", runner.agent.tools)
             self.assertIn("search_memory", runner.agent.tools)
             self.assertNotIn("write_memory", runner.agent.tools)
+            self.assertNotIn("generate_image", runner.agent.tools)
 
     def test_config_can_disable_the_notebook(self):
         with tempfile.TemporaryDirectory() as tmpdir:
