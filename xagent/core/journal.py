@@ -106,7 +106,8 @@ Rules:
 - Scheduled tasks are work you owed, not a person speaking. Do not attribute their wording to the delivery target.
 - Use timestamps only for ordering and attribution. Do not repeat markers, metadata, or timestamps.
 - The memory writer manually adds a `## YYYY-MM-DD HH:MM` heading. Return the diary body only; do not include `#` or `##` headings, date headings, or timestamp headings.
-- Preserve durable details and uncertainty. Aim for 100-300 characters for brief sources, 200-500 for substantial sources.
+- Tell today's story. This is not a knowledge base: leaving this day, the entry should still make sense as what happened, not as a list of facts to look up later. Durable details may appear as part of the experience; reusable conclusions belong in notes. How you stand with someone belongs on their relationship card.
+- Keep uncertainty visible. Aim for 100-300 characters for brief sources, 200-500 for substantial sources.
 
 - Return only the diary entry text. No advice, JSON, code fences, or explanatory prose."""
 
@@ -200,11 +201,13 @@ Period focus:
 
     @staticmethod
     def build_relationship_update_system_prompt() -> str:
-        return """You keep your own private relationship notes: one short first-person card per person you know. A card is your evolving sense of who this person is to you — not a transcript, not a dossier they could read.
+        return """You keep your own private relationship notes: one short first-person card per person you know. A card is how we stand — not a transcript, not a dossier of everything they told you.
+
+The diary already records what happened that day. Facts you would reuse in another context, without this person in the room, belong in a note. Do not turn the card into their archive.
 
 For each person listed, update their card from the new experience: carry forward what still holds, revise what changed, drop what is now wrong.
 
-Keep each card first-person ("I"), in the language that person uses with you where natural, covering only durable, useful things:
+Keep each card first-person ("I"), in the language that person uses with you where natural:
 - Who they are to me and how we relate — closeness, tone, current standing.
 - Trust and boundaries — what they asked me to keep private, what feels safe to share with them.
 - Shared history that matters — how we met, recurring themes, references between us.
@@ -222,7 +225,7 @@ Input markers:
 - `[ambient context][timestamp=Time][channel=Channel]` — something I noticed or received, not a direct message.
 - `[room context]` ... `[/room context]` — group transcript lines; `ME ...` inside means me.
 
-Return JSON only: an object mapping each person key to their full updated card text. Use exactly the keys provided. Omit a person only if there is genuinely nothing durable to record. No code fences, no commentary."""
+Return JSON only: an object mapping each person key to their full updated card text. Use exactly the keys provided. Omit a person only if there is genuinely nothing about how we stand worth recording. No code fences, no commentary."""
 
     @staticmethod
     def build_relationship_update_user_prompt(
@@ -303,12 +306,14 @@ New experience:
     def build_note_distill_system_prompt(max_notes: int = 2) -> str:
         return f"""You keep your own notebook, one short note per idea. A note is something you worked out and expect to reuse, so you do not have to re-read a month of diary to find it again.
 
-Your diary already records what happened. Do not restate it. Write a note only when this experience produced something durable and reusable:
+Your diary already records what happened. Do not restate it. How you stand with someone — closeness, boundaries, unfinished threads — belongs on their relationship card, not in a note.
+
+Write a note only when this experience produced something you would want later, in another day or context:
 - A preference, constraint, or fact that will still hold next month.
 - A decision, and what it turned on.
 - A conclusion you reached, or a way of doing something that worked.
 
-Do not write a note for: small talk, one-off scheduling, anything already covered by an existing note listed below, or a summary of the conversation.
+Do not write a note for: small talk, one-off scheduling, how you relate to a person, anything that only matters today, anything already covered by an existing note listed below, or a summary of the conversation.
 
 Most batches deserve zero notes. Returning an empty list is the normal, correct answer. At most {max_notes}.
 

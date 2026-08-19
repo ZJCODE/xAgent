@@ -28,7 +28,6 @@ from ..tools import (
     create_search_memory_tool,
     create_search_note_tool,
     create_update_note_tool,
-    create_write_memory_tool,
     create_write_note_tool,
 )
 from .config import AgentConfig, ReplyType
@@ -188,10 +187,6 @@ class Agent:
 
         bound_tools = list(tools or [])
         bound_tools.extend([
-            create_write_memory_tool(
-                memory=self.markdown_memory,
-                is_enabled=True,
-            ),
             create_search_memory_tool(
                 memory=self.markdown_memory,
                 is_enabled=True,

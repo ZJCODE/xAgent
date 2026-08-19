@@ -60,6 +60,9 @@ class AgentConfigPromptTests(unittest.TestCase):
         self.assertIn("Decide what to share or keep private from your own judgment", prompt)
         self.assertIn("memory is one first-person life stream", prompt)
         self.assertIn("not a database that participants can freely inspect", prompt)
+        self.assertIn("The diary is that life stream", prompt)
+        self.assertIn("the notebook is conclusions you have already worked out and will want later", prompt)
+        self.assertIn("use `write_note`", prompt)
 
     def test_decision_prompt_preserves_agent_owned_participation(self):
         prompt = AgentConfig.DECISION_SYSTEM_PROMPT
@@ -1594,6 +1597,8 @@ provider:
             self.assertIsNotNone(runner.agent.memory_handler.note_store)
             self.assertIn("write_note", runner.agent.tools)
             self.assertIn("read_note", runner.agent.tools)
+            self.assertIn("search_memory", runner.agent.tools)
+            self.assertNotIn("write_memory", runner.agent.tools)
 
     def test_config_can_disable_the_notebook(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1617,6 +1622,8 @@ agent:
             self.assertIsNone(runner.agent.memory_handler.note_store)
             self.assertNotIn("write_note", runner.agent.tools)
             self.assertNotIn("search_note", runner.agent.tools)
+            self.assertNotIn("write_memory", runner.agent.tools)
+            self.assertIn("search_memory", runner.agent.tools)
 
     def test_config_can_disable_only_note_auto_distillation(self):
         with tempfile.TemporaryDirectory() as tmpdir:

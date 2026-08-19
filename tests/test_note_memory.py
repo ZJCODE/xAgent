@@ -437,6 +437,8 @@ class NoteDistillationPromptTests(unittest.IsolatedAsyncioTestCase):
         prompt = JournalLLMService.build_note_distill_system_prompt(max_notes=2)
         self.assertIn("notebook", prompt)
         self.assertIn("diary already records what happened", prompt)
+        self.assertIn("relationship card", prompt)
+        self.assertIn("unfinished threads", prompt)
         self.assertIn("zero notes", prompt)
         self.assertIn("At most 2", prompt)
         self.assertIn("first person", prompt)

@@ -62,8 +62,10 @@ def create_write_note_tool(store: NoteStore, is_enabled: bool = True):
             "Add one note to your notebook: a durable, reusable conclusion in your own "
             "words. One idea per note. Use it for preferences, constraints, decisions and "
             "what they turned on, or an approach that worked. Your diary already records "
-            "what happened, so do not use this to summarise a conversation. If a note on "
-            "the topic already exists the tool says so; update that one instead."
+            "what happened, so do not use this to summarise a conversation. Do not write "
+            "one-off scheduling, how you stand with a person, or anything that only "
+            "matters today. If a note on the topic already exists the tool says so; "
+            "update that one instead."
         ),
         param_descriptions={
             "title": "One line, under 80 characters, specific enough to recognise later.",
