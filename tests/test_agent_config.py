@@ -531,7 +531,7 @@ provider:
             config_text = result.config_path.read_text(encoding="utf-8")
             identity_text = result.identity_path.read_text(encoding="utf-8")
             config = yaml.safe_load(config_text)
-            self.assertEqual(config["agent"], {"max_history": 12, "journal_batch_size": 32, "max_iter": 50, "max_concurrent_tools": 4, "subconscious_activity": 0.02, "memory_recent_days": 2})
+            self.assertEqual(config["agent"], {"max_history": 12, "journal_batch_size": 32, "max_iter": 50, "max_concurrent_tools": 4, "subconscious_activity": 0.02, "memory_recent_days": 2, "notes_enabled": True, "notes_auto_distill": True})
             self.assertEqual(config["provider"]["base_url"], "https://api.openai.com/v1")
             self.assertEqual(config["provider"]["api_key"], "your_api_key_here")
             self.assertEqual(config["provider"]["model"], "gpt-5.6-terra")
@@ -581,7 +581,7 @@ provider:
 
             self.assertTrue(forced.wrote_files)
             config = yaml.safe_load(forced.config_path.read_text(encoding="utf-8"))
-            self.assertEqual(config["agent"], {"max_history": 12, "journal_batch_size": 32, "max_iter": 50, "max_concurrent_tools": 4, "subconscious_activity": 0.02, "memory_recent_days": 2})
+            self.assertEqual(config["agent"], {"max_history": 12, "journal_batch_size": 32, "max_iter": 50, "max_concurrent_tools": 4, "subconscious_activity": 0.02, "memory_recent_days": 2, "notes_enabled": True, "notes_auto_distill": True})
             identity_text = forced.identity_path.read_text(encoding="utf-8")
             self.assertIn("practical collaborator", identity_text)
             self.assertIn("own continuing identity", identity_text)
@@ -643,7 +643,7 @@ provider:
             result = init_agent_directory(tmpdir, selection=selection)
             config = yaml.safe_load(result.config_path.read_text(encoding="utf-8"))
 
-            self.assertEqual(config["agent"], {"max_history": 12, "journal_batch_size": 32, "max_iter": 50, "max_concurrent_tools": 4, "subconscious_activity": 0.02, "memory_recent_days": 2})
+            self.assertEqual(config["agent"], {"max_history": 12, "journal_batch_size": 32, "max_iter": 50, "max_concurrent_tools": 4, "subconscious_activity": 0.02, "memory_recent_days": 2, "notes_enabled": True, "notes_auto_distill": True})
             self.assertEqual(config["provider"]["base_url"], "https://api.deepseek.com")
             self.assertEqual(config["provider"]["api_key"], "secret-key")
             self.assertEqual(config["provider"]["model"], "deepseek-v4-pro")
@@ -1572,6 +1572,94 @@ agent:
 
             self.assertEqual(runner.agent.memory_recent_days, 9)
             self.assertEqual(runner.agent.memory_handler.recent_days, 9)
+
+    def test_config_enables_the_notebook_by_default(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+  model: "gpt-5.4-mini"
+  api_key: "test-key"
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            runner = BaseAgentRunner(config_dir=tmpdir)
+
+            self.assertTrue(runner.agent.notes_enabled)
+            self.assertTrue(runner.agent.notes_auto_distill)
+            self.assertIsNotNone(runner.agent.note_store)
+            self.assertIsNotNone(runner.agent.memory_handler.note_store)
+            self.assertIn("write_note", runner.agent.tools)
+            self.assertIn("read_note", runner.agent.tools)
+
+    def test_config_can_disable_the_notebook(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+  model: "gpt-5.4-mini"
+  api_key: "test-key"
+agent:
+  notes_enabled: false
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            runner = BaseAgentRunner(config_dir=tmpdir)
+
+            self.assertFalse(runner.agent.notes_enabled)
+            self.assertIsNone(runner.agent.note_store)
+            self.assertIsNone(runner.agent.memory_handler.note_store)
+            self.assertNotIn("write_note", runner.agent.tools)
+            self.assertNotIn("search_note", runner.agent.tools)
+
+    def test_config_can_disable_only_note_auto_distillation(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+  model: "gpt-5.4-mini"
+  api_key: "test-key"
+agent:
+  notes_auto_distill: false
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            runner = BaseAgentRunner(config_dir=tmpdir)
+
+            self.assertTrue(runner.agent.notes_enabled)
+            self.assertFalse(runner.agent.memory_handler.notes_auto_distill)
+            self.assertIn("write_note", runner.agent.tools)
+
+    def test_config_rejects_non_boolean_notes_keys(self):
+        for key in ("notes_enabled", "notes_auto_distill"):
+            with self.subTest(key=key):
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    config_path = Path(tmpdir) / "config.yaml"
+                    config_path.write_text(
+                        f"""
+provider:
+  model: "gpt-5.4-mini"
+  api_key: "test-key"
+agent:
+  {key}: "yes"
+""",
+                        encoding="utf-8",
+                    )
+                    write_identity(tmpdir)
+
+                    with self.assertRaisesRegex(
+                        ValueError, rf"agent\.{key} must be a boolean"
+                    ):
+                        BaseAgentRunner(config_dir=tmpdir)
 
     def test_agent_uses_internal_memory_recent_max_chars_default(self):
         with tempfile.TemporaryDirectory() as tmpdir:
