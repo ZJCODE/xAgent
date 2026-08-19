@@ -165,6 +165,7 @@ class SubconsciousLoopTests(unittest.TestCase):
         agent._assistant_sender_id = "agent"
         memory_handler = MagicMock()
         memory_handler.get_subconscious_context.return_value = "Recent memory content."
+        memory_handler.get_notebook_context.return_value = ""
         agent.memory_handler = memory_handler
         message_handler = MessageHandler(MagicMock(), system_prompt=agent.system_prompt)
         message_handler.get_recent_messages = AsyncMock(return_value=[])
@@ -461,6 +462,46 @@ class SubconsciousLoopTests(unittest.TestCase):
             recent_memory = next(msg for msg in messages if msg.get("name") == AgentConfig.RECENT_MEMORY_NAME)
             self.assertIn("longer-range summaries", recent_memory["content"])
             agent.memory_handler.get_subconscious_context.assert_awaited_once()
+
+    def test_subconscious_injects_the_notebook_recalled_against_recent_diary(self):
+        agent = self._make_agent_mock()
+        agent.memory_handler.get_subconscious_context = AsyncMock(
+            return_value="I spent the morning dialling in the grinder."
+        )
+        agent.memory_handler.get_notebook_context = AsyncMock(
+            return_value="[pinned]\n- (202608190930) Grinder reads two clicks coarse"
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop = SubconsciousLoop(agent, workspace=Path(tmpdir))
+            loop._probability = 1.0
+            asyncio.run(loop.maybe_think())
+
+            messages = agent.model_client.calls[0]["messages"]
+            notebook = next(
+                msg
+                for msg in messages
+                if msg.get("name") == AgentConfig.SUBCONSCIOUS_NOTEBOOK_NAME
+            )
+            self.assertIn("two clicks coarse", notebook["content"])
+            self.assertNotIn(
+                AgentConfig.NOTEBOOK_CONTEXT_NAME,
+                {msg.get("name") for msg in messages},
+            )
+            kwargs = agent.memory_handler.get_notebook_context.await_args.kwargs
+            self.assertIn("dialling in the grinder", kwargs["current_text"])
+
+    def test_subconscious_ignores_a_non_text_notebook_context(self):
+        agent = self._make_agent_mock()
+        agent.memory_handler.get_notebook_context = MagicMock(return_value=object())
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop = SubconsciousLoop(agent, workspace=Path(tmpdir))
+            loop._probability = 1.0
+            asyncio.run(loop.maybe_think())
+
+            names = {msg.get("name") for msg in agent.model_client.calls[0]["messages"]}
+            self.assertNotIn(AgentConfig.SUBCONSCIOUS_NOTEBOOK_NAME, names)
 
     def test_collect_relationship_context_reads_store_cards_without_contacts(self):
         agent = self._make_agent_mock()

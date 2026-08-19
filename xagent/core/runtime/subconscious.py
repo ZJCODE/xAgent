@@ -616,10 +616,12 @@ class SubconsciousLoop:
             ctx = memory_handler.get_notebook_context(current_text=memory_context or "")
             if inspect.isawaitable(ctx):
                 ctx = await ctx
-            return str(ctx or "").strip()
         except Exception:
             self._logger.warning("Failed to collect notebook context", exc_info=True)
             return ""
+        # The handler is duck-typed here; anything but text would be stringified
+        # into the prompt.
+        return ctx.strip() if isinstance(ctx, str) else ""
 
     async def _collect_relationship_context(self) -> str:
         """Collect relationship cards for people this runtime can actually reach.
