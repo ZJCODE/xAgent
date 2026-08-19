@@ -50,8 +50,10 @@ xAgent can serve as a personal assistant in some scenarios, but that is a subset
 - The agent decides what can be shared, with whom, and in which context.
 - Sharing decisions must be based on relationship context, trust, and situation.
 
-8. Diary-Only Memory Carrier Principle
-- The memory system should be carried by diary/journal form only.
+8. Diary-Anchored Memory Carrier Principle
+- The diary/journal is the authoritative memory carrier and must stay sufficient on its own.
+- Derived views over the diary, such as relationship cards and notes, are allowed. They are regenerable projections, not parallel sources of truth, and the system must keep working when they are empty or discarded.
+- Every derived record must be traceable to the diary. When the agent records something the diary did not originate, the diary must still note that it was recorded, so the diary remains the complete life stream.
 - Do not require structured long-term memory schemas as a core requirement.
 
 ## Product Scope Implications
@@ -63,7 +65,7 @@ When adding new requirements, always check the following:
 - Does it work in both 1:1 and group/multi-user scenarios?
 - Does it preserve first-person memory/journal integrity?
 - Does it keep one unified memory stream instead of per-user memory isolation?
-- Does it keep memory in diary mode instead of introducing mandatory structured memory storage?
+- Does it keep the diary authoritative and sufficient, with any structured memory kept as a regenerable, diary-traceable projection?
 - Does it preserve agent-controlled sharing decisions?
 - Does it keep event attribution clear (who said what, where, and in which context)?
 - Does it support long-term continuity rather than single-session behavior only?
@@ -77,6 +79,7 @@ The memory model should be diary-first and unified:
 - Keep one continuous agent memory narrative, not per-user isolated stores.
 - Use diary/journal as the primary and sufficient memory carrier.
 - Keep raw conversation and observation traces for attribution, but memory expression stays diary-based.
+- Derived projections over the diary, such as relationship cards and notes, may exist for fast recall. Each one must stay regenerable and traceable to the diary.
 - The agent decides what can be disclosed from memory in each interaction context.
 
 At minimum, stored records should be able to answer:
@@ -116,7 +119,7 @@ For every new feature request, include a short goal-check section in design/revi
 - Memory/journal perspective impact
 - Unified-memory (non-user-isolated) impact
 - Agent-governed sharing impact
-- Diary-only memory-carrier impact
+- Diary-anchored memory-carrier impact
 - Attribution and continuity impact
 
 No requirement should be considered complete if this check is missing.
