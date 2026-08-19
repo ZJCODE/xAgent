@@ -466,6 +466,7 @@ class SubconsciousLoop:
         )
         memory_context = await self._collect_memory_context()
         relationship_context = await self._collect_relationship_context()
+        notebook_context = await self._collect_notebook_context(memory_context)
 
         instructions = message_handler.build_instruction_messages(
             tool_names=[],
@@ -479,6 +480,7 @@ class SubconsciousLoop:
             current_user_id=getattr(self._agent, "_assistant_sender_id", "agent"),
             memory_context=memory_context,
             relationship_context=relationship_context,
+            notebook_context=notebook_context,
             max_messages=hot_window,
             include_images=False,
             workspace_dir=getattr(self._agent, "workspace_dir", None),
@@ -597,6 +599,27 @@ class SubconsciousLoop:
         except Exception:
             self._logger.warning("Failed to collect subconscious memory context", exc_info=True)
             return "(memory read failed)"
+
+    async def _collect_notebook_context(self, memory_context: str = "") -> str:
+        """Collect the notebook index as material for association.
+
+        Recall is run against the recent diary rather than an incoming message,
+        because a reflection turn has no speaker — what the agent has been
+        living through is the closest thing to a query it has.
+        """
+        memory_handler = getattr(self._agent, "memory_handler", None)
+        if memory_handler is None or not callable(
+            getattr(memory_handler, "get_notebook_context", None)
+        ):
+            return ""
+        try:
+            ctx = memory_handler.get_notebook_context(current_text=memory_context or "")
+            if inspect.isawaitable(ctx):
+                ctx = await ctx
+            return str(ctx or "").strip()
+        except Exception:
+            self._logger.warning("Failed to collect notebook context", exc_info=True)
+            return ""
 
     async def _collect_relationship_context(self) -> str:
         """Collect relationship cards for people this runtime can actually reach.

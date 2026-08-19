@@ -570,6 +570,8 @@ def _config_yaml(selection: InitSelection, port: int) -> str:
             "max_concurrent_tools": AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS,
             "subconscious_activity": AgentConfig.SUBCONSCIOUS_ACTIVITY,
             "memory_recent_days": AgentConfig.MEMORY_RECENT_DAYS,
+            "notes_enabled": AgentConfig.NOTES_ENABLED,
+            "notes_auto_distill": AgentConfig.NOTES_AUTO_DISTILL,
         },
         "channels": {
             "api": {
@@ -600,6 +602,14 @@ def _config_yaml(selection: InitSelection, port: int) -> str:
     yaml_str = yaml_str.replace(
         "memory_recent_days: 2\n",
         "memory_recent_days: 2  # Days of diary injected each turn; 0 disables injection.\n",
+    )
+    yaml_str = yaml_str.replace(
+        "notes_enabled: true\n",
+        "notes_enabled: true  # The agent's notebook: note tools and notebook injection.\n",
+    )
+    yaml_str = yaml_str.replace(
+        "notes_auto_distill: true\n",
+        "notes_auto_distill: true  # Also distil notes automatically during diary maintenance.\n",
     )
     return yaml_str
 
