@@ -1,4 +1,11 @@
-from .memory_tool import create_write_memory_tool, create_search_memory_tool
+from .memory_tool import (
+    create_archive_note_tool,
+    create_list_notes_tool,
+    create_read_note_tool,
+    create_search_memory_tool,
+    create_upsert_note_tool,
+    create_write_memory_tool,
+)
 from .image_generation_tool import create_image_generation_tool
 from .artifact_tool import create_attach_artifact_tool
 from .search_tool import create_web_search_tool
@@ -12,6 +19,10 @@ __all__ = [
     "create_workspace_run_command_tool",
     "create_write_memory_tool",
     "create_search_memory_tool",
+    "create_upsert_note_tool",
+    "create_read_note_tool",
+    "create_list_notes_tool",
+    "create_archive_note_tool",
     "create_image_generation_tool",
     "create_attach_artifact_tool",
     "create_web_search_tool",

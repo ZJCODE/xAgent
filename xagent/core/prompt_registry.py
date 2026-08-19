@@ -28,6 +28,7 @@ class PromptAssembleContext:
     supports_vision: bool = True
     is_subconscious: bool = False
     relationship_context: str = ""
+    notebook_context: str = ""
     memory_context: str = ""
     recent_experience: str = ""
     current_user_id: str = ""
@@ -130,6 +131,13 @@ def _render_subconscious_relationships(ctx: PromptAssembleContext) -> str:
     if not relationships or ctx.task_mode != "subconscious_json":
         return ""
     return AgentConfig.build_subconscious_relationships_context(relationships)
+
+
+def _render_notebook(ctx: PromptAssembleContext) -> str:
+    notebook = (ctx.notebook_context or "").strip()
+    if not notebook:
+        return ""
+    return AgentConfig.build_notebook_context(notebook)
 
 
 def _render_memory(ctx: PromptAssembleContext) -> str:
@@ -240,6 +248,13 @@ def default_prompt_registry() -> PromptRegistry:
             order=0,
             kind=KIND_TURN,
             render=_render_subconscious_relationships,
+        ),
+        PromptSection(
+            name=AgentConfig.NOTEBOOK_CONTEXT_NAME,
+            role="user",
+            order=5,
+            kind=KIND_TURN,
+            render=_render_notebook,
         ),
         PromptSection(
             name=AgentConfig.RECENT_MEMORY_NAME,

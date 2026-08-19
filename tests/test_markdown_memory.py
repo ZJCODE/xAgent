@@ -89,6 +89,22 @@ class MarkdownMemoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(str(self.memory.root), result)
         self.assertNotIn(".md:", result)
 
+    async def test_search_keyword_notes_scope(self):
+        notes_dir = Path(self.memory_dir) / "notes"
+        notes_dir.mkdir(parents=True, exist_ok=True)
+        (notes_dir / "home-wifi.md").write_text(
+            '<!-- note slug="home-wifi" title="Home wifi" updated="2026-08-19" -->\n\n'
+            "SSID orchard lives on the router.\n",
+            encoding="utf-8",
+        )
+        result = await self.memory.search_keyword(["orchard"], scope="notes")
+        self.assertIn("orchard", result)
+        self.assertIn("[note home-wifi]", result)
+        self.assertNotIn(str(self.memory.root), result)
+
+        listed = await self.memory.list_files(scope="notes")
+        self.assertIn("[note home-wifi]", listed)
+
     async def test_search_keyword_no_matches(self):
         await self.memory.append_daily("Something unrelated")
         result = await self.memory.search_keyword(["nonexistent_xyz_term"])

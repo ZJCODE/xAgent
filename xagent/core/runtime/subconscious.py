@@ -466,6 +466,7 @@ class SubconsciousLoop:
         )
         memory_context = await self._collect_memory_context()
         relationship_context = await self._collect_relationship_context()
+        notebook_context = await self._collect_notebook_context()
 
         instructions = message_handler.build_instruction_messages(
             tool_names=[],
@@ -479,6 +480,7 @@ class SubconsciousLoop:
             current_user_id=getattr(self._agent, "_assistant_sender_id", "agent"),
             memory_context=memory_context,
             relationship_context=relationship_context,
+            notebook_context=notebook_context,
             max_messages=hot_window,
             include_images=False,
             workspace_dir=getattr(self._agent, "workspace_dir", None),
@@ -643,6 +645,21 @@ class SubconsciousLoop:
             )
         except Exception:
             self._logger.warning("Failed to collect relationship context", exc_info=True)
+            return ""
+
+    async def _collect_notebook_context(self) -> str:
+        """Collect the standing-note catalog for subconscious reflection."""
+        memory_handler = getattr(self._agent, "memory_handler", None)
+        getter = getattr(memory_handler, "get_notebook_context", None)
+        if memory_handler is None or not callable(getter):
+            return ""
+        try:
+            context = getter()
+            if inspect.isawaitable(context):
+                context = await context
+            return str(context or "").strip()
+        except Exception:
+            self._logger.warning("Failed to collect notebook context", exc_info=True)
             return ""
 
     def _is_deliverable_relationship_key(self, key: str) -> bool:

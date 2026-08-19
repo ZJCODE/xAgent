@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Optional
 
+from xagent.components.memory.note_memory import NoteStoreError
 from xagent.utils.search_terms import normalize_terms, score_text
 from xagent.utils.tool_decorator import function_tool
 
 if TYPE_CHECKING:
-    from xagent.components.memory import MarkdownMemory
+    from xagent.components.memory import MarkdownMemory, NoteStore
     from xagent.components.message import MessageStorage
 
 _SEARCH_MAX_RESULTS = 20
@@ -25,15 +26,17 @@ def create_write_memory_tool(
     @function_tool(
         name="write_memory",
         description=(
-            "Record a concise, attributable diary-memory note for durable preferences, "
-            "facts, decisions, commitments, or context. Skip trivial or temporary notes."
+            "Record a concise, attributable diary entry for what happened: events, "
+            "conversations, decisions, or context in time. Skip standing topic knowledge "
+            "— use upsert_note for current-version notes you will reuse. Skip trivial "
+            "or temporary notes."
         ),
         param_descriptions={
-            "content": "Memory note to record. Keep it concise, grounded, and attributed when needed.",
+            "content": "Diary entry to record. Keep it concise, grounded, and attributed when needed.",
         },
     )
     async def write_memory(content: str) -> dict:
-        """Record a long-term memory note."""
+        """Record a long-term diary entry."""
         if not is_enabled:
             return {"status": "disabled", "message": "Memory writing is disabled for this turn."}
 
@@ -47,6 +50,166 @@ def create_write_memory_tool(
     return write_memory
 
 
+def create_upsert_note_tool(
+    note_store: NoteStore,
+    is_enabled: bool = True,
+):
+    """Create a tool that writes standing topic notes."""
+
+    @function_tool(
+        name="upsert_note",
+        description=(
+            "Create or rewrite a standing notebook page for current-version topic knowledge "
+            "you will reuse (procedures, checklists, cross-person conventions, your own "
+            "working habits). Overwrites the page in place. Do not use this for what happened "
+            "today (write_memory) or for who one person is (relationship cards). Skip anything "
+            "you are unsure you will reuse. Pin at most two pages that must stay fully in context."
+        ),
+        param_descriptions={
+            "title": "Short page title. Used to generate the slug when slug is omitted.",
+            "content": "Full current-version page body in first person. Replace the whole page.",
+            "slug": "Stable page id. Omit to derive from the title. Reuse a slug to rewrite that page.",
+            "pin": "If true, keep this page body in context (max two pinned pages). If false, unpin.",
+        },
+    )
+    async def upsert_note(
+        title: str,
+        content: str,
+        slug: Optional[str] = None,
+        pin: Optional[bool] = None,
+    ) -> dict:
+        """Create or overwrite a standing note."""
+        if not is_enabled:
+            return {"status": "disabled", "message": "Notebook writing is disabled for this turn."}
+        try:
+            page = await note_store.upsert_page(
+                title=title,
+                body=content,
+                slug=slug,
+                pinned=pin,
+            )
+        except NoteStoreError as exc:
+            return {"status": exc.code, "message": str(exc)}
+        return {
+            "status": "ok",
+            "slug": page.slug,
+            "title": page.title,
+            "pinned": page.pinned,
+            "message": "Note saved.",
+        }
+
+    return upsert_note
+
+
+def create_read_note_tool(
+    note_store: NoteStore,
+    is_enabled: bool = True,
+):
+    """Create a tool that reads one standing note by slug or title."""
+
+    @function_tool(
+        name="read_note",
+        description=(
+            "Read one standing notebook page by slug or title. Use when the catalog "
+            "shows a relevant page and you need the current body."
+        ),
+        param_descriptions={
+            "slug_or_title": "Page slug or exact title from the notebook catalog.",
+        },
+    )
+    async def read_note(slug_or_title: str) -> dict:
+        """Read a standing note."""
+        if not is_enabled:
+            return {"status": "disabled", "message": "Notebook reading is disabled for this turn."}
+        query = str(slug_or_title or "").strip()
+        if not query:
+            return {"status": "skipped", "message": "Empty slug_or_title, nothing read."}
+        page = await note_store.resolve_page(query, touch=True)
+        if page is None:
+            return {"status": "not_found", "message": f"No note matched {query!r}."}
+        return {
+            "status": "ok",
+            "slug": page.slug,
+            "title": page.title,
+            "pinned": page.pinned,
+            "updated": page.updated,
+            "content": page.body,
+        }
+
+    return read_note
+
+
+def create_list_notes_tool(
+    note_store: NoteStore,
+    is_enabled: bool = True,
+):
+    """Create a tool that lists standing notes when the catalog is not enough."""
+
+    @function_tool(
+        name="list_notes",
+        description=(
+            "List standing notebook pages (title, slug, pin, one-line summary). "
+            "Prefer the catalog already in context; use this when you need the full list."
+        ),
+    )
+    async def list_notes() -> dict:
+        """List standing notes."""
+        if not is_enabled:
+            return {"status": "disabled", "message": "Notebook reading is disabled for this turn."}
+        pages = await note_store.list_pages()
+        notes = [
+            {
+                "slug": page.slug,
+                "title": page.title,
+                "pinned": page.pinned,
+                "updated": page.updated,
+                "summary": page.summary,
+            }
+            for page in pages
+        ]
+        return {"status": "ok", "count": len(notes), "notes": notes}
+
+    return list_notes
+
+
+def create_archive_note_tool(
+    note_store: NoteStore,
+    is_enabled: bool = True,
+):
+    """Create a tool that archives a standing note."""
+
+    @function_tool(
+        name="archive_note",
+        description=(
+            "Archive a standing notebook page that is stale or wrong. Archived pages "
+            "leave the catalog; search can still find them. Prefer archive over leaving "
+            "outdated current-version knowledge in the notebook."
+        ),
+        param_descriptions={
+            "slug_or_title": "Page slug or exact title to archive.",
+        },
+    )
+    async def archive_note(slug_or_title: str) -> dict:
+        """Archive a standing note."""
+        if not is_enabled:
+            return {"status": "disabled", "message": "Notebook writing is disabled for this turn."}
+        query = str(slug_or_title or "").strip()
+        if not query:
+            return {"status": "skipped", "message": "Empty slug_or_title, nothing archived."}
+        try:
+            page = await note_store.archive_page(query)
+        except NoteStoreError as exc:
+            return {"status": exc.code, "message": str(exc)}
+        return {
+            "status": "ok",
+            "slug": page.slug,
+            "title": page.title,
+            "message": "Note archived.",
+        }
+
+    return archive_note
+
+
 def create_search_memory_tool(
     memory: MarkdownMemory,
     is_enabled: bool = True,
@@ -57,7 +220,7 @@ def create_search_memory_tool(
     @function_tool(
         name="search_memory",
         description=(
-            "Search older diary memory or raw messages by verbatim terms, date, or date range. "
+            "Search older diary memory, standing notes, or raw messages by verbatim terms, date, or date range. "
             "Pass concrete words or short phrases likely to appear in memory; results OR-match "
             "terms and rank by how many terms hit. Prefer recent memory already in context when "
             "present; search when older continuity or facts are needed."
@@ -69,7 +232,7 @@ def create_search_memory_tool(
                 "Leave empty for date-only reads."
             ),
             "date": "Date or range: YYYY-MM-DD or YYYY-MM-DD to YYYY-MM-DD.",
-            "scope": "Memory area: daily, weekly, monthly, yearly, or all.",
+            "scope": "Memory area: daily, weekly, monthly, yearly, notes, or all.",
             "context_lines": "Context lines around each match, default 3.",
         },
     )
