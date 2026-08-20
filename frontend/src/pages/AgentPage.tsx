@@ -276,7 +276,7 @@ export function AgentPage() {
     }
     setSetupNotice(
       result.restart_required
-        ? "Setup saved. Restart the API channel for model, search, image, and observability changes to take effect."
+        ? "Setup saved. Restart the API channel for model, search, image generation, and observability changes to take effect."
         : "Setup saved.",
     );
     await load();

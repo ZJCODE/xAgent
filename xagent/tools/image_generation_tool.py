@@ -629,7 +629,9 @@ def create_image_generation_tool(
         name="generate_image",
         description=(
             "Generate a visual asset from a text prompt using the configured image provider. "
-            "Claim success only after the tool result confirms it."
+            "On success the image is already delivered to the user as a structured attachment; "
+            "use the returned workspace path with see_image to look at it, or attach_artifact to send it again. "
+            "Never embed images with Markdown. Claim success only after the tool result confirms it."
         ),
         param_descriptions={
             "prompt": "Image prompt: subject, style, composition, text, and constraints.",
@@ -759,6 +761,7 @@ def generated_image_description(tool_name: str, result: dict) -> str:
         description += f" Prompt: {prompt}."
     if revised_prompt and revised_prompt != prompt:
         description += f" Revised prompt: {revised_prompt}."
+    description += " Use see_image to look at it, or attach_artifact to send it again."
     return description + "]"
 
 

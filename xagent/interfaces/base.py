@@ -35,11 +35,11 @@ from ..tools import (
     create_workspace_run_command_tool,
 )
 from ..tools.image_generation_tool import (
+    IMAGE_GENERATION_PROVIDER_MINIMAX,
     IMAGE_GENERATION_PROVIDER_NONE,
     IMAGE_GENERATION_PROVIDER_OPENAI,
-    normalize_image_generation_provider,
-    IMAGE_GENERATION_PROVIDER_MINIMAX,
     IMAGE_GENERATION_PROVIDER_QWEN,
+    normalize_image_generation_provider,
 )
 from ..tools.search_tool import (
     DEFAULT_QWEN_SEARCH_MODEL,
@@ -238,18 +238,20 @@ class BaseAgentRunner:
             if not isinstance(agent_cfg, dict):
                 raise ValueError("agent must be a dictionary")
             allowed_agent_keys = {
-                "max_history",
-                "journal_batch_size",
-                "max_iter",
+                "recent_messages",
+                "diary_write_batch",
+                "max_agent_loops",
                 "max_concurrent_tools",
                 "subconscious_activity",
-                "memory_recent_days",
+                "diary_context_days",
+                "notes_enabled",
+                "notes_auto_distill",
             }
             unsupported_agent_keys = sorted(set(agent_cfg) - allowed_agent_keys)
             if unsupported_agent_keys:
                 joined_keys = ", ".join(unsupported_agent_keys)
                 raise ValueError(f"Unsupported agent key(s): {joined_keys}")
-            for key in ("max_history", "journal_batch_size", "max_iter", "max_concurrent_tools"):
+            for key in ("recent_messages", "diary_write_batch", "max_agent_loops", "max_concurrent_tools"):
                 if key in agent_cfg:
                     self._validate_positive_int(agent_cfg[key], f"agent.{key}")
             if "subconscious_activity" in agent_cfg:
@@ -258,8 +260,13 @@ class BaseAgentRunner:
                     raise ValueError(
                         f"agent.subconscious_activity must be a number between 0 and 1, got {val!r}"
                     )
-            if "memory_recent_days" in agent_cfg:
-                self._validate_non_negative_int(agent_cfg["memory_recent_days"], "agent.memory_recent_days")
+            if "diary_context_days" in agent_cfg:
+                self._validate_non_negative_int(agent_cfg["diary_context_days"], "agent.diary_context_days")
+            for key in ("notes_enabled", "notes_auto_distill"):
+                if key in agent_cfg and not isinstance(agent_cfg[key], bool):
+                    raise ValueError(
+                        f"agent.{key} must be a boolean, got {agent_cfg[key]!r}"
+                    )
         self._validate_observability_config(config.get("observability"))
 
         provider_cfg = config.get("provider")
@@ -275,7 +282,7 @@ class BaseAgentRunner:
 
         self._validate_search_config(config.get("search"), provider_cfg)
         self._validate_image_generation_config(config.get("image_generation"), provider_cfg)
-        
+
         return config
 
     def _validate_observability_config(self, observability_cfg: Optional[Dict[str, Any]]) -> None:
@@ -607,12 +614,16 @@ class BaseAgentRunner:
             skills_storage=self.skills_storage,
             observability=self.observability,
             supports_vision=self._provider_supports_vision(agent_cfg),
-            max_history=agent_section.get("max_history", AgentConfig.DEFAULT_MAX_HISTORY),
-            journal_batch_size=agent_section.get("journal_batch_size", AgentConfig.JOURNAL_BATCH_SIZE),
-            max_iter=agent_section.get("max_iter", AgentConfig.DEFAULT_MAX_ITER),
+            recent_messages=agent_section.get("recent_messages", AgentConfig.DEFAULT_RECENT_MESSAGES),
+            max_agent_loops=agent_section.get("max_agent_loops", AgentConfig.DEFAULT_MAX_AGENT_LOOPS),
             max_concurrent_tools=agent_section.get("max_concurrent_tools", AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS),
+            diary_write_batch=agent_section.get("diary_write_batch", AgentConfig.DIARY_WRITE_BATCH),
+            diary_context_days=agent_section.get("diary_context_days", AgentConfig.DIARY_CONTEXT_DAYS),
+            notes_enabled=agent_section.get("notes_enabled", AgentConfig.NOTES_ENABLED),
+            notes_auto_distill=agent_section.get(
+                "notes_auto_distill", AgentConfig.NOTES_AUTO_DISTILL
+            ),
             subconscious_activity=agent_section.get("subconscious_activity", AgentConfig.SUBCONSCIOUS_ACTIVITY),
-            memory_recent_days=agent_section.get("memory_recent_days", AgentConfig.MEMORY_RECENT_DAYS),
         )
 
     def _initialize_observability(self, agent_cfg: Dict[str, Any]) -> ObservabilityRuntime:
@@ -715,28 +726,6 @@ class BaseAgentRunner:
 
         return None
 
-    def _initialize_image_generation_client(
-        self,
-        agent_cfg: Dict[str, Any],
-        *,
-        model_client: Optional[Any],
-    ) -> Optional[Any]:
-        """Build the client used by OpenAI image generation."""
-        image_generation_cfg = agent_cfg.get("image_generation") or {}
-        if not isinstance(image_generation_cfg, dict):
-            return model_client
-
-        image_generation_provider = normalize_image_generation_provider(image_generation_cfg.get("provider"))
-        if image_generation_provider != IMAGE_GENERATION_PROVIDER_OPENAI:
-            return model_client
-
-        provider_cfg = agent_cfg.get("provider") or {}
-        return self._initialize_openai_feature_client(
-            image_generation_cfg,
-            provider_cfg,
-            model_client=model_client,
-        )
-
     def _initialize_openai_feature_client(
         self,
         feature_cfg: Dict[str, Any],
@@ -817,6 +806,28 @@ class BaseAgentRunner:
         if getattr(self, "skills_storage", None) is not None:
             tools.append(create_read_skill_tool(self.skills_storage))
         return tools
+
+    def _initialize_image_generation_client(
+        self,
+        agent_cfg: Dict[str, Any],
+        *,
+        model_client: Optional[Any],
+    ) -> Optional[Any]:
+        """Build the client used by OpenAI image generation."""
+        image_generation_cfg = agent_cfg.get("image_generation") or {}
+        if not isinstance(image_generation_cfg, dict):
+            return model_client
+
+        image_generation_provider = normalize_image_generation_provider(image_generation_cfg.get("provider"))
+        if image_generation_provider != IMAGE_GENERATION_PROVIDER_OPENAI:
+            return model_client
+
+        provider_cfg = agent_cfg.get("provider") or {}
+        return self._initialize_openai_feature_client(
+            image_generation_cfg,
+            provider_cfg,
+            model_client=model_client,
+        )
 
     def _search_config_for_tools(self, agent_cfg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         search_cfg = agent_cfg.get("search")

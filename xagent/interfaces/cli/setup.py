@@ -150,8 +150,8 @@ SEARCH_PROVIDERS = (
 IMAGE_GENERATION_PROVIDERS = (
     "none",
     "openai",
-    "minimax",
     "qwen",
+    "minimax",
 )
 
 _PROVIDER_DESCRIPTIONS = {
@@ -564,12 +564,14 @@ def _config_yaml(selection: InitSelection, port: int) -> str:
     config = {
         "provider": provider_config,
         "agent": {
-            "max_history": AgentConfig.DEFAULT_MAX_HISTORY,
-            "journal_batch_size": AgentConfig.JOURNAL_BATCH_SIZE,
-            "max_iter": AgentConfig.DEFAULT_MAX_ITER,
+            "recent_messages": AgentConfig.DEFAULT_RECENT_MESSAGES,
+            "max_agent_loops": AgentConfig.DEFAULT_MAX_AGENT_LOOPS,
             "max_concurrent_tools": AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS,
+            "diary_write_batch": AgentConfig.DIARY_WRITE_BATCH,
+            "diary_context_days": AgentConfig.DIARY_CONTEXT_DAYS,
+            "notes_enabled": AgentConfig.NOTES_ENABLED,
+            "notes_auto_distill": AgentConfig.NOTES_AUTO_DISTILL,
             "subconscious_activity": AgentConfig.SUBCONSCIOUS_ACTIVITY,
-            "memory_recent_days": AgentConfig.MEMORY_RECENT_DAYS,
         },
         "channels": {
             "api": {
@@ -585,12 +587,16 @@ def _config_yaml(selection: InitSelection, port: int) -> str:
     config["image_generation"] = {"provider": "none"}
     yaml_str = yaml.safe_dump(config, sort_keys=False, allow_unicode=False)
     yaml_str = yaml_str.replace(
-        f"max_history: {AgentConfig.DEFAULT_MAX_HISTORY}\n",
-        f"max_history: {AgentConfig.DEFAULT_MAX_HISTORY}  # Prompt hot window (raw conversation messages).\n",
+        f"recent_messages: {AgentConfig.DEFAULT_RECENT_MESSAGES}\n",
+        f"recent_messages: {AgentConfig.DEFAULT_RECENT_MESSAGES}  # Recent conversation messages kept in the prompt.\n",
     )
     yaml_str = yaml_str.replace(
-        f"journal_batch_size: {AgentConfig.JOURNAL_BATCH_SIZE}\n",
-        f"journal_batch_size: {AgentConfig.JOURNAL_BATCH_SIZE}  # Diary maintenance batch size; independent of max_history.\n",
+        f"max_agent_loops: {AgentConfig.DEFAULT_MAX_AGENT_LOOPS}\n",
+        f"max_agent_loops: {AgentConfig.DEFAULT_MAX_AGENT_LOOPS}  # Agent think/tool loop cap.\n",
+    )
+    yaml_str = yaml_str.replace(
+        f"diary_write_batch: {AgentConfig.DIARY_WRITE_BATCH}\n",
+        f"diary_write_batch: {AgentConfig.DIARY_WRITE_BATCH}  # Messages per diary maintenance write; independent of recent_messages.\n",
     )
     # Inline comment for subconscious_activity
     yaml_str = yaml_str.replace(
@@ -598,8 +604,16 @@ def _config_yaml(selection: InitSelection, port: int) -> str:
         "subconscious_activity: 0.02  # 0=off, 1=very active. Suggested: 0.01~0.1\n",
     )
     yaml_str = yaml_str.replace(
-        "memory_recent_days: 2\n",
-        "memory_recent_days: 2  # Days of diary injected each turn; 0 disables injection.\n",
+        "diary_context_days: 2\n",
+        "diary_context_days: 2  # Days of diary injected each turn; 0 disables injection.\n",
+    )
+    yaml_str = yaml_str.replace(
+        "notes_enabled: true\n",
+        "notes_enabled: true  # The agent's notebook: note tools and notebook injection.\n",
+    )
+    yaml_str = yaml_str.replace(
+        "notes_auto_distill: true\n",
+        "notes_auto_distill: true  # Distil notes after weekly summaries; garden after monthly.\n",
     )
     return yaml_str
 

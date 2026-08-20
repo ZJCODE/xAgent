@@ -7,10 +7,11 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from xagent.components.memory import MarkdownMemory
+from xagent.core.config import AgentConfig
 from xagent.core.handlers.memory import MemoryHandler
 from xagent.schemas import Message, MessageType, RoleType
 
-_TEST_JOURNAL_BATCH_SIZE = 20
+_TEST_DIARY_WRITE_BATCH = 20
 
 
 class _FakeLLMService:
@@ -22,17 +23,21 @@ class _FakeLLMService:
         self.fail_on_diary_call_number = None
         self.diary_gate = None
         self.diary_started = asyncio.Event()
+        self.empty_diary = False
 
-    async def format_diary_entry(self, messages, journal_date):
+    async def format_diary_entry(self, messages, journal_date, existing_today=""):
         self.diary_calls.append({
             "journal_date": journal_date,
             "messages": list(messages),
+            "existing_today": existing_today,
         })
         self.diary_started.set()
         if self.diary_gate is not None:
             await self.diary_gate.wait()
         if self.fail_on_diary_call_number is not None and len(self.diary_calls) >= self.fail_on_diary_call_number:
             raise RuntimeError("diary failed")
+        if self.empty_diary:
+            return ""
         return "\n".join(str(message.get("content", "")) for message in messages if message.get("content"))
 
     async def generate_summary(self, source_content, period_type, period_label):
@@ -42,7 +47,9 @@ class _FakeLLMService:
 
 class _FakeMessageStorage:
     def __init__(self, messages=None):
-        self.messages = list(messages or [])
+        self.messages = []
+        for message in messages or []:
+            self.append(message)
 
     async def get_message_count(self):
         return len(self.messages)
@@ -69,7 +76,10 @@ class _FakeMessageStorage:
         return normalized if normalized <= len(self.messages) else 0
 
     def append(self, message: Message) -> None:
-        self.messages.append(message)
+        cursor = len(self.messages) + 1
+        metadata = dict(message.metadata or {})
+        metadata[AgentConfig.MESSAGE_STORAGE_CURSOR_KEY] = cursor
+        self.messages.append(message.model_copy(update={"metadata": metadata}))
 
 
 class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
@@ -82,7 +92,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=self.llm,
             message_storage=self.storage,
-            journal_batch_size=_TEST_JOURNAL_BATCH_SIZE,
+            diary_write_batch=_TEST_DIARY_WRITE_BATCH,
         )
 
     async def asyncTearDown(self):
@@ -112,8 +122,8 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=self.llm,
             message_storage=self.storage,
-            journal_batch_size=_TEST_JOURNAL_BATCH_SIZE,
-            recent_days=0,
+            diary_write_batch=_TEST_DIARY_WRITE_BATCH,
+            diary_context_days=0,
         )
 
         ctx = await handler.get_recent_context()
@@ -131,8 +141,8 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=self.llm,
             message_storage=self.storage,
-            journal_batch_size=_TEST_JOURNAL_BATCH_SIZE,
-            recent_days=2,
+            diary_write_batch=_TEST_DIARY_WRITE_BATCH,
+            diary_context_days=2,
             recent_max_chars=6000,
         )
 
@@ -156,8 +166,8 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=self.llm,
             message_storage=self.storage,
-            journal_batch_size=_TEST_JOURNAL_BATCH_SIZE,
-            recent_days=1,
+            diary_write_batch=_TEST_DIARY_WRITE_BATCH,
+            diary_context_days=1,
             recent_max_chars=500,
         )
 
@@ -248,7 +258,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=self.llm,
             message_storage=self.storage,
-            journal_batch_size=1,
+            diary_write_batch=1,
         )
 
         handler.schedule_experience_write([message])
@@ -284,7 +294,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=self.llm,
             message_storage=self.storage,
-            journal_batch_size=_TEST_JOURNAL_BATCH_SIZE,
+            diary_write_batch=_TEST_DIARY_WRITE_BATCH,
         )
         # Cursor gap is 0 (last_processed=0, latest=1), below threshold of 14 → no write
         wrote = await handler.run_maintenance(force=False)
@@ -293,7 +303,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.llm.diary_calls, [])
 
     async def test_run_maintenance_writes_when_cursor_gap_meets_threshold(self):
-        # Add 20 messages so cursor gap = 20 >= threshold (journal_batch_size - window_overlap = 14)
+        # Add 20 messages so cursor gap = 20 >= threshold (diary_write_batch - window_overlap = 14)
         for i in range(20):
             self.storage.append(Message(
                 role=RoleType.USER,
@@ -305,7 +315,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=self.llm,
             message_storage=self.storage,
-            journal_batch_size=_TEST_JOURNAL_BATCH_SIZE,
+            diary_write_batch=_TEST_DIARY_WRITE_BATCH,
         )
 
         wrote = await handler.run_maintenance(force=False)
@@ -347,7 +357,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=self.llm,
             message_storage=storage,
-            journal_batch_size=_TEST_JOURNAL_BATCH_SIZE,
+            diary_write_batch=_TEST_DIARY_WRITE_BATCH,
         )
 
         wrote = await handler.run_maintenance(force=False)
@@ -372,7 +382,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=self.llm,
             message_storage=storage,
-            journal_batch_size=_TEST_JOURNAL_BATCH_SIZE,
+            diary_write_batch=_TEST_DIARY_WRITE_BATCH,
         )
 
         wrote = await handler.run_maintenance(force=True)
@@ -400,7 +410,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=self.llm,
             message_storage=storage,
-            journal_batch_size=_TEST_JOURNAL_BATCH_SIZE,
+            diary_write_batch=_TEST_DIARY_WRITE_BATCH,
         )
 
         wrote = await handler.run_maintenance(force=True)
@@ -425,7 +435,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=llm,
             message_storage=storage,
-            journal_batch_size=_TEST_JOURNAL_BATCH_SIZE,
+            diary_write_batch=_TEST_DIARY_WRITE_BATCH,
         )
 
         wrote = await handler.run_maintenance(force=True)
@@ -450,7 +460,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=failing_llm,
             message_storage=storage,
-            journal_batch_size=_TEST_JOURNAL_BATCH_SIZE,
+            diary_write_batch=_TEST_DIARY_WRITE_BATCH,
             max_journal_source_chars=150,
         )
 
@@ -464,7 +474,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=retry_llm,
             message_storage=storage,
-            journal_batch_size=_TEST_JOURNAL_BATCH_SIZE,
+            diary_write_batch=_TEST_DIARY_WRITE_BATCH,
             max_journal_source_chars=150,
         )
 
@@ -492,7 +502,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=self.llm,
             message_storage=storage,
-            journal_batch_size=_TEST_JOURNAL_BATCH_SIZE,
+            diary_write_batch=_TEST_DIARY_WRITE_BATCH,
         )
 
         wrote = await handler.run_maintenance(force=True)
@@ -518,7 +528,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=self.llm,
             message_storage=storage,
-            journal_batch_size=_TEST_JOURNAL_BATCH_SIZE,
+            diary_write_batch=_TEST_DIARY_WRITE_BATCH,
             max_journal_source_chars=150,
         )
 
@@ -546,14 +556,14 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=first_llm,
             message_storage=storage,
-            journal_batch_size=_TEST_JOURNAL_BATCH_SIZE,
+            diary_write_batch=_TEST_DIARY_WRITE_BATCH,
         )
         stale_llm = _FakeLLMService()
         stale_handler = MemoryHandler(
             memory=self.memory,
             llm_service=stale_llm,
             message_storage=storage,
-            journal_batch_size=_TEST_JOURNAL_BATCH_SIZE,
+            diary_write_batch=_TEST_DIARY_WRITE_BATCH,
         )
 
         first_wrote = await first_handler.run_maintenance(force=True)
@@ -577,7 +587,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=self.llm,
             message_storage=storage,
-            journal_batch_size=_TEST_JOURNAL_BATCH_SIZE,
+            diary_write_batch=_TEST_DIARY_WRITE_BATCH,
         )
 
         first_wrote = await handler.run_maintenance(
@@ -612,13 +622,13 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=blocking_llm,
             message_storage=storage,
-            journal_batch_size=_TEST_JOURNAL_BATCH_SIZE,
+            diary_write_batch=_TEST_DIARY_WRITE_BATCH,
         )
         second_handler = MemoryHandler(
             memory=self.memory,
             llm_service=waiting_llm,
             message_storage=storage,
-            journal_batch_size=_TEST_JOURNAL_BATCH_SIZE,
+            diary_write_batch=_TEST_DIARY_WRITE_BATCH,
         )
 
         first_task = asyncio.create_task(first_handler.run_maintenance(force=True))
@@ -650,7 +660,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=self.llm,
             message_storage=storage,
-            journal_batch_size=_TEST_JOURNAL_BATCH_SIZE,
+            diary_write_batch=_TEST_DIARY_WRITE_BATCH,
         )
 
         first_wrote = await first_handler.run_maintenance(force=True)
@@ -670,7 +680,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=second_llm,
             message_storage=storage,
-            journal_batch_size=_TEST_JOURNAL_BATCH_SIZE,
+            diary_write_batch=_TEST_DIARY_WRITE_BATCH,
         )
 
         second_wrote = await second_handler.run_maintenance(force=True)
@@ -683,7 +693,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_cursor_gap_triggers_maintenance(self):
-        # Add exactly journal_batch_size (20) messages so cursor gap = 20 >= 14
+        # Add exactly diary_write_batch (20) messages so cursor gap = 20 >= 14
         for i in range(20):
             self.storage.append(Message(
                 role=RoleType.USER,
@@ -695,7 +705,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=self.llm,
             message_storage=self.storage,
-            journal_batch_size=_TEST_JOURNAL_BATCH_SIZE,
+            diary_write_batch=_TEST_DIARY_WRITE_BATCH,
         )
         # _last_processed_message_id = 0, latest cursor = 20, unprocessed = 20 >= 14
 
@@ -718,7 +728,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=self.llm,
             message_storage=self.storage,
-            journal_batch_size=_TEST_JOURNAL_BATCH_SIZE,
+            diary_write_batch=_TEST_DIARY_WRITE_BATCH,
         )
 
         # First compression: cursor-range (0, 20] = msgs 0-19
@@ -752,6 +762,69 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
         overlap_second = set(second_contents[:overlap])
         self.assertEqual(overlap_first, overlap_second,
                          f"Expected overlap: {sorted(overlap_first)} vs {sorted(overlap_second)}")
+        second_msgs = second_llm.diary_calls[0]["messages"]
+        for message in second_msgs[:overlap]:
+            self.assertTrue(message.get("already_journaled"), message)
+        for message in second_msgs[overlap:]:
+            self.assertFalse(bool(message.get("already_journaled")), message)
+        self.assertIn("msg 0", second_llm.diary_calls[0]["existing_today"])
+
+    async def test_second_maintenance_passes_existing_today(self):
+        for i in range(20):
+            self.storage.append(Message(
+                role=RoleType.USER,
+                sender_id="alice",
+                content=f"first-batch-{i}",
+                timestamp=1716000000.0 + i,
+            ))
+        handler = MemoryHandler(
+            memory=self.memory,
+            llm_service=self.llm,
+            message_storage=self.storage,
+            diary_write_batch=_TEST_DIARY_WRITE_BATCH,
+        )
+        self.assertTrue(await handler.run_maintenance(force=False))
+        self.assertEqual(self.llm.diary_calls[0]["existing_today"], "")
+
+        for i in range(20, 40):
+            self.storage.append(Message(
+                role=RoleType.USER,
+                sender_id="alice",
+                content=f"second-batch-{i}",
+                timestamp=1716000000.0 + i,
+            ))
+        second_llm = _FakeLLMService()
+        handler.llm_service = second_llm
+        self.assertTrue(await handler.run_maintenance(force=False))
+
+        existing = second_llm.diary_calls[0]["existing_today"]
+        self.assertIn("first-batch-0", existing)
+        self.assertIn("first-batch-19", existing)
+
+    async def test_empty_diary_slice_still_advances_checkpoint(self):
+        storage = _FakeMessageStorage([
+            Message(
+                role=RoleType.USER,
+                sender_id="alice",
+                content="already covered",
+                timestamp=1710000000.0,
+            )
+        ])
+        llm = _FakeLLMService()
+        llm.empty_diary = True
+        handler = MemoryHandler(
+            memory=self.memory,
+            llm_service=llm,
+            message_storage=storage,
+            diary_write_batch=_TEST_DIARY_WRITE_BATCH,
+        )
+
+        wrote = await handler.run_maintenance(force=True)
+
+        self.assertTrue(wrote)
+        self.assertEqual(handler._last_processed_message_id, 1)
+        today_text = await self.memory.read_file(self.memory.daily_path(date.today()))
+        self.assertEqual(today_text.strip(), "")
 
     async def test_generate_previous_weekly_summary_if_missing_writes_summary(self):
         today = date(2026, 5, 18)  # Monday

@@ -419,9 +419,9 @@ class SubconsciousLoop:
         if not callable(getattr(model_client, "model_turn_events", None)):
             raise RuntimeError("Agent model_client does not support model_turn_events()")
 
-        max_iter = int(getattr(self._agent, "max_iter", AgentConfig.DEFAULT_MAX_ITER) or AgentConfig.DEFAULT_MAX_ITER)
+        max_agent_loops = int(getattr(self._agent, "max_agent_loops", AgentConfig.DEFAULT_MAX_AGENT_LOOPS) or AgentConfig.DEFAULT_MAX_AGENT_LOOPS)
 
-        for _ in range(max_iter):
+        for _ in range(max_agent_loops):
             text_parts: List[str] = []
             tool_calls = []
             async for model_event in model_client.model_turn_events(
@@ -452,7 +452,7 @@ class SubconsciousLoop:
 
             raise RuntimeError("Subconscious model turn ended without text or tool calls")
 
-        raise RuntimeError(f"Subconscious thought failed after {max_iter} attempts")
+        raise RuntimeError(f"Subconscious thought failed after {max_agent_loops} attempts")
 
     async def _build_subconscious_turn_context(self) -> tuple[list[dict], list[dict], list]:
         """Build model input using the same layers as a normal agent turn."""
@@ -460,12 +460,13 @@ class SubconsciousLoop:
         if message_handler is None:
             raise RuntimeError("Agent has no message_handler")
 
-        hot_window = getattr(self._agent, "max_history", AgentConfig.DEFAULT_MAX_HISTORY)
+        hot_window = getattr(self._agent, "recent_messages", AgentConfig.DEFAULT_RECENT_MESSAGES)
         recent_messages = await message_handler.get_recent_messages(
-            max_history=AgentConfig.history_fetch_depth(hot_window)
+            limit=AgentConfig.history_fetch_depth(hot_window)
         )
         memory_context = await self._collect_memory_context()
         relationship_context = await self._collect_relationship_context()
+        notebook_context = await self._collect_notebook_context(memory_context)
 
         instructions = message_handler.build_instruction_messages(
             tool_names=[],
@@ -479,6 +480,7 @@ class SubconsciousLoop:
             current_user_id=getattr(self._agent, "_assistant_sender_id", "agent"),
             memory_context=memory_context,
             relationship_context=relationship_context,
+            notebook_context=notebook_context,
             max_messages=hot_window,
             include_images=False,
             workspace_dir=getattr(self._agent, "workspace_dir", None),
@@ -597,6 +599,29 @@ class SubconsciousLoop:
         except Exception:
             self._logger.warning("Failed to collect subconscious memory context", exc_info=True)
             return "(memory read failed)"
+
+    async def _collect_notebook_context(self, memory_context: str = "") -> str:
+        """Collect the notebook index as material for association.
+
+        Recall is run against the recent diary rather than an incoming message,
+        because a reflection turn has no speaker — what the agent has been
+        living through is the closest thing to a query it has.
+        """
+        memory_handler = getattr(self._agent, "memory_handler", None)
+        if memory_handler is None or not callable(
+            getattr(memory_handler, "get_notebook_context", None)
+        ):
+            return ""
+        try:
+            ctx = memory_handler.get_notebook_context(current_text=memory_context or "")
+            if inspect.isawaitable(ctx):
+                ctx = await ctx
+        except Exception:
+            self._logger.warning("Failed to collect notebook context", exc_info=True)
+            return ""
+        # The handler is duck-typed here; anything but text would be stringified
+        # into the prompt.
+        return ctx.strip() if isinstance(ctx, str) else ""
 
     async def _collect_relationship_context(self) -> str:
         """Collect relationship cards for people this runtime can actually reach.

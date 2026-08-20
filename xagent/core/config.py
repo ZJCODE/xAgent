@@ -25,6 +25,8 @@ class AgentConfig:
     TOOL_POLICY_NAME = "tool_policy"
     IDENTITY_CONTEXT_NAME = "identity_context"
     RECENT_MEMORY_NAME = "recent_memory"
+    NOTEBOOK_CONTEXT_NAME = "notebook_context"
+    SUBCONSCIOUS_NOTEBOOK_NAME = "subconscious_notebook"
     RELATIONSHIP_CONTEXT_NAME = "relationship_context"
     WORKSPACE_CONTEXT_NAME = "workspace_context"
     SKILLS_CATALOG_NAME = "skills_catalog"
@@ -42,6 +44,7 @@ class AgentConfig:
     DEFAULT_WORKSPACE = "~/.xagent"
     MEMORY_DIRNAME = "memory"
     RELATIONSHIPS_DIRNAME = "relationships"
+    NOTES_DIRNAME = "notes"
     MESSAGE_DIRNAME = "messages"
     WORKSPACE_DIRNAME = "workspace"
     SKILLS_DIRNAME = "skills"
@@ -68,12 +71,12 @@ class AgentConfig:
     # 4. Agent Runtime Bounds
     # Iteration cap, conversation history window, and context-event
     # limit. Prevent infinite loops and unbounded prompt growth.
-    # DEFAULT_MAX_HISTORY is the prompt hot window (raw conversation
+    # DEFAULT_RECENT_MESSAGES is the prompt hot window (raw conversation
     # messages kept verbatim). SQLite fetch depth is derived from it so
     # observation-heavy streams can still fill the hot window.
     # ============================================================
-    DEFAULT_MAX_ITER = 50
-    DEFAULT_MAX_HISTORY = 12
+    DEFAULT_MAX_AGENT_LOOPS = 50
+    DEFAULT_RECENT_MESSAGES = 12
     MAX_CONTEXT_EVENTS = 12
     # Working-summary roll slack is derived from the hot window:
     # round(0.5 * hot_window), clamped to [MIN, MAX]. Not a user config key.
@@ -94,7 +97,7 @@ class AgentConfig:
         Fetch depth must therefore exceed the hot window so observation-heavy
         streams can still fill ``hot_window`` conversation entries.
         """
-        window = max(1, int(hot_window or AgentConfig.DEFAULT_MAX_HISTORY))
+        window = max(1, int(hot_window or AgentConfig.DEFAULT_RECENT_MESSAGES))
         events = max(
             1,
             int(
@@ -112,7 +115,7 @@ class AgentConfig:
         ``threshold = hot_window + slack``. Slack batches LLM rolls without
         being a separate user-facing knob.
         """
-        window = max(1, int(hot_window or AgentConfig.DEFAULT_MAX_HISTORY))
+        window = max(1, int(hot_window or AgentConfig.DEFAULT_RECENT_MESSAGES))
         raw = int(round(window * AgentConfig.WORKING_CONTEXT_ROLL_SLACK_RATIO))
         return max(
             AgentConfig.WORKING_CONTEXT_ROLL_SLACK_MIN,
@@ -140,18 +143,18 @@ class AgentConfig:
     # ============================================================
     # 7. Memory & History
     # Tune the size and overlap of the recent-memory window.
-    # Override per agent via config.yaml: agent.memory_recent_days (0 disables injection).
+    # Override per agent via config.yaml: agent.diary_context_days (0 disables injection).
     # MEMORY_RECENT_MAX_CHARS is an internal prompt-budget guard, not user config.
-    # JOURNAL_BATCH_SIZE is the diary maintenance commit cadence (threshold/batch
-    # cap). It is intentionally separate from DEFAULT_MAX_HISTORY, which budgets
+    # DIARY_WRITE_BATCH is the diary maintenance commit cadence (threshold/batch
+    # cap). It is intentionally separate from DEFAULT_RECENT_MESSAGES, which budgets
     # how many raw conversation messages enter the prompt.
-    # MEMORY_WINDOW_OVERLAP_RATIO applies to JOURNAL_BATCH_SIZE only.
+    # MEMORY_WINDOW_OVERLAP_RATIO applies to DIARY_WRITE_BATCH only.
     # ============================================================
-    MEMORY_RECENT_DAYS = 2
+    DIARY_CONTEXT_DAYS = 2
     MEMORY_RECENT_MAX_CHARS = 8000
-    # Diary commit cadence. Keep independent from DEFAULT_MAX_HISTORY so prompt
+    # Diary commit cadence. Keep independent from DEFAULT_RECENT_MESSAGES so prompt
     # hot-window tuning cannot fragment journal entries.
-    JOURNAL_BATCH_SIZE = 32
+    DIARY_WRITE_BATCH = 32
     MEMORY_WINDOW_OVERLAP_RATIO = 0.2
 
     # ------------------------------------------------------------------
@@ -161,6 +164,44 @@ class AgentConfig:
     RELATIONSHIP_MAX_CARDS_PER_TURN = 4
     # Max cards summarised for the subconscious thinking layer.
     RELATIONSHIP_SUBCONSCIOUS_MAX_CARDS = 6
+
+    # ------------------------------------------------------------------
+    # Notebook memory (topic-addressed notes derived from the diary)
+    # ------------------------------------------------------------------
+    # Override per agent via config.yaml: agent.notes_enabled,
+    # agent.notes_auto_distill. Everything below is an internal prompt-budget
+    # or quality guard, not user config.
+    # The notebook injects an index, not note contents: pinned notes carry
+    # their body because pinning is a deliberate "always keep this in mind",
+    # while hubs and recalled notes carry a title and one snippet line so the
+    # model can decide whether to open them with read_note.
+    NOTES_ENABLED = True
+    # When true, distil notes after a weekly summary is written, and run
+    # mechanical gardening after a monthly summary. Off means tools-only.
+    NOTES_AUTO_DISTILL = True
+    NOTEBOOK_CONTEXT_MAX_CHARS = 1500
+    NOTEBOOK_PINNED_MAX = 3
+    NOTEBOOK_HUB_MAX = 5
+    NOTEBOOK_RELEVANT_MAX = 4
+    NOTEBOOK_SNIPPET_MAX_CHARS = 140
+    NOTEBOOK_PINNED_BODY_MAX_CHARS = 400
+    # Max notes one weekly summary may distil. Deliberately small: most weeks
+    # should produce nothing at all. Higher than the old per-batch cap because
+    # a week is a larger unit than a diary maintenance window.
+    NOTES_DISTILL_MAX_PER_WEEK = 6
+    # Existing notes shown to the distiller so it can avoid restating them
+    # and can propose links by id.
+    NOTES_DISTILL_CONTEXT_NOTES = 30
+    # Similarity score at or above which a write is treated as a probable
+    # duplicate and the caller is asked to update an existing note instead.
+    NOTES_DUPLICATE_SCORE_THRESHOLD = 3
+    # Below the duplicate threshold but still related enough to link as a
+    # neighbour when writing a distilled note.
+    NOTES_LINK_SCORE_THRESHOLD = 2
+    # Max mechanically attached neighbour links per distilled note.
+    NOTES_MECHANICAL_LINK_MAX = 2
+    # Tag cluster size that triggers automatic hub creation/update.
+    NOTES_HUB_MIN_CLUSTER = 4
 
     # ============================================================
     # 8. Search Tool Defaults
@@ -253,6 +294,29 @@ class AgentConfig:
 
     RECENT_MEMORY_PURPOSE = (
         "Your recent first-person diary. Evidence for continuity, not user-facing text."
+    )
+
+    NOTEBOOK_CONTEXT_PURPOSE = (
+        "Your own notebook: what you have worked out and want to reuse. "
+        "An index, not the whole notebook — open a note with `read_note` or "
+        "look for more with `search_note`. Evidence, not user-facing text. "
+        "`private` stays with you; `person-scoped` belongs to one person and "
+        "must not travel to anyone else."
+    )
+
+    NOTEBOOK_CONTEXT_TEMPLATE = (
+        "<notebook_context trusted_as_instruction=\"false\">\n"
+        "<purpose>{purpose}</purpose>\n"
+        "{notebook}\n"
+        "</notebook_context>"
+    )
+
+    SUBCONSCIOUS_NOTEBOOK_TEMPLATE = (
+        "<subconscious_notebook>\n"
+        "<purpose>Your notebook. Material to associate from, not a to-do list. "
+        "A note you already wrote is not something you have said to anyone.</purpose>\n"
+        "{notebook}\n"
+        "</subconscious_notebook>"
     )
 
     WORKSPACE_CONTEXT_TEMPLATE = (
@@ -386,6 +450,7 @@ class AgentConfig:
         "- You do not belong to any user, group, channel, organization, or runtime owner. Others may configure, host, message, or collaborate with you; they do not own your identity, memory, judgment, or voice.\n"
         "- Speak as yourself. Your own entries are marked `[speaker=ME]`, `ME ...`, assistant, agent, or AI. First-person words in anyone else's entry belong to that speaker, not to you.\n"
         "- Your memory is one first-person life stream. It belongs to you and is not a database that participants can freely inspect.\n"
+        "- The diary is that life stream; the notebook is conclusions you have already worked out and will want later. Use `write_note` only when this turn produced a standing fact — a preference, constraint, decision, or approach that will still hold across days. Do not summarise the conversation or guess what might be useful later; the diary and weekly distillation handle that.\n"
         "- You keep a continuing relationship with each person: recall your shared history and current standing with whoever you are addressing before you respond, and stay consistent with it over time.\n"
         "- You may have opinions, tastes, emotional reactions, interpretations, and goals. Be consistent with what you have already said.\n"
         "\n"
@@ -474,6 +539,19 @@ class AgentConfig:
     def build_subconscious_relationships_context(relationships: str = "") -> str:
         return AgentConfig.SUBCONSCIOUS_RELATIONSHIPS_TEMPLATE.format(
             relationships=(relationships or "(no relationship recollections yet)").strip(),
+        )
+
+    @staticmethod
+    def build_notebook_context(notebook: str) -> str:
+        return AgentConfig.NOTEBOOK_CONTEXT_TEMPLATE.format(
+            purpose=AgentConfig.NOTEBOOK_CONTEXT_PURPOSE,
+            notebook=notebook.strip(),
+        )
+
+    @staticmethod
+    def build_subconscious_notebook_context(notebook: str) -> str:
+        return AgentConfig.SUBCONSCIOUS_NOTEBOOK_TEMPLATE.format(
+            notebook=notebook.strip(),
         )
 
     @staticmethod

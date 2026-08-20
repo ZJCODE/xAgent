@@ -380,6 +380,34 @@ class ImageGenerationToolTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result["status"], "error")
             self.assertIn("output_format", result["message"])
 
+    def test_generated_image_helpers_are_path_first(self):
+        from xagent.tools.image_generation_tool import (
+            generated_image_attachments,
+            generated_image_description,
+            is_generated_image_result,
+        )
+
+        result = {
+            "status": "ok",
+            "type": "generated_image",
+            "prompt": "a cat",
+            "image": {
+                "path": "assets/generated/images/cat.png",
+                "blob_url": "/api/workspace/blob?path=assets%2Fgenerated%2Fimages%2Fcat.png",
+                "mime_type": "image/png",
+                "size_bytes": 12,
+            },
+        }
+        self.assertTrue(is_generated_image_result(result))
+        description = generated_image_description("generate_image", result)
+        self.assertIn("assets/generated/images/cat.png", description)
+        self.assertIn("see_image", description)
+        self.assertNotIn("data:image", description)
+        attachments = generated_image_attachments(result)
+        self.assertEqual(len(attachments), 1)
+        self.assertEqual(attachments[0]["path"], "assets/generated/images/cat.png")
+        self.assertNotIn("content", attachments[0])
+
 
 if __name__ == "__main__":
     unittest.main()

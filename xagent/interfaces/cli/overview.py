@@ -8,6 +8,7 @@ from typing import Any
 
 from ...core.providers import provider_model_api
 from ...core.runtime import list_task_records
+from ...tools.image_generation_tool import normalize_image_generation_provider
 from ...tools.search_tool import is_placeholder_api_key, normalize_search_provider
 from ..base import BaseAgentConfig, BaseAgentRunner
 from ..voice.config import VoiceChannelConfig
@@ -177,7 +178,10 @@ def _search_item(config: dict[str, Any]) -> OverviewItem:
 
 def _image_item(config: dict[str, Any]) -> OverviewItem:
     image = config.get("image_generation") if isinstance(config.get("image_generation"), dict) else {}
-    provider = str(image.get("provider") or "none").strip().lower() if isinstance(image, dict) else "none"
+    try:
+        provider = normalize_image_generation_provider(image.get("provider") if isinstance(image, dict) else None)
+    except ValueError as exc:
+        return OverviewItem("Image", "invalid", STATUS_ERROR, str(exc))
     if provider == "none":
         return OverviewItem("Image", "not set", STATUS_DISABLED)
     api_key = str(image.get("api_key") or "").strip() if isinstance(image, dict) else ""

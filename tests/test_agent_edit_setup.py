@@ -71,7 +71,7 @@ class AgentEditSetupHelperTests(unittest.TestCase):
 
         self.assertEqual(
             [row["id"] for row in schema["features"]],
-            ["model", "search", "image", "observability"],
+            ["model", "search", "image_generation", "observability"],
         )
         self.assertFalse(schema["features"][3]["disabled"])
 
@@ -84,11 +84,13 @@ class AgentEditSetupHelperTests(unittest.TestCase):
         self.assertTrue(observability["disabled"])
         self.assertFalse(schema["observability"]["available"])
 
-    def test_apply_search_and_image_and_observability(self):
+    def test_apply_search_and_observability(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             agent_dir = _write_agent(Path(tmpdir))
             search = apply_agent_edit_setup(agent_dir, "search", {"provider": "openai"})
-            image = apply_agent_edit_setup(agent_dir, "image", {"provider": "openai"})
+            image = apply_agent_edit_setup(agent_dir, "image_generation", {"provider": "openai"})
+            with self.assertRaisesRegex(ValueError, "Unsupported setup feature"):
+                apply_agent_edit_setup(agent_dir, "image", {"provider": "openai"})
             observability = apply_agent_edit_setup(
                 agent_dir,
                 "observability",
@@ -139,11 +141,20 @@ class AgentEditSetupRouteTests(unittest.TestCase):
 
             schema_response = client.get("/api/agent/setup-schema")
             apply_response = client.post("/api/agent/setup/search", json={"provider": "qwen", "api_key": "qwen-key"})
+            image_response = client.post(
+                "/api/agent/setup/image_generation",
+                json={"provider": "openai"},
+            )
 
-        self.assertEqual(schema_response.status_code, 200)
-        self.assertEqual(apply_response.status_code, 200)
-        self.assertEqual(apply_response.json()["feature"], "search")
-        self.assertTrue(apply_response.json()["restart_required"])
+            self.assertEqual(schema_response.status_code, 200)
+            feature_ids = [row["id"] for row in schema_response.json()["features"]]
+            self.assertEqual(feature_ids, ["model", "search", "image_generation", "observability"])
+            self.assertEqual(apply_response.status_code, 200)
+            self.assertEqual(apply_response.json()["feature"], "search")
+            self.assertTrue(apply_response.json()["restart_required"])
+            self.assertEqual(image_response.status_code, 200)
+            self.assertEqual(image_response.json()["feature"], "image_generation")
+            self.assertEqual(load_config(agent_dir)["image_generation"]["provider"], "openai")
 
 
 if __name__ == "__main__":

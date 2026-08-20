@@ -7,6 +7,7 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, Union
 from ..components import (
     MarkdownMemory,
     MessageStorage,
+    NoteStore,
     RelationshipStore,
     SkillsStorageBase,
 )
@@ -22,7 +23,14 @@ from ..schemas import (
     ParticipationDecision,
     RoleType,
 )
-from ..tools import create_search_memory_tool, create_write_memory_tool
+from ..tools import (
+    create_read_note_tool,
+    create_search_memory_tool,
+    create_search_note_tool,
+    create_see_image_tool,
+    create_update_note_tool,
+    create_write_note_tool,
+)
 from .config import AgentConfig, ReplyType
 from .errors import (
     ERROR_EMPTY_RESPONSE,
@@ -78,12 +86,14 @@ class Agent:
         skills_storage: Optional[SkillsStorageBase] = None,
         observability: Optional[ObservabilityRuntime] = None,
         supports_vision: bool = True,
-        max_history: int = AgentConfig.DEFAULT_MAX_HISTORY,
-        journal_batch_size: int = AgentConfig.JOURNAL_BATCH_SIZE,
-        max_iter: int = AgentConfig.DEFAULT_MAX_ITER,
+        recent_messages: int = AgentConfig.DEFAULT_RECENT_MESSAGES,
+        max_agent_loops: int = AgentConfig.DEFAULT_MAX_AGENT_LOOPS,
         max_concurrent_tools: int = AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS,
+        diary_write_batch: int = AgentConfig.DIARY_WRITE_BATCH,
+        diary_context_days: int = AgentConfig.DIARY_CONTEXT_DAYS,
+        notes_enabled: bool = AgentConfig.NOTES_ENABLED,
+        notes_auto_distill: bool = AgentConfig.NOTES_AUTO_DISTILL,
         subconscious_activity: float = AgentConfig.SUBCONSCIOUS_ACTIVITY,
-        memory_recent_days: int = AgentConfig.MEMORY_RECENT_DAYS,
         provider_name: str = PROVIDER_OPENAI,
         reasoning: Optional[ReasoningConfig] = None,
     ):
@@ -94,12 +104,14 @@ class Agent:
         self.reasoning = reasoning
         self.maintenance_reasoning = maintenance_reasoning_config(reasoning)
         self.supports_vision = bool(supports_vision)
-        self.max_history = max_history
-        self.journal_batch_size = journal_batch_size
-        self.max_iter = max_iter
+        self.recent_messages = recent_messages
+        self.max_agent_loops = max_agent_loops
         self.max_concurrent_tools = max_concurrent_tools
+        self.diary_write_batch = diary_write_batch
+        self.diary_context_days = diary_context_days
+        self.notes_enabled = bool(notes_enabled)
+        self.notes_auto_distill = bool(notes_auto_distill)
         self.subconscious_activity = subconscious_activity
-        self.memory_recent_days = memory_recent_days
         self.observability = observability or NoopObservabilityRuntime()
         self.client = client
         if self.client is None:
@@ -146,6 +158,11 @@ class Agent:
         self.relationship_store = RelationshipStore(
             relationships_dir=str(Path(memory_dir) / AgentConfig.RELATIONSHIPS_DIRNAME)
         )
+        self.note_store = (
+            NoteStore(notes_dir=str(Path(memory_dir) / AgentConfig.NOTES_DIRNAME))
+            if self.notes_enabled
+            else None
+        )
         self.llm_service = JournalLLMService(
             client=self.client,
             model=self.model,
@@ -158,9 +175,11 @@ class Agent:
             memory=self.markdown_memory,
             llm_service=self.llm_service,
             message_storage=self.message_storage,
-            journal_batch_size=self.journal_batch_size,
+            diary_write_batch=self.diary_write_batch,
             relationship_store=self.relationship_store,
-            recent_days=self.memory_recent_days,
+            note_store=self.note_store,
+            notes_auto_distill=self.notes_auto_distill,
+            diary_context_days=self.diary_context_days,
         )
         self.working_context_compactor = self._build_working_context_compactor(
             runtime_root=runtime_root,
@@ -169,16 +188,21 @@ class Agent:
 
         bound_tools = list(tools or [])
         bound_tools.extend([
-            create_write_memory_tool(
-                memory=self.markdown_memory,
-                is_enabled=True,
-            ),
             create_search_memory_tool(
                 memory=self.markdown_memory,
                 is_enabled=True,
                 message_storage=self.message_storage,
             ),
         ])
+        if self.note_store is not None:
+            bound_tools.extend([
+                create_write_note_tool(store=self.note_store),
+                create_update_note_tool(store=self.note_store),
+                create_search_note_tool(store=self.note_store),
+                create_read_note_tool(store=self.note_store),
+            ])
+        if self.supports_vision:
+            bound_tools.append(create_see_image_tool(workspace_dir=str(self.workspace_dir)))
         self.tool_manager = ToolManager(tools=bound_tools)
         self.model_client = ModelClient(
             client=self.client,
@@ -280,7 +304,7 @@ class Agent:
             store=store,
             message_storage=self.message_storage,
             summarizer=summarizer,
-            hot_window=self.max_history,
+            hot_window=self.recent_messages,
         )
 
     async def _working_context_for_turn(self) -> WorkingContextView:
@@ -317,7 +341,7 @@ class Agent:
         """Build the shared turn preparation context for both chat and chat_events."""
         working_context = await self._working_context_for_turn()
         recent_messages = await msg_handler.get_recent_messages(
-            max_history=AgentConfig.history_fetch_depth(self.max_history),
+            limit=AgentConfig.history_fetch_depth(self.recent_messages),
         )
         memory_context = await self.memory_handler.get_recent_context()
         relationship_context = await self._relationship_context_for_turn(
@@ -325,6 +349,7 @@ class Agent:
             user_id=user_id,
             recent_messages=recent_messages,
         )
+        notebook_context = await self._notebook_context_for_turn(user_msg)
         tool_names = list(self.tool_manager._tools)
         tool_specs = self.tool_manager.cached_tool_specs
         workspace_context = self._workspace_context(tool_names)
@@ -340,7 +365,8 @@ class Agent:
             current_user_id=user_id,
             memory_context=memory_context,
             relationship_context=relationship_context,
-            max_messages=self.max_history,
+            notebook_context=notebook_context,
+            max_messages=self.recent_messages,
             include_images=self.supports_vision,
             workspace_dir=getattr(self, "workspace_dir", None),
             current_message=user_msg,
@@ -351,6 +377,25 @@ class Agent:
         )
         input_messages = msg_handler.sanitize_input_messages(list(iteration_messages))
         return tool_specs, instructions, iteration_messages, input_messages
+
+    async def _notebook_context_for_turn(self, user_msg: Message) -> str:
+        """Assemble the notebook index, recalled against the current message.
+
+        Recall is keyword-cheap and runs every turn, so the model sees which of
+        its notes bear on what was just said without spending a tool call.
+        """
+        memory_handler = getattr(self, "memory_handler", None)
+        if memory_handler is None or not callable(
+            getattr(memory_handler, "get_notebook_context", None)
+        ):
+            return ""
+        try:
+            return await memory_handler.get_notebook_context(
+                current_text=getattr(user_msg, "content", "") or ""
+            )
+        except Exception as exc:
+            logger.warning("Failed to assemble notebook context: %s", exc)
+            return ""
 
     async def _relationship_context_for_turn(
         self,
@@ -627,8 +672,13 @@ class Agent:
                 channel_instructions=channel_instructions,
             )
             turn_obs.set_input(input_messages)
+            begin_see_image_turn = getattr(self.tool_executor, "begin_see_image_turn", None)
+            if callable(begin_see_image_turn):
+                begin_see_image_turn(
+                    already_visible=MessageHandler.count_current_task_images(iteration_messages),
+                )
 
-            for iteration_index in range(self.max_iter):
+            for iteration_index in range(self.max_agent_loops):
                 if self.inbox.abort_requested():
                     yield self._aborted_event()
                     yield {"type": "done"}
@@ -720,6 +770,15 @@ class Agent:
                         room_name=room_name,
                         inbox_kind=inbox_item.kind.value,
                     )
+                    pending_see_image_paths = getattr(
+                        self.tool_executor, "pending_see_image_paths", None
+                    )
+                    if callable(pending_see_image_paths):
+                        MessageHandler.apply_see_image_paths(
+                            iteration_messages,
+                            pending_see_image_paths(),
+                            workspace_dir=getattr(self, "workspace_dir", None),
+                        )
 
                     for tool_call in tool_calls:
                         yield self._tool_event("tool_result", tool_call)
@@ -800,7 +859,7 @@ class Agent:
 
             payload = build_public_error(
                 code=ERROR_TURN_EXHAUSTED,
-                cause=f"Failed to generate response after {self.max_iter} attempts",
+                cause=f"Failed to generate response after {self.max_agent_loops} attempts",
             )
             turn_obs.set_error(
                 error_id=payload["error_id"],

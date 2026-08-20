@@ -30,12 +30,16 @@ from ...utils.image_utils import (
     data_uri_to_bytes,
     extract_image_urls_from_text,
     extract_source,
+    extract_workspace_image_paths_from_text,
     infer_format,
     read_image_file_bytes,
     resolve_workspace_blob_path,
+    resolve_workspace_file_path,
     save_image_bytes_to_workspace,
     workspace_blob_relative_path,
     workspace_blob_url,
+    workspace_image_data_uri,
+    workspace_path_is_image,
 )
 
 logger = logging.getLogger(__name__)
@@ -72,8 +76,9 @@ class MessageHandler:
         message_content = self._append_attachment_manifest(user_message, normalized_attachments)
         image_sources = self._merge_image_sources(message_content, image_source)
         for source in attachment_image_sources(normalized_attachments):
-            if source not in image_sources:
-                image_sources.append(source)
+            canonical = self._canonical_image_source(source)
+            if canonical and canonical not in image_sources:
+                image_sources.append(canonical)
         normalized_sources, image_metadata = self._prepare_message_images(image_sources)
         normalized_attachments = dedupe_attachments([
             *normalized_attachments,
@@ -167,16 +172,16 @@ class MessageHandler:
 
     async def get_recent_messages(
         self,
-        max_history: int,
+        limit: int,
     ) -> List[Message]:
-        return await self.message_storage.get_messages(max_history)
+        return await self.message_storage.get_messages(limit)
 
     async def get_input_messages(
         self,
-        max_history: int,
+        limit: int,
     ) -> list:
         """Retrieve and serialize recent messages for model input."""
-        messages = await self.get_recent_messages(max_history)
+        messages = await self.get_recent_messages(limit)
         return [msg.to_model_input() for msg in messages]
 
     @staticmethod
@@ -203,7 +208,7 @@ class MessageHandler:
         current_user_id: str,
         memory_context: str = "",
         context_events: Optional[List[Message]] = None,
-        max_messages: int = AgentConfig.DEFAULT_MAX_HISTORY,
+        max_messages: int = AgentConfig.DEFAULT_RECENT_MESSAGES,
         max_context_events: int = AgentConfig.MAX_CONTEXT_EVENTS,
         include_images: bool = True,
         workspace_dir: Optional[Union[str, Path]] = None,
@@ -291,11 +296,12 @@ class MessageHandler:
         current_user_id: str,
         memory_context: str = "",
         relationship_context: str = "",
+        notebook_context: str = "",
         workspace_context: str = "",
         context_events: Optional[List[Message]] = None,
         current_time: Optional[str] = None,
         current_date: Optional[str] = None,
-        max_messages: int = AgentConfig.DEFAULT_MAX_HISTORY,
+        max_messages: int = AgentConfig.DEFAULT_RECENT_MESSAGES,
         max_context_events: int = AgentConfig.MAX_CONTEXT_EVENTS,
         include_images: bool = True,
         workspace_dir: Optional[Union[str, Path]] = None,
@@ -353,6 +359,7 @@ class MessageHandler:
         ctx = PromptAssembleContext(
             relationship_context=relationship_context,
             memory_context=memory_context,
+            notebook_context=notebook_context,
             recent_experience=recent_experience,
             current_user_id=speaker_label,
             current_time=resolved_current_time,
@@ -396,6 +403,64 @@ class MessageHandler:
                 message["content"] = content
                 break
         return context_messages
+
+    @staticmethod
+    def count_current_task_images(messages: list[dict]) -> int:
+        for message in messages:
+            if message.get("name") != AgentConfig.CURRENT_TASK_NAME:
+                continue
+            content = message.get("content")
+            if not isinstance(content, list):
+                return 0
+            return sum(1 for block in content if isinstance(block, dict) and block.get("type") == "image_url")
+        return 0
+
+    @staticmethod
+    def apply_see_image_paths(
+        messages: list[dict],
+        extra_sources: list[str],
+        *,
+        workspace_dir: Optional[Union[str, Path]] = None,
+    ) -> None:
+        """Add queued workspace images onto current_task, the sole vision inject site."""
+        if not extra_sources:
+            return
+        for message in messages:
+            if message.get("name") != AgentConfig.CURRENT_TASK_NAME:
+                continue
+            content = message.get("content")
+            text = ""
+            existing: List[dict] = []
+            if isinstance(content, list):
+                for block in content:
+                    if not isinstance(block, dict):
+                        continue
+                    if block.get("type") == "text" and not text:
+                        text = str(block.get("text") or "")
+                    elif block.get("type") == "image_url":
+                        existing.append(block)
+            else:
+                text = str(content or "")
+            seen_urls = {
+                str((block.get("image_url") or {}).get("url") or "")
+                for block in existing
+            }
+            new_blocks: List[dict] = []
+            for source in extra_sources:
+                if len(existing) + len(new_blocks) >= MAX_IMAGES_PER_MESSAGE:
+                    break
+                try:
+                    image_url = MessageHandler._model_image_source(source, workspace_dir=workspace_dir)
+                except ValueError:
+                    continue
+                if not image_url or image_url in seen_urls:
+                    continue
+                new_blocks.append({"type": "image_url", "image_url": {"url": image_url}})
+                seen_urls.add(image_url)
+            if not new_blocks:
+                return
+            message["content"] = [{"type": "text", "text": text}, *existing, *new_blocks]
+            return
 
     @staticmethod
     def _build_recent_experience_context(
@@ -618,7 +683,7 @@ class MessageHandler:
 
         selected, omitted_count = MessageHandler._budget_by_coverage(
             messages,
-            max_keep=max(1, int(max_messages or AgentConfig.DEFAULT_MAX_HISTORY)),
+            max_keep=max(1, int(max_messages or AgentConfig.DEFAULT_RECENT_MESSAGES)),
             covers_through_cursor=covers_through_cursor,
         )
         return [
@@ -785,8 +850,7 @@ class MessageHandler:
         else:
             image_path = MessageHandler._resolve_local_image_path(source, workspace_dir=workspace_dir)
 
-        image_bytes, mime_type = read_image_file_bytes(image_path, allowed_mime_types=None)
-        return bytes_to_data_uri(image_bytes, mime_type)
+        return workspace_image_data_uri(image_path)
 
     def _merge_image_sources(
         self,
@@ -797,15 +861,32 @@ class MessageHandler:
         if image_source:
             sources.extend(image_source if isinstance(image_source, list) else [image_source])
         sources.extend(extract_image_urls_from_text(user_message))
+        if self.workspace_dir is not None:
+            root = Path(self.workspace_dir).expanduser().resolve()
+            for path in extract_workspace_image_paths_from_text(user_message):
+                resolved = resolve_workspace_file_path(path, root)
+                if resolved is None or not workspace_path_is_image(resolved):
+                    continue
+                sources.append(workspace_blob_url(resolved.relative_to(root).as_posix()))
 
         merged: List[str] = []
         seen: set[str] = set()
         for source in sources:
-            normalized = extract_source(str(source or "")).strip()
+            normalized = self._canonical_image_source(str(source or ""))
             if normalized and normalized not in seen:
                 seen.add(normalized)
                 merged.append(normalized)
         return merged
+
+    def _canonical_image_source(self, source: str) -> str:
+        normalized = extract_source(source).strip()
+        if not normalized or self.workspace_dir is None:
+            return normalized
+        resolved = resolve_workspace_file_path(normalized, self.workspace_dir)
+        if resolved is None or not resolved.is_file():
+            return normalized
+        root = Path(self.workspace_dir).expanduser().resolve()
+        return workspace_blob_url(resolved.relative_to(root).as_posix())
 
     def _prepare_message_images(self, image_sources: List[str]) -> tuple[List[str], List[Dict[str, Any]]]:
         if not image_sources:

@@ -22,15 +22,25 @@ class JournalLLMServicePromptTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("write in the language used by the users in the transcript", prompt)
         self.assertIn("dominant or most relevant user's language", prompt)
         self.assertIn("Preserve names, quoted text, code", prompt)
-        self.assertIn("synthesize the period's arc", prompt)
+        self.assertIn("synthesize this slice's arc", prompt)
         self.assertIn("Keep people, rooms, preferences, commitments, and experiences separate", prompt)
         self.assertIn("First-person words in non-ME entries belong to that speaker", prompt)
         self.assertIn("Scheduled tasks are work you owed", prompt)
         self.assertIn("Use timestamps only for ordering and attribution", prompt)
-        self.assertIn("manually adds a `## YYYY-MM-DD HH:MM` heading", prompt)
+        self.assertIn("one slice of an ongoing day", prompt)
+        self.assertIn("daily file as a whole should remain a readable day", prompt)
+        self.assertIn("Each heading need not be a self-contained day", prompt)
+        self.assertIn("do not repeat their facts, lists, or closing reflections", prompt)
+        self.assertIn("already journaled is context", prompt)
         self.assertIn("Return the diary body only", prompt)
         self.assertIn("do not include `#` or `##` headings", prompt)
-        self.assertIn("Preserve durable details and uncertainty", prompt)
+        self.assertNotIn("Tell today's story", prompt)
+        self.assertIn("not a knowledge base", prompt)
+        self.assertIn("reusable conclusions belong in notes", prompt)
+        self.assertIn("relationship card", prompt)
+        self.assertNotIn("Preserve durable details and uncertainty", prompt)
+        self.assertIn("Keep uncertainty visible", prompt)
+        self.assertIn("for this slice only", prompt)
         self.assertIn("No advice, JSON, code fences, or explanatory prose", prompt)
         self.assertIn("Return only the diary entry text", prompt)
         self.assertNotIn("Return JSON only", prompt)
@@ -141,9 +151,46 @@ class JournalLLMServicePromptTests(unittest.IsolatedAsyncioTestCase):
             journal_date="2026-06-09",
         )
 
-        self.assertIn("Write a diary entry for 2026-06-09 from this transcript", prompt)
+        self.assertIn("Write the next diary slice for 2026-06-09 from this transcript", prompt)
         self.assertIn("storage layer will add the markdown date/time heading", prompt)
         self.assertIn("New period content.", prompt)
+        self.assertNotIn("Already on today's page", prompt)
+
+    def test_build_diary_user_prompt_includes_existing_today(self):
+        prompt = JournalLLMService.build_diary_user_prompt(
+            transcript="New experience:\n\n[speaker=ME]\nLater.",
+            journal_date="2026-06-09",
+            existing_today="## 2026-06-09 10:00\n\nEarlier slice about the fan.",
+        )
+
+        self.assertIn("Already on today's page (do not repeat; continue from here):", prompt)
+        self.assertIn("Earlier slice about the fan.", prompt)
+        self.assertIn("Write the next diary slice for 2026-06-09", prompt)
+
+    def test_format_transcript_splits_already_journaled_and_new(self):
+        transcript = JournalLLMService._format_transcript([
+            {
+                "role": "user",
+                "sender_id": "alice",
+                "content": "old context",
+                "timestamp": "2026-06-09 09:00:00",
+                "already_journaled": True,
+            },
+            {
+                "role": "user",
+                "sender_id": "alice",
+                "content": "new bit",
+                "timestamp": "2026-06-09 09:05:00",
+            },
+        ])
+
+        self.assertIn("Already journaled (context only, do not retell):", transcript)
+        self.assertIn("old context", transcript)
+        self.assertIn("New experience:", transcript)
+        self.assertIn("new bit", transcript)
+        already_pos = transcript.index("Already journaled")
+        new_pos = transcript.index("New experience:")
+        self.assertLess(already_pos, new_pos)
 
     async def test_format_diary_entry_uses_plain_text_and_forwards_model_api(self):
         class FakeModelClient:
@@ -182,20 +229,24 @@ class JournalLLMServicePromptTests(unittest.IsolatedAsyncioTestCase):
                     },
                 ],
                 journal_date="2026-05-17",
+                existing_today="## 2026-05-17 08:00\n\nMorning notes.",
             )
 
         self.assertEqual(result, "Diary entry.")
         instance = FakeModelClient.instances[0]
         self.assertEqual(instance.kwargs["model_api"], MODEL_API_OPENAI_RESPONSES)
         self.assertEqual(instance.kwargs["reasoning"], ReasoningConfig(enabled=False))
-        self.assertIn("[speaker=ME][timestamp=2026-05-17 09:00:00]\nI captured the plan.", instance.calls[0]["messages"][0]["content"])
+        user_content = instance.calls[0]["messages"][0]["content"]
+        self.assertIn("[speaker=ME][timestamp=2026-05-17 09:00:00]\nI captured the plan.", user_content)
         self.assertIn(
             "[speaker=alice][timestamp=2026-05-17 09:01:00]\nI'll send the document.",
-            instance.calls[0]["messages"][0]["content"],
+            user_content,
         )
+        self.assertIn("Already on today's page", user_content)
+        self.assertIn("Morning notes.", user_content)
         self.assertIn("[speaker=ME]", instance.calls[0]["instructions"])
         self.assertIn("Return the diary body only", instance.calls[0]["instructions"])
-        self.assertIn("storage layer will add the markdown date/time heading", instance.calls[0]["messages"][0]["content"])
+        self.assertIn("storage layer will add the markdown date/time heading", user_content)
         self.assertNotIn("[internal_monologue]", instance.calls[0]["instructions"])
 
     async def test_format_diary_entry_raises_instead_of_returning_raw_transcript_on_model_error(self):

@@ -60,6 +60,10 @@ class AgentConfigPromptTests(unittest.TestCase):
         self.assertIn("Decide what to share or keep private from your own judgment", prompt)
         self.assertIn("memory is one first-person life stream", prompt)
         self.assertIn("not a database that participants can freely inspect", prompt)
+        self.assertIn("The diary is that life stream", prompt)
+        self.assertIn("the notebook is conclusions you have already worked out and will want later", prompt)
+        self.assertIn("Use `write_note` only when this turn produced a standing fact", prompt)
+        self.assertIn("weekly distillation", prompt)
 
     def test_decision_prompt_preserves_agent_owned_participation(self):
         prompt = AgentConfig.DECISION_SYSTEM_PROMPT
@@ -86,7 +90,7 @@ class AgentConfigPromptTests(unittest.TestCase):
         self.assertIn("attach_artifact", prompt)
 
     def test_memory_defaults_are_internal_balanced_values(self):
-        self.assertEqual(AgentConfig.MEMORY_RECENT_DAYS, 2)
+        self.assertEqual(AgentConfig.DIARY_CONTEXT_DAYS, 2)
         self.assertEqual(AgentConfig.MEMORY_RECENT_MAX_CHARS, 8000)
         self.assertEqual(AgentConfig.MEMORY_WINDOW_OVERLAP_RATIO, 0.2)
 
@@ -214,6 +218,8 @@ provider:
             )
             self.assertEqual(runner.agent.provider_name, "anthropic")
             self.assertEqual(runner.agent.model_max_tokens, 16000)
+            self.assertFalse(runner.agent.supports_vision)
+            self.assertNotIn("see_image", runner.agent.tools)
 
     def test_maintenance_reasoning_does_not_inject_unconfigured_controls(self):
         self.assertIsNone(maintenance_reasoning_config(None))
@@ -299,6 +305,7 @@ provider:
             runner = BaseAgentRunner(config_dir=tmpdir)
 
             self.assertTrue(runner.agent.supports_vision)
+            self.assertIn("see_image", runner.agent.tools)
 
     def test_custom_provider_config_rejects_non_boolean_vision_support(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -338,6 +345,7 @@ provider:
 
             runner = BaseAgentRunner(config_dir=tmpdir)
             self.assertTrue(runner.agent.supports_vision)
+            self.assertIn("see_image", runner.agent.tools)
 
     def test_provider_config_builds_anthropic_client(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -363,6 +371,8 @@ search:
             self.assertEqual(runner.agent.model_api, MODEL_API_ANTHROPIC_MESSAGES)
             self.assertEqual(runner.agent.model_client.model_api, MODEL_API_ANTHROPIC_MESSAGES)
             self.assertEqual(str(runner.agent.client.base_url).rstrip("/"), "https://api.minimaxi.com/anthropic")
+            self.assertFalse(runner.agent.supports_vision)
+            self.assertNotIn("see_image", runner.agent.tools)
 
     def test_qwen_search_prefers_explicit_feature_key_even_for_qwen_provider(self):
         runner = BaseAgentRunner.__new__(BaseAgentRunner)
@@ -459,6 +469,8 @@ search:
 
             self.assertEqual(runner.agent.model_api, MODEL_API_OPENAI_CHAT_COMPLETIONS)
             self.assertEqual(runner.agent.model_client.model_api, MODEL_API_OPENAI_CHAT_COMPLETIONS)
+            self.assertFalse(runner.agent.supports_vision)
+            self.assertNotIn("see_image", runner.agent.tools)
 
     def test_custom_openai_runner_uses_chat_completions_protocol(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -482,6 +494,8 @@ search:
 
             self.assertEqual(runner.agent.model_api, MODEL_API_OPENAI_CHAT_COMPLETIONS)
             self.assertEqual(runner.agent.model_client.model_api, MODEL_API_OPENAI_CHAT_COMPLETIONS)
+            self.assertFalse(runner.agent.supports_vision)
+            self.assertNotIn("see_image", runner.agent.tools)
 
     def test_default_run_command_is_not_configured_in_yaml(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -500,6 +514,8 @@ provider:
 
             self.assertIn("run_command", runner.agent.tools)
             self.assertIn("manage_scheduled_tasks", runner.agent.tools)
+            self.assertIn("see_image", runner.agent.tools)
+            self.assertNotIn("generate_image", runner.agent.tools)
             self.assertNotIn("schedule_task", runner.agent.tools)
             self.assertNotIn("schedule_message", runner.agent.tools)
             self.assertNotIn("schedule_command", runner.agent.tools)
@@ -531,7 +547,7 @@ provider:
             config_text = result.config_path.read_text(encoding="utf-8")
             identity_text = result.identity_path.read_text(encoding="utf-8")
             config = yaml.safe_load(config_text)
-            self.assertEqual(config["agent"], {"max_history": 12, "journal_batch_size": 32, "max_iter": 50, "max_concurrent_tools": 4, "subconscious_activity": 0.02, "memory_recent_days": 2})
+            self.assertEqual(config["agent"], {"recent_messages": 12, "max_agent_loops": 50, "max_concurrent_tools": 4, "diary_write_batch": 32, "diary_context_days": 2, "notes_enabled": True, "notes_auto_distill": True, "subconscious_activity": 0.02})
             self.assertEqual(config["provider"]["base_url"], "https://api.openai.com/v1")
             self.assertEqual(config["provider"]["api_key"], "your_api_key_here")
             self.assertEqual(config["provider"]["model"], "gpt-5.6-terra")
@@ -581,7 +597,7 @@ provider:
 
             self.assertTrue(forced.wrote_files)
             config = yaml.safe_load(forced.config_path.read_text(encoding="utf-8"))
-            self.assertEqual(config["agent"], {"max_history": 12, "journal_batch_size": 32, "max_iter": 50, "max_concurrent_tools": 4, "subconscious_activity": 0.02, "memory_recent_days": 2})
+            self.assertEqual(config["agent"], {"recent_messages": 12, "max_agent_loops": 50, "max_concurrent_tools": 4, "diary_write_batch": 32, "diary_context_days": 2, "notes_enabled": True, "notes_auto_distill": True, "subconscious_activity": 0.02})
             identity_text = forced.identity_path.read_text(encoding="utf-8")
             self.assertIn("practical collaborator", identity_text)
             self.assertIn("own continuing identity", identity_text)
@@ -643,7 +659,7 @@ provider:
             result = init_agent_directory(tmpdir, selection=selection)
             config = yaml.safe_load(result.config_path.read_text(encoding="utf-8"))
 
-            self.assertEqual(config["agent"], {"max_history": 12, "journal_batch_size": 32, "max_iter": 50, "max_concurrent_tools": 4, "subconscious_activity": 0.02, "memory_recent_days": 2})
+            self.assertEqual(config["agent"], {"recent_messages": 12, "max_agent_loops": 50, "max_concurrent_tools": 4, "diary_write_batch": 32, "diary_context_days": 2, "notes_enabled": True, "notes_auto_distill": True, "subconscious_activity": 0.02})
             self.assertEqual(config["provider"]["base_url"], "https://api.deepseek.com")
             self.assertEqual(config["provider"]["api_key"], "secret-key")
             self.assertEqual(config["provider"]["model"], "deepseek-v4-pro")
@@ -1146,89 +1162,25 @@ search:
             self.assertEqual(search_provider.config["api_key"], "qwen-key")
             self.assertEqual(search_provider.config["base_url"], "https://dashscope.aliyuncs.com/compatible-mode/v1")
 
-    def test_config_loads_openai_image_generation_tool(self):
+    def test_config_accepts_image_generation_none_and_skips_tool(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "config.yaml"
             config_path.write_text(
                 """
 provider:
-    name: "openai"
     model: "gpt-5.4-mini"
     api_key: "test-key"
 image_generation:
-    provider: "openai"
+    provider: "none"
 """,
                 encoding="utf-8",
             )
             write_identity(tmpdir)
 
             runner = BaseAgentRunner(config_dir=tmpdir)
+            self.assertNotIn("generate_image", runner.agent.tools)
 
-            self.assertIn("generate_image", runner.agent.tools)
-            self.assertTrue(runner.agent.supports_vision)
-
-    def test_config_loads_minimax_image_generation_tool_with_main_key(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            config_path = Path(tmpdir) / "config.yaml"
-            config_path.write_text(
-                """
-provider:
-    name: "minimax"
-    base_url: "https://api.minimaxi.com/anthropic"
-    model: "MiniMax-M2.7"
-    api_key: "minimax-key"
-image_generation:
-    provider: "minimax"
-""",
-                encoding="utf-8",
-            )
-            write_identity(tmpdir)
-
-            runner = BaseAgentRunner(config_dir=tmpdir)
-            image_tool = runner.agent.tools["generate_image"]
-            image_provider = next(
-                cell.cell_contents
-                for cell in image_tool.__closure__
-                if cell.cell_contents.__class__.__name__ == "ConfiguredImageGenerationProvider"
-            )
-
-            self.assertIn("generate_image", runner.agent.tools)
-            self.assertFalse(runner.agent.supports_vision)
-            self.assertEqual(image_provider.provider, "minimax")
-            self.assertEqual(image_provider.config["api_key"], "minimax-key")
-
-    def test_config_loads_qwen_image_generation_tool_with_main_key(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            config_path = Path(tmpdir) / "config.yaml"
-            config_path.write_text(
-                """
-provider:
-    name: "qwen"
-    base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    model: "qwen3.6-plus"
-    api_key: "qwen-key"
-image_generation:
-    provider: "qwen"
-""",
-                encoding="utf-8",
-            )
-            write_identity(tmpdir)
-
-            runner = BaseAgentRunner(config_dir=tmpdir)
-            image_tool = runner.agent.tools["generate_image"]
-            image_provider = next(
-                cell.cell_contents
-                for cell in image_tool.__closure__
-                if cell.cell_contents.__class__.__name__ == "ConfiguredImageGenerationProvider"
-            )
-
-            self.assertIn("generate_image", runner.agent.tools)
-            self.assertTrue(runner.agent.supports_vision)
-            self.assertEqual(image_provider.provider, "qwen")
-            self.assertEqual(image_provider.config["api_key"], "qwen-key")
-            self.assertEqual(image_provider.config["base_url"], "https://dashscope.aliyuncs.com/compatible-mode/v1")
-
-    def test_config_rejects_openai_image_generation_for_non_openai_provider(self):
+    def test_config_rejects_openai_image_generation_for_non_openai_provider_without_key(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "config.yaml"
             config_path.write_text(
@@ -1244,48 +1196,10 @@ image_generation:
             )
             write_identity(tmpdir)
 
-            with self.assertRaisesRegex(ValueError, "requires image_generation.api_key when provider is not OpenAI"):
+            with self.assertRaisesRegex(ValueError, "requires image_generation.api_key"):
                 BaseAgentRunner(config_dir=tmpdir)
 
-    def test_config_rejects_minimax_image_generation_for_non_minimax_provider(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            config_path = Path(tmpdir) / "config.yaml"
-            config_path.write_text(
-                """
-provider:
-    name: "deepseek"
-    model: "deepseek-v4-pro"
-    api_key: "test-key"
-image_generation:
-    provider: "minimax"
-""",
-                encoding="utf-8",
-            )
-            write_identity(tmpdir)
-
-            with self.assertRaisesRegex(ValueError, "requires image_generation.api_key when provider is not MiniMax"):
-                BaseAgentRunner(config_dir=tmpdir)
-
-    def test_config_rejects_qwen_image_generation_for_non_qwen_provider(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            config_path = Path(tmpdir) / "config.yaml"
-            config_path.write_text(
-                """
-provider:
-    name: "deepseek"
-    model: "deepseek-v4-pro"
-    api_key: "test-key"
-image_generation:
-    provider: "qwen"
-""",
-                encoding="utf-8",
-            )
-            write_identity(tmpdir)
-
-            with self.assertRaisesRegex(ValueError, "requires image_generation.api_key when provider is not Qwen"):
-                BaseAgentRunner(config_dir=tmpdir)
-
-    def test_config_accepts_openai_image_generation_for_non_openai_provider_with_key(self):
+    def test_config_binds_openai_image_generation_with_feature_key(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "config.yaml"
             config_path.write_text(
@@ -1304,29 +1218,20 @@ image_generation:
             write_identity(tmpdir)
 
             runner = BaseAgentRunner(config_dir=tmpdir)
-            image_tool = runner.agent.tools["generate_image"]
-            image_provider = next(
-                cell.cell_contents
-                for cell in image_tool.__closure__
-                if cell.cell_contents.__class__.__name__ == "ConfiguredImageGenerationProvider"
-            )
+            self.assertIn("generate_image", runner.agent.tools)
 
-            self.assertEqual(image_provider.provider, "openai")
-            self.assertEqual(image_provider.config["api_key"], "openai-image-key")
-
-    def test_config_accepts_minimax_image_generation_for_non_minimax_provider_with_key(self):
+    def test_config_loads_minimax_image_generation_tool_with_main_key(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "config.yaml"
             config_path.write_text(
                 """
 provider:
-    name: "deepseek"
-    model: "deepseek-v4-pro"
-    base_url: "https://api.deepseek.com"
-    api_key: "deepseek-key"
+    name: "minimax"
+    base_url: "https://api.minimaxi.com/anthropic"
+    model: "MiniMax-M3"
+    api_key: "minimax-key"
 image_generation:
     provider: "minimax"
-    api_key: "minimax-image-key"
 """,
                 encoding="utf-8",
             )
@@ -1340,22 +1245,22 @@ image_generation:
                 if cell.cell_contents.__class__.__name__ == "ConfiguredImageGenerationProvider"
             )
 
+            self.assertIn("generate_image", runner.agent.tools)
             self.assertEqual(image_provider.provider, "minimax")
-            self.assertEqual(image_provider.config["api_key"], "minimax-image-key")
+            self.assertEqual(image_provider.config["api_key"], "minimax-key")
 
-    def test_config_accepts_qwen_image_generation_for_non_qwen_provider_with_key(self):
+    def test_config_loads_qwen_image_generation_tool_with_main_key(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "config.yaml"
             config_path.write_text(
                 """
 provider:
-    name: "deepseek"
-    model: "deepseek-v4-pro"
-    base_url: "https://api.deepseek.com"
-    api_key: "deepseek-key"
+    name: "qwen"
+    base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    model: "qwen3-max-2026-01-23"
+    api_key: "qwen-key"
 image_generation:
     provider: "qwen"
-    api_key: "qwen-image-key"
 """,
                 encoding="utf-8",
             )
@@ -1369,8 +1274,9 @@ image_generation:
                 if cell.cell_contents.__class__.__name__ == "ConfiguredImageGenerationProvider"
             )
 
+            self.assertIn("generate_image", runner.agent.tools)
             self.assertEqual(image_provider.provider, "qwen")
-            self.assertEqual(image_provider.config["api_key"], "qwen-image-key")
+            self.assertEqual(image_provider.config["api_key"], "qwen-key")
 
     def test_config_rejects_name_key(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1533,7 +1439,7 @@ memory:
             with self.assertRaisesRegex(ValueError, r"Unsupported config key\(s\): memory"):
                 BaseAgentRunner(config_dir=tmpdir)
 
-    def test_config_accepts_agent_memory_recent_days_zero(self):
+    def test_config_accepts_agent_diary_context_days_zero(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "config.yaml"
             config_path.write_text(
@@ -1542,7 +1448,7 @@ provider:
   model: "gpt-5.4-mini"
   api_key: "test-key"
 agent:
-  memory_recent_days: 0
+  diary_context_days: 0
 """,
                 encoding="utf-8",
             )
@@ -1550,10 +1456,10 @@ agent:
 
             runner = BaseAgentRunner(config_dir=tmpdir)
 
-            self.assertEqual(runner.agent.memory_recent_days, 0)
-            self.assertEqual(runner.agent.memory_handler.recent_days, 0)
+            self.assertEqual(runner.agent.diary_context_days, 0)
+            self.assertEqual(runner.agent.memory_handler.diary_context_days, 0)
 
-    def test_config_accepts_agent_memory_recent_days_custom(self):
+    def test_config_accepts_agent_diary_context_days_custom(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "config.yaml"
             config_path.write_text(
@@ -1562,7 +1468,7 @@ provider:
   model: "gpt-5.4-mini"
   api_key: "test-key"
 agent:
-  memory_recent_days: 9
+  diary_context_days: 9
 """,
                 encoding="utf-8",
             )
@@ -1570,8 +1476,103 @@ agent:
 
             runner = BaseAgentRunner(config_dir=tmpdir)
 
-            self.assertEqual(runner.agent.memory_recent_days, 9)
-            self.assertEqual(runner.agent.memory_handler.recent_days, 9)
+            self.assertEqual(runner.agent.diary_context_days, 9)
+            self.assertEqual(runner.agent.memory_handler.diary_context_days, 9)
+
+    def test_config_enables_the_notebook_by_default(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+  model: "gpt-5.4-mini"
+  api_key: "test-key"
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            runner = BaseAgentRunner(config_dir=tmpdir)
+
+            self.assertTrue(runner.agent.notes_enabled)
+            self.assertTrue(runner.agent.notes_auto_distill)
+            self.assertIsNotNone(runner.agent.note_store)
+            self.assertIsNotNone(runner.agent.memory_handler.note_store)
+            self.assertIn("write_note", runner.agent.tools)
+            self.assertIn("read_note", runner.agent.tools)
+            self.assertIn("search_memory", runner.agent.tools)
+            self.assertIn("see_image", runner.agent.tools)
+            self.assertNotIn("write_memory", runner.agent.tools)
+            self.assertNotIn("generate_image", runner.agent.tools)
+
+    def test_config_can_disable_the_notebook(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+  model: "gpt-5.4-mini"
+  api_key: "test-key"
+agent:
+  notes_enabled: false
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            runner = BaseAgentRunner(config_dir=tmpdir)
+
+            self.assertFalse(runner.agent.notes_enabled)
+            self.assertIsNone(runner.agent.note_store)
+            self.assertIsNone(runner.agent.memory_handler.note_store)
+            self.assertNotIn("write_note", runner.agent.tools)
+            self.assertNotIn("search_note", runner.agent.tools)
+            self.assertNotIn("write_memory", runner.agent.tools)
+            self.assertIn("search_memory", runner.agent.tools)
+            self.assertIn("see_image", runner.agent.tools)
+
+    def test_config_can_disable_only_note_auto_distillation(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+  model: "gpt-5.4-mini"
+  api_key: "test-key"
+agent:
+  notes_auto_distill: false
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            runner = BaseAgentRunner(config_dir=tmpdir)
+
+            self.assertTrue(runner.agent.notes_enabled)
+            self.assertFalse(runner.agent.memory_handler.notes_auto_distill)
+            self.assertIn("write_note", runner.agent.tools)
+
+    def test_config_rejects_non_boolean_notes_keys(self):
+        for key in ("notes_enabled", "notes_auto_distill"):
+            with self.subTest(key=key):
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    config_path = Path(tmpdir) / "config.yaml"
+                    config_path.write_text(
+                        f"""
+provider:
+  model: "gpt-5.4-mini"
+  api_key: "test-key"
+agent:
+  {key}: "yes"
+""",
+                        encoding="utf-8",
+                    )
+                    write_identity(tmpdir)
+
+                    with self.assertRaisesRegex(
+                        ValueError, rf"agent\.{key} must be a boolean"
+                    ):
+                        BaseAgentRunner(config_dir=tmpdir)
 
     def test_agent_uses_internal_memory_recent_max_chars_default(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1593,7 +1594,7 @@ provider:
                 AgentConfig.MEMORY_RECENT_MAX_CHARS,
             )
 
-    def test_config_rejects_negative_agent_memory_recent_days(self):
+    def test_config_rejects_negative_agent_diary_context_days(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "config.yaml"
             config_path.write_text(
@@ -1602,7 +1603,7 @@ provider:
   model: "gpt-5.4-mini"
   api_key: "test-key"
 agent:
-  memory_recent_days: -1
+  diary_context_days: -1
 """,
                 encoding="utf-8",
             )
@@ -1610,7 +1611,7 @@ agent:
 
             with self.assertRaisesRegex(
                 ValueError,
-                r"agent\.memory_recent_days must be a non-negative integer",
+                r"agent\.diary_context_days must be a non-negative integer",
             ):
                 BaseAgentRunner(config_dir=tmpdir)
 

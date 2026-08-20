@@ -82,7 +82,6 @@ from .setup import (
     DEEPSEEK_MODELS,
     DEFAULT_MEMORY_LIST_DAYS,
     DEFAULT_MESSAGE_LIST_COUNT,
-    IMAGE_GENERATION_PROVIDERS,
     LANGFUSE_BASE_URL,
     LANGFUSE_PUBLIC_KEY_PLACEHOLDER,
     LANGFUSE_SECRET_KEY_PLACEHOLDER,
@@ -91,6 +90,7 @@ from .setup import (
     MODEL_PLACEHOLDER,
     OPENAI_MODELS,
     QWEN_MODELS,
+    IMAGE_GENERATION_PROVIDERS,
     SEARCH_PROVIDERS,
     SETUP_EXIT_CANCELLED,
     _format_init_command,
@@ -381,7 +381,7 @@ def _partial_update_options(config_dir: Path) -> list[MenuOption]:
     return [
         MenuOption("model", "Model", "Update the main model provider, model, API key, or custom endpoint."),
         MenuOption("search", "Search", "Change provider-native web search."),
-        MenuOption("image", "Image", "Enable or update image generation provider settings."),
+        MenuOption("image_generation", "Image", "Enable or update image generation provider settings."),
         MenuOption(
             "observability",
             "Observability",
@@ -648,6 +648,13 @@ def _current_search_provider(config: dict[str, Any]) -> str:
     return str(search.get("provider") or "none").strip().lower()
 
 
+def _current_image_generation_provider(config: dict[str, Any]) -> str:
+    image_generation = config.get("image_generation")
+    if not isinstance(image_generation, dict):
+        return "none"
+    return str(image_generation.get("provider") or "none").strip().lower()
+
+
 def _current_model_provider(config: dict[str, Any]) -> str:
     provider = config.get("provider")
     if not isinstance(provider, dict):
@@ -663,13 +670,6 @@ def _current_model_api(config: dict[str, Any]) -> str:
         return provider_model_api(provider)
     except Exception:
         return MODEL_API_OPENAI_CHAT_COMPLETIONS
-
-
-def _current_image_generation_provider(config: dict[str, Any]) -> str:
-    image_generation = config.get("image_generation")
-    if not isinstance(image_generation, dict):
-        return "none"
-    return str(image_generation.get("provider") or "none").strip().lower()
 
 
 def _current_observability(config: dict[str, Any]) -> dict[str, Any]:
@@ -951,6 +951,42 @@ def _run_search_config_launcher(ui: TerminalUI, config_dir: Path) -> bool:
     return _apply_config_update(ui, config_dir, update, return_home_on_success=True)
 
 
+def _run_image_generation_config_launcher(ui: TerminalUI, config_dir: Path) -> bool:
+    try:
+        config = load_config(config_dir)
+    except Exception as exc:
+        ui.print_panel(f"Cannot load config: {exc}", title="Setup", border_style="red")
+        return True
+    current = _current_image_generation_provider(config)
+    choice = ui.select_menu(
+        title="xAgent Setup / Image Generation",
+        subtitle=f"Current provider: {current}",
+        options=_menu_option_rows(
+            IMAGE_GENERATION_PROVIDERS + ("back",),
+            _provider_option_descriptions("image generation"),
+        ),
+        footer="↑/↓ Move • Enter Select  •  q Back",
+    )
+    if choice is None or choice.key == "back":
+        return False
+    api_key = None
+    if image_generation_provider_needs_feature_key(config, choice.key):
+        current_key = ""
+        image_generation = config.get("image_generation")
+        if isinstance(image_generation, dict):
+            current_key = str(image_generation.get("api_key") or "")
+        if choice.key != current or is_placeholder_api_key(current_key):
+            api_key = _required_feature_api_key(ui, provider=choice.key, feature="image generation")
+            if api_key is None:
+                return True
+    try:
+        update = prepare_image_generation_provider_update(config, provider=choice.key, api_key=api_key)
+    except Exception as exc:
+        ui.print_panel(f"Image generation update is invalid: {exc}", title="Setup", border_style="red")
+        return True
+    return _apply_config_update(ui, config_dir, update, return_home_on_success=True)
+
+
 def _prompt_model_reasoning(
     ui: TerminalUI,
     *,
@@ -1135,8 +1171,14 @@ def _run_model_config_launcher(ui: TerminalUI, config_dir: Path) -> bool:
 
     image_generation_api_key = None
     image_provider = _current_image_generation_provider(config)
-    if image_provider != "none" and image_provider != provider and not _feature_api_key_available(config, "image_generation", image_provider):
-        image_generation_api_key = _required_feature_api_key(ui, provider=image_provider, feature="image generation")
+    if (
+        image_provider != "none"
+        and image_provider != provider
+        and not _feature_api_key_available(config, "image_generation", image_provider)
+    ):
+        image_generation_api_key = _required_feature_api_key(
+            ui, provider=image_provider, feature="image generation"
+        )
         if image_generation_api_key is None:
             return True
 
@@ -1190,39 +1232,6 @@ def _model_option_rows(options: Sequence[str], descriptions: Optional[dict[str, 
     if CUSTOM_MODEL_OPTION not in values:
         values.append(CUSTOM_MODEL_OPTION)
     return _menu_option_rows(tuple(values), option_descriptions)
-
-
-def _run_image_generation_config_launcher(ui: TerminalUI, config_dir: Path) -> bool:
-    try:
-        config = load_config(config_dir)
-    except Exception as exc:
-        ui.print_panel(f"Cannot load config: {exc}", title="Setup", border_style="red")
-        return True
-    current = _current_image_generation_provider(config)
-    choice = ui.select_menu(
-        title="xAgent Setup / Image Generation",
-        subtitle=f"Current provider: {current}",
-        options=_menu_option_rows(IMAGE_GENERATION_PROVIDERS + ("back",), _provider_option_descriptions("image generation")),
-        footer="↑/↓ Move • Enter Select  •  q Back",
-    )
-    if choice is None or choice.key == "back":
-        return False
-    api_key = None
-    if image_generation_provider_needs_feature_key(config, choice.key):
-        current_key = ""
-        image_generation = config.get("image_generation")
-        if isinstance(image_generation, dict):
-            current_key = str(image_generation.get("api_key") or "")
-        if choice.key != current or is_placeholder_api_key(current_key):
-            api_key = _required_feature_api_key(ui, provider=choice.key, feature="image generation")
-            if api_key is None:
-                return True
-    try:
-        update = prepare_image_generation_provider_update(config, provider=choice.key, api_key=api_key)
-    except Exception as exc:
-        ui.print_panel(f"Image generation update is invalid: {exc}", title="Setup", border_style="red")
-        return True
-    return _apply_config_update(ui, config_dir, update, return_home_on_success=True)
 
 
 def _run_observability_config_launcher(ui: TerminalUI, config_dir: Path) -> bool:
@@ -1359,7 +1368,7 @@ def _run_partial_update_launcher(ui: TerminalUI, config_dir: Path) -> None:
             should_pause = _run_observability_config_launcher(ui, config_dir)
         elif option.key == "search":
             should_pause = _run_search_config_launcher(ui, config_dir)
-        elif option.key == "image":
+        elif option.key == "image_generation":
             should_pause = _run_image_generation_config_launcher(ui, config_dir)
         if should_pause is True:
             ui.pause("Press Enter to return to Edit Setup")
@@ -1377,7 +1386,7 @@ def _run_resetup_launcher(config_dir: Path) -> int:
                     MenuOption(
                         "partial",
                         "Edit Setup",
-                        "Update model, search, image, or observability. Channels live under Channel.",
+                        "Update model, search, image generation, or observability. Channels live under Channel.",
                     ),
                     MenuOption("full", "Full Setup", "Run the full setup flow again."),
                     MenuOption("back", "Back", "Return to the main launcher."),

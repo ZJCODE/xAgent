@@ -544,7 +544,7 @@ def validate_voice_config(data: dict[str, Any]) -> None:
     VoiceChannelConfig.from_dict(channels["voice"])
 
 
-AGENT_SETUP_FEATURES = ("model", "search", "image", "observability")
+AGENT_SETUP_FEATURES = ("model", "search", "image_generation", "observability")
 _SEARCH_PROVIDER_DESCRIPTIONS = {
     "none": "Do not enable a provider-native web search tool.",
     "openai": "Use OpenAI web search.",
@@ -565,7 +565,7 @@ def _has_usable_secret(value: Any) -> bool:
 
 
 def build_agent_edit_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
-    """Return Edit Setup metadata for the web Agent tab (model/search/image/observability).
+    """Return Edit Setup metadata for the web Agent tab (model/search/image_generation/observability).
 
     Channel setup (voice/feishu/weixin) lives on the Channels tab, not here.
     """
@@ -619,7 +619,7 @@ def build_agent_edit_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
             "disabled_reason": "",
         },
         {
-            "id": "image",
+            "id": "image_generation",
             "kind": "agent",
             "label": "Image",
             "description": "Enable or update image generation provider settings.",
@@ -690,7 +690,7 @@ def build_agent_edit_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
             },
             "placeholders": {"api_key": API_KEY_PLACEHOLDER},
         },
-        "image": {
+        "image_generation": {
             "providers": [
                 {"id": provider, "description": _IMAGE_GENERATION_DESCRIPTIONS.get(provider, "")}
                 for provider in IMAGE_GENERATION_PROVIDERS
@@ -725,8 +725,6 @@ def apply_agent_edit_setup(
 ) -> dict[str, Any]:
     """Apply one Edit Setup feature update and persist config.yaml."""
     normalized = str(feature or "").strip().lower()
-    if normalized == "image_generation":
-        normalized = "image"
     if normalized not in AGENT_SETUP_FEATURES:
         raise ValueError(f"Unsupported setup feature: {feature}")
 
@@ -737,7 +735,7 @@ def apply_agent_edit_setup(
             provider=str(selection.get("provider") or SEARCH_PROVIDER_NONE),
             api_key=selection.get("api_key"),
         )
-    elif normalized == "image":
+    elif normalized == "image_generation":
         update = prepare_image_generation_provider_update(
             config,
             provider=str(selection.get("provider") or IMAGE_GENERATION_PROVIDER_NONE),

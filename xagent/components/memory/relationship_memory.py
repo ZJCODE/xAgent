@@ -22,14 +22,12 @@ import re
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import Any, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
+
+import yaml
 
 logger = logging.getLogger(__name__)
 
-_META_PATTERN = re.compile(
-    r'^<!--\s*rel\s+(?P<attrs>.*?)\s*-->\s*$',
-)
-_ATTR_PATTERN = re.compile(r'(\w+)="((?:[^"\\]|\\.)*)"')
 _SLUG_UNSAFE = re.compile(r"[^a-zA-Z0-9._-]+")
 _PLATFORM_ID_PREFIXES = ("ou_", "on_", "cli_", "oc_")
 _GENERIC_DISPLAY_NAMES = frozenset({
@@ -116,8 +114,7 @@ class RelationshipStore:
     """Store relationship cards as one markdown file per person.
 
     Files live under ``<root>/<channel>/<user_id>.md``. Each file starts with
-    a single metadata comment line owned by this store, followed by the
-    LLM-managed card body.
+    YAML frontmatter owned by this store, followed by the LLM-managed card body.
     """
 
     def __init__(self, relationships_dir: str) -> None:
@@ -180,8 +177,8 @@ class RelationshipStore:
         keys: List[str] = []
         for path in paths:
             text = await asyncio.to_thread(self._read_text_sync, path)
-            meta, _ = self._parse_meta(text)
-            key = meta.get("key", "")
+            meta, _ = self._split_frontmatter(text)
+            key = str(meta.get("key") or "").strip()
             if key:
                 keys.append(key)
         return keys
@@ -205,19 +202,23 @@ class RelationshipStore:
 
     def _render(self, card: RelationshipCard) -> str:
         updated = card.updated or date.today().isoformat()
-        attrs = [f'key="{self._escape(card.key)}"']
+        frontmatter: Dict[str, Any] = {"key": card.key}
         name = human_display_name(card.display_name, user_id=card.user_id, key=card.key)
         if name:
-            attrs.append(f'name="{self._escape(name)}"')
-        attrs.append(f'updated="{self._escape(updated)}"')
-        return f"<!-- rel {' '.join(attrs)} -->\n\n{card.body.strip()}\n"
+            frontmatter["name"] = name
+        frontmatter["updated"] = updated
+        header = yaml.safe_dump(
+            frontmatter,
+            sort_keys=False,
+            allow_unicode=True,
+            default_flow_style=False,
+        ).strip()
+        return f"---\n{header}\n---\n\n{card.body.strip()}\n"
 
     def _parse(self, key: str, text: str) -> RelationshipCard:
-        meta, body = self._parse_meta(text)
-        resolved_key = meta.get("key", key)
+        meta, body = self._split_frontmatter(text)
+        resolved_key = str(meta.get("key") or key).strip() or key
         channel, user_id = self.split_key(resolved_key)
-        channel = meta.get("channel", channel)
-        user_id = meta.get("user_id", user_id)
         return RelationshipCard(
             key=resolved_key,
             body=body.strip(),
@@ -228,31 +229,34 @@ class RelationshipStore:
             ),
             channel=channel,
             user_id=user_id,
-            updated=meta.get("updated", ""),
+            updated=str(meta.get("updated") or "").strip(),
         )
 
     @staticmethod
-    def _parse_meta(text: str) -> Tuple[dict, str]:
-        lines = text.splitlines()
-        if not lines:
-            return {}, ""
-        match = _META_PATTERN.match(lines[0].strip())
-        if not match:
-            return {}, text
-        attrs = {
-            attr_match.group(1): RelationshipStore._unescape(attr_match.group(2))
-            for attr_match in _ATTR_PATTERN.finditer(match.group("attrs"))
-        }
-        body = "\n".join(lines[1:]).strip()
-        return attrs, body
-
-    @staticmethod
-    def _escape(value: str) -> str:
-        return str(value or "").replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ")
-
-    @staticmethod
-    def _unescape(value: str) -> str:
-        return value.replace('\\"', '"').replace("\\\\", "\\")
+    def _split_frontmatter(text: str) -> Tuple[Dict[str, Any], str]:
+        lines = str(text or "").splitlines(keepends=True)
+        if not lines or lines[0].strip() != "---":
+            return {}, str(text or "").strip()
+        closing_index = None
+        for index, line in enumerate(lines[1:], start=1):
+            if line.strip() == "---":
+                closing_index = index
+                break
+        if closing_index is None:
+            return {}, str(text or "").strip()
+        raw = "".join(lines[1:closing_index])
+        body = "".join(lines[closing_index + 1:]).strip()
+        try:
+            loaded = yaml.safe_load(raw) or {}
+        except yaml.YAMLError as exc:
+            logger.warning(
+                "Relationship frontmatter is not valid YAML, falling back to body only: %s",
+                exc,
+            )
+            return {}, body
+        if not isinstance(loaded, dict):
+            return {}, body
+        return loaded, body
 
     # ------------------------------------------------------------------
     # Sync I/O primitives

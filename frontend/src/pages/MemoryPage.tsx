@@ -8,6 +8,7 @@ import { formatTimestamp } from "../lib/format";
 import type { AgentInfo, FileNode, FileReadResult, SearchResult } from "../types";
 
 const TIME_SCOPES = new Set(["daily", "weekly", "monthly", "yearly"]);
+const NOTE_SCOPE = "notes";
 
 export function MemoryPage() {
   const [info, setInfo] = useState<AgentInfo | null>(null);
@@ -59,17 +60,20 @@ export function MemoryPage() {
     }
   };
 
-  const { timeNodes, relNodes } = useMemo(() => {
+  const { timeNodes, relNodes, noteNodes } = useMemo(() => {
     const time: FileNode[] = [];
     const rel: FileNode[] = [];
+    const notes: FileNode[] = [];
     for (const node of tree) {
       if (TIME_SCOPES.has(node.name)) {
         time.push(node);
+      } else if (node.name === NOTE_SCOPE) {
+        notes.push(node);
       } else {
         rel.push(node);
       }
     }
-    return { timeNodes: time, relNodes: rel };
+    return { timeNodes: time, relNodes: rel, noteNodes: notes };
   }, [tree]);
 
   return (
@@ -137,6 +141,12 @@ export function MemoryPage() {
                 <div>
                   <div className="text-[10px] font-semibold uppercase tracking-wider text-zinc-400 mb-1 px-1">Relationships</div>
                   <FileTree nodes={relNodes} selectedPath={selected?.path} onSelect={selectFile} />
+                </div>
+              )}
+              {noteNodes.length > 0 && (
+                <div>
+                  <div className="text-[10px] font-semibold uppercase tracking-wider text-zinc-400 mb-1 px-1">Notes</div>
+                  <FileTree nodes={noteNodes} selectedPath={selected?.path} onSelect={selectFile} />
                 </div>
               )}
             </div>

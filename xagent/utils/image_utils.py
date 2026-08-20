@@ -279,6 +279,100 @@ def resolve_workspace_blob_path(source: str, workspace_dir: str | Path) -> Optio
     return candidate
 
 
+def resolve_workspace_file_path(source: str, workspace_dir: str | Path) -> Optional[Path]:
+    """Resolve a blob URL, relative path, or absolute workspace path to a file inside workspace_dir."""
+    source = extract_source(str(source or "")).strip().strip("<>`")
+    if not source:
+        return None
+    root = Path(workspace_dir).expanduser().resolve()
+    relative_path = workspace_blob_relative_path(source)
+    if relative_path:
+        candidate = (root / relative_path).resolve()
+    else:
+        parsed = urlparse(source)
+        if parsed.scheme and parsed.scheme not in {"", "file"}:
+            return None
+        raw_path = unquote(parsed.path if parsed.scheme == "file" else source)
+        candidate_path = Path(raw_path).expanduser()
+        candidate = (
+            candidate_path.resolve()
+            if candidate_path.is_absolute()
+            else (root / raw_path).resolve()
+        )
+    if not candidate.is_relative_to(root):
+        return None
+    return candidate
+
+
+def workspace_path_is_image(path: Path) -> bool:
+    """Return True when a workspace file looks like a raster image."""
+    if not path.is_file():
+        return False
+    try:
+        header = path.read_bytes()[:16]
+    except OSError:
+        return False
+    if detect_image_mime(header):
+        return True
+    mime_type, _ = mimetypes.guess_type(path.name)
+    return str(mime_type or "").lower().startswith("image/")
+
+
+def workspace_image_data_uri(path: Path) -> str:
+    """Read a workspace image, compress for model transport, and return a data URI."""
+    image_bytes, mime_type = read_image_file_bytes(path, allowed_mime_types=None)
+    compressed = compress_image_bytes_for_transport(
+        image_bytes,
+        mime_type=mime_type,
+        file_name=path.name,
+    )
+    return bytes_to_data_uri(compressed.data, compressed.mime_type)
+
+
+_WORKSPACE_RELATIVE_IMAGE_PATH_RE = re.compile(
+    r"(?<![A-Za-z0-9_./-])(?:\./)?(?:[A-Za-z0-9_.-]+/)+\S*?\.(?:png|jpe?g|gif|webp|bmp|tiff)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_workspace_relative_image_path(source: str) -> bool:
+    normalized = extract_source(str(source or "")).strip().strip("<>`")
+    if not normalized or normalized.startswith(("http://", "https://", "data:", "/api/workspace/blob")):
+        return False
+    posix = normalized.replace("\\", "/")
+    if posix.startswith("/") or ":" in posix.split("/", 1)[0]:
+        return False
+    if "/" not in posix:
+        return False
+    return bool(re.search(r"\.(?:png|jpe?g|gif|webp|bmp|tiff)\Z", posix, re.IGNORECASE))
+
+
+def extract_workspace_image_paths_from_text(text: str) -> list[str]:
+    """Extract workspace-relative image paths from free-form text.
+
+    Bare filenames without a slash are ignored. HTTP URLs and blob URLs are
+    left to ``extract_image_urls_from_text``.
+    """
+    if not isinstance(text, str) or not text.strip():
+        return []
+
+    seen: set[str] = set()
+    result: list[str] = []
+
+    def _add(path: str) -> None:
+        cleaned = extract_source(path).strip().strip("<>`").rstrip(".,;:)")
+        if not _is_workspace_relative_image_path(cleaned) or cleaned in seen:
+            return
+        seen.add(cleaned)
+        result.append(cleaned)
+
+    for match in _MARKDOWN_IMG_IN_TEXT_RE.finditer(text):
+        _add(match.group(1))
+    for match in _WORKSPACE_RELATIVE_IMAGE_PATH_RE.finditer(text):
+        _add(match.group(0))
+    return result
+
+
 def detect_image_mime(image_bytes: bytes) -> Optional[str]:
     """Detect common raster image MIME types from magic bytes."""
     if image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
