@@ -133,7 +133,11 @@ async def _run_shell_command(
             pass
         return {
             "stdout": "",
-            "stderr": f"Command timed out after {timeout} seconds",
+            "stderr": (
+                f"Command timed out after {timeout}s. "
+                f"Retry with higher timeout (max {AgentConfig.MAX_COMMAND_TIMEOUT}) "
+                "if still progressing; otherwise split into smaller commands."
+            ),
             "return_code": -1,
         }
     except Exception as e:
