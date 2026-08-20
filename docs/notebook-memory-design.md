@@ -87,10 +87,9 @@ someone has to remember.
 
 ### 4.2 File format
 
-YAML frontmatter plus first-person body, following the `SKILL.md` precedent (`_parse_frontmatter` in
-`xagent/components/skills/local.py`; `yaml` is already a dependency). Frontmatter is chosen over the
-single `<!-- rel ... -->` metadata line used by relationship cards because notes carry more fields
-and are meant to be read and edited by a human in the Web UI Memory tab.
+YAML frontmatter plus first-person body, following the `SKILL.md` / note precedent. Relationship
+cards use the same frontmatter fence for human-readable Memory browsing; their schema stays small
+(`key`, optional `name`, `updated`) because the path already encodes channel/user_id.
 
 ```markdown
 ---

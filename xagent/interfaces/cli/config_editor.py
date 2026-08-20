@@ -24,6 +24,20 @@ from ...core.providers import (
     provider_base_url,
     provider_model_api,
 )
+from ...tools.image_generation_tool import (
+    DEFAULT_IMAGE_GENERATION_MODEL,
+    DEFAULT_IMAGE_GENERATION_QUALITY,
+    DEFAULT_IMAGE_GENERATION_SIZE,
+    DEFAULT_MINIMAX_IMAGE_GENERATION_ASPECT_RATIO,
+    DEFAULT_MINIMAX_IMAGE_GENERATION_MODEL,
+    DEFAULT_QWEN_IMAGE_GENERATION_MODEL,
+    DEFAULT_QWEN_IMAGE_GENERATION_SIZE,
+    IMAGE_GENERATION_PROVIDER_MINIMAX,
+    IMAGE_GENERATION_PROVIDER_NONE,
+    IMAGE_GENERATION_PROVIDER_OPENAI,
+    IMAGE_GENERATION_PROVIDER_QWEN,
+    normalize_image_generation_provider,
+)
 from ...tools.search_tool import is_placeholder_api_key, normalize_search_provider
 from ..base import BaseAgentConfig, BaseAgentRunner
 from ..voice.config import (
@@ -33,6 +47,12 @@ from ..voice.config import (
 
 SEARCH_PROVIDER_NONE = "none"
 SEARCH_PROVIDERS = (SEARCH_PROVIDER_NONE, PROVIDER_OPENAI, PROVIDER_QWEN, PROVIDER_MINIMAX)
+IMAGE_GENERATION_PROVIDERS = (
+    IMAGE_GENERATION_PROVIDER_NONE,
+    IMAGE_GENERATION_PROVIDER_OPENAI,
+    IMAGE_GENERATION_PROVIDER_MINIMAX,
+    IMAGE_GENERATION_PROVIDER_QWEN,
+)
 MODEL_APIS = (
     MODEL_API_OPENAI_CHAT_COMPLETIONS,
     MODEL_API_OPENAI_RESPONSES,
@@ -157,6 +177,34 @@ def provider_needs_feature_key(config: dict[str, Any], provider: str) -> bool:
     return provider != SEARCH_PROVIDER_NONE and provider != model_provider
 
 
+def image_generation_provider_needs_feature_key(config: dict[str, Any], provider: str) -> bool:
+    model_provider = normalize_provider_name((config.get("provider") or {}).get("name"))
+    return provider != IMAGE_GENERATION_PROVIDER_NONE and provider != model_provider
+
+
+def _image_generation_defaults(provider: str) -> dict[str, Any]:
+    if provider == IMAGE_GENERATION_PROVIDER_OPENAI:
+        return {
+            "provider": provider,
+            "model": DEFAULT_IMAGE_GENERATION_MODEL,
+            "size": DEFAULT_IMAGE_GENERATION_SIZE,
+            "quality": DEFAULT_IMAGE_GENERATION_QUALITY,
+        }
+    if provider == IMAGE_GENERATION_PROVIDER_MINIMAX:
+        return {
+            "provider": provider,
+            "model": DEFAULT_MINIMAX_IMAGE_GENERATION_MODEL,
+            "aspect_ratio": DEFAULT_MINIMAX_IMAGE_GENERATION_ASPECT_RATIO,
+        }
+    if provider == IMAGE_GENERATION_PROVIDER_QWEN:
+        return {
+            "provider": provider,
+            "model": DEFAULT_QWEN_IMAGE_GENERATION_MODEL,
+            "size": DEFAULT_QWEN_IMAGE_GENERATION_SIZE,
+        }
+    return {"provider": IMAGE_GENERATION_PROVIDER_NONE}
+
+
 def _existing_feature_key(config: dict[str, Any], section: str, provider: str) -> str | None:
     current = config.get(section)
     if not isinstance(current, dict):
@@ -214,6 +262,7 @@ def prepare_model_provider_update(
     supports_vision: bool | None = None,
     reasoning: Any = _REASONING_UNSET,
     search_api_key: str | None = None,
+    image_generation_api_key: str | None = None,
 ) -> ConfigUpdate:
     normalized_provider = normalize_provider_name(provider)
     if normalized_provider not in KNOWN_PROVIDERS:
@@ -276,6 +325,19 @@ def prepare_model_provider_update(
                 )
                 search["api_key"] = feature_key
 
+        image_generation = data.get("image_generation")
+        if isinstance(image_generation, dict):
+            image_provider = normalize_image_generation_provider(image_generation.get("provider"))
+            if image_provider != IMAGE_GENERATION_PROVIDER_NONE:
+                feature_key = _resolve_feature_api_key(
+                    data,
+                    section="image_generation",
+                    provider=image_provider,
+                    explicit_api_key=image_generation_api_key,
+                    provider_fallbacks=(provider_config, current_provider),
+                )
+                image_generation["api_key"] = feature_key
+
         data["provider"] = provider_config
 
     return prepare_update(
@@ -292,6 +354,7 @@ def prepare_model_provider_update(
             "provider.reasoning.effort",
             "provider.reasoning.budget_tokens",
             "search.api_key",
+            "image_generation.api_key",
         ),
     )
 
@@ -320,6 +383,48 @@ def prepare_search_provider_update(
         data["search"] = search
 
     return prepare_update(config, mutate, ("search.provider", "search.api_key"))
+
+
+def prepare_image_generation_provider_update(
+    config: dict[str, Any],
+    *,
+    provider: str,
+    api_key: str | None = None,
+) -> ConfigUpdate:
+    normalized_provider = normalize_image_generation_provider(provider)
+    if normalized_provider not in IMAGE_GENERATION_PROVIDERS:
+        raise ValueError(f"Unsupported image generation provider: {provider}")
+
+    def mutate(data: dict[str, Any]) -> None:
+        current = data.get("image_generation") if isinstance(data.get("image_generation"), dict) else {}
+        if normalize_image_generation_provider(current.get("provider")) == normalized_provider:
+            image_generation = dict(current)
+            image_generation["provider"] = normalized_provider
+        else:
+            image_generation = _image_generation_defaults(normalized_provider)
+        if normalized_provider != IMAGE_GENERATION_PROVIDER_NONE:
+            current_provider = data.get("provider") if isinstance(data.get("provider"), dict) else {}
+            image_generation["api_key"] = _resolve_feature_api_key(
+                data,
+                section="image_generation",
+                provider=normalized_provider,
+                explicit_api_key=api_key,
+                provider_fallbacks=(current_provider,),
+            )
+        data["image_generation"] = image_generation
+
+    return prepare_update(
+        config,
+        mutate,
+        (
+            "image_generation.provider",
+            "image_generation.api_key",
+            "image_generation.model",
+            "image_generation.size",
+            "image_generation.quality",
+            "image_generation.aspect_ratio",
+        ),
+    )
 
 
 def prepare_observability_update(
@@ -439,12 +544,18 @@ def validate_voice_config(data: dict[str, Any]) -> None:
     VoiceChannelConfig.from_dict(channels["voice"])
 
 
-AGENT_SETUP_FEATURES = ("model", "search", "observability")
+AGENT_SETUP_FEATURES = ("model", "search", "image_generation", "observability")
 _SEARCH_PROVIDER_DESCRIPTIONS = {
     "none": "Do not enable a provider-native web search tool.",
     "openai": "Use OpenAI web search.",
     "qwen": "Use Qwen web search via DashScope.",
     "minimax": "Use MiniMax web search.",
+}
+_IMAGE_GENERATION_DESCRIPTIONS = {
+    "none": "Do not enable image generation.",
+    "openai": "Use OpenAI image generation.",
+    "minimax": "Use MiniMax image generation.",
+    "qwen": "Use Qwen image generation via DashScope.",
 }
 
 
@@ -454,7 +565,7 @@ def _has_usable_secret(value: Any) -> bool:
 
 
 def build_agent_edit_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
-    """Return Edit Setup metadata for the web Agent tab (model/search/observability).
+    """Return Edit Setup metadata for the web Agent tab (model/search/image_generation/observability).
 
     Channel setup (voice/feishu/weixin) lives on the Channels tab, not here.
     """
@@ -480,6 +591,11 @@ def build_agent_edit_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
 
     search_cfg = config.get("search") if isinstance(config.get("search"), dict) else {}
     search_provider = normalize_search_provider(search_cfg.get("provider"))
+    image_cfg = config.get("image_generation") if isinstance(config.get("image_generation"), dict) else {}
+    try:
+        image_provider = normalize_image_generation_provider(image_cfg.get("provider"))
+    except ValueError:
+        image_provider = IMAGE_GENERATION_PROVIDER_NONE
     observability_cfg = config.get("observability") if isinstance(config.get("observability"), dict) else {}
     observability_enabled = bool(observability_cfg.get("enabled", False))
 
@@ -499,6 +615,15 @@ def build_agent_edit_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
             "label": "Search",
             "description": "Change provider-native web search.",
             "status": search_provider,
+            "disabled": False,
+            "disabled_reason": "",
+        },
+        {
+            "id": "image_generation",
+            "kind": "agent",
+            "label": "Image",
+            "description": "Enable or update image generation provider settings.",
+            "status": image_provider,
             "disabled": False,
             "disabled_reason": "",
         },
@@ -565,6 +690,17 @@ def build_agent_edit_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
             },
             "placeholders": {"api_key": API_KEY_PLACEHOLDER},
         },
+        "image_generation": {
+            "providers": [
+                {"id": provider, "description": _IMAGE_GENERATION_DESCRIPTIONS.get(provider, "")}
+                for provider in IMAGE_GENERATION_PROVIDERS
+            ],
+            "current": {
+                "provider": image_provider,
+                "has_api_key": _has_usable_secret(image_cfg.get("api_key")),
+            },
+            "placeholders": {"api_key": API_KEY_PLACEHOLDER},
+        },
         "observability": {
             "available": observability_available,
             "current": {
@@ -599,6 +735,12 @@ def apply_agent_edit_setup(
             provider=str(selection.get("provider") or SEARCH_PROVIDER_NONE),
             api_key=selection.get("api_key"),
         )
+    elif normalized == "image_generation":
+        update = prepare_image_generation_provider_update(
+            config,
+            provider=str(selection.get("provider") or IMAGE_GENERATION_PROVIDER_NONE),
+            api_key=selection.get("api_key"),
+        )
     elif normalized == "observability":
         update = prepare_observability_update(
             config,
@@ -621,6 +763,7 @@ def apply_agent_edit_setup(
             supports_vision=selection.get("supports_vision"),
             reasoning=reasoning,
             search_api_key=selection.get("search_api_key"),
+            image_generation_api_key=selection.get("image_generation_api_key"),
         )
 
     write_config(config_dir, update.data)

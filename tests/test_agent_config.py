@@ -555,7 +555,7 @@ provider:
             self.assertNotIn("model_api", config["provider"])
             self.assertNotIn("sdk", config["provider"])
             self.assertEqual(config["search"]["provider"], "none")
-            self.assertNotIn("image_generation", config)
+            self.assertEqual(config["image_generation"]["provider"], "none")
             self.assertNotIn("enabled", config["channels"]["api"])
             self.assertEqual(config["channels"]["api"]["host"], "127.0.0.1")
             self.assertIsInstance(config["channels"]["api"]["port"], int)
@@ -667,7 +667,7 @@ provider:
             self.assertNotIn("model_api", config["provider"])
             self.assertNotIn("sdk", config["provider"])
             self.assertEqual(config["search"]["provider"], "none")
-            self.assertNotIn("image_generation", config)
+            self.assertEqual(config["image_generation"]["provider"], "none")
             self.assertEqual(result.identity_path.read_text(encoding="utf-8"), "# Identity\n\nYou report weather.\n")
 
     def test_init_writes_model_api_only_for_custom_provider(self):
@@ -759,7 +759,7 @@ provider:
             self.assertNotIn("voice", config["channels"])
             self.assertNotIn("observability", config)
             self.assertEqual(config["search"], {"provider": "none"})
-            self.assertNotIn("image_generation", config)
+            self.assertEqual(config["image_generation"], {"provider": "none"})
 
     def test_collect_init_selection_supports_custom_identity(self):
         answers = iter([
@@ -1161,7 +1161,7 @@ search:
             self.assertEqual(search_provider.config["api_key"], "qwen-key")
             self.assertEqual(search_provider.config["base_url"], "https://dashscope.aliyuncs.com/compatible-mode/v1")
 
-    def test_config_rejects_image_generation_key(self):
+    def test_config_accepts_image_generation_none_and_skips_tool(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "config.yaml"
             config_path.write_text(
@@ -1170,14 +1170,112 @@ provider:
     model: "gpt-5.4-mini"
     api_key: "test-key"
 image_generation:
+    provider: "none"
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            runner = BaseAgentRunner(config_dir=tmpdir)
+            self.assertNotIn("generate_image", runner.agent.tools)
+
+    def test_config_rejects_openai_image_generation_for_non_openai_provider_without_key(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+    name: "deepseek"
+    model: "deepseek-v4-pro"
+    api_key: "test-key"
+image_generation:
     provider: "openai"
 """,
                 encoding="utf-8",
             )
             write_identity(tmpdir)
 
-            with self.assertRaisesRegex(ValueError, r"Unsupported config key\(s\): image_generation"):
+            with self.assertRaisesRegex(ValueError, "requires image_generation.api_key"):
                 BaseAgentRunner(config_dir=tmpdir)
+
+    def test_config_binds_openai_image_generation_with_feature_key(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+    name: "deepseek"
+    model: "deepseek-v4-pro"
+    base_url: "https://api.deepseek.com"
+    api_key: "deepseek-key"
+image_generation:
+    provider: "openai"
+    api_key: "openai-image-key"
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            runner = BaseAgentRunner(config_dir=tmpdir)
+            self.assertIn("generate_image", runner.agent.tools)
+
+    def test_config_loads_minimax_image_generation_tool_with_main_key(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+    name: "minimax"
+    base_url: "https://api.minimaxi.com/anthropic"
+    model: "MiniMax-M3"
+    api_key: "minimax-key"
+image_generation:
+    provider: "minimax"
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            runner = BaseAgentRunner(config_dir=tmpdir)
+            image_tool = runner.agent.tools["generate_image"]
+            image_provider = next(
+                cell.cell_contents
+                for cell in image_tool.__closure__
+                if cell.cell_contents.__class__.__name__ == "ConfiguredImageGenerationProvider"
+            )
+
+            self.assertIn("generate_image", runner.agent.tools)
+            self.assertEqual(image_provider.provider, "minimax")
+            self.assertEqual(image_provider.config["api_key"], "minimax-key")
+
+    def test_config_loads_qwen_image_generation_tool_with_main_key(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+    name: "qwen"
+    base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    model: "qwen3-max-2026-01-23"
+    api_key: "qwen-key"
+image_generation:
+    provider: "qwen"
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            runner = BaseAgentRunner(config_dir=tmpdir)
+            image_tool = runner.agent.tools["generate_image"]
+            image_provider = next(
+                cell.cell_contents
+                for cell in image_tool.__closure__
+                if cell.cell_contents.__class__.__name__ == "ConfiguredImageGenerationProvider"
+            )
+
+            self.assertIn("generate_image", runner.agent.tools)
+            self.assertEqual(image_provider.provider, "qwen")
+            self.assertEqual(image_provider.config["api_key"], "qwen-key")
 
     def test_config_rejects_name_key(self):
         with tempfile.TemporaryDirectory() as tmpdir:

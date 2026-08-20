@@ -95,10 +95,13 @@ class RelationshipStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(loaded.updated, "2026-06-27")
         self.assertIn("we trust each other", loaded.body)
         rendered = (self.store.root / "feishu" / "ou_1.md").read_text(encoding="utf-8")
-        self.assertIn('key="feishu:ou_1"', rendered)
-        self.assertIn('name="Alice"', rendered)
-        self.assertNotIn("channel=", rendered)
-        self.assertNotIn("user_id=", rendered)
+        self.assertTrue(rendered.startswith("---\n"))
+        self.assertIn("key: feishu:ou_1", rendered)
+        self.assertIn("name: Alice", rendered)
+        self.assertIn("updated: '2026-06-27'", rendered)
+        self.assertNotIn("channel:", rendered.split("---", 2)[1])
+        self.assertNotIn("user_id:", rendered.split("---", 2)[1])
+        self.assertNotIn("<!-- rel", rendered)
 
     async def test_header_omits_name_when_only_platform_id_is_known(self):
         await self.store.write_card(
@@ -114,21 +117,25 @@ class RelationshipStoreTests(unittest.IsolatedAsyncioTestCase):
         rendered = (
             self.store.root / "feishu" / "ou_d988df0a30ef9202a01bd962d8c07c21.md"
         ).read_text(encoding="utf-8")
-        self.assertEqual(
-            rendered.splitlines()[0],
-            '<!-- rel key="feishu:ou_d988df0a30ef9202a01bd962d8c07c21" updated="2026-08-16" -->',
-        )
+        header = rendered.split("---", 2)[1]
+        self.assertIn("key: feishu:ou_d988df0a30ef9202a01bd962d8c07c21", header)
+        self.assertIn("updated: '2026-08-16'", header)
+        self.assertNotIn("name:", header)
         loaded = await self.store.read_card("feishu:ou_d988df0a30ef9202a01bd962d8c07c21")
         self.assertEqual(loaded.display_name, "")
         self.assertEqual(loaded.channel, "feishu")
         self.assertEqual(loaded.user_id, "ou_d988df0a30ef9202a01bd962d8c07c21")
 
-    async def test_parse_legacy_header_drops_id_used_as_name(self):
+    async def test_parse_drops_id_used_as_name(self):
         path = self.store.card_path("feishu:ou_legacy")
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
-            '<!-- rel key="feishu:ou_legacy" name="ou_legacy" channel="feishu" '
-            'user_id="ou_legacy" updated="2026-08-16" -->\n\nStill probing.\n',
+            "---\n"
+            "key: feishu:ou_legacy\n"
+            "name: ou_legacy\n"
+            "updated: '2026-08-16'\n"
+            "---\n\n"
+            "Still probing.\n",
             encoding="utf-8",
         )
         loaded = await self.store.read_card("feishu:ou_legacy")
@@ -149,6 +156,9 @@ class RelationshipStoreTests(unittest.IsolatedAsyncioTestCase):
         loaded = await self.store.read_card('feishu:ou"x')
         self.assertIsNotNone(loaded)
         self.assertEqual(loaded.display_name, 'Bob "the builder"')
+        rendered = self.store.card_path('feishu:ou"x').read_text(encoding="utf-8")
+        self.assertTrue(rendered.startswith("---\n"))
+        self.assertIn("Bob", rendered.split("---", 2)[1])
 
     async def test_read_cards_preserves_order_and_dedupes(self):
         for key, name in (("feishu:a", "A"), ("feishu:b", "B")):

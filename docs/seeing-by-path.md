@@ -35,7 +35,7 @@ Dropped alternatives, and why:
 - **Skill (`SKILL.md`).** A skill is a procedure loaded as text via `read_skill`. It cannot open the vision channel. Domain methods ("how to read this kind of gel") may become skills later; *whether the agent can look* is not a skill.
 - **`understand_image` / caption / OCR tool.** That is a second pair of eyes that returns words. The main model already sees. Tool results are observations; current image tool results are specifically *not* shown to the model. Understanding is what happens after the pixels are on `current_task`.
 - **Re-inject every historical image every turn.** Looking is on demand. Cost and context are the reason path exists.
-- **`generate_image`.** Removed. This proposal does not make pictures.
+- **`generate_image`.** Optional outbound faculty: writes a new image under `assets/generated/images/`. Delivery to the user is a structured attachment on that tool result; looking at it later uses `see_image`; resending uses `attach_artifact`. Same path handle as every other image job.
 - **`attach_artifact`.** Outbound: show or send a file to a person. Inbound seeing is the opposite direction.
 
 ## 4. Mechanism

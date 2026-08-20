@@ -55,6 +55,7 @@ export interface AgentCapabilities {
   vision: boolean;
   vision_input?: boolean;
   web_search: boolean;
+  generate_image?: boolean;
 }
 
 export interface ChatEvent {
@@ -358,7 +359,7 @@ export interface CreateAgentInput {
   selection: InitSelectionInput;
 }
 
-export type AgentEditSetupFeatureId = "model" | "search" | "observability";
+export type AgentEditSetupFeatureId = "model" | "search" | "image_generation" | "observability";
 
 export interface AgentEditSetupFeature {
   id: AgentEditSetupFeatureId;
@@ -394,6 +395,11 @@ export interface AgentEditSetupSchema {
     placeholders: Record<string, string>;
   };
   search: {
+    providers: SetupOption[];
+    current: { provider: string; has_api_key: boolean };
+    placeholders: Record<string, string>;
+  };
+  image_generation: {
     providers: SetupOption[];
     current: { provider: string; has_api_key: boolean };
     placeholders: Record<string, string>;

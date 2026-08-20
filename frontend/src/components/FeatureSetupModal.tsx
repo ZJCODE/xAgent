@@ -6,6 +6,7 @@ import type {
   AgentEditSetupSchema,
   ReasoningCapability,
   ReasoningConfigInput,
+  SetupOption,
 } from "../types";
 import { SetupWizardShell } from "./SetupWizardShell";
 import { WizardField } from "./WizardField";
@@ -46,6 +47,67 @@ function needsFeatureKey(modelProvider: string, featureProvider: string) {
   return featureProvider !== "none" && featureProvider !== modelProvider;
 }
 
+function isProviderFeature(feature: AgentEditSetupFeatureId): feature is "search" | "image_generation" {
+  return feature === "search" || feature === "image_generation";
+}
+
+function providerFeatureSchema(schema: AgentEditSetupSchema, feature: "search" | "image_generation") {
+  return feature === "search" ? schema.search : schema.image_generation;
+}
+
+function ProviderFeatureFields({
+  label,
+  providers,
+  provider,
+  hasApiKey,
+  showFeatureKey,
+  apiKey,
+  onProviderChange,
+  onApiKeyChange,
+}: {
+  label: string;
+  providers: SetupOption[];
+  provider: string;
+  hasApiKey: boolean;
+  showFeatureKey: boolean;
+  apiKey: string;
+  onProviderChange: (value: string) => void;
+  onApiKeyChange: (value: string) => void;
+}) {
+  return (
+    <div className="wizard-grid">
+      <WizardField label={label}>
+        <select value={provider} onChange={(event) => onProviderChange(event.target.value)}>
+          {providers.map((item) => (
+            <option key={item.id} value={item.id}>
+              {item.id}
+            </option>
+          ))}
+        </select>
+      </WizardField>
+      {showFeatureKey ? (
+        <WizardField
+          label="API key"
+          hint={
+            hasApiKey
+              ? "Leave blank to keep the current key."
+              : "Required because this differs from the model provider."
+          }
+        >
+          <input
+            type="password"
+            autoComplete="off"
+            value={apiKey}
+            onChange={(event) => onApiKeyChange(event.target.value)}
+          />
+        </WizardField>
+      ) : provider !== "none" ? (
+        <p className="wizard-hint">Uses the main model API key for this provider.</p>
+      ) : null}
+    </div>
+  );
+}
+
 export function FeatureSetupModal({ open, feature, schema, onClose, onSaved }: FeatureSetupModalProps) {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
@@ -66,8 +128,8 @@ export function FeatureSetupModal({ open, feature, schema, onClose, onSaved }: F
     setError("");
     setSubmitting(false);
     setApiKey("");
-    if (feature === "search") {
-      setProvider(schema.search.current.provider || "none");
+    if (isProviderFeature(feature)) {
+      setProvider(providerFeatureSchema(schema, feature).current.provider || "none");
     } else if (feature === "observability") {
       setObservabilityEnabled(schema.observability.current.enabled);
       setPublicKey("");
@@ -86,9 +148,11 @@ export function FeatureSetupModal({ open, feature, schema, onClose, onSaved }: F
   const title =
     feature === "search"
       ? "Edit Search"
-      : feature === "observability"
-        ? "Edit Observability"
-        : "Edit Model";
+      : feature === "image_generation"
+        ? "Edit Image"
+        : feature === "observability"
+          ? "Edit Observability"
+          : "Edit Model";
 
   const models = schema.model.models[provider] || [];
   const capability = useMemo(
@@ -98,10 +162,14 @@ export function FeatureSetupModal({ open, feature, schema, onClose, onSaved }: F
   const reasoningMode = reasoning?.enabled ? "custom" : "default";
   const reasoningControl = reasoning?.budget_tokens !== undefined ? "budget_tokens" : "effort";
   const showFeatureKey =
-    feature === "search" && needsFeatureKey(schema.model_provider, provider);
+    isProviderFeature(feature) && needsFeatureKey(schema.model_provider, provider);
+  const providerFeature = isProviderFeature(feature) ? providerFeatureSchema(schema, feature) : null;
 
   const isDirty = useMemo(() => {
-    if (feature === "search") return provider !== schema.search.current.provider || Boolean(apiKey.trim());
+    if (isProviderFeature(feature)) {
+      const current = providerFeatureSchema(schema, feature).current;
+      return provider !== current.provider || Boolean(apiKey.trim());
+    }
     if (feature === "observability") {
       return (
         observabilityEnabled !== schema.observability.current.enabled ||
@@ -152,7 +220,7 @@ export function FeatureSetupModal({ open, feature, schema, onClose, onSaved }: F
     setError("");
     try {
       let selection: Record<string, unknown> = {};
-      if (feature === "search") {
+      if (isProviderFeature(feature)) {
         selection = {
           provider,
           api_key: apiKey.trim() || undefined,
@@ -209,37 +277,17 @@ export function FeatureSetupModal({ open, feature, schema, onClose, onSaved }: F
       onNext={() => undefined}
       onSubmit={() => void submit()}
     >
-      {feature === "search" ? (
-        <div className="wizard-grid">
-          <WizardField label="Search provider">
-            <select value={provider} onChange={(event) => setProvider(event.target.value)}>
-              {schema.search.providers.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.id}
-                </option>
-              ))}
-            </select>
-          </WizardField>
-          {showFeatureKey ? (
-            <WizardField
-              label="API key"
-              hint={
-                schema.search.current.has_api_key
-                  ? "Leave blank to keep the current key."
-                  : "Required because this differs from the model provider."
-              }
-            >
-              <input
-                type="password"
-                autoComplete="off"
-                value={apiKey}
-                onChange={(event) => setApiKey(event.target.value)}
-              />
-            </WizardField>
-          ) : provider !== "none" ? (
-            <p className="wizard-hint">Uses the main model API key for this provider.</p>
-          ) : null}
-        </div>
+      {isProviderFeature(feature) && providerFeature ? (
+        <ProviderFeatureFields
+          label={feature === "search" ? "Search provider" : "Image provider"}
+          providers={providerFeature.providers}
+          provider={provider}
+          hasApiKey={providerFeature.current.has_api_key}
+          showFeatureKey={showFeatureKey}
+          apiKey={apiKey}
+          onProviderChange={setProvider}
+          onApiKeyChange={setApiKey}
+        />
       ) : null}
 
       {feature === "observability" ? (

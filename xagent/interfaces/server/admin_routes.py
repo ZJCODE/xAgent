@@ -180,6 +180,7 @@ def register_admin_routes(
                 "vision": supports_vision,
                 "vision_input": supports_vision,
                 "web_search": "web_search" in tool_names,
+                "generate_image": "generate_image" in tool_names,
             },
             "identity": identity,
             "identity_file": server.identity_path.name if hasattr(server, "identity_path") else "identity.md",

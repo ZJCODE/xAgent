@@ -20,6 +20,7 @@ const DEFAULT_CAPABILITIES: AgentCapabilities = {
   vision: true,
   vision_input: true,
   web_search: false,
+  generate_image: false,
 };
 const MAX_IMAGES_PER_MESSAGE = 5;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;

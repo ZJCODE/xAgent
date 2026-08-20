@@ -14,6 +14,11 @@ from ...tools.artifact_tool import (
     artifact_attachments,
     is_artifact_attachment_result,
 )
+from ...tools.image_generation_tool import (
+    generated_image_attachments,
+    generated_image_description,
+    is_generated_image_result,
+)
 from ...tools.see_image_tool import is_see_image_result, see_image_observation
 
 
@@ -229,6 +234,17 @@ class ToolExecutor:
                 logger.error("Tool call error: %s", e)
                 result = f"Tool error: {e}"
                 tool_obs.set_error(str(e))
+
+            if is_generated_image_result(result):
+                result_str = json.dumps(result, ensure_ascii=False)
+                model_output = generated_image_description(name, result)
+                logger.info("Tool `%s` result: %s", name, self._format_preview(result_str))
+                tool_obs.set_output(model_output)
+                return self._tool_result_message(call_id, model_output), ToolDisplayResult(
+                    content="",
+                    description=model_output,
+                    attachments=generated_image_attachments(result),
+                )
 
             if is_artifact_attachment_result(result):
                 result_str = json.dumps(result, ensure_ascii=False)

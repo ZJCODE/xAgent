@@ -68,6 +68,7 @@ from xagent.interfaces.cli.agents import (
 )
 from xagent.interfaces.cli.channels import enabled_channels_from_config
 from xagent.interfaces.cli.config_editor import (
+    prepare_image_generation_provider_update,
     prepare_model_provider_update,
     prepare_observability_update,
     prepare_search_provider_update,
@@ -1017,8 +1018,8 @@ class CLICommandTests(unittest.TestCase):
         self.assertIn("Web        running", subtitle)
         self.assertIn("99999", subtitle)
         self.assertIn("Feishu     running  pid 72069", subtitle)
-        self.assertIn("Not configured: Weixin", subtitle)
-        self.assertNotIn("Image", subtitle)
+        self.assertIn("Not configured: Image, Weixin", subtitle)
+        self.assertNotIn("\nImage ", subtitle)
 
     def test_launcher_channel_options_are_entry_points(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1259,10 +1260,26 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(web_item.status, "idle")
         self.assertEqual(web_item.value, "stopped")
         self.assertIn(str(DEFAULT_WEB_CLIENT_PORT), web_item.detail)
-        self.assertFalse(any(item.name == "Image" for item in overview.items))
+        image_item = next(item for item in overview.items if item.name == "Image")
+        self.assertEqual(image_item.value, "not set")
+        self.assertEqual(image_item.status, "disabled")
         voice = next(item for item in overview.items if item.name == "Voice")
         self.assertEqual(voice.value, "not set")
         self.assertEqual(voice.detail, "")
+
+    def test_runtime_overview_flags_image_generation_missing_key(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir)
+            config_path = Path(tmpdir) / "config.yaml"
+            config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+            config["image_generation"] = {"provider": "qwen"}
+            config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
+
+            overview = build_runtime_overview(Path(tmpdir))
+
+        image = next(item for item in overview.items if item.name == "Image")
+        self.assertEqual(image.status, STATUS_ERROR)
+        self.assertEqual(image.detail, "API key")
 
     def test_runtime_overview_shows_api_and_web_client_when_running(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1349,6 +1366,20 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(saved["search"]["provider"], "qwen")
         self.assertEqual(saved["search"]["api_key"], "qwen-key")
         self.assertIn("search.provider", [change.path for change in update.changes])
+
+    def test_config_editor_updates_image_generation_provider_with_validation(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir)
+            root = Path(tmpdir)
+            config = yaml.safe_load((root / "config.yaml").read_text(encoding="utf-8"))
+
+            update = prepare_image_generation_provider_update(config, provider="qwen", api_key="qwen-key")
+            write_config(root, update.data)
+            saved = yaml.safe_load((root / "config.yaml").read_text(encoding="utf-8"))
+
+        self.assertEqual(saved["image_generation"]["provider"], "qwen")
+        self.assertEqual(saved["image_generation"]["api_key"], "qwen-key")
+        self.assertIn("image_generation.provider", [change.path for change in update.changes])
 
     def test_config_editor_updates_model_provider_and_feature_keys(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1760,7 +1791,7 @@ class CLICommandTests(unittest.TestCase):
             _write_runtime(tmpdir)
             _run_partial_update_launcher(fake_ui, Path(tmpdir))
 
-        self.assertEqual(fake_ui.option_keys, ["model", "search", "observability", "back"])
+        self.assertEqual(fake_ui.option_keys, ["model", "search", "image_generation", "observability", "back"])
         self.assertNotIn("voice", fake_ui.option_keys)
         self.assertNotIn("feishu", fake_ui.option_keys)
         self.assertNotIn("weixin", fake_ui.option_keys)
