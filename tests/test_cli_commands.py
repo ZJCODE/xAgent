@@ -3245,9 +3245,10 @@ class CLICommandTests(unittest.TestCase):
                 "xagent.interfaces.cli.runtime.start_background",
                 return_value=StartResult(ok=False, pid=70780, error="already running (pid=70780)"),
             ):
-                with patch("webbrowser.open", return_value=True) as browser_open:
-                    with patch("sys.stdout", new_callable=io.StringIO) as stdout:
-                        exit_code = handle_web_start(args)
+                with patch("xagent.interfaces.cli.runtime.running_pid", return_value=70780):
+                    with patch("webbrowser.open", return_value=True) as browser_open:
+                        with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                            exit_code = handle_web_start(args)
 
         self.assertEqual(exit_code, 0)
         self.assertIn("already running (pid=70780)", stdout.getvalue())
