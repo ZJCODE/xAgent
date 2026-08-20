@@ -86,14 +86,14 @@ class Agent:
         skills_storage: Optional[SkillsStorageBase] = None,
         observability: Optional[ObservabilityRuntime] = None,
         supports_vision: bool = True,
-        max_history: int = AgentConfig.DEFAULT_MAX_HISTORY,
-        journal_batch_size: int = AgentConfig.JOURNAL_BATCH_SIZE,
-        max_iter: int = AgentConfig.DEFAULT_MAX_ITER,
+        recent_messages: int = AgentConfig.DEFAULT_RECENT_MESSAGES,
+        max_agent_loops: int = AgentConfig.DEFAULT_MAX_AGENT_LOOPS,
         max_concurrent_tools: int = AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS,
-        subconscious_activity: float = AgentConfig.SUBCONSCIOUS_ACTIVITY,
-        memory_recent_days: int = AgentConfig.MEMORY_RECENT_DAYS,
+        diary_write_batch: int = AgentConfig.DIARY_WRITE_BATCH,
+        diary_context_days: int = AgentConfig.DIARY_CONTEXT_DAYS,
         notes_enabled: bool = AgentConfig.NOTES_ENABLED,
         notes_auto_distill: bool = AgentConfig.NOTES_AUTO_DISTILL,
+        subconscious_activity: float = AgentConfig.SUBCONSCIOUS_ACTIVITY,
         provider_name: str = PROVIDER_OPENAI,
         reasoning: Optional[ReasoningConfig] = None,
     ):
@@ -104,14 +104,14 @@ class Agent:
         self.reasoning = reasoning
         self.maintenance_reasoning = maintenance_reasoning_config(reasoning)
         self.supports_vision = bool(supports_vision)
-        self.max_history = max_history
-        self.journal_batch_size = journal_batch_size
-        self.max_iter = max_iter
+        self.recent_messages = recent_messages
+        self.max_agent_loops = max_agent_loops
         self.max_concurrent_tools = max_concurrent_tools
-        self.subconscious_activity = subconscious_activity
-        self.memory_recent_days = memory_recent_days
+        self.diary_write_batch = diary_write_batch
+        self.diary_context_days = diary_context_days
         self.notes_enabled = bool(notes_enabled)
         self.notes_auto_distill = bool(notes_auto_distill)
+        self.subconscious_activity = subconscious_activity
         self.observability = observability or NoopObservabilityRuntime()
         self.client = client
         if self.client is None:
@@ -175,11 +175,11 @@ class Agent:
             memory=self.markdown_memory,
             llm_service=self.llm_service,
             message_storage=self.message_storage,
-            journal_batch_size=self.journal_batch_size,
+            diary_write_batch=self.diary_write_batch,
             relationship_store=self.relationship_store,
             note_store=self.note_store,
             notes_auto_distill=self.notes_auto_distill,
-            recent_days=self.memory_recent_days,
+            diary_context_days=self.diary_context_days,
         )
         self.working_context_compactor = self._build_working_context_compactor(
             runtime_root=runtime_root,
@@ -304,7 +304,7 @@ class Agent:
             store=store,
             message_storage=self.message_storage,
             summarizer=summarizer,
-            hot_window=self.max_history,
+            hot_window=self.recent_messages,
         )
 
     async def _working_context_for_turn(self) -> WorkingContextView:
@@ -341,7 +341,7 @@ class Agent:
         """Build the shared turn preparation context for both chat and chat_events."""
         working_context = await self._working_context_for_turn()
         recent_messages = await msg_handler.get_recent_messages(
-            max_history=AgentConfig.history_fetch_depth(self.max_history),
+            limit=AgentConfig.history_fetch_depth(self.recent_messages),
         )
         memory_context = await self.memory_handler.get_recent_context()
         relationship_context = await self._relationship_context_for_turn(
@@ -366,7 +366,7 @@ class Agent:
             memory_context=memory_context,
             relationship_context=relationship_context,
             notebook_context=notebook_context,
-            max_messages=self.max_history,
+            max_messages=self.recent_messages,
             include_images=self.supports_vision,
             workspace_dir=getattr(self, "workspace_dir", None),
             current_message=user_msg,
@@ -678,7 +678,7 @@ class Agent:
                     already_visible=MessageHandler.count_current_task_images(iteration_messages),
                 )
 
-            for iteration_index in range(self.max_iter):
+            for iteration_index in range(self.max_agent_loops):
                 if self.inbox.abort_requested():
                     yield self._aborted_event()
                     yield {"type": "done"}
@@ -859,7 +859,7 @@ class Agent:
 
             payload = build_public_error(
                 code=ERROR_TURN_EXHAUSTED,
-                cause=f"Failed to generate response after {self.max_iter} attempts",
+                cause=f"Failed to generate response after {self.max_agent_loops} attempts",
             )
             turn_obs.set_error(
                 error_id=payload["error_id"],

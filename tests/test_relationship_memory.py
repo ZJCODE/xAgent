@@ -333,12 +333,12 @@ class MemoryHandlerRelationshipTests(unittest.IsolatedAsyncioTestCase):
     def tearDown(self):
         self._tmpdir.cleanup()
 
-    def _make_handler(self, storage, llm, journal_batch_size=20):
+    def _make_handler(self, storage, llm, diary_write_batch=20):
         return MemoryHandler(
             memory=self.memory,
             llm_service=llm,
             message_storage=storage,
-            journal_batch_size=journal_batch_size,
+            diary_write_batch=diary_write_batch,
             relationship_store=self.store,
         )
 
@@ -494,7 +494,7 @@ class MemoryHandlerRelationshipTests(unittest.IsolatedAsyncioTestCase):
             message.channel = "feishu"
         storage = _FakeMessageStorage(messages)
         llm = _FakeDiaryLLMService(cards={"feishu:alice": "Alice and I talk often."})
-        handler = self._make_handler(storage, llm, journal_batch_size=20)
+        handler = self._make_handler(storage, llm, diary_write_batch=20)
 
         wrote = await handler.run_maintenance(force=True)
         self.assertTrue(wrote)

@@ -571,12 +571,12 @@ class MemoryHandlerNotebookTests(unittest.IsolatedAsyncioTestCase):
     def tearDown(self):
         self._tmpdir.cleanup()
 
-    def _make_handler(self, storage, llm, journal_batch_size=20, notes_auto_distill=True):
+    def _make_handler(self, storage, llm, diary_write_batch=20, notes_auto_distill=True):
         return MemoryHandler(
             memory=self.memory,
             llm_service=llm,
             message_storage=storage,
-            journal_batch_size=journal_batch_size,
+            diary_write_batch=diary_write_batch,
             note_store=self.notes,
             notes_auto_distill=notes_auto_distill,
         )
@@ -731,7 +731,7 @@ class MemoryHandlerNotebookTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory,
             llm_service=_FakeDiaryLLMService(),
             message_storage=_FakeMessageStorage(),
-            journal_batch_size=20,
+            diary_write_batch=20,
         )
         self.assertEqual(await handler.get_notebook_context("anything"), "")
 

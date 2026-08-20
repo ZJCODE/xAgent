@@ -159,8 +159,8 @@ class SubconsciousLoopTests(unittest.TestCase):
         agent = MagicMock()
         agent.system_prompt = "You are a helpful assistant."
         agent.supports_vision = True
-        agent.max_history = AgentConfig.DEFAULT_MAX_HISTORY
-        agent.max_iter = AgentConfig.DEFAULT_MAX_ITER
+        agent.recent_messages = AgentConfig.DEFAULT_RECENT_MESSAGES
+        agent.max_agent_loops = AgentConfig.DEFAULT_MAX_AGENT_LOOPS
         agent.max_concurrent_tools = AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS
         agent._assistant_sender_id = "agent"
         memory_handler = MagicMock()

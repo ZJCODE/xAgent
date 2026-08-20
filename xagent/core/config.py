@@ -71,12 +71,12 @@ class AgentConfig:
     # 4. Agent Runtime Bounds
     # Iteration cap, conversation history window, and context-event
     # limit. Prevent infinite loops and unbounded prompt growth.
-    # DEFAULT_MAX_HISTORY is the prompt hot window (raw conversation
+    # DEFAULT_RECENT_MESSAGES is the prompt hot window (raw conversation
     # messages kept verbatim). SQLite fetch depth is derived from it so
     # observation-heavy streams can still fill the hot window.
     # ============================================================
-    DEFAULT_MAX_ITER = 50
-    DEFAULT_MAX_HISTORY = 12
+    DEFAULT_MAX_AGENT_LOOPS = 50
+    DEFAULT_RECENT_MESSAGES = 12
     MAX_CONTEXT_EVENTS = 12
     # Working-summary roll slack is derived from the hot window:
     # round(0.5 * hot_window), clamped to [MIN, MAX]. Not a user config key.
@@ -97,7 +97,7 @@ class AgentConfig:
         Fetch depth must therefore exceed the hot window so observation-heavy
         streams can still fill ``hot_window`` conversation entries.
         """
-        window = max(1, int(hot_window or AgentConfig.DEFAULT_MAX_HISTORY))
+        window = max(1, int(hot_window or AgentConfig.DEFAULT_RECENT_MESSAGES))
         events = max(
             1,
             int(
@@ -115,7 +115,7 @@ class AgentConfig:
         ``threshold = hot_window + slack``. Slack batches LLM rolls without
         being a separate user-facing knob.
         """
-        window = max(1, int(hot_window or AgentConfig.DEFAULT_MAX_HISTORY))
+        window = max(1, int(hot_window or AgentConfig.DEFAULT_RECENT_MESSAGES))
         raw = int(round(window * AgentConfig.WORKING_CONTEXT_ROLL_SLACK_RATIO))
         return max(
             AgentConfig.WORKING_CONTEXT_ROLL_SLACK_MIN,
@@ -143,18 +143,18 @@ class AgentConfig:
     # ============================================================
     # 7. Memory & History
     # Tune the size and overlap of the recent-memory window.
-    # Override per agent via config.yaml: agent.memory_recent_days (0 disables injection).
+    # Override per agent via config.yaml: agent.diary_context_days (0 disables injection).
     # MEMORY_RECENT_MAX_CHARS is an internal prompt-budget guard, not user config.
-    # JOURNAL_BATCH_SIZE is the diary maintenance commit cadence (threshold/batch
-    # cap). It is intentionally separate from DEFAULT_MAX_HISTORY, which budgets
+    # DIARY_WRITE_BATCH is the diary maintenance commit cadence (threshold/batch
+    # cap). It is intentionally separate from DEFAULT_RECENT_MESSAGES, which budgets
     # how many raw conversation messages enter the prompt.
-    # MEMORY_WINDOW_OVERLAP_RATIO applies to JOURNAL_BATCH_SIZE only.
+    # MEMORY_WINDOW_OVERLAP_RATIO applies to DIARY_WRITE_BATCH only.
     # ============================================================
-    MEMORY_RECENT_DAYS = 2
+    DIARY_CONTEXT_DAYS = 2
     MEMORY_RECENT_MAX_CHARS = 8000
-    # Diary commit cadence. Keep independent from DEFAULT_MAX_HISTORY so prompt
+    # Diary commit cadence. Keep independent from DEFAULT_RECENT_MESSAGES so prompt
     # hot-window tuning cannot fragment journal entries.
-    JOURNAL_BATCH_SIZE = 32
+    DIARY_WRITE_BATCH = 32
     MEMORY_WINDOW_OVERLAP_RATIO = 0.2
 
     # ------------------------------------------------------------------

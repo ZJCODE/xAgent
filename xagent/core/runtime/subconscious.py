@@ -419,9 +419,9 @@ class SubconsciousLoop:
         if not callable(getattr(model_client, "model_turn_events", None)):
             raise RuntimeError("Agent model_client does not support model_turn_events()")
 
-        max_iter = int(getattr(self._agent, "max_iter", AgentConfig.DEFAULT_MAX_ITER) or AgentConfig.DEFAULT_MAX_ITER)
+        max_agent_loops = int(getattr(self._agent, "max_agent_loops", AgentConfig.DEFAULT_MAX_AGENT_LOOPS) or AgentConfig.DEFAULT_MAX_AGENT_LOOPS)
 
-        for _ in range(max_iter):
+        for _ in range(max_agent_loops):
             text_parts: List[str] = []
             tool_calls = []
             async for model_event in model_client.model_turn_events(
@@ -452,7 +452,7 @@ class SubconsciousLoop:
 
             raise RuntimeError("Subconscious model turn ended without text or tool calls")
 
-        raise RuntimeError(f"Subconscious thought failed after {max_iter} attempts")
+        raise RuntimeError(f"Subconscious thought failed after {max_agent_loops} attempts")
 
     async def _build_subconscious_turn_context(self) -> tuple[list[dict], list[dict], list]:
         """Build model input using the same layers as a normal agent turn."""
@@ -460,9 +460,9 @@ class SubconsciousLoop:
         if message_handler is None:
             raise RuntimeError("Agent has no message_handler")
 
-        hot_window = getattr(self._agent, "max_history", AgentConfig.DEFAULT_MAX_HISTORY)
+        hot_window = getattr(self._agent, "recent_messages", AgentConfig.DEFAULT_RECENT_MESSAGES)
         recent_messages = await message_handler.get_recent_messages(
-            max_history=AgentConfig.history_fetch_depth(hot_window)
+            limit=AgentConfig.history_fetch_depth(hot_window)
         )
         memory_context = await self._collect_memory_context()
         relationship_context = await self._collect_relationship_context()

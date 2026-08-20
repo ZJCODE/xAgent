@@ -172,16 +172,16 @@ class MessageHandler:
 
     async def get_recent_messages(
         self,
-        max_history: int,
+        limit: int,
     ) -> List[Message]:
-        return await self.message_storage.get_messages(max_history)
+        return await self.message_storage.get_messages(limit)
 
     async def get_input_messages(
         self,
-        max_history: int,
+        limit: int,
     ) -> list:
         """Retrieve and serialize recent messages for model input."""
-        messages = await self.get_recent_messages(max_history)
+        messages = await self.get_recent_messages(limit)
         return [msg.to_model_input() for msg in messages]
 
     @staticmethod
@@ -208,7 +208,7 @@ class MessageHandler:
         current_user_id: str,
         memory_context: str = "",
         context_events: Optional[List[Message]] = None,
-        max_messages: int = AgentConfig.DEFAULT_MAX_HISTORY,
+        max_messages: int = AgentConfig.DEFAULT_RECENT_MESSAGES,
         max_context_events: int = AgentConfig.MAX_CONTEXT_EVENTS,
         include_images: bool = True,
         workspace_dir: Optional[Union[str, Path]] = None,
@@ -301,7 +301,7 @@ class MessageHandler:
         context_events: Optional[List[Message]] = None,
         current_time: Optional[str] = None,
         current_date: Optional[str] = None,
-        max_messages: int = AgentConfig.DEFAULT_MAX_HISTORY,
+        max_messages: int = AgentConfig.DEFAULT_RECENT_MESSAGES,
         max_context_events: int = AgentConfig.MAX_CONTEXT_EVENTS,
         include_images: bool = True,
         workspace_dir: Optional[Union[str, Path]] = None,
@@ -683,7 +683,7 @@ class MessageHandler:
 
         selected, omitted_count = MessageHandler._budget_by_coverage(
             messages,
-            max_keep=max(1, int(max_messages or AgentConfig.DEFAULT_MAX_HISTORY)),
+            max_keep=max(1, int(max_messages or AgentConfig.DEFAULT_RECENT_MESSAGES)),
             covers_through_cursor=covers_through_cursor,
         )
         return [

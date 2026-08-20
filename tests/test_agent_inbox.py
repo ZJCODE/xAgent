@@ -100,8 +100,8 @@ class AgentInboxTests(unittest.IsolatedAsyncioTestCase):
         agent.system_prompt = ""
         agent._assistant_sender_id = "agent"
         agent.supports_vision = True
-        agent.max_history = AgentConfig.DEFAULT_MAX_HISTORY
-        agent.max_iter = AgentConfig.DEFAULT_MAX_ITER
+        agent.recent_messages = AgentConfig.DEFAULT_RECENT_MESSAGES
+        agent.max_agent_loops = AgentConfig.DEFAULT_MAX_AGENT_LOOPS
         agent.max_concurrent_tools = AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS
         agent.observability = NoopObservabilityRuntime()
         agent.tool_manager = FakeToolManager()

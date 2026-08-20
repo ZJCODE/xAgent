@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 class MemoryHandler:
     """Manages recent diary context and count-based journal maintenance."""
 
-    RECENT_DAYS = AgentConfig.MEMORY_RECENT_DAYS
+    RECENT_DAYS = AgentConfig.DIARY_CONTEXT_DAYS
     RECENT_MAX_CHARS = AgentConfig.MEMORY_RECENT_MAX_CHARS
     DEFAULT_JOURNAL_SOURCE_CHARS = 24000  # Soft per-batch source budget; records remain intact.
     DIARY_OMITTED_NOTICE = "earlier diary omitted within recent window"
@@ -57,8 +57,8 @@ class MemoryHandler:
         llm_service: JournalLLMService,
         message_storage: MessageStorage,
         *,
-        journal_batch_size: int,
-        recent_days: Optional[int] = None,
+        diary_write_batch: int,
+        diary_context_days: Optional[int] = None,
         recent_max_chars: Optional[int] = None,
         max_journal_source_chars: Optional[int] = None,
         relationship_store: Optional["RelationshipStore"] = None,
@@ -71,15 +71,15 @@ class MemoryHandler:
         self.relationship_store = relationship_store
         self.note_store = note_store
         self.notes_auto_distill = bool(notes_auto_distill)
-        self.journal_batch_size = self._positive_int(
-            journal_batch_size,
-            AgentConfig.JOURNAL_BATCH_SIZE,
+        self.diary_write_batch = self._positive_int(
+            diary_write_batch,
+            AgentConfig.DIARY_WRITE_BATCH,
         )
-        self.recent_days = self._non_negative_int(recent_days, self.RECENT_DAYS)
+        self.diary_context_days = self._non_negative_int(diary_context_days, self.RECENT_DAYS)
         self.recent_max_chars = self._non_negative_int(recent_max_chars, self.RECENT_MAX_CHARS)
         self.window_overlap = min(
-            max(1, int(self.journal_batch_size * AgentConfig.MEMORY_WINDOW_OVERLAP_RATIO)),
-            self.journal_batch_size - 1,
+            max(1, int(self.diary_write_batch * AgentConfig.MEMORY_WINDOW_OVERLAP_RATIO)),
+            self.diary_write_batch - 1,
         )
         self.max_journal_source_chars = self._positive_int(
             max_journal_source_chars,
@@ -102,7 +102,7 @@ class MemoryHandler:
         This is injected verbatim into the system prompt so the model always
         has recent diary context without needing a tool call.
         """
-        days = self.recent_days if days is None else self._non_negative_int(days, self.recent_days)
+        days = self.diary_context_days if days is None else self._non_negative_int(days, self.diary_context_days)
         if days <= 0:
             return ""
 
@@ -312,17 +312,17 @@ class MemoryHandler:
         # the persisted cursor so it is safe across multiple processes.
         if not force:
             unprocessed_count = latest_message_id - self._last_processed_message_id
-            if unprocessed_count < self.journal_batch_size - self.window_overlap:
+            if unprocessed_count < self.diary_write_batch - self.window_overlap:
                 return False
 
         # Build a cursor-bounded window that starts window_overlap entries
         # before the last checkpoint (for diary continuity between adjacent
-        # batches) and is capped at journal_batch_size (to bound the LLM budget
+        # batches) and is capped at diary_write_batch (to bound the LLM budget
         # even when many messages accumulate between maintenance cycles).
         # Advancing the checkpoint to the batch end rather than to
         # latest_message_id ensures overflow messages are not dropped.
         start_exclusive = max(0, self._last_processed_message_id - self.window_overlap)
-        end_inclusive = min(latest_message_id, start_exclusive + self.journal_batch_size)
+        end_inclusive = min(latest_message_id, start_exclusive + self.diary_write_batch)
         if end_inclusive <= 0:
             return False
 
@@ -334,7 +334,7 @@ class MemoryHandler:
             # Jump checkpoint forward.  If messages were deleted (id gap),
             # leap to just before latest so the next cycle catches real data
             # instead of inching forward one window at a time.
-            jump_to = max(end_inclusive, latest_message_id - self.journal_batch_size)
+            jump_to = max(end_inclusive, latest_message_id - self.diary_write_batch)
             await self._commit_processed_message_id(jump_to)
             return False
 

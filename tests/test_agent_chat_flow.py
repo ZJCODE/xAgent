@@ -1266,8 +1266,8 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         agent.system_prompt = ""
         agent._assistant_sender_id = "agent"
         agent.supports_vision = True
-        agent.max_history = AgentConfig.DEFAULT_MAX_HISTORY
-        agent.max_iter = AgentConfig.DEFAULT_MAX_ITER
+        agent.recent_messages = AgentConfig.DEFAULT_RECENT_MESSAGES
+        agent.max_agent_loops = AgentConfig.DEFAULT_MAX_AGENT_LOOPS
         agent.max_concurrent_tools = AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS
         agent.observability = observability or NoopObservabilityRuntime()
         agent.tool_manager = FakeToolManager(tools=tools)
@@ -1306,7 +1306,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
             system_prompt="",
             workspace_dir=workspace,
         )
-        agent.max_iter = 3
+        agent.max_agent_loops = 3
         return agent
 
     @staticmethod
@@ -1431,8 +1431,8 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
             tool_executor=tool_executor,
         )
 
-        agent.max_history = 10
-        agent.max_iter = 3
+        agent.recent_messages = 10
+        agent.max_agent_loops = 3
         result = await Agent.chat(
             agent,
             user_message="Run the lookup and summarize it",
@@ -1531,8 +1531,8 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
             memory_handler=memory_handler,
         )
 
-        agent.max_history = 10
-        agent.max_iter = 3
+        agent.recent_messages = 10
+        agent.max_agent_loops = 3
         events = [
             event async for event in Agent.chat_events(
                 agent,
@@ -1926,7 +1926,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         ])
         agent = self._build_agent(storage=storage, model_client=model_client)
 
-        agent.max_iter = 2
+        agent.max_agent_loops = 2
         result = await Agent.chat(
             agent,
             user_message="latest request",
@@ -1937,7 +1937,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, "Final answer")
         self.assertEqual(
             storage.last_count,
-            AgentConfig.history_fetch_depth(AgentConfig.DEFAULT_MAX_HISTORY),
+            AgentConfig.history_fetch_depth(AgentConfig.DEFAULT_RECENT_MESSAGES),
         )
         transcript = next(
             message for message in model_client.calls[0]
@@ -1948,7 +1948,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("old-49", transcript)
         self.assertIn("latest request", transcript)
 
-    async def test_chat_respects_explicit_max_history(self):
+    async def test_chat_respects_explicit_recent_messages(self):
         storage = InMemoryMessageStorage([
             Message.create(f"old-{index:02d}", role=RoleType.USER, sender_id="alice")
             for index in range(50)
@@ -1957,8 +1957,8 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
             (ReplyType.SIMPLE_REPLY, "Final answer"),
         ])
         agent = self._build_agent(storage=storage, model_client=model_client)
-        agent.max_history = 15
-        agent.max_iter = 2
+        agent.recent_messages = 15
+        agent.max_agent_loops = 2
 
         result = await Agent.chat(
             agent,
@@ -1999,8 +1999,8 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
             (ReplyType.SIMPLE_REPLY, "Final answer"),
         ])
         agent = self._build_agent(storage=storage, model_client=model_client)
-        agent.max_history = 10
-        agent.max_iter = 2
+        agent.recent_messages = 10
+        agent.max_agent_loops = 2
 
         result = await Agent.chat(
             agent,
@@ -2034,7 +2034,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         ])
         agent = self._build_agent(storage=storage, model_client=model_client)
 
-        agent.max_iter = 1
+        agent.max_agent_loops = 1
 
         events = []
         async for event in Agent.chat_events(
