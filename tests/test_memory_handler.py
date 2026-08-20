@@ -7,6 +7,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from xagent.components.memory import MarkdownMemory
+from xagent.core.config import AgentConfig
 from xagent.core.handlers.memory import MemoryHandler
 from xagent.schemas import Message, MessageType, RoleType
 
@@ -22,17 +23,21 @@ class _FakeLLMService:
         self.fail_on_diary_call_number = None
         self.diary_gate = None
         self.diary_started = asyncio.Event()
+        self.empty_diary = False
 
-    async def format_diary_entry(self, messages, journal_date):
+    async def format_diary_entry(self, messages, journal_date, existing_today=""):
         self.diary_calls.append({
             "journal_date": journal_date,
             "messages": list(messages),
+            "existing_today": existing_today,
         })
         self.diary_started.set()
         if self.diary_gate is not None:
             await self.diary_gate.wait()
         if self.fail_on_diary_call_number is not None and len(self.diary_calls) >= self.fail_on_diary_call_number:
             raise RuntimeError("diary failed")
+        if self.empty_diary:
+            return ""
         return "\n".join(str(message.get("content", "")) for message in messages if message.get("content"))
 
     async def generate_summary(self, source_content, period_type, period_label):
@@ -42,7 +47,9 @@ class _FakeLLMService:
 
 class _FakeMessageStorage:
     def __init__(self, messages=None):
-        self.messages = list(messages or [])
+        self.messages = []
+        for message in messages or []:
+            self.append(message)
 
     async def get_message_count(self):
         return len(self.messages)
@@ -69,7 +76,10 @@ class _FakeMessageStorage:
         return normalized if normalized <= len(self.messages) else 0
 
     def append(self, message: Message) -> None:
-        self.messages.append(message)
+        cursor = len(self.messages) + 1
+        metadata = dict(message.metadata or {})
+        metadata[AgentConfig.MESSAGE_STORAGE_CURSOR_KEY] = cursor
+        self.messages.append(message.model_copy(update={"metadata": metadata}))
 
 
 class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
@@ -752,6 +762,69 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
         overlap_second = set(second_contents[:overlap])
         self.assertEqual(overlap_first, overlap_second,
                          f"Expected overlap: {sorted(overlap_first)} vs {sorted(overlap_second)}")
+        second_msgs = second_llm.diary_calls[0]["messages"]
+        for message in second_msgs[:overlap]:
+            self.assertTrue(message.get("already_journaled"), message)
+        for message in second_msgs[overlap:]:
+            self.assertFalse(bool(message.get("already_journaled")), message)
+        self.assertIn("msg 0", second_llm.diary_calls[0]["existing_today"])
+
+    async def test_second_maintenance_passes_existing_today(self):
+        for i in range(20):
+            self.storage.append(Message(
+                role=RoleType.USER,
+                sender_id="alice",
+                content=f"first-batch-{i}",
+                timestamp=1716000000.0 + i,
+            ))
+        handler = MemoryHandler(
+            memory=self.memory,
+            llm_service=self.llm,
+            message_storage=self.storage,
+            diary_write_batch=_TEST_DIARY_WRITE_BATCH,
+        )
+        self.assertTrue(await handler.run_maintenance(force=False))
+        self.assertEqual(self.llm.diary_calls[0]["existing_today"], "")
+
+        for i in range(20, 40):
+            self.storage.append(Message(
+                role=RoleType.USER,
+                sender_id="alice",
+                content=f"second-batch-{i}",
+                timestamp=1716000000.0 + i,
+            ))
+        second_llm = _FakeLLMService()
+        handler.llm_service = second_llm
+        self.assertTrue(await handler.run_maintenance(force=False))
+
+        existing = second_llm.diary_calls[0]["existing_today"]
+        self.assertIn("first-batch-0", existing)
+        self.assertIn("first-batch-19", existing)
+
+    async def test_empty_diary_slice_still_advances_checkpoint(self):
+        storage = _FakeMessageStorage([
+            Message(
+                role=RoleType.USER,
+                sender_id="alice",
+                content="already covered",
+                timestamp=1710000000.0,
+            )
+        ])
+        llm = _FakeLLMService()
+        llm.empty_diary = True
+        handler = MemoryHandler(
+            memory=self.memory,
+            llm_service=llm,
+            message_storage=storage,
+            diary_write_batch=_TEST_DIARY_WRITE_BATCH,
+        )
+
+        wrote = await handler.run_maintenance(force=True)
+
+        self.assertTrue(wrote)
+        self.assertEqual(handler._last_processed_message_id, 1)
+        today_text = await self.memory.read_file(self.memory.daily_path(date.today()))
+        self.assertEqual(today_text.strip(), "")
 
     async def test_generate_previous_weekly_summary_if_missing_writes_summary(self):
         today = date(2026, 5, 18)  # Monday

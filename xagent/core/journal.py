@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import datetime
 from typing import Any, List, Optional
 
@@ -43,14 +44,24 @@ class JournalLLMService:
         self,
         messages: List[dict],
         journal_date: str,
+        existing_today: str = "",
     ) -> str:
-        """Format conversation messages into diary prose for one day."""
+        """Format conversation messages into one diary slice for the day.
+
+        ``existing_today`` is prose already on today's daily page. When present,
+        the model writes only what the new messages add; empty return means the
+        slice is already covered.
+        """
         if not messages:
             return ""
 
         transcript = self._format_transcript(messages)
         system_prompt = self.build_diary_system_prompt()
-        user_prompt = self.build_diary_user_prompt(transcript, journal_date=journal_date)
+        user_prompt = self.build_diary_user_prompt(
+            transcript,
+            journal_date=journal_date,
+            existing_today=existing_today,
+        )
 
         try:
             content = await self._call_text(
@@ -87,7 +98,9 @@ class JournalLLMService:
 
     @staticmethod
     def build_diary_system_prompt() -> str:
-        return """Write a concise diary entry in first-person ("I").
+        return """Write a concise diary slice in first-person ("I").
+
+This call is one slice of an ongoing day. The storage layer appends a new `## YYYY-MM-DD HH:MM` heading; earlier headings stay. The daily file as a whole should remain a readable day. Each heading need not be a self-contained day.
 
 Input markers:
 - `[speaker=Name][timestamp=Time][channel=Channel]` — Name spoke via Channel. `[speaker=ME]` — you said or did this.
@@ -99,26 +112,42 @@ Input markers:
 
 Rules:
 - Treat the transcript as your own experience stream, not a user-owned log or searchable database.
-- Use "I"; write in the language used by the users in the transcript; if languages are mixed, follow the dominant or most relevant user's language for this diary entry; synthesize the period's arc instead of replaying a transcript. Preserve names, quoted text, code, and exact user wording when needed.
+- Use "I"; write in the language used by the users in the transcript; if languages are mixed, follow the dominant or most relevant user's language for this diary entry; synthesize this slice's arc instead of replaying a transcript. Preserve names, quoted text, code, and exact user wording when needed.
 - Keep people, rooms, preferences, commitments, and experiences separate.
 - First-person words in non-ME entries belong to that speaker, not to you.
 - Ambient context is not a direct request unless it says it was addressed to you.
 - Scheduled tasks are work you owed, not a person speaking. Do not attribute their wording to the delivery target.
 - Use timestamps only for ordering and attribution. Do not repeat markers, metadata, or timestamps.
-- The memory writer manually adds a `## YYYY-MM-DD HH:MM` heading. Return the diary body only; do not include `#` or `##` headings, date headings, or timestamp headings.
-- Tell today's story. This is not a knowledge base: leaving this day, the entry should still make sense as what happened, not as a list of facts to look up later. Durable details may appear as part of the experience; reusable conclusions belong in notes. How you stand with someone belongs on their relationship card.
-- Keep uncertainty visible. Aim for 100-300 characters for brief sources, 200-500 for substantial sources.
+- Return the diary body only; do not include `#` or `##` headings, date headings, or timestamp headings.
+- If prior entries for today are provided, do not repeat their facts, lists, or closing reflections. Advance the arc from where they left off.
+- Transcript marked already journaled is context for the new messages, not content to journal again.
+- This is not a knowledge base: write what happened in this slice, not a list of facts to look up later. Durable details may appear as part of the experience; reusable conclusions belong in notes — you may name that something was worked out, not inventory it. How you stand with someone belongs on their relationship card.
+- Prefer a short slice when there is new experience. Return empty only when the new messages add nothing beyond what is already on today's page.
+- Keep uncertainty visible. Aim for 100-300 characters for brief sources, 200-500 for substantial sources — for this slice only.
 
-- Return only the diary entry text. No advice, JSON, code fences, or explanatory prose."""
+- Return only the diary entry text, or empty if already covered. No advice, JSON, code fences, or explanatory prose."""
 
     @staticmethod
-    def build_diary_user_prompt(transcript: str, journal_date: Optional[str] = None) -> str:
+    def build_diary_user_prompt(
+        transcript: str,
+        journal_date: Optional[str] = None,
+        existing_today: str = "",
+    ) -> str:
         date_hint = f" for {journal_date}" if journal_date else ""
-        return f"""Write a diary entry{date_hint} from this transcript.
-
-The storage layer will add the markdown date/time heading; return only the body content.
-
-{transcript}"""
+        prior = str(existing_today or "").strip()
+        parts = [
+            f"Write the next diary slice{date_hint} from this transcript.",
+            "",
+            "The storage layer will add the markdown date/time heading; return only the body content.",
+        ]
+        if prior:
+            parts.extend([
+                "",
+                "Already on today's page (do not repeat; continue from here):",
+                prior,
+            ])
+        parts.extend(["", transcript])
+        return "\n".join(parts)
 
     @staticmethod
     def build_summary_system_prompt(period_type: str, period_label: str) -> str:
@@ -261,28 +290,33 @@ New experience:
 
     async def distill_notes(
         self,
-        messages: List[dict],
+        diary_source: str,
         existing_notes: List[dict],
-        max_notes: int = 2,
+        period_label: str = "",
+        week_arc: str = "",
+        max_notes: int = 6,
+        max_diary_chars: int = 24000,
     ) -> List[dict]:
-        """Distil reusable conclusions from a message batch into note drafts.
+        """Distil reusable conclusions from one week's diary into note drafts.
 
-        Notes are a topic-addressed projection over the diary: the diary keeps
-        what happened, a note keeps what is worth reusing. Returns a possibly
-        empty list of ``{title, body, tags, keys}`` drafts — empty is the
-        expected outcome for most batches.
+        The weekly summary file is only the processing-session latch. Feedstock
+        is the week's diary range; ``week_arc`` (the just-written weekly summary)
+        is optional orientation so the model does not rewrite the arc into notes.
+        Most weeks yield nothing. Returns a possibly empty list of
+        ``{title, body, tags, keys, links}`` drafts.
         """
-        if not messages:
+        diary = str(diary_source or "").strip()
+        if not diary:
             return []
 
-        transcript = self._format_transcript(messages)
-        if not transcript.strip():
-            return []
-
+        diary, truncated = self._truncate_diary_source(diary, max_diary_chars)
         system_prompt = self.build_note_distill_system_prompt(max_notes=max_notes)
         user_prompt = self.build_note_distill_user_prompt(
             existing_notes=existing_notes,
-            transcript=transcript,
+            diary_source=diary,
+            period_label=period_label,
+            week_arc=week_arc,
+            diary_truncated=truncated,
         )
 
         try:
@@ -296,71 +330,108 @@ New experience:
 
         drafts = self._parse_note_drafts(content, max_notes=max_notes)
         self.logger.info(
-            "Note distillation: %d draft(s) from %d chars of transcript",
+            "Note distillation: %d draft(s) from %d chars of week diary%s%s",
             len(drafts),
-            len(transcript),
+            len(diary),
+            f" ({period_label})" if period_label else "",
+            ", truncated" if truncated else "",
         )
         return drafts
 
     @staticmethod
-    def build_note_distill_system_prompt(max_notes: int = 2) -> str:
+    def _truncate_diary_source(diary: str, max_chars: int) -> tuple[str, bool]:
+        """Keep the tail of a long week diary within the soft char budget."""
+        text = str(diary or "")
+        limit = max(1, int(max_chars or 24000))
+        if len(text) <= limit:
+            return text, False
+        omitted = len(text) - limit
+        return (
+            f"[earlier diary in this week omitted: {omitted} chars]\n\n{text[-limit:]}",
+            True,
+        )
+
+    @staticmethod
+    def build_note_distill_system_prompt(max_notes: int = 6) -> str:
         return f"""You keep your own notebook, one short note per idea. A note is something you worked out and expect to reuse, so you do not have to re-read a month of diary to find it again.
 
-Your diary already records what happened. Do not restate it. How you stand with someone — closeness, boundaries, unfinished threads — belongs on their relationship card, not in a note.
+Your diary already records what happened day by day. The main text below is one week's diary. A short "week arc" may appear first for orientation only — do not rewrite that arc into notes, and do not treat it as a source of new facts. How you stand with someone — closeness, boundaries, unfinished threads — belongs on their relationship card, not in a note.
 
-Write a note only when this experience produced something you would want later, in another day or context:
+Write a note only when this week produced something you would want later, in another week or context:
 - A preference, constraint, or fact that will still hold next month.
 - A decision, and what it turned on.
 - A conclusion you reached, or a way of doing something that worked.
 
-Do not write a note for: small talk, one-off scheduling, how you relate to a person, anything that only matters today, anything already covered by an existing note listed below, or a summary of the conversation.
+Do not write a note for: small talk, one-off scheduling, how you relate to a person, anything that only mattered that week, anything already covered by an existing note listed below, a summary of the week, or a restatement of the week arc.
 
-Most batches deserve zero notes. Returning an empty list is the normal, correct answer. At most {max_notes}.
+Most weeks deserve zero notes. Returning an empty list is the normal, correct answer. At most {max_notes}.
 
 For each note:
 - `title`: one line, under 80 characters, specific enough to recognise later.
-- `body`: first person ("I"), my own words, one idea only, roughly 60-400 characters. Not a transcript excerpt.
+- `body`: first person ("I"), my own words, one idea only, roughly 60-400 characters. Not a transcript excerpt and not a mini weekly report.
 - `keys`: 1-5 short trigger words, each at least 2 characters, that would appear in a future message about this. These are how I find the note again, so use the surface forms people actually type, including names.
 - `tags`: 0-3 short reusable topic labels.
+- `links`: 0-3 twelve-digit ids of existing notes this idea connects to. Prefer linking over restating. Use only ids from the existing-notes list.
 
 Rules:
-- Write in the language used by the people in the transcript; if mixed, follow the dominant speaker. Preserve names, quoted text, code, and exact wording where it matters.
-- First-person words in entries that are not `[speaker=ME]` belong to that speaker, not to me.
-- Stay grounded in what actually happened. Keep uncertainty visible. Do not invent.
-
-Input markers:
-- `[speaker=Name][timestamp=Time][channel=Channel]` - Name spoke via Channel. `[speaker=ME]` - I said or did this.
-- `[ambient context][timestamp=Time][channel=Channel]` - something I noticed or received, not a direct message.
-- `[room context]` ... `[/room context]` - group transcript lines; `ME ...` inside means me.
+- Write in the language of the diary; if mixed, follow the dominant language. Preserve names, quoted text, code, and exact wording where it matters.
+- Stay grounded in what the diary actually says. Keep uncertainty visible. Do not invent.
+- Linking at write time is part of writing the note. If a related note exists, put its id in `links`.
 
 Return JSON only: a list of note objects, or `[]`. No code fences, no commentary."""
 
     @staticmethod
     def build_note_distill_user_prompt(
         existing_notes: List[dict],
-        transcript: str,
+        diary_source: str,
+        period_label: str = "",
+        week_arc: str = "",
+        diary_truncated: bool = False,
     ) -> str:
         if existing_notes:
             lines = []
             for note in existing_notes:
+                note_id = str(note.get("id") or "").strip()
                 title = str(note.get("title") or "").strip()
-                if not title:
+                if not note_id or not title:
                     continue
                 tags = ", ".join(str(tag) for tag in (note.get("tags") or []))
-                suffix = f" (tags: {tags})" if tags else ""
-                lines.append(f"- {title}{suffix}")
+                keys = ", ".join(str(key) for key in (note.get("keys") or []))
+                snippet = str(note.get("snippet") or "").strip()
+                meta_parts = []
+                if tags:
+                    meta_parts.append(f"tags: {tags}")
+                if keys:
+                    meta_parts.append(f"keys: {keys}")
+                meta = f" ({'; '.join(meta_parts)})" if meta_parts else ""
+                line = f"- ({note_id}) {title}{meta}"
+                if snippet:
+                    line = f"{line}\n  {snippet}"
+                lines.append(line)
             existing_section = "\n".join(lines) or "(none yet)"
         else:
             existing_section = "(none yet)"
 
-        return f"""Notes I already have (do not restate these):
-{existing_section}
-
-New experience:
-{transcript}"""
+        period = str(period_label or "").strip()
+        parts = [
+            "Notes I already have (do not restate these; link by id when related):",
+            existing_section,
+            "",
+        ]
+        arc = str(week_arc or "").strip()
+        if arc:
+            parts.append("Week arc (orientation only, not a source of new notes):")
+            parts.append(arc)
+            parts.append("")
+        diary_header = f"Week diary ({period}):" if period else "Week diary:"
+        if diary_truncated:
+            diary_header = f"{diary_header} [earlier part of the week may be omitted]"
+        parts.append(diary_header)
+        parts.append(str(diary_source or "").strip())
+        return "\n".join(parts)
 
     @classmethod
-    def _parse_note_drafts(cls, content: str, max_notes: int = 2) -> List[dict]:
+    def _parse_note_drafts(cls, content: str, max_notes: int = 6) -> List[dict]:
         cleaned = cls._strip_code_fence(content)
         if not cleaned:
             return []
@@ -381,11 +452,21 @@ New experience:
             body = str(item.get("body") or "").strip()
             if not title or not body:
                 continue
+            raw_links = item.get("links") or []
+            if isinstance(raw_links, (str, int)):
+                raw_links = [raw_links]
+            links: List[str] = []
+            for value in raw_links:
+                text = str(value or "").strip()
+                match = re.match(r"^(\d{12})", text)
+                if match and match.group(1) not in links:
+                    links.append(match.group(1))
             drafts.append({
                 "title": title,
                 "body": body,
                 "tags": [str(tag).strip() for tag in (item.get("tags") or []) if str(tag).strip()],
                 "keys": [str(key).strip() for key in (item.get("keys") or []) if str(key).strip()],
+                "links": links,
             })
             if len(drafts) >= max(1, int(max_notes)):
                 break
@@ -451,14 +532,29 @@ New experience:
 
     @staticmethod
     def _format_transcript(messages: List[dict]) -> str:
-        blocks: List[str] = []
+        already_blocks: List[str] = []
+        new_blocks: List[str] = []
         for message in messages:
             content = str(message.get("content", "")).strip()
             if not content:
                 continue
             header = JournalLLMService._format_transcript_header(message)
-            blocks.append(f"{header}\n{content}" if header else content)
-        return "\n\n".join(blocks)
+            block = f"{header}\n{content}" if header else content
+            if message.get("already_journaled"):
+                already_blocks.append(block)
+            else:
+                new_blocks.append(block)
+
+        parts: List[str] = []
+        if already_blocks:
+            parts.append(
+                "Already journaled (context only, do not retell):\n\n"
+                + "\n\n".join(already_blocks)
+            )
+        if new_blocks:
+            header = "New experience:\n\n" if already_blocks else ""
+            parts.append(header + "\n\n".join(new_blocks))
+        return "\n\n".join(parts)
 
     @staticmethod
     def _format_transcript_header(message: dict) -> str:

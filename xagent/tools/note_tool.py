@@ -60,12 +60,15 @@ def create_write_note_tool(store: NoteStore, is_enabled: bool = True):
         name="write_note",
         description=(
             "Add one note to your notebook: a durable, reusable conclusion in your own "
-            "words. One idea per note. Use it for preferences, constraints, decisions and "
-            "what they turned on, or an approach that worked. Your diary already records "
-            "what happened, so do not use this to summarise a conversation. Do not write "
-            "one-off scheduling, how you stand with a person, or anything that only "
-            "matters today. If a note on the topic already exists the tool says so; "
-            "update that one instead."
+            "words. One idea per note. Use it only when this turn produced a standing "
+            "fact that will still hold across days — a preference, constraint, decision "
+            "and what it turned on, or an approach that worked. Your diary already "
+            "records what happened, and weekly distillation will surface post-hoc "
+            "conclusions later — do not summarise the conversation, guess what might be "
+            "useful, or do the week's processing yourself. Do not write one-off "
+            "scheduling, how you stand with a person, or anything that only matters "
+            "today. Link related notes when you can. If a note on the topic already "
+            "exists the tool says so; update that one instead."
         ),
         param_descriptions={
             "title": "One line, under 80 characters, specific enough to recognise later.",
@@ -79,14 +82,19 @@ def create_write_note_tool(store: NoteStore, is_enabled: bool = True):
                 "surface forms people actually type."
             ),
             "tags": "0-3 short reusable topic labels.",
-            "links": "Ids of related notes. Linking is what makes the notebook navigable.",
+            "links": (
+                "Ids of related notes. Linking at write time is what makes the notebook "
+                "navigable; prefer linking over inventing a new category. Omit if there "
+                "is no clear neighbour yet — weekly/monthly processing may add links later."
+            ),
             "sensitivity": (
                 "shareable (general knowledge), person-scoped (belongs to one person's "
                 "context, must not travel), or private (yours alone)."
             ),
             "kind": (
-                "note for an idea, hub for an entry point that links a cluster together, "
-                "ref for a digest of an external source."
+                "note for an idea (default); ref for a digest of an external source; "
+                "hub only when you deliberately open a cluster entry point — most hubs "
+                "are created by later gardening."
             ),
         },
     )
@@ -161,9 +169,12 @@ def create_update_note_tool(store: NoteStore, is_enabled: bool = True):
     @function_tool(
         name="update_note",
         description=(
-            "Revise a note in your notebook: correct it, sharpen it, add links, pin it, or "
-            "archive it when it stopped being true. Only the fields you pass change. "
-            "Prefer this over writing a second note on the same idea."
+            "Revise a note in your notebook. After a week of life, this is usually the "
+            "right tool — not write_note: correct a conclusion that stopped holding, "
+            "sharpen wording, add or replace links to related notes, pin a few that "
+            "should stay in mind, or archive one that is no longer true. Only the "
+            "fields you pass change. Prefer this over writing a second note on the "
+            "same idea."
         ),
         param_descriptions={
             "note_id": "The 12-digit id of the note to revise.",
@@ -171,7 +182,10 @@ def create_update_note_tool(store: NoteStore, is_enabled: bool = True):
             "body": "Replacement body, in first person and your own words.",
             "keys": "Replacement trigger words for recall.",
             "tags": "Replacement topic labels.",
-            "links": "Replacement list of related note ids.",
+            "links": (
+                "Replacement list of related note ids (full replace, not append). Pass "
+                "the complete set you want kept."
+            ),
             "sensitivity": "shareable, person-scoped, or private.",
             "pinned": (
                 "Pin a note to keep it in mind every turn. Reserve this for the few notes "

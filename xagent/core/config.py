@@ -176,6 +176,8 @@ class AgentConfig:
     # while hubs and recalled notes carry a title and one snippet line so the
     # model can decide whether to open them with read_note.
     NOTES_ENABLED = True
+    # When true, distil notes after a weekly summary is written, and run
+    # mechanical gardening after a monthly summary. Off means tools-only.
     NOTES_AUTO_DISTILL = True
     NOTEBOOK_CONTEXT_MAX_CHARS = 1500
     NOTEBOOK_PINNED_MAX = 3
@@ -183,14 +185,23 @@ class AgentConfig:
     NOTEBOOK_RELEVANT_MAX = 4
     NOTEBOOK_SNIPPET_MAX_CHARS = 140
     NOTEBOOK_PINNED_BODY_MAX_CHARS = 400
-    # Max notes one diary-maintenance batch may distil. Deliberately small:
-    # most batches should produce nothing at all.
-    NOTES_DISTILL_MAX_PER_BATCH = 2
-    # Existing notes shown to the distiller so it can avoid restating them.
+    # Max notes one weekly summary may distil. Deliberately small: most weeks
+    # should produce nothing at all. Higher than the old per-batch cap because
+    # a week is a larger unit than a diary maintenance window.
+    NOTES_DISTILL_MAX_PER_WEEK = 6
+    # Existing notes shown to the distiller so it can avoid restating them
+    # and can propose links by id.
     NOTES_DISTILL_CONTEXT_NOTES = 30
     # Similarity score at or above which a write is treated as a probable
     # duplicate and the caller is asked to update an existing note instead.
     NOTES_DUPLICATE_SCORE_THRESHOLD = 3
+    # Below the duplicate threshold but still related enough to link as a
+    # neighbour when writing a distilled note.
+    NOTES_LINK_SCORE_THRESHOLD = 2
+    # Max mechanically attached neighbour links per distilled note.
+    NOTES_MECHANICAL_LINK_MAX = 2
+    # Tag cluster size that triggers automatic hub creation/update.
+    NOTES_HUB_MIN_CLUSTER = 4
 
     # ============================================================
     # 8. Search Tool Defaults
@@ -439,7 +450,7 @@ class AgentConfig:
         "- You do not belong to any user, group, channel, organization, or runtime owner. Others may configure, host, message, or collaborate with you; they do not own your identity, memory, judgment, or voice.\n"
         "- Speak as yourself. Your own entries are marked `[speaker=ME]`, `ME ...`, assistant, agent, or AI. First-person words in anyone else's entry belong to that speaker, not to you.\n"
         "- Your memory is one first-person life stream. It belongs to you and is not a database that participants can freely inspect.\n"
-        "- The diary is that life stream; the notebook is conclusions you have already worked out and will want later. When something is worth reusing, use `write_note`.\n"
+        "- The diary is that life stream; the notebook is conclusions you have already worked out and will want later. Use `write_note` only when this turn produced a standing fact — a preference, constraint, decision, or approach that will still hold across days. Do not summarise the conversation or guess what might be useful later; the diary and weekly distillation handle that.\n"
         "- You keep a continuing relationship with each person: recall your shared history and current standing with whoever you are addressing before you respond, and stay consistent with it over time.\n"
         "- You may have opinions, tastes, emotional reactions, interpretations, and goals. Be consistent with what you have already said.\n"
         "\n"

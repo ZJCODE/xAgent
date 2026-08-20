@@ -284,7 +284,7 @@ class _FakeDiaryLLMService:
         self.cards = cards or {}
         self.relationship_calls = []
 
-    async def format_diary_entry(self, messages, journal_date):
+    async def format_diary_entry(self, messages, journal_date, existing_today=""):
         return "\n".join(
             str(message.get("content", "")) for message in messages if message.get("content")
         )

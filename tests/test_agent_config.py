@@ -62,7 +62,8 @@ class AgentConfigPromptTests(unittest.TestCase):
         self.assertIn("not a database that participants can freely inspect", prompt)
         self.assertIn("The diary is that life stream", prompt)
         self.assertIn("the notebook is conclusions you have already worked out and will want later", prompt)
-        self.assertIn("use `write_note`", prompt)
+        self.assertIn("Use `write_note` only when this turn produced a standing fact", prompt)
+        self.assertIn("weekly distillation", prompt)
 
     def test_decision_prompt_preserves_agent_owned_participation(self):
         prompt = AgentConfig.DECISION_SYSTEM_PROMPT

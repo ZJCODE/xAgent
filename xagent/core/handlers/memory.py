@@ -39,6 +39,7 @@ class MemoryHandler:
     RECENT_DAYS = AgentConfig.DIARY_CONTEXT_DAYS
     RECENT_MAX_CHARS = AgentConfig.MEMORY_RECENT_MAX_CHARS
     DEFAULT_JOURNAL_SOURCE_CHARS = 24000  # Soft per-batch source budget; records remain intact.
+    EXISTING_TODAY_MAX_CHARS = 4000  # Newest-first trim of today's page for the diary writer.
     DIARY_OMITTED_NOTICE = "earlier diary omitted within recent window"
     _DIARY_HR_RE = re.compile(r"(?m)^---\s*$")
     _DIARY_ENTRY_HEADING_RE = re.compile(r"(?m)^## \d{4}-\d{2}-\d{2} \d{2}:\d{2}\s*$")
@@ -338,11 +339,16 @@ class MemoryHandler:
             await self._commit_processed_message_id(jump_to)
             return False
 
-        new_records = [
-            self._experience_record(message)
-            for message in recent_messages
-            if self._is_memory_worthy_experience(message)
-        ]
+        checkpoint = self._last_processed_message_id
+        new_records = []
+        for message in recent_messages:
+            if not self._is_memory_worthy_experience(message):
+                continue
+            record = self._experience_record(message)
+            cursor = self._storage_cursor_from_metadata(record.get("metadata"))
+            if cursor is not None and cursor <= checkpoint:
+                record["already_journaled"] = True
+            new_records.append(record)
         if not new_records:
             await self._commit_processed_message_id(end_inclusive)
             return False
@@ -362,7 +368,6 @@ class MemoryHandler:
                 return False
 
         await self._update_relationship_cards(recent_messages, new_records)
-        await self._distill_notes(recent_messages, new_records, cursor=end_inclusive)
 
         if not await self._commit_processed_message_id(end_inclusive):
             logger.warning(
@@ -371,6 +376,17 @@ class MemoryHandler:
             return False
 
         return True
+
+    @staticmethod
+    def _storage_cursor_from_metadata(metadata: object) -> Optional[int]:
+        if not isinstance(metadata, dict):
+            return None
+        raw = metadata.get(AgentConfig.MESSAGE_STORAGE_CURSOR_KEY)
+        try:
+            cursor = int(raw)
+        except (TypeError, ValueError):
+            return None
+        return cursor if cursor > 0 else None
 
     @staticmethod
     def _experience_record(message: Message) -> dict:
@@ -571,54 +587,66 @@ class MemoryHandler:
     # Notebook (topic-addressed projection over the diary)
     # ------------------------------------------------------------------
 
-    async def _distill_notes(
+    async def _distill_notes_from_weekly(
         self,
-        recent_messages: List[Message],
-        new_records: List[dict],
-        cursor: int = 0,
+        diary_source: str,
+        week_start: date,
+        week_end: date,
+        week_arc: str = "",
+        period_label: str = "",
     ) -> None:
-        """Distil reusable conclusions from this batch into notes.
+        """Distil reusable conclusions after a weekly summary is written.
 
-        Runs on records that just became a diary entry, so a note can only ever
-        come from experience the diary already holds. Best-effort like
-        relationship cards: a failure here must never break diary maintenance.
+        The weekly file is only the processing-session latch. Feedstock is the
+        week's diary range (already fetched for the summary); the summary body
+        is optional orientation, not the sole upstream. Best-effort: a failure
+        here must never roll back the weekly summary.
         """
         if self.note_store is None or not self.notes_auto_distill:
             return
+        if not str(diary_source or "").strip():
+            return
         try:
-            from ...components.memory import (
-                Note,
-                SENSITIVITY_PERSON_SCOPED,
-                SENSITIVITY_SHAREABLE,
-            )
+            from ...components.memory import Note, SENSITIVITY_SHAREABLE
 
             existing = await self.note_store.list_notes()
+            snippet_cap = AgentConfig.NOTEBOOK_SNIPPET_MAX_CHARS
             candidates = await self.llm_service.distill_notes(
-                messages=new_records,
+                diary_source=diary_source,
+                week_arc=week_arc,
+                period_label=period_label,
                 existing_notes=[
-                    {"id": note.id, "title": note.title, "tags": list(note.tags)}
+                    {
+                        "id": note.id,
+                        "title": note.title,
+                        "tags": list(note.tags),
+                        "keys": list(note.keys),
+                        "snippet": (note.snippet or "")[:snippet_cap],
+                    }
                     for note in existing[: AgentConfig.NOTES_DISTILL_CONTEXT_NOTES]
                 ],
-                max_notes=AgentConfig.NOTES_DISTILL_MAX_PER_BATCH,
+                max_notes=AgentConfig.NOTES_DISTILL_MAX_PER_WEEK,
+                max_diary_chars=self.max_journal_source_chars,
             )
             if not candidates:
                 return
 
-            participants = self._extract_participants(recent_messages)
-            person_key = participants[0]["key"] if len(participants) == 1 else ""
+            known_ids = {note.id for note in existing}
             today_str = date.today().isoformat()
-            cursor = self._non_negative_int(cursor, 0)
+            diary_range = [week_start.isoformat(), week_end.isoformat()]
 
             written: list[str] = []
-            for candidate in candidates[: AgentConfig.NOTES_DISTILL_MAX_PER_BATCH]:
+            for candidate in candidates[: AgentConfig.NOTES_DISTILL_MAX_PER_WEEK]:
                 title = str(candidate.get("title") or "").strip()
                 body = str(candidate.get("body") or "").strip()
                 if not title or not body:
                     continue
+                keys = candidate.get("keys")
+                tags = candidate.get("tags")
                 duplicate = await self._existing_note_covering(
                     title=title,
-                    keys=candidate.get("keys"),
-                    tags=candidate.get("tags"),
+                    keys=keys,
+                    tags=tags,
                 )
                 if duplicate is not None:
                     logger.debug(
@@ -627,31 +655,227 @@ class MemoryHandler:
                         duplicate.id,
                     )
                     continue
-                source: dict = {"diary": [today_str]}
-                if person_key:
-                    source["person"] = person_key
-                if cursor > 0:
-                    source["cursor"] = cursor
+
+                model_links = [
+                    link_id
+                    for link_id in (candidate.get("links") or [])
+                    if str(link_id).strip() in known_ids
+                ]
+                neighbour_links = await self._mechanical_neighbour_links(
+                    title=title,
+                    keys=keys,
+                    tags=tags,
+                )
+                links = self._merge_link_ids(model_links, neighbour_links)
+
                 note = await self.note_store.create(
                     Note(
                         id="",
                         title=title,
                         body=body,
-                        tags=tuple(candidate.get("tags") or ()),
-                        keys=tuple(candidate.get("keys") or ()),
-                        sensitivity=(
-                            SENSITIVITY_PERSON_SCOPED if person_key else SENSITIVITY_SHAREABLE
-                        ),
-                        source=source,
+                        tags=tuple(tags or ()),
+                        keys=tuple(keys or ()),
+                        links=tuple(links),
+                        sensitivity=SENSITIVITY_SHAREABLE,
+                        source={"diary": list(diary_range)},
                         created=today_str,
                         updated=today_str,
                     )
                 )
+                known_ids.add(note.id)
                 written.append(f"{note.id} ({len(note.body)} chars)")
             if written:
-                logger.info("Distilled %d note(s): %s", len(written), ", ".join(written))
+                logger.info(
+                    "Distilled %d note(s) from weekly %s: %s",
+                    len(written),
+                    period_label or f"{week_start}..{week_end}",
+                    ", ".join(written),
+                )
         except Exception as exc:
             logger.warning("Note distillation failed: %s", exc, exc_info=True)
+
+    async def _mechanical_neighbour_links(
+        self,
+        title: str,
+        keys=None,
+        tags=None,
+    ) -> List[str]:
+        """Return related note ids below the duplicate threshold for write-time linking."""
+        if self.note_store is None:
+            return []
+        from ...components.memory import NoteStore
+
+        similar = await self.note_store.find_similar(
+            title=title,
+            keys=keys,
+            tags=tags,
+            limit=AgentConfig.NOTES_MECHANICAL_LINK_MAX + 2,
+        )
+        linked: List[str] = []
+        for candidate in similar:
+            score = NoteStore.identity_score(candidate, title, keys, tags)
+            if score >= AgentConfig.NOTES_DUPLICATE_SCORE_THRESHOLD:
+                continue
+            if score < AgentConfig.NOTES_LINK_SCORE_THRESHOLD:
+                continue
+            linked.append(candidate.id)
+            if len(linked) >= AgentConfig.NOTES_MECHANICAL_LINK_MAX:
+                break
+        return linked
+
+    @staticmethod
+    def _merge_link_ids(*groups) -> List[str]:
+        merged: List[str] = []
+        for group in groups:
+            for value in group or ():
+                link_id = str(value or "").strip()
+                if link_id and link_id not in merged:
+                    merged.append(link_id)
+        return merged
+
+    async def _garden_notes_after_monthly(self, period_label: str = "") -> None:
+        """Mechanical gardening after a monthly summary is written.
+
+        Best-effort: never rolls back the monthly summary. Controlled by the
+        same ``notes_auto_distill`` switch as weekly distillation.
+        """
+        if self.note_store is None or not self.notes_auto_distill:
+            return
+        try:
+            linked = await self._link_orphan_notes()
+            hubs = await self._ensure_tag_hubs()
+            if linked or hubs:
+                logger.info(
+                    "Notebook gardening after monthly %s: linked %d orphan(s), "
+                    "created/updated %d hub(s)",
+                    period_label or "period",
+                    linked,
+                    hubs,
+                )
+        except Exception as exc:
+            logger.warning("Notebook gardening failed: %s", exc, exc_info=True)
+
+    async def _link_orphan_notes(self) -> int:
+        """Attach 1–2 neighbour links to active notes with no links and no backlinks."""
+        if self.note_store is None:
+            return 0
+        from ...components.memory import NoteStore
+        from dataclasses import replace
+
+        notes = await self.note_store.list_notes()
+        if len(notes) < 2:
+            return 0
+
+        linked_count = 0
+        today_str = date.today().isoformat()
+        for note in notes:
+            if note.links:
+                continue
+            if await self.note_store.backlinks(note.id):
+                continue
+            similar = await self.note_store.find_similar(
+                title=note.title,
+                keys=note.keys,
+                tags=note.tags,
+                limit=AgentConfig.NOTES_MECHANICAL_LINK_MAX + 1,
+            )
+            neighbour_ids: List[str] = []
+            for candidate in similar:
+                if candidate.id == note.id:
+                    continue
+                score = NoteStore.identity_score(
+                    candidate, note.title, note.keys, note.tags
+                )
+                if score < AgentConfig.NOTES_LINK_SCORE_THRESHOLD:
+                    continue
+                neighbour_ids.append(candidate.id)
+                if len(neighbour_ids) >= AgentConfig.NOTES_MECHANICAL_LINK_MAX:
+                    break
+            if not neighbour_ids:
+                continue
+            updated = self.note_store.normalize(
+                replace(note, links=tuple(neighbour_ids), updated=today_str)
+            )
+            await self.note_store.write(updated)
+            linked_count += 1
+        return linked_count
+
+    async def _ensure_tag_hubs(self) -> int:
+        """Create or refresh hub notes for tags that reach the cluster threshold."""
+        if self.note_store is None:
+            return 0
+        from ...components.memory import KIND_HUB, Note
+        from dataclasses import replace
+
+        notes = await self.note_store.list_notes()
+        by_tag: dict[str, list] = {}
+        hubs = [note for note in notes if note.kind == KIND_HUB]
+        for note in notes:
+            if note.kind == KIND_HUB:
+                continue
+            for tag in note.tags:
+                folded = tag.casefold()
+                by_tag.setdefault(folded, []).append(note)
+
+        today_str = date.today().isoformat()
+        touched = 0
+        for folded, members in by_tag.items():
+            if len(members) < AgentConfig.NOTES_HUB_MIN_CLUSTER:
+                continue
+            # Prefer the first member's original casing for the hub title.
+            display_tag = next(
+                (tag for note in members for tag in note.tags if tag.casefold() == folded),
+                folded,
+            )
+            member_ids = [note.id for note in members]
+            body_lines = [
+                f"- [[{note.id}]] {note.title}" for note in members
+            ]
+            body = "\n".join(body_lines)
+
+            existing_hub = None
+            for hub in hubs:
+                hub_labels = {label.casefold() for label in (*hub.tags, *hub.keys, hub.title)}
+                if folded in hub_labels:
+                    existing_hub = hub
+                    break
+
+            if existing_hub is not None:
+                updated = self.note_store.normalize(
+                    replace(
+                        existing_hub,
+                        body=body,
+                        links=tuple(member_ids),
+                        tags=tuple(
+                            dict.fromkeys([*(existing_hub.tags), display_tag])
+                        ),
+                        keys=tuple(
+                            dict.fromkeys([*(existing_hub.keys), display_tag])
+                        ),
+                        updated=today_str,
+                    )
+                )
+                await self.note_store.write(updated)
+                touched += 1
+                continue
+
+            hub = await self.note_store.create(
+                Note(
+                    id="",
+                    title=display_tag,
+                    body=body,
+                    kind=KIND_HUB,
+                    tags=(display_tag,),
+                    keys=(display_tag,),
+                    links=tuple(member_ids),
+                    source={"diary": [today_str]},
+                    created=today_str,
+                    updated=today_str,
+                )
+            )
+            hubs.append(hub)
+            touched += 1
+        return touched
 
     async def _existing_note_covering(
         self,
@@ -814,38 +1038,64 @@ class MemoryHandler:
         end_cursor: int = 0,
         idle_seconds: float = 0,
     ) -> bool:
-        """LLM-format messages and append to today's daily file."""
-        today_str = date.today().isoformat()
+        """LLM-format messages and append today's next diary slice.
+
+        Empty model output means the slice is already covered: do not append,
+        but still succeed so the checkpoint can advance. LLM errors return
+        False so the checkpoint stays put.
+        """
+        today = date.today()
+        today_str = today.isoformat()
+        existing_today = await self._read_existing_today(today)
 
         try:
             content = await self.llm_service.format_diary_entry(
                 messages=messages,
                 journal_date=today_str,
+                existing_today=existing_today,
             )
-            if content.strip():
-                await self.memory.append_daily(content)
+            body = content.strip()
+            if body:
+                await self.memory.append_daily(body)
 
-                if trigger == "idle":
-                    logger.info(
-                        "Diary write [trigger=idle] idle=%.0fs, cursor %d→%d, %d msgs → %d chars",
-                        idle_seconds,
-                        start_cursor,
-                        end_cursor,
-                        len(messages),
-                        len(content),
-                    )
-                else:
-                    logger.info(
-                        "Diary write [trigger=count] cursor %d→%d, %d msgs → %d chars",
-                        start_cursor,
-                        end_cursor,
-                        len(messages),
-                        len(content),
-                    )
-                return True
+            if trigger == "idle":
+                logger.info(
+                    "Diary write [trigger=idle] idle=%.0fs, cursor %d→%d, %d msgs → %d chars%s",
+                    idle_seconds,
+                    start_cursor,
+                    end_cursor,
+                    len(messages),
+                    len(body),
+                    "" if body else " (empty slice)",
+                )
+            else:
+                logger.info(
+                    "Diary write [trigger=count] cursor %d→%d, %d msgs → %d chars%s",
+                    start_cursor,
+                    end_cursor,
+                    len(messages),
+                    len(body),
+                    "" if body else " (empty slice)",
+                )
+            return True
         except Exception as exc:
             logger.error("Background diary write failed: %s", exc)
         return False
+
+    async def _read_existing_today(self, target_date: date) -> str:
+        """Return today's daily prose, newest-first trimmed for the diary writer."""
+        path = self.memory.daily_path(target_date)
+        text = await self.memory.read_file(path)
+        if not text.strip():
+            return ""
+        entries = self._split_diary_entries(text)
+        if not entries:
+            return ""
+        trimmed = self._trim_recent_diary_entries(entries, self.EXISTING_TODAY_MAX_CHARS)
+        # Drop the prompt-budget notice; the writer should see diary prose only.
+        if trimmed.startswith(self.DIARY_OMITTED_NOTICE):
+            trimmed = trimmed[len(self.DIARY_OMITTED_NOTICE):].lstrip("\n")
+        return trimmed.strip()
 
     def _split_records_for_source_budget(self, records: List[dict]) -> List[List[dict]]:
         batches: list[list[dict]] = []
@@ -968,6 +1218,13 @@ class MemoryHandler:
         if summary:
             await self.memory.write_summary(self.memory.weekly_path(week_start, week_end), summary)
             logger.info("Generated weekly summary: %s", label)
+            await self._distill_notes_from_weekly(
+                diary_source=source,
+                week_arc=summary,
+                week_start=week_start,
+                week_end=week_end,
+                period_label=label,
+            )
             return True
         return False
 
@@ -987,6 +1244,7 @@ class MemoryHandler:
         if summary:
             await self.memory.write_summary(self.memory.monthly_path(year, month), summary)
             logger.info("Generated monthly summary: %s", label)
+            await self._garden_notes_after_monthly(period_label=label)
             return True
         return False
 
