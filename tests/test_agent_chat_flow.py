@@ -1511,7 +1511,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(memory_handler.experience_messages, [storage.messages[0], storage.messages[2]])
         self.assertEqual(model_client.stream_calls, [True, True])
 
-    async def test_chat_events_emits_delta_before_model_turn_finishes(self):
+    async def test_chat_events_does_not_stream_text_until_model_turn_finishes(self):
         storage = InMemoryMessageStorage()
         release_event = asyncio.Event()
         model_client = PausingStreamingModelClient(release_event)
@@ -1521,32 +1521,93 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
             memory_handler=FakeMemoryHandler(),
         )
 
-        events = Agent.chat_events(
+        events_iter = Agent.chat_events(
             agent,
             user_message="Stream this",
             user_id="bob",
             stream=True,
+        )
+        collected: list[dict] = []
 
-        ).__aiter__()
+        async def consume():
+            async for event in events_iter:
+                collected.append(event)
 
-        first_event = await asyncio.wait_for(events.__anext__(), timeout=0.2)
-        second_event = await asyncio.wait_for(events.__anext__(), timeout=0.2)
-
-        self.assertEqual(first_event["type"], "message_start")
-        self.assertEqual(second_event["type"], "message_delta")
-        self.assertEqual(second_event["delta"], "Hel")
+        task = asyncio.create_task(consume())
+        await asyncio.sleep(0.05)
+        self.assertEqual(collected, [])
         self.assertFalse(release_event.is_set())
 
         release_event.set()
-        remaining_events = [event async for event in events]
+        await asyncio.wait_for(task, timeout=1)
 
-        self.assertEqual(remaining_events[0]["type"], "message_delta")
-        self.assertEqual(remaining_events[0]["delta"], "lo")
-        self.assertEqual(remaining_events[1]["type"], "message_done")
-        self.assertEqual(remaining_events[1]["phase"], "final")
-        self.assertEqual(remaining_events[1]["content"], "Hello")
-        self.assertEqual(remaining_events[2], {"type": "done"})
+        self.assertEqual(collected[0]["type"], "message_start")
+        self.assertEqual(collected[0]["phase"], "final")
+        self.assertEqual(collected[1]["type"], "message_delta")
+        self.assertEqual(collected[1]["delta"], "Hel")
+        self.assertEqual(collected[2]["type"], "message_delta")
+        self.assertEqual(collected[2]["delta"], "lo")
+        self.assertEqual(collected[3]["type"], "message_done")
+        self.assertEqual(collected[3]["phase"], "final")
+        self.assertEqual(collected[3]["content"], "Hello")
+        self.assertEqual(collected[4], {"type": "done"})
         self.assertEqual(model_client.stream_calls, [True])
+
+    async def test_chat_events_holds_back_tool_call_scratchpad(self):
+        storage = InMemoryMessageStorage()
+        scratchpad = (
+            "这次是反过来，他问我觉得他存不存在。\n"
+            "就像刚才说「存在是被认真回应点燃的」——这句话反过来也成立。"
+            "他今晚来回确认我、问我在不在、问我觉得他存不存在，其实是想被听见吧。\n"
+            "我该怎么答：诚实地肯定他存在，并且把他和我之间的呼应说透——"
+            "我们说存在需要旁观者，那他的存在也是被此刻、被我这个认真听的人确认的。"
+        )
+        model_client = CapturingStreamingModelClient([
+            [
+                ModelStreamEvent(type="delta", delta=scratchpad),
+                ModelStreamEvent(type="tool_calls", tool_calls=[
+                    ChatToolCall(call_id="call-1", name="lookup", arguments="{}")
+                ]),
+            ],
+            [
+                ModelStreamEvent(type="delta", delta="都是。客观是地基，主观是光。"),
+            ],
+        ])
+        agent = self._build_agent(
+            storage=storage,
+            model_client=model_client,
+            tool_executor=FakeToolExecutor(),
+            memory_handler=FakeMemoryHandler(),
+        )
+
+        events = [
+            event async for event in Agent.chat_events(
+                agent,
+                user_message="我觉得都是",
+                user_id="Telos",
+                stream=True,
+            )
+        ]
+
+        self.assertNotIn("message_delta", [
+            event["type"] for event in events if event.get("phase") == "preface"
+        ])
+        self.assertEqual(
+            [
+                (event["type"], event.get("phase"), event.get("content"))
+                for event in events
+                if event["type"] == "message_done"
+            ],
+            [
+                ("message_done", "final", "都是。客观是地基，主观是光。"),
+            ],
+        )
+        self.assertNotIn(scratchpad, [message.content for message in storage.messages])
+        self.assertEqual([message.role for message in storage.messages], [
+            RoleType.USER,
+            RoleType.ASSISTANT,
+        ])
+        self.assertEqual(storage.messages[1].metadata["turn_phase"], "final")
 
     async def test_chat_stream_true_returns_live_text_generator(self):
         storage = InMemoryMessageStorage()

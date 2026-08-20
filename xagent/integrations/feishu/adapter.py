@@ -43,6 +43,10 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from ...core.agent import Agent
 from ...core.config import AgentConfig
+from ...core.reply_events import (
+    is_deliverable_assistant_event,
+    is_live_streamable_event,
+)
 from ...core.runtime import (
     AsyncTaskScheduler,
     ScheduledDeliveryContext,
@@ -2369,6 +2373,8 @@ class FeishuAdapter:
         async for event in chat_events(**chat_kwargs, stream=False, room_name=room_name):
             event_type = event.get("type")
             if event_type == "message_done":
+                if not is_deliverable_assistant_event(event):
+                    continue
                 content = str(event.get("content") or "").strip()
                 attachments = self._outbound_attachments_from_event(event)
                 if not content and not attachments:
@@ -2483,10 +2489,14 @@ class FeishuAdapter:
         async for event in chat_events_fn(**chat_kwargs, stream=True, room_name=room_name):
             event_type = event.get("type")
             if event_type == "message_start":
+                if not is_live_streamable_event(event):
+                    continue
                 if active_queue is not None:
                     await finish_card()
                 continue
             if event_type == "message_delta":
+                if not is_live_streamable_event(event):
+                    continue
                 if active_queue is None:
                     await start_card()
                 delta = str(event.get("delta") or "")
@@ -2495,6 +2505,8 @@ class FeishuAdapter:
                     active_has_delta = True
                 continue
             if event_type == "message_done":
+                if not is_deliverable_assistant_event(event):
+                    continue
                 content = str(event.get("content") or "")
                 await finish_card(content, self._outbound_attachments_from_event(event))
                 continue
