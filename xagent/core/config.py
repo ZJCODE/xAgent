@@ -171,20 +171,16 @@ class AgentConfig:
     # Override per agent via config.yaml: agent.notes_enabled,
     # agent.notes_auto_distill. Everything below is an internal prompt-budget
     # or quality guard, not user config.
-    # The notebook injects an index, not note contents: pinned notes carry
-    # their body because pinning is a deliberate "always keep this in mind",
-    # while hubs and recalled notes carry a title and one snippet line so the
-    # model can decide whether to open them with read_note.
+    # The notebook injects an index, not note contents: key-recalled notes
+    # carry a title and one snippet line so the model can decide whether to
+    # open them with read_note.
     NOTES_ENABLED = True
-    # When true, distil notes after a weekly summary is written, and run
-    # mechanical gardening after a monthly summary. Off means tools-only.
+    # When true, distil notes after a weekly summary is written. Off means
+    # tools-only.
     NOTES_AUTO_DISTILL = True
     NOTEBOOK_CONTEXT_MAX_CHARS = 1500
-    NOTEBOOK_PINNED_MAX = 3
-    NOTEBOOK_HUB_MAX = 5
-    NOTEBOOK_RELEVANT_MAX = 4
+    NOTEBOOK_RECALL_MAX = 4
     NOTEBOOK_SNIPPET_MAX_CHARS = 140
-    NOTEBOOK_PINNED_BODY_MAX_CHARS = 400
     # Max notes one weekly summary may distil. Deliberately small: most weeks
     # should produce nothing at all. Higher than the old per-batch cap because
     # a week is a larger unit than a diary maintenance window.
@@ -195,13 +191,6 @@ class AgentConfig:
     # Similarity score at or above which a write is treated as a probable
     # duplicate and the caller is asked to update an existing note instead.
     NOTES_DUPLICATE_SCORE_THRESHOLD = 3
-    # Below the duplicate threshold but still related enough to link as a
-    # neighbour when writing a distilled note.
-    NOTES_LINK_SCORE_THRESHOLD = 2
-    # Max mechanically attached neighbour links per distilled note.
-    NOTES_MECHANICAL_LINK_MAX = 2
-    # Tag cluster size that triggers automatic hub creation/update.
-    NOTES_HUB_MIN_CLUSTER = 4
 
     # ============================================================
     # 8. Search Tool Defaults
@@ -297,11 +286,9 @@ class AgentConfig:
     )
 
     NOTEBOOK_CONTEXT_PURPOSE = (
-        "Your own notebook: what you have worked out and want to reuse. "
+        "Your own notebook: reusable conclusions you have already worked out. "
         "An index, not the whole notebook — open a note with `read_note` or "
-        "look for more with `search_note`. Evidence, not user-facing text. "
-        "`private` stays with you; `person-scoped` belongs to one person and "
-        "must not travel to anyone else."
+        "look for more with `search_note`. Evidence, not user-facing text."
     )
 
     NOTEBOOK_CONTEXT_TEMPLATE = (

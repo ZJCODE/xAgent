@@ -45,11 +45,6 @@ class MemoryHandler:
     _DIARY_ENTRY_HEADING_RE = re.compile(r"(?m)^## \d{4}-\d{2}-\d{2} \d{2}:\d{2}\s*$")
     SUBCONSCIOUS_SUMMARY_SCOPES = ("yearly", "monthly", "weekly")
     SUBCONSCIOUS_SUMMARY_CHARS_PER_SCOPE = 2000
-    NOTEBOOK_SECTIONS = (
-        ("pinned", "[pinned]"),
-        ("hubs", "[hubs]"),
-        ("relevant", "[relevant to the current message]"),
-    )
     NOTEBOOK_OMITTED_NOTICE = "[notes omitted from index due to budget: {count}]"
 
     def __init__(
@@ -607,7 +602,7 @@ class MemoryHandler:
         if not str(diary_source or "").strip():
             return
         try:
-            from ...components.memory import Note, SENSITIVITY_SHAREABLE
+            from ...components.memory import Note
 
             existing = await self.note_store.list_notes()
             snippet_cap = AgentConfig.NOTEBOOK_SNIPPET_MAX_CHARS
@@ -619,7 +614,6 @@ class MemoryHandler:
                     {
                         "id": note.id,
                         "title": note.title,
-                        "tags": list(note.tags),
                         "keys": list(note.keys),
                         "snippet": (note.snippet or "")[:snippet_cap],
                     }
@@ -642,12 +636,7 @@ class MemoryHandler:
                 if not title or not body:
                     continue
                 keys = candidate.get("keys")
-                tags = candidate.get("tags")
-                duplicate = await self._existing_note_covering(
-                    title=title,
-                    keys=keys,
-                    tags=tags,
-                )
+                duplicate = await self._existing_note_covering(title=title, keys=keys)
                 if duplicate is not None:
                     logger.debug(
                         "Skipped distilled note %r; note %s already covers it",
@@ -656,27 +645,19 @@ class MemoryHandler:
                     )
                     continue
 
-                model_links = [
+                links = [
                     link_id
                     for link_id in (candidate.get("links") or [])
                     if str(link_id).strip() in known_ids
                 ]
-                neighbour_links = await self._mechanical_neighbour_links(
-                    title=title,
-                    keys=keys,
-                    tags=tags,
-                )
-                links = self._merge_link_ids(model_links, neighbour_links)
 
                 note = await self.note_store.create(
                     Note(
                         id="",
                         title=title,
                         body=body,
-                        tags=tuple(tags or ()),
                         keys=tuple(keys or ()),
                         links=tuple(links),
-                        sensitivity=SENSITIVITY_SHAREABLE,
                         source={"diary": list(diary_range)},
                         created=today_str,
                         updated=today_str,
@@ -694,194 +675,10 @@ class MemoryHandler:
         except Exception as exc:
             logger.warning("Note distillation failed: %s", exc, exc_info=True)
 
-    async def _mechanical_neighbour_links(
-        self,
-        title: str,
-        keys=None,
-        tags=None,
-    ) -> List[str]:
-        """Return related note ids below the duplicate threshold for write-time linking."""
-        if self.note_store is None:
-            return []
-        from ...components.memory import NoteStore
-
-        similar = await self.note_store.find_similar(
-            title=title,
-            keys=keys,
-            tags=tags,
-            limit=AgentConfig.NOTES_MECHANICAL_LINK_MAX + 2,
-        )
-        linked: List[str] = []
-        for candidate in similar:
-            score = NoteStore.identity_score(candidate, title, keys, tags)
-            if score >= AgentConfig.NOTES_DUPLICATE_SCORE_THRESHOLD:
-                continue
-            if score < AgentConfig.NOTES_LINK_SCORE_THRESHOLD:
-                continue
-            linked.append(candidate.id)
-            if len(linked) >= AgentConfig.NOTES_MECHANICAL_LINK_MAX:
-                break
-        return linked
-
-    @staticmethod
-    def _merge_link_ids(*groups) -> List[str]:
-        merged: List[str] = []
-        for group in groups:
-            for value in group or ():
-                link_id = str(value or "").strip()
-                if link_id and link_id not in merged:
-                    merged.append(link_id)
-        return merged
-
-    async def _garden_notes_after_monthly(self, period_label: str = "") -> None:
-        """Mechanical gardening after a monthly summary is written.
-
-        Best-effort: never rolls back the monthly summary. Controlled by the
-        same ``notes_auto_distill`` switch as weekly distillation.
-        """
-        if self.note_store is None or not self.notes_auto_distill:
-            return
-        try:
-            linked = await self._link_orphan_notes()
-            hubs = await self._ensure_tag_hubs()
-            if linked or hubs:
-                logger.info(
-                    "Notebook gardening after monthly %s: linked %d orphan(s), "
-                    "created/updated %d hub(s)",
-                    period_label or "period",
-                    linked,
-                    hubs,
-                )
-        except Exception as exc:
-            logger.warning("Notebook gardening failed: %s", exc, exc_info=True)
-
-    async def _link_orphan_notes(self) -> int:
-        """Attach 1–2 neighbour links to active notes with no links and no backlinks."""
-        if self.note_store is None:
-            return 0
-        from ...components.memory import NoteStore
-        from dataclasses import replace
-
-        notes = await self.note_store.list_notes()
-        if len(notes) < 2:
-            return 0
-
-        linked_count = 0
-        today_str = date.today().isoformat()
-        for note in notes:
-            if note.links:
-                continue
-            if await self.note_store.backlinks(note.id):
-                continue
-            similar = await self.note_store.find_similar(
-                title=note.title,
-                keys=note.keys,
-                tags=note.tags,
-                limit=AgentConfig.NOTES_MECHANICAL_LINK_MAX + 1,
-            )
-            neighbour_ids: List[str] = []
-            for candidate in similar:
-                if candidate.id == note.id:
-                    continue
-                score = NoteStore.identity_score(
-                    candidate, note.title, note.keys, note.tags
-                )
-                if score < AgentConfig.NOTES_LINK_SCORE_THRESHOLD:
-                    continue
-                neighbour_ids.append(candidate.id)
-                if len(neighbour_ids) >= AgentConfig.NOTES_MECHANICAL_LINK_MAX:
-                    break
-            if not neighbour_ids:
-                continue
-            updated = self.note_store.normalize(
-                replace(note, links=tuple(neighbour_ids), updated=today_str)
-            )
-            await self.note_store.write(updated)
-            linked_count += 1
-        return linked_count
-
-    async def _ensure_tag_hubs(self) -> int:
-        """Create or refresh hub notes for tags that reach the cluster threshold."""
-        if self.note_store is None:
-            return 0
-        from ...components.memory import KIND_HUB, Note
-        from dataclasses import replace
-
-        notes = await self.note_store.list_notes()
-        by_tag: dict[str, list] = {}
-        hubs = [note for note in notes if note.kind == KIND_HUB]
-        for note in notes:
-            if note.kind == KIND_HUB:
-                continue
-            for tag in note.tags:
-                folded = tag.casefold()
-                by_tag.setdefault(folded, []).append(note)
-
-        today_str = date.today().isoformat()
-        touched = 0
-        for folded, members in by_tag.items():
-            if len(members) < AgentConfig.NOTES_HUB_MIN_CLUSTER:
-                continue
-            # Prefer the first member's original casing for the hub title.
-            display_tag = next(
-                (tag for note in members for tag in note.tags if tag.casefold() == folded),
-                folded,
-            )
-            member_ids = [note.id for note in members]
-            body_lines = [
-                f"- [[{note.id}]] {note.title}" for note in members
-            ]
-            body = "\n".join(body_lines)
-
-            existing_hub = None
-            for hub in hubs:
-                hub_labels = {label.casefold() for label in (*hub.tags, *hub.keys, hub.title)}
-                if folded in hub_labels:
-                    existing_hub = hub
-                    break
-
-            if existing_hub is not None:
-                updated = self.note_store.normalize(
-                    replace(
-                        existing_hub,
-                        body=body,
-                        links=tuple(member_ids),
-                        tags=tuple(
-                            dict.fromkeys([*(existing_hub.tags), display_tag])
-                        ),
-                        keys=tuple(
-                            dict.fromkeys([*(existing_hub.keys), display_tag])
-                        ),
-                        updated=today_str,
-                    )
-                )
-                await self.note_store.write(updated)
-                touched += 1
-                continue
-
-            hub = await self.note_store.create(
-                Note(
-                    id="",
-                    title=display_tag,
-                    body=body,
-                    kind=KIND_HUB,
-                    tags=(display_tag,),
-                    keys=(display_tag,),
-                    links=tuple(member_ids),
-                    source={"diary": [today_str]},
-                    created=today_str,
-                    updated=today_str,
-                )
-            )
-            hubs.append(hub)
-            touched += 1
-        return touched
-
     async def _existing_note_covering(
         self,
         title: str,
         keys=None,
-        tags=None,
     ) -> Optional["Note"]:
         """Return an existing note that already covers this idea, if any.
 
@@ -896,11 +693,10 @@ class MemoryHandler:
         candidates = await self.note_store.find_similar(
             title=title,
             keys=keys,
-            tags=tags,
             limit=3,
         )
         for candidate in candidates:
-            score = NoteStore.identity_score(candidate, title, keys, tags)
+            score = NoteStore.identity_score(candidate, title, keys)
             if score >= AgentConfig.NOTES_DUPLICATE_SCORE_THRESHOLD:
                 return candidate
         return None
@@ -908,108 +704,62 @@ class MemoryHandler:
     async def get_notebook_context(self, current_text: str = "") -> str:
         """Render the notebook index for prompt injection.
 
-        Deliberately an index, not the notebook: pinned notes carry their body
-        because pinning means "keep this in mind", while hubs and recalled notes
-        carry a title and one snippet line so the model can decide whether to
-        open them with ``read_note``.
+        Deliberately an index, not the notebook: key-recalled notes carry a
+        title and one snippet line so the model can decide whether to open
+        them with ``read_note``.
         """
         if self.note_store is None:
             return ""
+        query = str(current_text or "").strip()
+        if not query:
+            return ""
 
         try:
-            pinned = await self.note_store.pinned(limit=AgentConfig.NOTEBOOK_PINNED_MAX)
-            hubs = await self.note_store.hubs(limit=AgentConfig.NOTEBOOK_HUB_MAX)
-            recalled = (
-                await self.note_store.recall(
-                    current_text,
-                    limit=AgentConfig.NOTEBOOK_RELEVANT_MAX,
-                )
-                if str(current_text or "").strip()
-                else []
+            recalled = await self.note_store.recall(
+                query,
+                limit=AgentConfig.NOTEBOOK_RECALL_MAX,
             )
         except Exception as exc:
             logger.warning("Failed to read notebook: %s", exc, exc_info=True)
             return ""
 
-        return self._render_notebook_sections(pinned=pinned, hubs=hubs, recalled=recalled)
+        return self._render_notebook_index(recalled)
 
     @classmethod
-    def _render_notebook_sections(
-        cls,
-        pinned: List["Note"],
-        hubs: List["Note"],
-        recalled: List["Note"],
-    ) -> str:
-        """Assemble notebook index rows within the prompt budget.
-
-        Rows are selected in priority order (pinned, then recalled, then hubs)
-        and rendered in reading order, so a tight budget drops navigation rows
-        before it drops a note the current message actually matched.
-        """
-        shown: set[str] = set()
-        candidates: list[tuple[str, "Note", int]] = []
-        for note in pinned:
-            if note.id in shown:
-                continue
-            shown.add(note.id)
-            candidates.append(("pinned", note, AgentConfig.NOTEBOOK_PINNED_BODY_MAX_CHARS))
-        for note in recalled:
-            if note.id in shown:
-                continue
-            shown.add(note.id)
-            candidates.append(("relevant", note, AgentConfig.NOTEBOOK_SNIPPET_MAX_CHARS))
-        for note in hubs:
-            if note.id in shown:
-                continue
-            shown.add(note.id)
-            candidates.append(("hubs", note, 0))
-
-        if not candidates:
+    def _render_notebook_index(cls, notes: List["Note"]) -> str:
+        """Assemble recalled notebook rows within the prompt budget."""
+        if not notes:
             return ""
 
-        # Reserve the framing (section headings plus a possible omission
-        # notice) before budgeting rows, so the returned block really does fit.
-        reserve = sum(len(heading) + 1 for _section, heading in cls.NOTEBOOK_SECTIONS)
-        reserve += len(cls.NOTEBOOK_OMITTED_NOTICE.format(count=len(candidates))) + 1
+        reserve = len(cls.NOTEBOOK_OMITTED_NOTICE.format(count=len(notes))) + 1
         budget = max(1, int(AgentConfig.NOTEBOOK_CONTEXT_MAX_CHARS) - reserve)
 
-        rows: dict[str, list[str]] = {section: [] for section, _heading in cls.NOTEBOOK_SECTIONS}
+        rows: list[str] = []
         used = 0
         omitted = 0
-        for section, note, body_limit in candidates:
-            row = cls._format_notebook_row(note, body_limit)
+        for note in notes:
+            row = cls._format_notebook_row(note)
             if used + len(row) + 1 > budget:
                 omitted += 1
                 continue
-            rows[section].append(row)
+            rows.append(row)
             used += len(row) + 1
 
-        blocks: list[str] = []
-        for section, heading in cls.NOTEBOOK_SECTIONS:
-            if rows[section]:
-                blocks.append("\n".join([heading, *rows[section]]))
-        if not blocks:
+        if not rows:
             return ""
         if omitted:
-            blocks.append(cls.NOTEBOOK_OMITTED_NOTICE.format(count=omitted))
-        return "\n".join(blocks)
+            rows.append(cls.NOTEBOOK_OMITTED_NOTICE.format(count=omitted))
+        return "\n".join(rows)
 
     @staticmethod
-    def _format_notebook_row(note: "Note", body_limit: int) -> str:
-        from ...components.memory import KIND_HUB, SENSITIVITY_SHAREABLE
-
+    def _format_notebook_row(note: "Note") -> str:
         header = f"- ({note.id}) {note.title}"
-        if note.sensitivity != SENSITIVITY_SHAREABLE:
-            header += f" [{note.sensitivity}]"
-        if note.kind == KIND_HUB and note.links:
-            header += f" [{len(note.links)} linked]"
-        if body_limit <= 0:
-            return header
         text = " ".join((note.body or "").split())
         if not text:
             return header
-        if len(text) > body_limit:
-            text = text[:body_limit].rstrip() + "..."
+        limit = AgentConfig.NOTEBOOK_SNIPPET_MAX_CHARS
+        if len(text) > limit:
+            text = text[:limit].rstrip() + "..."
         return f"{header}\n  {text}"
 
     @staticmethod
@@ -1244,7 +994,6 @@ class MemoryHandler:
         if summary:
             await self.memory.write_summary(self.memory.monthly_path(year, month), summary)
             logger.info("Generated monthly summary: %s", label)
-            await self._garden_notes_after_monthly(period_label=label)
             return True
         return False
 

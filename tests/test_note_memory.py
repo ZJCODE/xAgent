@@ -7,7 +7,6 @@ from datetime import date, datetime
 from pathlib import Path
 
 from xagent.components.memory import (
-    KIND_HUB,
     MAX_BODY_CHARS,
     STATUS_ARCHIVED,
     Note,
@@ -48,10 +47,9 @@ class NoteStoreTests(unittest.IsolatedAsyncioTestCase):
             self.store,
             "Jun takes espresso at 1:2.5",
             "Jun wants 1:2.5 at 92C; thinner has no spine to him.",
-            tags=("coffee", "preference"),
             keys=("espresso", "Jun"),
-            sensitivity="person-scoped",
-            source={"diary": ["2026-08-19"], "person": "feishu:ou_a", "cursor": 42},
+            links=("202608190931",),
+            source={"diary": ["2026-08-19"]},
         )
         await self.store.write(note)
 
@@ -59,11 +57,9 @@ class NoteStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(loaded)
         self.assertEqual(loaded.title, "Jun takes espresso at 1:2.5")
         self.assertIn("no spine", loaded.body)
-        self.assertEqual(loaded.tags, ("coffee", "preference"))
         self.assertEqual(loaded.keys, ("espresso", "Jun"))
-        self.assertEqual(loaded.sensitivity, "person-scoped")
-        self.assertEqual(loaded.source["person"], "feishu:ou_a")
-        self.assertEqual(loaded.source["cursor"], 42)
+        self.assertEqual(loaded.links, ("202608190931",))
+        self.assertEqual(loaded.source, {"diary": ["2026-08-19"]})
 
     async def test_id_stays_a_string_through_yaml_roundtrip(self):
         note = _note(self.store, "Leading zeros survive", "body")
@@ -129,33 +125,62 @@ class NoteStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([note.id for note in notes], ["202608190931"])
         self.assertEqual(notes[0].title, "Just a body someone typed by hand.")
 
-    async def test_normalize_clamps_body_tags_keys_and_enums(self):
+    async def test_parse_ignores_legacy_fields_and_folds_tags_into_keys(self):
+        path = Path(self._tmpdir.name) / "202608190930-legacy.md"
+        path.write_text(
+            "---\n"
+            "id: '202608190930'\n"
+            "title: Legacy espresso\n"
+            "kind: hub\n"
+            "status: active\n"
+            "tags:\n"
+            "- coffee\n"
+            "keys:\n"
+            "- espresso\n"
+            "pinned: true\n"
+            "sensitivity: person-scoped\n"
+            "source:\n"
+            "  diary:\n"
+            "  - '2026-08-19'\n"
+            "  person: feishu:ou_a\n"
+            "created: '2026-08-19'\n"
+            "updated: '2026-08-19'\n"
+            "---\n\n"
+            "Jun wants 1:2.5.\n",
+            encoding="utf-8",
+        )
+        loaded = await self.store.read("202608190930")
+        self.assertIsNotNone(loaded)
+        self.assertEqual(loaded.keys, ("espresso", "coffee"))
+        self.assertEqual(loaded.source, {"diary": ["2026-08-19"]})
+        self.assertFalse(hasattr(loaded, "kind"))
+        self.assertFalse(hasattr(loaded, "tags"))
+        self.assertFalse(hasattr(loaded, "pinned"))
+        self.assertFalse(hasattr(loaded, "sensitivity"))
+        # Read does not rewrite the file.
+        self.assertIn("kind: hub", path.read_text(encoding="utf-8"))
+
+    async def test_normalize_clamps_body_keys_and_status(self):
         note = NoteStore.normalize(
             Note(
                 id="202608190930",
                 title="t" * 200,
                 body="b" * (MAX_BODY_CHARS + 500),
-                kind="nonsense",
                 status="nonsense",
-                sensitivity="nonsense",
-                tags=tuple(f"tag{index}" for index in range(9)),
                 keys=("ok", "x", "  ", "ok"),
                 links=("202608190931", "nope", "202608190931"),
             )
         )
         self.assertEqual(len(note.title), 80)
         self.assertEqual(len(note.body), MAX_BODY_CHARS)
-        self.assertEqual(note.kind, "note")
         self.assertEqual(note.status, "active")
-        self.assertEqual(note.sensitivity, "shareable")
-        self.assertEqual(len(note.tags), 5)
         self.assertEqual(note.keys, ("ok",))
         self.assertEqual(note.links, ("202608190931",))
 
     async def test_inline_wiki_links_are_collected(self):
         target = _note(self.store, "Target", "body")
         await self.store.write(target)
-        hub = _note(self.store, "Hub", f"See [[{target.id}]] for the ratio.", kind=KIND_HUB)
+        hub = _note(self.store, "Hub", f"See [[{target.id}]] for the ratio.")
         await self.store.write(hub)
 
         loaded = await self.store.read(hub.id)
@@ -216,7 +241,6 @@ class NoteRetrievalTests(unittest.IsolatedAsyncioTestCase):
             "Jun 的浓缩固定 1:2.5",
             "Jun 喝浓缩要 1:2.5、92 度，再淡他说没有骨架。",
             keys=("浓缩", "Jun"),
-            tags=("coffee",),
         )
         await self.store.write(self.espresso)
         self.grinder = _note(
@@ -224,8 +248,6 @@ class NoteRetrievalTests(unittest.IsolatedAsyncioTestCase):
             "Grinder reads two clicks coarse",
             "The home grinder is offset by two clicks; dial finer than the recipe says.",
             keys=("grinder",),
-            tags=("coffee",),
-            pinned=True,
         )
         await self.store.write(self.grinder)
 
@@ -260,20 +282,12 @@ class NoteRetrievalTests(unittest.IsolatedAsyncioTestCase):
         results = await self.store.search(["grinder"])
         self.assertEqual(results[0].id, self.grinder.id)
 
-    async def test_search_filters_by_tag_and_kind(self):
-        hub = _note(self.store, "Coffee", "entry point", kind=KIND_HUB, tags=("coffee",))
-        await self.store.write(hub)
-        self.assertEqual(
-            [note.id for note in await self.store.search([], kind=KIND_HUB)],
-            [hub.id],
-        )
-        self.assertEqual(len(await self.store.search([], tags=["coffee"])), 3)
-        self.assertEqual(await self.store.search([], tags=["missing"]), [])
+    async def test_search_with_empty_query_browses_by_recency(self):
+        results = await self.store.search([])
+        self.assertEqual({note.id for note in results}, {self.espresso.id, self.grinder.id})
 
     async def test_find_similar_surfaces_an_existing_note_on_the_same_idea(self):
-        similar = await self.store.find_similar(
-            title="浓缩的粉水比", keys=["浓缩"], tags=["coffee"]
-        )
+        similar = await self.store.find_similar(title="浓缩的粉水比", keys=["浓缩"])
         self.assertEqual(similar[0].id, self.espresso.id)
 
     async def test_identity_score_ignores_a_passing_body_mention(self):
@@ -291,12 +305,6 @@ class NoteRetrievalTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(
             NoteStore.identity_score(self.grinder, "grinder offset", keys=["grinder"]), 0
         )
-
-    async def test_pinned_and_hubs_are_scoped_to_their_kind(self):
-        hub = _note(self.store, "Coffee", "entry point", kind=KIND_HUB)
-        await self.store.write(hub)
-        self.assertEqual([note.id for note in await self.store.pinned()], [self.grinder.id])
-        self.assertEqual([note.id for note in await self.store.hubs()], [hub.id])
 
 
 # ----------------------------------------------------------------------
@@ -321,12 +329,10 @@ class NoteToolTests(unittest.IsolatedAsyncioTestCase):
             title="Jun takes espresso at 1:2.5",
             body="Jun wants 1:2.5 at 92C.",
             keys=["espresso", "Jun"],
-            tags=["coffee"],
-            sensitivity="person-scoped",
         )
         self.assertEqual(result["status"], "ok")
         stored = await self.store.read(result["note"]["id"])
-        self.assertEqual(stored.sensitivity, "person-scoped")
+        self.assertEqual(stored.keys, ("espresso", "Jun"))
         self.assertEqual(stored.source["diary"][0], stored.created)
 
     async def test_write_note_requires_title_and_body(self):
@@ -343,13 +349,11 @@ class NoteToolTests(unittest.IsolatedAsyncioTestCase):
             title="Jun takes espresso at 1:2.5",
             body="Jun wants 1:2.5 at 92C.",
             keys=["espresso", "Jun"],
-            tags=["coffee"],
         )
         duplicate = await self.write_note(
             title="Jun espresso 1:2.5 preference",
             body="Jun likes it at 1:2.5.",
             keys=["espresso", "Jun"],
-            tags=["coffee"],
         )
         self.assertEqual(duplicate["status"], "similar_exists")
         self.assertEqual(duplicate["candidates"][0]["id"], first["note"]["id"])
@@ -367,17 +371,16 @@ class NoteToolTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_update_note_changes_only_given_fields(self):
         created = await self.write_note(
-            title="Espresso ratio", body="1:2.5", keys=["espresso"], tags=["coffee"]
+            title="Espresso ratio", body="1:2.5", keys=["espresso"]
         )
         note_id = created["note"]["id"]
 
-        result = await self.update_note(note_id=note_id, body="1:2.5 at 92C", pinned=True)
+        result = await self.update_note(note_id=note_id, body="1:2.5 at 92C")
         self.assertEqual(result["status"], "ok")
         stored = await self.store.read(note_id)
         self.assertEqual(stored.body, "1:2.5 at 92C")
         self.assertEqual(stored.title, "Espresso ratio")
-        self.assertEqual(stored.tags, ("coffee",))
-        self.assertTrue(stored.pinned)
+        self.assertEqual(stored.keys, ("espresso",))
 
     async def test_update_note_can_archive(self):
         created = await self.write_note(title="Stale", body="not true anymore")
@@ -399,19 +402,15 @@ class NoteToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["total"], 1)
         self.assertIn("Dial finer", result["notes"][0]["body"])
 
-    async def test_read_note_follows_links_when_asked(self):
+    async def test_read_note_always_returns_neighbours(self):
         target = await self.write_note(title="Ratio", body="1:2.5", keys=["ratio"])
         source = await self.write_note(
-            title="Hub for coffee",
-            body="entry point",
+            title="How I brew for Jun",
+            body="Use the ratio note.",
             keys=["coffee"],
             links=[target["note"]["id"]],
-            kind="hub",
         )
-        plain = await self.read_note(note_id=source["note"]["id"])
-        self.assertNotIn("neighbours", plain)
-
-        walked = await self.read_note(note_id=source["note"]["id"], follow_links=True)
+        walked = await self.read_note(note_id=source["note"]["id"])
         self.assertEqual(walked["neighbours"][0]["id"], target["note"]["id"])
         self.assertEqual(walked["neighbours"][0]["snippet"], "1:2.5")
 
@@ -447,6 +446,7 @@ class NoteDistillationPromptTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("At most 6", prompt)
         self.assertIn("first person", prompt)
         self.assertIn("links", prompt)
+        self.assertNotIn("`tags`", prompt)
         self.assertIn("Return JSON only", prompt)
 
     def test_user_prompt_lists_existing_notes_with_ids(self):
@@ -454,7 +454,6 @@ class NoteDistillationPromptTests(unittest.IsolatedAsyncioTestCase):
             existing_notes=[{
                 "id": "202608190930",
                 "title": "Espresso ratio",
-                "tags": ["coffee"],
                 "keys": ["espresso"],
                 "snippet": "He said thinner has no spine.",
             }],
@@ -463,7 +462,7 @@ class NoteDistillationPromptTests(unittest.IsolatedAsyncioTestCase):
             week_arc="A coffee-heavy week with Jun.",
         )
         self.assertIn("(202608190930) Espresso ratio", prompt)
-        self.assertIn("tags: coffee", prompt)
+        self.assertNotIn("tags:", prompt)
         self.assertIn("keys: espresso", prompt)
         self.assertIn("He said thinner has no spine.", prompt)
         self.assertIn("Week arc (orientation only, not a source of new notes):", prompt)
@@ -493,7 +492,6 @@ class NoteDistillationPromptTests(unittest.IsolatedAsyncioTestCase):
             [{
                 "title": "A",
                 "body": "b",
-                "tags": ["t"],
                 "keys": ["k"],
                 "links": ["202608190930"],
             }],
@@ -542,6 +540,7 @@ class NoteDistillationPromptTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(drafts[0]["title"], "Jun likes 1:2.5")
         self.assertEqual(drafts[0]["links"], ["202608190930"])
+        self.assertNotIn("tags", drafts[0])
         self.assertIn("Monday: Jun asked for espresso at 1:2.5.", captured["user"])
         self.assertIn("Week arc (orientation only, not a source of new notes):", captured["user"])
         self.assertIn("Espresso week.", captured["user"])
@@ -662,7 +661,6 @@ class MemoryHandlerNotebookTests(unittest.IsolatedAsyncioTestCase):
                     "title": "Jun takes espresso at 1:2.5",
                     "body": "He said thinner has no spine.",
                     "keys": ["espresso"],
-                    "tags": ["coffee"],
                 }
             ]
         )
@@ -680,7 +678,6 @@ class MemoryHandlerNotebookTests(unittest.IsolatedAsyncioTestCase):
             "The early train to Hangzhou is the only connection",
             "Anything later misses the transfer.",
             keys=("train", "Hangzhou"),
-            tags=("travel",),
         )
         await self.notes.write(related)
 
@@ -690,7 +687,6 @@ class MemoryHandlerNotebookTests(unittest.IsolatedAsyncioTestCase):
                     "title": "Jun takes espresso at 1:2.5",
                     "body": "He said thinner has no spine.",
                     "keys": ["espresso", "Jun"],
-                    "tags": ["coffee"],
                     "links": [related.id],
                 }
             ]
@@ -707,24 +703,23 @@ class MemoryHandlerNotebookTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             llm.distill_calls[0]["max_notes"], AgentConfig.NOTES_DISTILL_MAX_PER_WEEK
         )
+        self.assertNotIn("tags", llm.distill_calls[0]["existing_notes"][0])
 
         notes = [note for note in await self.notes.list_notes() if note.id != related.id]
         self.assertEqual(len(notes), 1)
         note = notes[0]
         self.assertEqual(note.title, "Jun takes espresso at 1:2.5")
-        self.assertEqual(note.sensitivity, "shareable")
         self.assertEqual(note.source.get("diary"), ["2026-08-11", "2026-08-17"])
         self.assertNotIn("cursor", note.source)
         self.assertNotIn("person", note.source)
         self.assertIn(related.id, note.links)
 
-    async def test_weekly_distillation_adds_mechanical_neighbour_links(self):
+    async def test_weekly_distillation_does_not_invent_mechanical_links(self):
         neighbour = _note(
             self.notes,
             "Keep the grind two clicks coarser",
             "Finer than that chokes the shot.",
             keys=("grind", "clicks"),
-            tags=("coffee",),
         )
         await self.notes.write(neighbour)
 
@@ -734,7 +729,6 @@ class MemoryHandlerNotebookTests(unittest.IsolatedAsyncioTestCase):
                     "title": "Jun wants the kettle hotter than the recipe",
                     "body": "He asks for 94C when I brew for him.",
                     "keys": ["kettle", "temperature"],
-                    "tags": ["coffee"],
                     "links": [],
                 }
             ]
@@ -747,7 +741,7 @@ class MemoryHandlerNotebookTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await handler._generate_weekly(week_start, week_end))
         created = [note for note in await self.notes.list_notes() if note.id != neighbour.id]
         self.assertEqual(len(created), 1)
-        self.assertIn(neighbour.id, created[0].links)
+        self.assertEqual(created[0].links, ())
 
     async def test_weekly_distillation_respects_the_per_week_cap(self):
         llm = _FakeDiaryLLMService(
@@ -770,7 +764,6 @@ class MemoryHandlerNotebookTests(unittest.IsolatedAsyncioTestCase):
             "Jun takes espresso at 1:2.5",
             "He said thinner has no spine.",
             keys=("espresso", "Jun"),
-            tags=("coffee",),
         )
         await self.notes.write(existing)
 
@@ -780,7 +773,6 @@ class MemoryHandlerNotebookTests(unittest.IsolatedAsyncioTestCase):
                     "title": "Jun espresso 1:2.5",
                     "body": "restating what I already know",
                     "keys": ["espresso", "Jun"],
-                    "tags": ["coffee"],
                 }
             ]
         )
@@ -798,7 +790,6 @@ class MemoryHandlerNotebookTests(unittest.IsolatedAsyncioTestCase):
             "Jun takes espresso at 1:2.5",
             "He said thinner has no spine.",
             keys=("espresso", "Jun"),
-            tags=("coffee",),
         )
         await self.notes.write(existing)
 
@@ -808,7 +799,6 @@ class MemoryHandlerNotebookTests(unittest.IsolatedAsyncioTestCase):
                     "title": "The early train to Hangzhou is the only connection",
                     "body": "Anything later misses the transfer.",
                     "keys": ["train", "Hangzhou"],
-                    "tags": ["travel"],
                 }
             ]
         )
@@ -847,90 +837,23 @@ class MemoryHandlerNotebookTests(unittest.IsolatedAsyncioTestCase):
         summary = await self.memory.read_file(self.memory.weekly_path(week_start, week_end))
         self.assertEqual(summary, "Weekly recap")
 
-    async def test_monthly_gardening_links_orphans_and_creates_hubs(self):
-        members = []
-        for index in range(AgentConfig.NOTES_HUB_MIN_CLUSTER):
-            note = _note(
-                self.notes,
-                f"Coffee idea {index}",
-                f"Detail about coffee idea {index}.",
-                keys=(f"coffee{index}", "espresso"),
-                tags=("coffee",),
-            )
-            await self.notes.write(note)
-            members.append(note)
-
-        handler = self._make_handler(_FakeMessageStorage(), _FakeDiaryLLMService())
-        await handler._garden_notes_after_monthly(period_label="2026-08")
-
-        refreshed = {note.id: note for note in await self.notes.list_notes()}
-        for member in members:
-            current = refreshed[member.id]
-            has_outbound = bool(current.links)
-            has_backlink = any(
-                member.id in other.links
-                for other in refreshed.values()
-                if other.id != member.id
-            )
-            self.assertTrue(
-                has_outbound or has_backlink,
-                f"note {member.id} remained an orphan",
-            )
-
-        hubs = [note for note in refreshed.values() if note.kind == KIND_HUB]
-        self.assertEqual(len(hubs), 1)
-        self.assertEqual(hubs[0].title, "coffee")
-        for member in members:
-            self.assertIn(member.id, hubs[0].links)
-
-    async def test_monthly_gardening_updates_an_existing_hub_instead_of_duplicating(self):
-        hub = _note(
-            self.notes,
-            "coffee",
-            "old hub",
-            kind=KIND_HUB,
-            tags=("coffee",),
-            keys=("coffee",),
-        )
-        await self.notes.write(hub)
-        for index in range(AgentConfig.NOTES_HUB_MIN_CLUSTER):
+    async def test_monthly_summary_does_not_garden_notes(self):
+        for index in range(4):
             await self.notes.write(
                 _note(
                     self.notes,
                     f"Coffee idea {index}",
-                    f"Detail {index}",
+                    f"Detail about coffee idea {index}.",
                     keys=(f"coffee{index}",),
-                    tags=("coffee",),
                 )
             )
-
         handler = self._make_handler(_FakeMessageStorage(), _FakeDiaryLLMService())
-        await handler._garden_notes_after_monthly(period_label="2026-08")
+        await self.memory.append_daily("Coffee month", target_date=date(2026, 8, 1))
 
-        hubs = [note for note in await self.notes.list_notes() if note.kind == KIND_HUB]
-        self.assertEqual(len(hubs), 1)
-        self.assertEqual(hubs[0].id, hub.id)
-        self.assertEqual(len(hubs[0].links), AgentConfig.NOTES_HUB_MIN_CLUSTER)
-
-    async def test_monthly_gardening_can_be_switched_off(self):
-        for index in range(AgentConfig.NOTES_HUB_MIN_CLUSTER):
-            await self.notes.write(
-                _note(
-                    self.notes,
-                    f"Coffee idea {index}",
-                    f"Detail {index}",
-                    tags=("coffee",),
-                    keys=(f"c{index}",),
-                )
-            )
-        handler = self._make_handler(
-            _FakeMessageStorage(), _FakeDiaryLLMService(), notes_auto_distill=False
-        )
-        await handler._garden_notes_after_monthly(period_label="2026-08")
-        self.assertEqual(
-            len([note for note in await self.notes.list_notes() if note.kind == KIND_HUB]),
-            0,
-        )
+        self.assertTrue(await handler._generate_monthly(2026, 8))
+        notes = await self.notes.list_notes()
+        self.assertEqual(len(notes), 4)
+        self.assertTrue(all(not note.links for note in notes))
 
     async def test_notebook_context_is_empty_without_a_store(self):
         handler = MemoryHandler(
@@ -941,12 +864,9 @@ class MemoryHandlerNotebookTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(await handler.get_notebook_context("anything"), "")
 
-    async def test_notebook_context_groups_pinned_hubs_and_recalled_notes(self):
+    async def test_notebook_context_injects_recalled_notes_only(self):
         await self.notes.write(
-            _note(self.notes, "Grinder is two clicks coarse", "Dial finer.", keys=("grinder",), pinned=True)
-        )
-        await self.notes.write(
-            _note(self.notes, "Coffee", "entry point", kind=KIND_HUB, keys=("coffee",))
+            _note(self.notes, "Grinder is two clicks coarse", "Dial finer.", keys=("grinder",))
         )
         await self.notes.write(
             _note(self.notes, "Jun 的浓缩固定 1:2.5", "再淡他说没有骨架。", keys=("浓缩",))
@@ -954,53 +874,21 @@ class MemoryHandlerNotebookTests(unittest.IsolatedAsyncioTestCase):
         handler = self._make_handler(_FakeMessageStorage(), _FakeDiaryLLMService())
 
         context = await handler.get_notebook_context("给 Jun 冲个浓缩")
-        self.assertIn("[pinned]", context)
-        self.assertIn("Grinder is two clicks coarse", context)
-        self.assertIn("[hubs]", context)
-        self.assertIn("[relevant to the current message]", context)
+        self.assertNotIn("[pinned]", context)
+        self.assertNotIn("[hubs]", context)
+        self.assertNotIn("[relevant to the current message]", context)
+        self.assertNotIn("Grinder is two clicks coarse", context)
         self.assertIn("浓缩", context)
+        self.assertIn("再淡他说没有骨架。", context)
 
-    async def test_notebook_context_omits_the_recall_section_without_a_message(self):
+    async def test_notebook_context_is_empty_without_a_message(self):
         await self.notes.write(
             _note(self.notes, "Jun 的浓缩固定 1:2.5", "body", keys=("浓缩",))
         )
         handler = self._make_handler(_FakeMessageStorage(), _FakeDiaryLLMService())
         self.assertEqual(await handler.get_notebook_context(""), "")
 
-    async def test_notebook_context_does_not_repeat_a_pinned_note(self):
-        await self.notes.write(
-            _note(self.notes, "Grinder is two clicks coarse", "Dial finer.", keys=("grinder",), pinned=True)
-        )
-        handler = self._make_handler(_FakeMessageStorage(), _FakeDiaryLLMService())
-
-        context = await handler.get_notebook_context("what about the grinder")
-        self.assertEqual(context.count("Grinder is two clicks coarse"), 1)
-        self.assertNotIn("[relevant to the current message]", context)
-
-    async def test_notebook_context_marks_non_shareable_notes(self):
-        await self.notes.write(
-            _note(
-                self.notes,
-                "Jun keeps the move quiet",
-                "He asked me not to mention it.",
-                keys=("move",),
-                sensitivity="person-scoped",
-                pinned=True,
-            )
-        )
-        handler = self._make_handler(_FakeMessageStorage(), _FakeDiaryLLMService())
-        context = await handler.get_notebook_context("")
-        self.assertIn("[person-scoped]", context)
-
-    async def test_notebook_context_caps_each_section(self):
-        for index in range(5):
-            await self.notes.write(
-                _note(self.notes, f"Pinned {index}", "short", keys=(f"pin{index}",), pinned=True)
-            )
-        for index in range(7):
-            await self.notes.write(
-                _note(self.notes, f"Hub {index}", "short", kind=KIND_HUB, keys=(f"hub{index}",))
-            )
+    async def test_notebook_context_caps_recalled_notes(self):
         for index in range(6):
             await self.notes.write(
                 _note(self.notes, f"Loose {index}", "short", keys=(f"loose{index}",))
@@ -1010,84 +898,29 @@ class MemoryHandlerNotebookTests(unittest.IsolatedAsyncioTestCase):
         context = await handler.get_notebook_context(
             " ".join(f"loose{index}" for index in range(6))
         )
-        self.assertEqual(
-            context.count("- ("),
-            AgentConfig.NOTEBOOK_PINNED_MAX
-            + AgentConfig.NOTEBOOK_HUB_MAX
-            + AgentConfig.NOTEBOOK_RELEVANT_MAX,
-        )
-        for _section, heading in MemoryHandler.NOTEBOOK_SECTIONS:
-            self.assertIn(heading, context)
+        self.assertEqual(context.count("- ("), AgentConfig.NOTEBOOK_RECALL_MAX)
 
     async def test_notebook_context_stays_within_the_prompt_budget(self):
-        for index in range(3):
-            await self.notes.write(
-                _note(
-                    self.notes,
-                    f"Pinned {index}",
-                    "b" * MAX_BODY_CHARS,
-                    keys=(f"pin{index}",),
-                    pinned=True,
+        notes = [
+            NoteStore.normalize(
+                Note(
+                    id=f"20260819093{index}",
+                    title=f"Long {index}",
+                    body="y" * MAX_BODY_CHARS,
+                    keys=(f"loose{index}",),
                 )
             )
-        for index in range(6):
-            await self.notes.write(
-                _note(self.notes, f"Hub {index}", "x" * 500, kind=KIND_HUB, keys=(f"hub{index}",))
-            )
-        for index in range(4):
-            await self.notes.write(
-                _note(self.notes, f"Loose {index}", "y" * 500, keys=(f"loose{index}",))
-            )
-        handler = self._make_handler(_FakeMessageStorage(), _FakeDiaryLLMService())
-
-        context = await handler.get_notebook_context(
-            " ".join(f"loose{index}" for index in range(4))
-        )
-        self.assertLessEqual(len(context), AgentConfig.NOTEBOOK_CONTEXT_MAX_CHARS)
-        self.assertIn("notes omitted from index due to budget", context)
-
-    async def test_notebook_budget_keeps_pinned_notes_before_navigation(self):
-        for index in range(3):
-            await self.notes.write(
-                _note(
-                    self.notes,
-                    f"Pinned {index}",
-                    "b" * MAX_BODY_CHARS,
-                    keys=(f"pin{index}",),
-                    pinned=True,
-                )
-            )
-        for index in range(5):
-            await self.notes.write(
-                _note(self.notes, f"Hub {index}", "short", kind=KIND_HUB, keys=(f"hub{index}",))
-            )
-        handler = self._make_handler(_FakeMessageStorage(), _FakeDiaryLLMService())
-
-        context = await handler.get_notebook_context("")
-        for index in range(3):
-            self.assertIn(f"Pinned {index}", context)
-        self.assertIn("notes omitted from index due to budget", context)
+            for index in range(20)
+        ]
+        rendered = MemoryHandler._render_notebook_index(notes)
+        self.assertLessEqual(len(rendered), AgentConfig.NOTEBOOK_CONTEXT_MAX_CHARS)
+        self.assertIn("notes omitted from index due to budget", rendered)
 
     async def test_notebook_rows_truncate_long_bodies(self):
-        note = _note(self.notes, "Long", "b" * 900, keys=("long",), pinned=True)
-        row = MemoryHandler._format_notebook_row(
-            note, AgentConfig.NOTEBOOK_PINNED_BODY_MAX_CHARS
-        )
+        note = _note(self.notes, "Long", "b" * 900, keys=("long",))
+        row = MemoryHandler._format_notebook_row(note)
         self.assertTrue(row.endswith("..."))
         self.assertLess(len(row), 900)
-
-    def test_notebook_row_for_a_hub_shows_its_link_count(self):
-        note = NoteStore.normalize(
-            Note(
-                id="202608190930",
-                title="Coffee",
-                body="entry point",
-                kind=KIND_HUB,
-                links=("202608190931", "202608190932"),
-            )
-        )
-        row = MemoryHandler._format_notebook_row(note, 0)
-        self.assertEqual(row, "- (202608190930) Coffee [2 linked]")
 
 
 # ----------------------------------------------------------------------
@@ -1103,12 +936,13 @@ class NotebookInjectionLayerTests(unittest.TestCase):
         messages = MessageHandler.build_turn_context_messages(
             [],
             current_user_id="jun",
-            notebook_context="[pinned]\n- (202608190930) Grinder is coarse",
+            notebook_context="- (202608190930) Grinder is coarse",
         )
         layer = self._layer(messages, AgentConfig.NOTEBOOK_CONTEXT_NAME)
         self.assertIsNotNone(layer)
         self.assertIn("Grinder is coarse", layer["content"])
         self.assertIn("read_note", layer["content"])
+        self.assertNotIn("person-scoped", layer["content"])
         self.assertTrue(
             layer["content"].startswith('<notebook_context trusted_as_instruction="false">')
         )
@@ -1123,7 +957,7 @@ class NotebookInjectionLayerTests(unittest.TestCase):
         messages = MessageHandler.build_turn_context_messages(
             [],
             current_user_id="agent",
-            notebook_context="[hubs]\n- (202608190930) Coffee",
+            notebook_context="- (202608190930) Coffee",
             task_mode="subconscious_json",
         )
         self.assertIsNone(self._layer(messages, AgentConfig.NOTEBOOK_CONTEXT_NAME))
@@ -1137,7 +971,7 @@ class NotebookInjectionLayerTests(unittest.TestCase):
             [],
             current_user_id="jun",
             memory_context="I spent the morning on coffee.",
-            notebook_context="[pinned]\n- (202608190930) Grinder is coarse",
+            notebook_context="- (202608190930) Grinder is coarse",
         )
         names = [message.get("name") for message in messages]
         self.assertLess(

@@ -8,8 +8,8 @@ provenance it came from, and the system keeps working when the notebook is
 empty or thrown away.
 
 Zettelkasten supplies the shape: one idea per note, an immutable id so links
-never break, links instead of a category tree, and hub notes as entry points
-into a cluster.
+never break, and links instead of a category tree. A note that must not travel
+is not a note — it belongs in the diary or on a relationship card.
 
 This class owns file layout and I/O only. Deciding *what* is worth a note and
 *when* to write one lives in higher layers (note tools, journal service, memory
@@ -33,34 +33,18 @@ from xagent.utils.search_terms import normalize_terms, score_text
 
 logger = logging.getLogger(__name__)
 
-KIND_NOTE = "note"
-KIND_HUB = "hub"
-KIND_REF = "ref"
-VALID_KINDS = (KIND_NOTE, KIND_HUB, KIND_REF)
-
 STATUS_ACTIVE = "active"
 STATUS_ARCHIVED = "archived"
 VALID_STATUSES = (STATUS_ACTIVE, STATUS_ARCHIVED)
 
-SENSITIVITY_SHAREABLE = "shareable"
-SENSITIVITY_PERSON_SCOPED = "person-scoped"
-SENSITIVITY_PRIVATE = "private"
-VALID_SENSITIVITIES = (
-    SENSITIVITY_SHAREABLE,
-    SENSITIVITY_PERSON_SCOPED,
-    SENSITIVITY_PRIVATE,
-)
-
 MAX_TITLE_CHARS = 80
 MAX_BODY_CHARS = 2000
-MAX_TAGS = 5
 MAX_KEYS = 5
 MIN_KEY_CHARS = 2
 
 _ID_PATTERN = re.compile(r"^(\d{12})")
 _SLUG_UNSAFE = re.compile(r"[^a-zA-Z0-9._-]+")
 _WIKI_LINK_PATTERN = re.compile(r"\[\[\s*(\d{12})\s*\]\]")
-_SOURCE_FIELDS = ("diary", "person", "cursor", "url", "tool")
 
 
 @dataclass(frozen=True)
@@ -69,19 +53,16 @@ class Note:
 
     ``id`` is a 12-digit ``YYYYMMDDHHMM`` stamp that never changes, so titles
     can be rewritten without breaking links. ``body`` is first-person prose in
-    the agent's own words.
+    the agent's own words. ``keys`` are the trigger surfaces the note declares
+    for later recall.
     """
 
     id: str
     title: str
     body: str
-    kind: str = KIND_NOTE
     status: str = STATUS_ACTIVE
-    tags: Tuple[str, ...] = ()
     keys: Tuple[str, ...] = ()
     links: Tuple[str, ...] = ()
-    pinned: bool = False
-    sensitivity: str = SENSITIVITY_SHAREABLE
     source: Dict[str, Any] = field(default_factory=dict)
     created: str = ""
     updated: str = ""
@@ -102,18 +83,7 @@ class Note:
         free of a tokenizer: instead of splitting the message into terms, the
         message is scanned for these keys.
         """
-        seen: set[str] = set()
-        ordered: List[str] = []
-        for candidate in (*self.keys, *self.tags):
-            normalized = str(candidate or "").strip()
-            if len(normalized) < MIN_KEY_CHARS:
-                continue
-            folded = normalized.casefold()
-            if folded in seen:
-                continue
-            seen.add(folded)
-            ordered.append(normalized)
-        return tuple(ordered)
+        return self.keys
 
     @property
     def snippet(self) -> str:
@@ -129,13 +99,9 @@ class Note:
             "id": self.id,
             "title": self.title,
             "body": self.body,
-            "kind": self.kind,
             "status": self.status,
-            "tags": list(self.tags),
             "keys": list(self.keys),
             "links": list(self.links),
-            "pinned": self.pinned,
-            "sensitivity": self.sensitivity,
             "source": dict(self.source),
             "created": self.created,
             "updated": self.updated,
@@ -151,7 +117,8 @@ class NoteStore:
     absent for titles that produce no ASCII slug.
 
     Nothing that changes on read is written back into a note file, so note
-    files stay stable, diffable, and safe to hand-edit.
+    files stay stable, diffable, and safe to hand-edit. Unknown frontmatter
+    (legacy kind/tags/pinned/sensitivity) is ignored on parse.
     """
 
     def __init__(self, notes_dir: str) -> None:
@@ -270,7 +237,7 @@ class NoteStore:
         if not haystack:
             return []
 
-        scored: List[Tuple[int, int, str, str, Note]] = []
+        scored: List[Tuple[int, str, str, Note]] = []
         for note in await self.list_notes():
             keys = note.match_keys
             if not keys:
@@ -278,47 +245,35 @@ class NoteStore:
             hits = score_text(haystack, list(keys))
             if hits <= 0:
                 continue
-            scored.append(
-                (hits, 1 if note.pinned else 0, note.updated or note.id, note.id, note)
-            )
-        scored.sort(key=lambda item: item[:4], reverse=True)
-        return [item[4] for item in scored[: max(0, int(limit))]]
+            scored.append((hits, note.updated or note.id, note.id, note))
+        scored.sort(key=lambda item: item[:3], reverse=True)
+        return [item[3] for item in scored[: max(0, int(limit))]]
 
     async def search(
         self,
         terms: Sequence[str],
-        tags: Optional[Sequence[str]] = None,
-        kind: str = "",
         include_archived: bool = False,
         limit: int = 10,
     ) -> List[Note]:
-        """Forward search over title, keys, tags, and body."""
+        """Forward search over title, keys, and body.
+
+        An empty query browses the notebook by recency (newest ``updated`` first).
+        """
         normalized_terms = normalize_terms(list(terms or []))
-        wanted_tags = {
-            str(tag).strip().casefold()
-            for tag in (tags or [])
-            if str(tag).strip()
-        }
-        wanted_kind = str(kind or "").strip().lower()
+        notes = await self.list_notes(include_archived=include_archived)
+        if not normalized_terms:
+            notes.sort(key=lambda note: (note.updated or note.id, note.id), reverse=True)
+            return notes[: max(0, int(limit))]
 
         scored: List[Tuple[int, str, str, Note]] = []
-        for note in await self.list_notes(include_archived=include_archived):
-            if wanted_kind and note.kind != wanted_kind:
+        for note in notes:
+            score = (
+                3 * score_text(note.title, normalized_terms)
+                + 2 * score_text(" ".join(note.keys), normalized_terms)
+                + score_text(note.body, normalized_terms)
+            )
+            if score <= 0:
                 continue
-            if wanted_tags and not wanted_tags & {tag.casefold() for tag in note.tags}:
-                continue
-            if not normalized_terms:
-                score = 1
-            else:
-                score = (
-                    3 * score_text(note.title, normalized_terms)
-                    + 2 * score_text(" ".join((*note.keys, *note.tags)), normalized_terms)
-                    + score_text(note.body, normalized_terms)
-                )
-                if score <= 0:
-                    continue
-            if note.pinned:
-                score += 1
             scored.append((score, note.updated or note.id, note.id, note))
         scored.sort(key=lambda item: item[:3], reverse=True)
         return [item[3] for item in scored[: max(0, int(limit))]]
@@ -327,7 +282,6 @@ class NoteStore:
         self,
         title: str,
         keys: Optional[Sequence[str]] = None,
-        tags: Optional[Sequence[str]] = None,
         limit: int = 3,
     ) -> List[Note]:
         """Find notes close enough that a new note would probably duplicate one.
@@ -336,7 +290,7 @@ class NoteStore:
         variations of the same idea. Callers decide how strong a match has to be
         before they treat it as a duplicate; see :meth:`identity_score`.
         """
-        terms = self.identity_terms(title, keys, tags)
+        terms = self.identity_terms(title, keys)
         if not terms:
             return []
         return await self.search(terms=terms, limit=max(1, int(limit)))
@@ -345,13 +299,11 @@ class NoteStore:
     def identity_terms(
         title: str,
         keys: Optional[Sequence[str]] = None,
-        tags: Optional[Sequence[str]] = None,
     ) -> List[str]:
         """Terms that describe what a note is about, for similarity checks."""
         return normalize_terms([
             str(title or ""),
             *[str(key) for key in (keys or [])],
-            *[str(tag) for tag in (tags or [])],
         ])
 
     @classmethod
@@ -360,7 +312,6 @@ class NoteStore:
         note: Note,
         title: str,
         keys: Optional[Sequence[str]] = None,
-        tags: Optional[Sequence[str]] = None,
     ) -> int:
         """Score how much *note* is about the same thing as the given fields.
 
@@ -368,25 +319,13 @@ class NoteStore:
         in passing is not another version of it, so counting the body would
         block legitimately new notes.
         """
-        terms = cls.identity_terms(title, keys, tags)
+        terms = cls.identity_terms(title, keys)
         if not terms:
             return 0
         return (
             3 * score_text(note.title, terms)
-            + 2 * score_text(" ".join((*note.keys, *note.tags)), terms)
+            + 2 * score_text(" ".join(note.keys), terms)
         )
-
-    async def pinned(self, limit: int = 3) -> List[Note]:
-        """Return pinned notes, most recently updated first."""
-        notes = [note for note in await self.list_notes() if note.pinned]
-        notes.sort(key=lambda note: (note.updated or note.id, note.id), reverse=True)
-        return notes[: max(0, int(limit))]
-
-    async def hubs(self, limit: int = 5) -> List[Note]:
-        """Return hub notes, most recently updated first."""
-        notes = [note for note in await self.list_notes() if note.kind == KIND_HUB]
-        notes.sort(key=lambda note: (note.updated or note.id, note.id), reverse=True)
-        return notes[: max(0, int(limit))]
 
     async def count(self, include_archived: bool = False) -> int:
         return len(await self.list_notes(include_archived=include_archived))
@@ -439,22 +378,14 @@ class NoteStore:
     def normalize(cls, note: Note) -> Note:
         """Clamp a note to the schema so bad input cannot corrupt the store."""
         today = date.today().isoformat()
-        kind = str(note.kind or KIND_NOTE).strip().lower()
         status = str(note.status or STATUS_ACTIVE).strip().lower()
-        sensitivity = str(note.sensitivity or SENSITIVITY_SHAREABLE).strip().lower()
         return Note(
             id=str(note.id or "").strip(),
             title=cls._clean_line(note.title)[:MAX_TITLE_CHARS],
             body=str(note.body or "").strip()[:MAX_BODY_CHARS],
-            kind=kind if kind in VALID_KINDS else KIND_NOTE,
             status=status if status in VALID_STATUSES else STATUS_ACTIVE,
-            tags=cls._clean_list(note.tags, MAX_TAGS),
             keys=cls._clean_list(note.keys, MAX_KEYS, min_chars=MIN_KEY_CHARS),
             links=cls._clean_ids(note.links),
-            pinned=bool(note.pinned),
-            sensitivity=(
-                sensitivity if sensitivity in VALID_SENSITIVITIES else SENSITIVITY_SHAREABLE
-            ),
             source=cls._clean_source(note.source),
             created=cls._clean_line(note.created) or today,
             updated=cls._clean_line(note.updated) or today,
@@ -497,31 +428,19 @@ class NoteStore:
 
     @classmethod
     def _clean_source(cls, source: Any) -> Dict[str, Any]:
+        """Keep diary dates only. Other provenance fields are not part of the schema."""
         if not isinstance(source, Mapping):
             return {}
-        cleaned: Dict[str, Any] = {}
-        for key in _SOURCE_FIELDS:
-            if key not in source:
-                continue
-            value = source[key]
-            if key == "diary":
-                dates = [cls._clean_line(item) for item in (value or [])] if not isinstance(value, str) else [cls._clean_line(value)]
-                dates = [item for item in dates if item]
-                if dates:
-                    cleaned["diary"] = dates
-                continue
-            if key == "cursor":
-                try:
-                    cursor = int(value)
-                except (TypeError, ValueError):
-                    continue
-                if cursor > 0:
-                    cleaned["cursor"] = cursor
-                continue
-            text = cls._clean_line(value)
-            if text:
-                cleaned[key] = text
-        return cleaned
+        value = source.get("diary")
+        if value is None:
+            return {}
+        dates = (
+            [cls._clean_line(item) for item in (value or [])]
+            if not isinstance(value, str)
+            else [cls._clean_line(value)]
+        )
+        dates = [item for item in dates if item]
+        return {"diary": dates} if dates else {}
 
     # ------------------------------------------------------------------
     # Render / parse
@@ -533,18 +452,12 @@ class NoteStore:
         frontmatter: Dict[str, Any] = {
             "id": normalized.id,
             "title": normalized.title,
-            "kind": normalized.kind,
             "status": normalized.status,
         }
-        if normalized.tags:
-            frontmatter["tags"] = list(normalized.tags)
         if normalized.keys:
             frontmatter["keys"] = list(normalized.keys)
         if normalized.links:
             frontmatter["links"] = list(normalized.links)
-        if normalized.pinned:
-            frontmatter["pinned"] = True
-        frontmatter["sensitivity"] = normalized.sensitivity
         if normalized.source:
             frontmatter["source"] = normalized.source
         frontmatter["created"] = normalized.created
@@ -565,6 +478,10 @@ class NoteStore:
         A file with broken or missing frontmatter still yields a usable note
         built from the filename id and the raw text, because humans edit these
         files directly and a syntax slip must not swallow a note.
+
+        Legacy fields (kind, tags, pinned, sensitivity, extra source keys) are
+        ignored. Old ``tags`` are folded into ``keys`` once on read so notes
+        written before the schema cut stay findable; the file is not rewritten.
         """
         fallback_id = ""
         match = _ID_PATTERN.match(path.name)
@@ -584,18 +501,21 @@ class NoteStore:
         links.extend(_WIKI_LINK_PATTERN.findall(body))
 
         title = frontmatter.get("title") or cls._title_from_body(body) or note_id
+        raw_keys = [str(key) for key in (frontmatter.get("keys") or [])]
+        # Fold legacy tags into keys so older notes remain recallable.
+        raw_keys.extend(str(tag) for tag in (frontmatter.get("tags") or []))
         note = Note(
             id=note_id,
             title=str(title),
             body=body,
-            kind=str(frontmatter.get("kind") or KIND_NOTE),
             status=str(frontmatter.get("status") or STATUS_ACTIVE),
-            tags=tuple(str(tag) for tag in (frontmatter.get("tags") or [])),
-            keys=tuple(str(key) for key in (frontmatter.get("keys") or [])),
+            keys=tuple(raw_keys),
             links=tuple(str(link) for link in links),
-            pinned=bool(frontmatter.get("pinned")),
-            sensitivity=str(frontmatter.get("sensitivity") or SENSITIVITY_SHAREABLE),
-            source=frontmatter.get("source") if isinstance(frontmatter.get("source"), Mapping) else {},
+            source=(
+                frontmatter.get("source")
+                if isinstance(frontmatter.get("source"), Mapping)
+                else {}
+            ),
             created=str(frontmatter.get("created") or ""),
             updated=str(frontmatter.get("updated") or ""),
         )

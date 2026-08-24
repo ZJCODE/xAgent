@@ -303,7 +303,7 @@ New experience:
         is the week's diary range; ``week_arc`` (the just-written weekly summary)
         is optional orientation so the model does not rewrite the arc into notes.
         Most weeks yield nothing. Returns a possibly empty list of
-        ``{title, body, tags, keys, links}`` drafts.
+        ``{title, body, keys, links}`` drafts.
         """
         diary = str(diary_source or "").strip()
         if not diary:
@@ -370,7 +370,6 @@ For each note:
 - `title`: one line, under 80 characters, specific enough to recognise later.
 - `body`: first person ("I"), my own words, one idea only, roughly 60-400 characters. Not a transcript excerpt and not a mini weekly report.
 - `keys`: 1-5 short trigger words, each at least 2 characters, that would appear in a future message about this. These are how I find the note again, so use the surface forms people actually type, including names.
-- `tags`: 0-3 short reusable topic labels.
 - `links`: 0-3 twelve-digit ids of existing notes this idea connects to. Prefer linking over restating. Use only ids from the existing-notes list.
 
 Rules:
@@ -395,12 +394,9 @@ Return JSON only: a list of note objects, or `[]`. No code fences, no commentary
                 title = str(note.get("title") or "").strip()
                 if not note_id or not title:
                     continue
-                tags = ", ".join(str(tag) for tag in (note.get("tags") or []))
                 keys = ", ".join(str(key) for key in (note.get("keys") or []))
                 snippet = str(note.get("snippet") or "").strip()
                 meta_parts = []
-                if tags:
-                    meta_parts.append(f"tags: {tags}")
                 if keys:
                     meta_parts.append(f"keys: {keys}")
                 meta = f" ({'; '.join(meta_parts)})" if meta_parts else ""
@@ -464,7 +460,6 @@ Return JSON only: a list of note objects, or `[]`. No code fences, no commentary
             drafts.append({
                 "title": title,
                 "body": body,
-                "tags": [str(tag).strip() for tag in (item.get("tags") or []) if str(tag).strip()],
                 "keys": [str(key).strip() for key in (item.get("keys") or []) if str(key).strip()],
                 "links": links,
             })

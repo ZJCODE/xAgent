@@ -2,13 +2,7 @@
 
 from .markdown_memory import MarkdownMemory, MemoryScope
 from .note_memory import (
-    KIND_HUB,
-    KIND_NOTE,
-    KIND_REF,
     MAX_BODY_CHARS,
-    SENSITIVITY_PERSON_SCOPED,
-    SENSITIVITY_PRIVATE,
-    SENSITIVITY_SHAREABLE,
     STATUS_ACTIVE,
     STATUS_ARCHIVED,
     Note,
@@ -28,14 +22,8 @@ __all__ = [
     "MemoryScope",
     "Note",
     "NoteStore",
-    "KIND_NOTE",
-    "KIND_HUB",
-    "KIND_REF",
     "STATUS_ACTIVE",
     "STATUS_ARCHIVED",
-    "SENSITIVITY_SHAREABLE",
-    "SENSITIVITY_PERSON_SCOPED",
-    "SENSITIVITY_PRIVATE",
     "MAX_BODY_CHARS",
     "RelationshipCard",
     "RelationshipStore",

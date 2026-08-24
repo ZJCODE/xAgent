@@ -613,7 +613,7 @@ def _config_yaml(selection: InitSelection, port: int) -> str:
     )
     yaml_str = yaml_str.replace(
         "notes_auto_distill: true\n",
-        "notes_auto_distill: true  # Distil notes after weekly summaries; garden after monthly.\n",
+        "notes_auto_distill: true  # Distil notes after weekly summaries.\n",
     )
     return yaml_str
 
