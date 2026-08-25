@@ -78,8 +78,9 @@ Dropped, because they fight the load-bearing shape:
 - **Mechanical monthly gardening** — auto-linking orphans and auto-creating tag
   hubs produces a noisy graph. Linking is a write-time judgment, not a monthly
   job.
-- ID genealogy (`1a1b`), fleeting staging status, unbounded growth (archive is
-  mandatory, delete is not offered).
+- ID genealogy (`1a1b`), fleeting staging status, unbounded growth (lifecycle
+  status fields; rewrite in place when a conclusion changes, and delete noisy
+  files by hand if needed).
 
 ## 4. Data model
 
@@ -116,10 +117,9 @@ YAML frontmatter plus first-person body.
 ---
 id: '202608190930'
 title: Jun takes espresso at 1:2.5
-status: active
 keys:
 - espresso
-- Jun
+- jun
 source:
   diary:
   - '2026-08-19'
@@ -135,7 +135,6 @@ When I brew for him I just use that and stop asking.
 | --- | --- | --- |
 | `id` | 12-digit `YYYYMMDDHHMM` | immutable; collision resolves by walking forward a minute |
 | `title` | string, <= 80 chars | freely rewritable |
-| `status` | `active` \| `archived` | archive never deletes |
 | `keys` | list, <= 5, min 2 chars each | recall triggers, see 7.1 |
 | `links` | list of ids | related notes; inline `[[id]]` in the body is also indexed |
 | `source` | mapping | `diary` dates only |
@@ -146,12 +145,12 @@ id is authoritative; rewriting a title does not rename the file.
 
 Ids are allocated and written under a single lock (`NoteStore.create`).
 
-The parser tolerates human damage: unknown enum values and oversized fields are
-clamped, missing fields fall back to defaults, and broken or absent YAML degrades
-to a body-only note. **Unknown frontmatter is ignored**, so notes written under
-the earlier schema (`kind`, `tags`, `pinned`, `sensitivity`, extra `source` keys)
-still load. Legacy `tags` are folded into `keys` on read so those notes stay
-findable; the file is not rewritten until the next explicit write.
+The parser tolerates human damage: oversized fields are clamped, missing fields
+fall back to defaults, and broken or absent YAML degrades to a body-only note.
+**Unknown frontmatter is ignored**, so notes written under the earlier schema
+(`kind`, `tags`, `pinned`, `sensitivity`, `status`, extra `source` keys) still
+load. Legacy `tags` are folded into `keys` on read so those notes stay findable;
+the file is not rewritten until the next explicit write.
 
 ## 5. Write
 
@@ -160,11 +159,12 @@ Two ways into one store.
 ### 5.1 In chat — the agent writes with tools
 
 `write_note(title, body, keys, links)` and
-`update_note(note_id, title, body, keys, links, archive)`. Only the fields passed
+`update_note(note_id, title, body, keys, links)`. Only the fields passed
 to `update_note` change. Tool descriptions carry a tight contract: write only when
 **this turn** produced a standing fact that will still hold across days. Do not
-summarise the conversation. Prefer linking related notes at write time. Bodies
-over 2000 characters are rejected with an instruction to split.
+summarise the conversation. Prefer linking related notes at write time. When a
+conclusion stops holding, rewrite the same note in place. Bodies over 2000
+characters are rejected with an instruction to split.
 
 **Duplicate guard, no LLM required.** Before creating, the tool asks the store
 for near neighbours and scores each with `NoteStore.identity_score` (3× title,
@@ -212,11 +212,11 @@ than a diary trace.
 
 ## 6. Organize
 
-`active` → `archived`. Archiving keeps the file and stops the note being recalled,
-searched by default, or injected.
-
-There is no monthly gardening job. Structure is links the writer (agent, weekly
-distiller, or human) chose.
+Structure is links the writer (agent, weekly distiller, or human) chose at write
+time. There is no monthly gardening job and no lifecycle status on a note. When a
+conclusion changes, rewrite the same note (id and links stay). When a note should
+not fire on a message, change its `keys`. Noise that should not exist at all is
+deleted by hand from the Memory tree.
 
 ## 7. Retrieve
 
@@ -311,14 +311,14 @@ Internal constants in `AgentConfig`: `NOTEBOOK_CONTEXT_MAX_CHARS` (1500),
 
 `tests/test_note_memory.py` covers the store (frontmatter round-trip, damage
 tolerance, legacy-field ignore with tag-to-key fold, id collision, slug and CJK
-filenames, normalization clamps, inline `[[id]]` links, neighbours, archive,
-cache invalidation), retrieval (Chinese and English recall, ranking, archived
-exclusion, minimum key length, recency browse, similarity), the four tools
-(duplicate guard, body cap, partial updates, neighbours on read, disabled state),
-weekly distillation prompts and draft parsing, wiring (diary maintenance does
-not distil; weekly latch does; no mechanical links; per-week cap; duplicate skip;
-switch-off; failure isolation; monthly summary does not garden), and injection
-(key-recall only, empty without a message, cap, budget bound, layer placement).
+filenames, normalization clamps, inline `[[id]]` links, neighbours, cache
+invalidation), retrieval (Chinese and English recall, ranking, minimum key
+length, recency browse, similarity), the four tools (duplicate guard, body cap,
+partial updates, neighbours on read, disabled state), weekly distillation prompts
+and draft parsing, wiring (diary maintenance does not distil; weekly latch does;
+no mechanical links; per-week cap; duplicate skip; switch-off; failure isolation;
+monthly summary does not garden), and injection (key-recall only, empty without a
+message, cap, budget bound, layer placement).
 
 ## 12. Goal-check
 
@@ -335,8 +335,9 @@ switch-off; failure isolation; monthly summary does not garden), and injection
 - **Diary-anchored carrier** — the notebook is a regenerable projection,
   `source.diary` is recorded, and weekly distillation can only run for a week
   that already has a summary file.
-- **Attribution and continuity** — immutable ids and archive-never-delete;
-  first-person in a note is the agent, not the source speaker.
+- **Attribution and continuity** — immutable ids; rewrite in place keeps links;
+  first-person in a note is the agent, not the source speaker. The projection is
+  regenerable; noisy files can be deleted by hand.
 
 ## 13. What is deferred
 
@@ -351,7 +352,7 @@ switch-off; failure isolation; monthly summary does not garden), and injection
 
 - **Note explosion** remains a risk. Defences: closed-week latch, diary feedstock,
   pre-write neighbour check, per-week cap, inject-only-index. Without decay, a
-  noisy notebook still needs a human or the agent to archive entries.
+  noisy notebook still needs rewrite-in-place or a human deleting files.
 - **Cold start until the first completed week.** In-chat tools cover standing
   facts; an empty notebook before the first weekly summary is intentional.
 - **Semantic overlap with the diary.** Held off by reusable-conclusion-only,
@@ -363,9 +364,10 @@ switch-off; failure isolation; monthly summary does not garden), and injection
 
 ## 15. Decisions on record
 
-1. **A note is a reusable conclusion.** Sharing classes, kinds, tags, pins, and
-   monthly gardening were tried and dropped: they added ontology without a job
-   the rest of the system could use.
+1. **A note is a reusable conclusion.** Sharing classes, kinds, tags, pins,
+   lifecycle status, and monthly gardening were tried and dropped: they added
+   ontology without a job the rest of the system could use. When a conclusion
+   changes, rewrite the same note in place.
 2. **L0 auto-recall is on by default**, reverse key matching, no tokenizer.
 3. **Weekly background distillation ships on the weekly summary cadence**,
    default on and switchable. Writes go through `NoteStore.create`.

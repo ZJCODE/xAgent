@@ -8,7 +8,6 @@ from pathlib import Path
 
 from xagent.components.memory import (
     MAX_BODY_CHARS,
-    STATUS_ARCHIVED,
     Note,
     NoteStore,
 )
@@ -60,6 +59,9 @@ class NoteStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(loaded.keys, ("espresso", "Jun"))
         self.assertEqual(loaded.links, ("202608190931",))
         self.assertEqual(loaded.source, {"diary": ["2026-08-19"]})
+        rendered = self.store.path_for(note.id).read_text(encoding="utf-8")
+        self.assertNotIn("status:", rendered)
+        self.assertFalse(hasattr(loaded, "status"))
 
     async def test_id_stays_a_string_through_yaml_roundtrip(self):
         note = _note(self.store, "Leading zeros survive", "body")
@@ -157,23 +159,22 @@ class NoteStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(hasattr(loaded, "tags"))
         self.assertFalse(hasattr(loaded, "pinned"))
         self.assertFalse(hasattr(loaded, "sensitivity"))
+        self.assertFalse(hasattr(loaded, "status"))
         # Read does not rewrite the file.
         self.assertIn("kind: hub", path.read_text(encoding="utf-8"))
 
-    async def test_normalize_clamps_body_keys_and_status(self):
+    async def test_normalize_clamps_body_and_keys(self):
         note = NoteStore.normalize(
             Note(
                 id="202608190930",
                 title="t" * 200,
                 body="b" * (MAX_BODY_CHARS + 500),
-                status="nonsense",
                 keys=("ok", "x", "  ", "ok"),
                 links=("202608190931", "nope", "202608190931"),
             )
         )
         self.assertEqual(len(note.title), 80)
         self.assertEqual(len(note.body), MAX_BODY_CHARS)
-        self.assertEqual(note.status, "active")
         self.assertEqual(note.keys, ("ok",))
         self.assertEqual(note.links, ("202608190931",))
 
@@ -187,16 +188,6 @@ class NoteStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(target.id, loaded.links)
         backlinks = await self.store.backlinks(target.id)
         self.assertEqual([note.id for note in backlinks], [hub.id])
-
-    async def test_archive_keeps_the_file_but_hides_the_note(self):
-        note = _note(self.store, "No longer true", "body")
-        await self.store.write(note)
-
-        archived = await self.store.archive(note.id)
-        self.assertEqual(archived.status, STATUS_ARCHIVED)
-        self.assertEqual(await self.store.list_notes(), [])
-        self.assertEqual(len(await self.store.list_notes(include_archived=True)), 1)
-        self.assertTrue(self.store.path_for(note.id).exists())
 
     async def test_neighbours_returns_links_then_backlinks(self):
         linked = _note(self.store, "Linked", "body")
@@ -269,10 +260,6 @@ class NoteRetrievalTests(unittest.IsolatedAsyncioTestCase):
     async def test_recall_returns_nothing_for_unrelated_text(self):
         self.assertEqual(await self.store.recall("what is the train timetable"), [])
 
-    async def test_recall_ignores_archived_notes(self):
-        await self.store.archive(self.grinder.id)
-        self.assertEqual(await self.store.recall("is the grinder still off?"), [])
-
     async def test_recall_skips_keys_below_minimum_length(self):
         short = _note(self.store, "Short key", "body", keys=("a",))
         await self.store.write(short)
@@ -334,6 +321,8 @@ class NoteToolTests(unittest.IsolatedAsyncioTestCase):
             write_fn["parameters"]["properties"]["title"]["description"],
         )
         self.assertIn("'I' is you", update_fn["parameters"]["properties"]["body"]["description"])
+        self.assertIn("rewrite this note in place", update_fn["description"])
+        self.assertNotIn("archive", update_fn["parameters"]["properties"])
 
     async def test_write_note_stores_a_note(self):
         result = await self.write_note(
@@ -392,12 +381,6 @@ class NoteToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stored.body, "1:2.5 at 92C")
         self.assertEqual(stored.title, "Espresso ratio")
         self.assertEqual(stored.keys, ("espresso",))
-
-    async def test_update_note_can_archive(self):
-        created = await self.write_note(title="Stale", body="not true anymore")
-        result = await self.update_note(note_id=created["note"]["id"], archive=True)
-        self.assertEqual(result["status"], "ok")
-        self.assertEqual(await self.store.count(), 0)
 
     async def test_update_note_reports_missing_notes(self):
         result = await self.update_note(note_id="202608190930", body="x")

@@ -13,7 +13,6 @@ from typing import Optional
 
 from xagent.components.memory.note_memory import (
     MAX_BODY_CHARS,
-    STATUS_ARCHIVED,
     Note,
     NoteStore,
 )
@@ -40,7 +39,6 @@ def _note_detail(note: Note) -> dict:
     detail = _note_summary(note)
     detail.update({
         "body": note.body,
-        "status": note.status,
         "links": list(note.links),
         "created": note.created,
     })
@@ -151,16 +149,18 @@ def create_write_note_tool(store: NoteStore, is_enabled: bool = True):
 
 
 def create_update_note_tool(store: NoteStore, is_enabled: bool = True):
-    """Create a tool that revises or archives an existing note."""
+    """Create a tool that revises an existing note."""
 
     @function_tool(
         name="update_note",
         description=(
             "Revise a note in your notebook. After a week of life, this is usually the "
             "right tool — not write_note: correct a conclusion that stopped holding, "
-            "sharpen wording, or add or replace links to related notes. Only the fields "
-            "you pass change. Prefer this over writing a second note on the same idea. "
-            "Archive a note that is no longer true."
+            "sharpen wording, change keys so it is recalled differently, or add or "
+            "replace links to related notes. Only the fields you pass change. Prefer "
+            "this over writing a second note on the same idea. When a conclusion no "
+            "longer holds, rewrite this note in place; do not archive or invent a "
+            "replacement id."
         ),
         param_descriptions={
             "note_id": "The 12-digit id of the note to revise.",
@@ -177,10 +177,6 @@ def create_update_note_tool(store: NoteStore, is_enabled: bool = True):
                 "Replacement list of related note ids (full replace, not append). Pass "
                 "the complete set you want kept."
             ),
-            "archive": (
-                "Archive the note when it no longer holds. Archived notes are kept but "
-                "stop being recalled."
-            ),
         },
     )
     async def update_note(
@@ -189,9 +185,8 @@ def create_update_note_tool(store: NoteStore, is_enabled: bool = True):
         body: Optional[str] = None,
         keys: Optional[list[str]] = None,
         links: Optional[list[str]] = None,
-        archive: bool = False,
     ) -> dict:
-        """Revise or archive one note."""
+        """Revise one note."""
         if not is_enabled:
             return {"status": "disabled", "message": "The notebook is unavailable this turn."}
 
@@ -213,7 +208,6 @@ def create_update_note_tool(store: NoteStore, is_enabled: bool = True):
                 id=existing.id,
                 title=str(title).strip() if title is not None else existing.title,
                 body=str(body).strip() if body is not None else existing.body,
-                status=STATUS_ARCHIVED if archive else existing.status,
                 keys=tuple(keys) if keys is not None else existing.keys,
                 links=tuple(links) if links is not None else existing.links,
                 source=dict(existing.source),

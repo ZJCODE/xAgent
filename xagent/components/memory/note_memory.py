@@ -33,10 +33,6 @@ from xagent.utils.search_terms import normalize_terms, score_text
 
 logger = logging.getLogger(__name__)
 
-STATUS_ACTIVE = "active"
-STATUS_ARCHIVED = "archived"
-VALID_STATUSES = (STATUS_ACTIVE, STATUS_ARCHIVED)
-
 MAX_TITLE_CHARS = 80
 MAX_BODY_CHARS = 2000
 MAX_KEYS = 5
@@ -60,7 +56,6 @@ class Note:
     id: str
     title: str
     body: str
-    status: str = STATUS_ACTIVE
     keys: Tuple[str, ...] = ()
     links: Tuple[str, ...] = ()
     source: Dict[str, Any] = field(default_factory=dict)
@@ -70,10 +65,6 @@ class Note:
     @property
     def is_empty(self) -> bool:
         return not self.body.strip() and not self.title.strip()
-
-    @property
-    def is_archived(self) -> bool:
-        return self.status == STATUS_ARCHIVED
 
     @property
     def match_keys(self) -> Tuple[str, ...]:
@@ -99,7 +90,6 @@ class Note:
             "id": self.id,
             "title": self.title,
             "body": self.body,
-            "status": self.status,
             "keys": list(self.keys),
             "links": list(self.links),
             "source": dict(self.source),
@@ -118,7 +108,7 @@ class NoteStore:
 
     Nothing that changes on read is written back into a note file, so note
     files stay stable, diffable, and safe to hand-edit. Unknown frontmatter
-    (legacy kind/tags/pinned/sensitivity) is ignored on parse.
+    (legacy kind/tags/pinned/sensitivity/status) is ignored on parse.
     """
 
     def __init__(self, notes_dir: str) -> None:
@@ -183,18 +173,14 @@ class NoteStore:
         normalized = str(note_id or "").strip()
         if not normalized:
             return None
-        notes = await self.list_notes(include_archived=True)
-        for note in notes:
+        for note in await self.list_notes():
             if note.id == normalized:
                 return note
         return None
 
-    async def list_notes(self, include_archived: bool = False) -> List[Note]:
-        """Return all notes, newest id first."""
-        notes = await asyncio.to_thread(self._load_all_sync)
-        if include_archived:
-            return list(notes)
-        return [note for note in notes if not note.is_archived]
+    async def list_notes(self) -> List[Note]:
+        """Return all live notes, newest id first."""
+        return list(await asyncio.to_thread(self._load_all_sync))
 
     async def backlinks(self, note_id: str) -> List[Note]:
         """Return notes linking to *note_id*."""
@@ -252,7 +238,6 @@ class NoteStore:
     async def search(
         self,
         terms: Sequence[str],
-        include_archived: bool = False,
         limit: int = 10,
     ) -> List[Note]:
         """Forward search over title, keys, and body.
@@ -260,7 +245,7 @@ class NoteStore:
         An empty query browses the notebook by recency (newest ``updated`` first).
         """
         normalized_terms = normalize_terms(list(terms or []))
-        notes = await self.list_notes(include_archived=include_archived)
+        notes = await self.list_notes()
         if not normalized_terms:
             notes.sort(key=lambda note: (note.updated or note.id, note.id), reverse=True)
             return notes[: max(0, int(limit))]
@@ -327,8 +312,8 @@ class NoteStore:
             + 2 * score_text(" ".join(note.keys), terms)
         )
 
-    async def count(self, include_archived: bool = False) -> int:
-        return len(await self.list_notes(include_archived=include_archived))
+    async def count(self) -> int:
+        return len(await self.list_notes())
 
     # ------------------------------------------------------------------
     # Write
@@ -359,17 +344,6 @@ class NoteStore:
         logger.debug("Wrote note %s (%d chars)", note.id, len(note.body))
         return path
 
-    async def archive(self, note_id: str) -> Optional[Note]:
-        """Mark a note archived. Notes are never deleted, so the trail survives."""
-        note = await self.read(note_id)
-        if note is None:
-            return None
-        archived = self.normalize(
-            replace(note, status=STATUS_ARCHIVED, updated=date.today().isoformat())
-        )
-        await self.write(archived)
-        return archived
-
     # ------------------------------------------------------------------
     # Normalization
     # ------------------------------------------------------------------
@@ -378,12 +352,10 @@ class NoteStore:
     def normalize(cls, note: Note) -> Note:
         """Clamp a note to the schema so bad input cannot corrupt the store."""
         today = date.today().isoformat()
-        status = str(note.status or STATUS_ACTIVE).strip().lower()
         return Note(
             id=str(note.id or "").strip(),
             title=cls._clean_line(note.title)[:MAX_TITLE_CHARS],
             body=str(note.body or "").strip()[:MAX_BODY_CHARS],
-            status=status if status in VALID_STATUSES else STATUS_ACTIVE,
             keys=cls._clean_list(note.keys, MAX_KEYS, min_chars=MIN_KEY_CHARS),
             links=cls._clean_ids(note.links),
             source=cls._clean_source(note.source),
@@ -452,7 +424,6 @@ class NoteStore:
         frontmatter: Dict[str, Any] = {
             "id": normalized.id,
             "title": normalized.title,
-            "status": normalized.status,
         }
         if normalized.keys:
             frontmatter["keys"] = list(normalized.keys)
@@ -479,9 +450,10 @@ class NoteStore:
         built from the filename id and the raw text, because humans edit these
         files directly and a syntax slip must not swallow a note.
 
-        Legacy fields (kind, tags, pinned, sensitivity, extra source keys) are
-        ignored. Old ``tags`` are folded into ``keys`` once on read so notes
-        written before the schema cut stay findable; the file is not rewritten.
+        Legacy fields (kind, tags, pinned, sensitivity, status, extra source
+        keys) are ignored. Old ``tags`` are folded into ``keys`` once on read so
+        notes written before the schema cut stay findable; the file is not
+        rewritten.
         """
         fallback_id = ""
         match = _ID_PATTERN.match(path.name)
@@ -508,7 +480,6 @@ class NoteStore:
             id=note_id,
             title=str(title),
             body=body,
-            status=str(frontmatter.get("status") or STATUS_ACTIVE),
             keys=tuple(raw_keys),
             links=tuple(str(link) for link in links),
             source=(

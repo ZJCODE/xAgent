@@ -3,8 +3,6 @@
 from .markdown_memory import MarkdownMemory, MemoryScope
 from .note_memory import (
     MAX_BODY_CHARS,
-    STATUS_ACTIVE,
-    STATUS_ARCHIVED,
     Note,
     NoteStore,
 )
@@ -22,8 +20,6 @@ __all__ = [
     "MemoryScope",
     "Note",
     "NoteStore",
-    "STATUS_ACTIVE",
-    "STATUS_ARCHIVED",
     "MAX_BODY_CHARS",
     "RelationshipCard",
     "RelationshipStore",
