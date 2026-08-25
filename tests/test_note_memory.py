@@ -324,6 +324,17 @@ class NoteToolTests(unittest.IsolatedAsyncioTestCase):
     def tearDown(self):
         self._tmpdir.cleanup()
 
+    def test_write_and_update_prompts_keep_agent_first_person(self):
+        write_fn = self.write_note.tool_spec["function"]
+        update_fn = self.update_note.tool_spec["function"]
+        self.assertIn("do not copy their 'I' as yours", write_fn["description"])
+        self.assertIn("'I' is you", write_fn["parameters"]["properties"]["body"]["description"])
+        self.assertIn(
+            "If the fact belongs to a person, name them",
+            write_fn["parameters"]["properties"]["title"]["description"],
+        )
+        self.assertIn("'I' is you", update_fn["parameters"]["properties"]["body"]["description"])
+
     async def test_write_note_stores_a_note(self):
         result = await self.write_note(
             title="Jun takes espresso at 1:2.5",
@@ -445,6 +456,9 @@ class NoteDistillationPromptTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Most weeks", prompt)
         self.assertIn("At most 6", prompt)
         self.assertIn("first person", prompt)
+        self.assertIn("Preserve attribution", prompt)
+        self.assertIn("First-person words in the diary belong to that speaker", prompt)
+        self.assertIn("If the fact belongs to a person, name them", prompt)
         self.assertIn("links", prompt)
         self.assertNotIn("`tags`", prompt)
         self.assertIn("Return JSON only", prompt)

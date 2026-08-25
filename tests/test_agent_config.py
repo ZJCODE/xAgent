@@ -63,6 +63,7 @@ class AgentConfigPromptTests(unittest.TestCase):
         self.assertIn("The diary is that life stream", prompt)
         self.assertIn("the notebook is conclusions you have already worked out and will want later", prompt)
         self.assertIn("Use `write_note` only when this turn produced a standing fact", prompt)
+        self.assertIn("First-person in a note is you", prompt)
         self.assertIn("weekly distillation", prompt)
 
     def test_decision_prompt_preserves_agent_owned_participation(self):

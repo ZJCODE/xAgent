@@ -55,9 +55,10 @@ Taken:
    path churns.
 3. **Links over taxonomy** — no directory tree, no category hierarchy, no tag
    vocabulary. Link traversal is a first-class retrieval action.
-4. **The agent's own words** — first-person, the agent's own phrasing, never a
-   transcript excerpt. This is the only constraint that reliably stops notes from
-   degrading into a copy of the chat log.
+4. **The agent's own words** — first-person is the agent's "I", in the agent's
+   own phrasing, never a transcript excerpt. Someone else's plan or preference
+   stays attached to them by name. This is the constraint that stops notes from
+   degrading into a copy of the chat log, or swallowing a speaker's first person.
 5. **Write later than capture** — the diary is the fleeting inbox. Permanent notes
    are written in a processing session (in-chat tools for standing facts, weekly
    background distillation), not in the same diary maintenance batch that just
@@ -321,19 +322,21 @@ switch-off; failure isolation; monthly summary does not garden), and injection
 
 ## 12. Goal-check
 
-- **Identity** — notes are first-person, in the agent's own words and judgment.
+- **Identity** — notes are first-person, in the agent's own words and judgment;
+  other people's facts stay attributed to them.
 - **Multi-user** — one notebook, never sharded per user.
 - **1:1 and group coverage** — notes are independent of conversation shape;
   injected identically in both. Anything that must not travel is not a note.
-- **Memory/journal perspective** — first person; distillation reads that week's
-  diary, with the weekly summary only as orientation.
+- **Memory/journal perspective** — first person is the agent; distillation reads
+  that week's diary, with the weekly summary only as orientation.
 - **Unified memory** — a single notebook; no per-user memory silos.
 - **Agent-governed sharing** — the model decides what to say. The notebook does
   not carry a parallel sharing ontology.
 - **Diary-anchored carrier** — the notebook is a regenerable projection,
   `source.diary` is recorded, and weekly distillation can only run for a week
   that already has a summary file.
-- **Attribution and continuity** — immutable ids and archive-never-delete.
+- **Attribution and continuity** — immutable ids and archive-never-delete;
+  first-person in a note is the agent, not the source speaker.
 
 ## 13. What is deferred
 

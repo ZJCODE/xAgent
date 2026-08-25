@@ -367,13 +367,14 @@ Do not write a note for: small talk, one-off scheduling, how you relate to a per
 Most weeks deserve zero notes. Returning an empty list is the normal, correct answer. At most {max_notes}.
 
 For each note:
-- `title`: one line, under 80 characters, specific enough to recognise later.
-- `body`: first person ("I"), my own words, one idea only, roughly 60-400 characters. Not a transcript excerpt and not a mini weekly report.
+- `title`: one line, under 80 characters, specific enough to recognise later. If the fact belongs to a person, name them.
+- `body`: first person ("I") is me, in my own words, one idea only, roughly 60-400 characters. Not a transcript excerpt and not a mini weekly report. Someone else's plan, preference, or constraint stays attached to them by name.
 - `keys`: 1-5 short trigger words, each at least 2 characters, that would appear in a future message about this. These are how I find the note again, so use the surface forms people actually type, including names.
 - `links`: 0-3 twelve-digit ids of existing notes this idea connects to. Prefer linking over restating. Use only ids from the existing-notes list.
 
 Rules:
 - Write in the language of the diary; if mixed, follow the dominant language. Preserve names, quoted text, code, and exact wording where it matters.
+- Preserve attribution. First-person words in the diary belong to that speaker unless they are mine. Do not rewrite someone else's "I plan / I prefer / I decided" as my own.
 - Stay grounded in what the diary actually says. Keep uncertainty visible. Do not invent.
 - Linking at write time is part of writing the note. If a related note exists, put its id in `links`.
 

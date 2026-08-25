@@ -56,21 +56,27 @@ def create_write_note_tool(store: NoteStore, is_enabled: bool = True):
         name="write_note",
         description=(
             "Add one note to your notebook: a durable, reusable conclusion in your own "
-            "words. One idea per note. Use it only when this turn produced a standing "
-            "fact that will still hold across days — a preference, constraint, decision "
-            "and what it turned on, or an approach that worked. Your diary already "
-            "records what happened, and weekly distillation will surface post-hoc "
-            "conclusions later — do not summarise the conversation, guess what might be "
-            "useful, or do the week's processing yourself. Do not write one-off "
-            "scheduling, how you stand with a person, or anything that only matters "
-            "today. If it must not travel, it is not a note: put it in the diary or on "
-            "a relationship card. Link related notes when you can. If a note on the "
-            "topic already exists the tool says so; update that one instead."
+            "words. One idea per note. First-person is you: name other people for their "
+            "plans, preferences, and constraints; do not copy their 'I' as yours. Use it "
+            "only when this turn produced a standing fact that will still hold across "
+            "days — a preference, constraint, decision and what it turned on, or an "
+            "approach that worked. Your diary already records what happened, and weekly "
+            "distillation will surface post-hoc conclusions later — do not summarise the "
+            "conversation, guess what might be useful, or do the week's processing "
+            "yourself. Do not write one-off scheduling, how you stand with a person, or "
+            "anything that only matters today. If it must not travel, it is not a note: "
+            "put it in the diary or on a relationship card. Link related notes when you "
+            "can. If a note on the topic already exists the tool says so; update that "
+            "one instead."
         ),
         param_descriptions={
-            "title": "One line, under 80 characters, specific enough to recognise later.",
+            "title": (
+                "One line, under 80 characters, specific enough to recognise later. "
+                "If the fact belongs to a person, name them."
+            ),
             "body": (
-                "The note in first person and your own words. One idea, roughly 60-400 "
+                "The note in first person and your own words. 'I' is you. Attribute "
+                "other people's facts to them by name. One idea, roughly 60-400 "
                 "characters."
             ),
             "keys": (
@@ -158,8 +164,14 @@ def create_update_note_tool(store: NoteStore, is_enabled: bool = True):
         ),
         param_descriptions={
             "note_id": "The 12-digit id of the note to revise.",
-            "title": "Replacement title, if it should change.",
-            "body": "Replacement body, in first person and your own words.",
+            "title": (
+                "Replacement title, if it should change. If the fact belongs to a "
+                "person, name them."
+            ),
+            "body": (
+                "Replacement body, in first person and your own words. 'I' is you; "
+                "name other people for their facts."
+            ),
             "keys": "Replacement trigger words for recall.",
             "links": (
                 "Replacement list of related note ids (full replace, not append). Pass "
