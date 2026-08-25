@@ -135,7 +135,15 @@ ANTHROPIC_MODELS = (
 DEEPSEEK_MODELS = (
     "deepseek-v4-flash",
     "deepseek-v4-pro",
+    "deepseek-v4-flash-vision-exp",
 )
+DEEPSEEK_MODEL_DESCRIPTIONS = {
+    "deepseek-v4-flash": "Everyday text default. This ID does not accept images yet.",
+    "deepseek-v4-pro": "Stronger text agent. This ID does not accept images yet.",
+    "deepseek-v4-flash-vision-exp": (
+        "Experimental multimodal Flash. Choose this when the agent needs to see images."
+    ),
+}
 QWEN_MODELS = (
     "qwen3.7-max",
     "qwen3.6-flash",
@@ -978,6 +986,7 @@ def _collect_init_selection_core(surface: InitPromptSurface) -> InitSelection:
         selected_model = surface.select_model_option(
             "DeepSeek Model",
             DEEPSEEK_MODELS,
+            descriptions=DEEPSEEK_MODEL_DESCRIPTIONS,
             default_index=0,
         )
         base_url = DEEPSEEK_BASE_URL

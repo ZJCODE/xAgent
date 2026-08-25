@@ -23,6 +23,7 @@ from ...core.providers import (
     normalize_provider_name,
     provider_base_url,
     provider_model_api,
+    provider_supports_vision,
 )
 from ...tools.image_generation_tool import (
     DEFAULT_IMAGE_GENERATION_MODEL,
@@ -670,7 +671,7 @@ def build_agent_edit_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
                 "model": model_name,
                 "base_url": str(provider_cfg.get("base_url") or ""),
                 "model_api": str(provider_cfg.get("model_api") or ""),
-                "supports_vision": bool(provider_cfg.get("supports_vision", False)),
+                "supports_vision": provider_supports_vision(provider_cfg),
                 "has_api_key": _has_usable_secret(provider_cfg.get("api_key")),
                 "reasoning": current_reasoning,
             },

@@ -48,8 +48,19 @@ PROVIDER_BASE_URLS = {
 
 VISION_CAPABLE_PROVIDERS = frozenset({
     PROVIDER_OPENAI,
+    PROVIDER_DEEPSEEK,
     PROVIDER_QWEN,
 })
+
+# Exact (provider, model) overrides that differ from the provider default.
+# Delete a row when that model ID starts accepting images; do not use prefixes
+# (e.g. "flash") or vision-capable SKUs like deepseek-v4-flash-vision-exp are hit.
+VISION_MODEL_OVERRIDES: dict[tuple[str, str], bool] = {
+    (PROVIDER_DEEPSEEK, "deepseek-v4-flash"): False,
+    (PROVIDER_DEEPSEEK, "deepseek-v4-pro"): False,
+    (PROVIDER_DEEPSEEK, "deepseek-chat"): False,
+    (PROVIDER_DEEPSEEK, "deepseek-reasoner"): False,
+}
 
 CUSTOM_BASE_URLS = {
     MODEL_API_OPENAI_RESPONSES: "https://api.example.com/v1",
@@ -171,11 +182,22 @@ def provider_is_official_openai(provider_cfg: dict[str, Any]) -> bool:
 
 
 def provider_supports_vision(provider_cfg: dict[str, Any]) -> bool:
+    """Resolve whether this endpoint can receive image input.
+
+    Order: explicit yaml ``supports_vision`` → exact model override → provider default.
+    Known providers omit ``supports_vision`` so Flash/Pro can gain vision by deleting
+    override rows without migrating agent configs.
+    """
     if "supports_vision" in provider_cfg:
         return provider_cfg.get("supports_vision") is True
     provider = normalize_provider_name(provider_cfg.get("name"))
     if provider == PROVIDER_CUSTOM:
         return False
+    model = str(provider_cfg.get("model") or "").strip().lower()
+    if provider and model:
+        override = VISION_MODEL_OVERRIDES.get((provider, model))
+        if override is not None:
+            return override
     if provider in VISION_CAPABLE_PROVIDERS:
         return True
     if provider:

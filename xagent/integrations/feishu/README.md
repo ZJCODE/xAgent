@@ -227,7 +227,8 @@ Messages page can render image previews or download entries without depending on
 Markdown image rendering. At the model boundary the adapter passes
 provider-ready image data as `image_source` only for current-turn images;
 non-image files remain references, not raw bytes.
-OpenAI and Qwen support vision by default; custom providers can opt in with
+OpenAI, Qwen, and DeepSeek support vision by default (DeepSeek still overrides
+a few text-only model IDs until they accept images); custom providers can opt in with
 `provider.supports_vision: true`. Providers without vision support do not
 receive image bytes as model image input, but image messages still route to chat
 with workspace-backed attachment references. This lets the agent use file-level

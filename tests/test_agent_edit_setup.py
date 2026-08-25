@@ -119,10 +119,17 @@ class AgentEditSetupHelperTests(unittest.TestCase):
                 {"provider": "deepseek", "model": "deepseek-v4-pro", "api_key": "deepseek-key"},
             )
             config = load_config(agent_dir)
+            schema = build_agent_edit_setup_schema(config)
 
         self.assertTrue(result["changed"])
         self.assertEqual(config["provider"]["name"], "deepseek")
         self.assertEqual(config["provider"]["model"], "deepseek-v4-pro")
+        self.assertNotIn("supports_vision", config["provider"])
+        self.assertFalse(schema["model"]["current"]["supports_vision"])
+        self.assertIn(
+            "deepseek-v4-flash-vision-exp",
+            schema["model"]["models"]["deepseek"],
+        )
 
 
 class AgentEditSetupRouteTests(unittest.TestCase):

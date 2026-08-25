@@ -15,8 +15,10 @@ from xagent.core.providers import (
     MODEL_API_OPENAI_CHAT_COMPLETIONS,
     MODEL_API_OPENAI_RESPONSES,
     PROVIDER_CUSTOM,
+    PROVIDER_DEEPSEEK,
     PROVIDER_QWEN,
     VISION_CAPABLE_PROVIDERS,
+    VISION_MODEL_OVERRIDES,
     ReasoningConfig,
     maintenance_reasoning_config,
     normalize_reasoning_config,
@@ -256,14 +258,66 @@ provider:
         )
 
     def test_provider_capability_detects_vision_providers(self):
-        self.assertEqual(VISION_CAPABLE_PROVIDERS, frozenset({"openai", PROVIDER_QWEN}))
+        self.assertEqual(
+            VISION_CAPABLE_PROVIDERS,
+            frozenset({"openai", PROVIDER_DEEPSEEK, PROVIDER_QWEN}),
+        )
+        self.assertEqual(
+            VISION_MODEL_OVERRIDES,
+            {
+                (PROVIDER_DEEPSEEK, "deepseek-v4-flash"): False,
+                (PROVIDER_DEEPSEEK, "deepseek-v4-pro"): False,
+                (PROVIDER_DEEPSEEK, "deepseek-chat"): False,
+                (PROVIDER_DEEPSEEK, "deepseek-reasoner"): False,
+            },
+        )
         self.assertTrue(provider_supports_vision({"name": "openai"}))
         self.assertTrue(provider_supports_vision({"name": PROVIDER_QWEN}))
         self.assertTrue(provider_supports_vision({"name": PROVIDER_CUSTOM, "supports_vision": True}))
         self.assertFalse(provider_supports_vision({"name": PROVIDER_CUSTOM}))
         self.assertFalse(provider_supports_vision({"name": PROVIDER_CUSTOM, "supports_vision": False}))
-        self.assertFalse(provider_supports_vision({"name": "deepseek"}))
         self.assertFalse(provider_supports_vision({"name": "anthropic"}))
+
+        # DeepSeek: provider-capable with deletable per-model overrides.
+        self.assertTrue(provider_supports_vision({"name": "deepseek"}))
+        self.assertFalse(
+            provider_supports_vision({"name": "deepseek", "model": "deepseek-v4-flash"})
+        )
+        self.assertFalse(
+            provider_supports_vision({"name": "deepseek", "model": "deepseek-v4-pro"})
+        )
+        self.assertFalse(
+            provider_supports_vision({"name": "deepseek", "model": "deepseek-chat"})
+        )
+        self.assertFalse(
+            provider_supports_vision({"name": "deepseek", "model": "deepseek-reasoner"})
+        )
+        self.assertTrue(
+            provider_supports_vision(
+                {"name": "deepseek", "model": "deepseek-v4-flash-vision-exp"}
+            )
+        )
+        self.assertTrue(
+            provider_supports_vision({"name": "deepseek", "model": "deepseek-v5-unknown"})
+        )
+        self.assertFalse(
+            provider_supports_vision(
+                {
+                    "name": "deepseek",
+                    "model": "deepseek-v4-flash-vision-exp",
+                    "supports_vision": False,
+                }
+            )
+        )
+        self.assertTrue(
+            provider_supports_vision(
+                {
+                    "name": "deepseek",
+                    "model": "deepseek-v4-flash",
+                    "supports_vision": True,
+                }
+            )
+        )
 
     def test_provider_config_builds_openai_compatible_client(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -472,6 +526,30 @@ search:
             self.assertEqual(runner.agent.model_client.model_api, MODEL_API_OPENAI_CHAT_COMPLETIONS)
             self.assertFalse(runner.agent.supports_vision)
             self.assertNotIn("see_image", runner.agent.tools)
+
+    def test_deepseek_vision_exp_runner_enables_vision_without_yaml_flag(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+    name: "deepseek"
+    model: "deepseek-v4-flash-vision-exp"
+    base_url: "https://api.deepseek.com"
+    api_key: "test-key"
+search:
+    provider: "none"
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            runner = BaseAgentRunner(config_dir=tmpdir)
+            config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+
+            self.assertNotIn("supports_vision", config["provider"])
+            self.assertTrue(runner.agent.supports_vision)
+            self.assertIn("see_image", runner.agent.tools)
 
     def test_custom_openai_runner_uses_chat_completions_protocol(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -786,7 +864,7 @@ provider:
     def test_collect_init_selection_deepseek_empty_custom_model_uses_model_placeholder(self):
         answers = iter([
             "2",
-            "3",
+            "4",
             "",
             ".",
         ])
@@ -856,6 +934,7 @@ provider:
         selection = collect_init_selection_terminal_ui(ui=ui)
 
         self.assertIn("Custom", ui.model_options)
+        self.assertIn("deepseek-v4-flash-vision-exp", ui.model_options)
         self.assertEqual(selection.provider, "deepseek")
         self.assertEqual(selection.model, "deepseek-v4-lab")
         self.assertEqual(selection.api_key, "your_api_key_here")
