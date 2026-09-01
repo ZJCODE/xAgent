@@ -28,6 +28,7 @@ except ImportError:  # pragma: no cover - POSIX platforms
 
 from ..schemas import Message, MessageType, RoleType
 from .config import AgentConfig
+from .reply_events import is_history_preface_message
 from .journal import JournalLLMService
 
 logger = logging.getLogger(__name__)
@@ -442,6 +443,8 @@ class WorkingContextCompactor:
     @staticmethod
     def _is_summarizable(message: Message) -> bool:
         if not str(message.content or "").strip():
+            return False
+        if is_history_preface_message(message):
             return False
         if message.type == MessageType.MESSAGE:
             return message.role in (RoleType.USER, RoleType.ASSISTANT)

@@ -6,6 +6,10 @@ import logging
 from pathlib import Path
 from typing import Any, Optional
 
+from ...core.reply_events import (
+    is_deliverable_assistant_event,
+    is_live_streamable_event,
+)
 from ...schemas.attachment import dedupe_attachments
 from ...utils.image_utils import workspace_blob_relative_path
 from ..base import BaseAgentRunner
@@ -232,6 +236,8 @@ class AgentCLI(BaseAgentRunner):
         ):
             event_type = event.get("type")
             if event_type == "message_start":
+                if not is_live_streamable_event(event):
+                    continue
                 if line_open:
                     print()
                 print("🤖 Agent: ", end="", flush=True)
@@ -239,6 +245,8 @@ class AgentCLI(BaseAgentRunner):
                 line_has_streamed_text = False
                 continue
             if event_type == "message_delta":
+                if not is_live_streamable_event(event):
+                    continue
                 if not line_open:
                     print("🤖 Agent: ", end="", flush=True)
                     line_open = True
@@ -249,6 +257,8 @@ class AgentCLI(BaseAgentRunner):
                     line_has_streamed_text = True
                 continue
             if event_type == "message_done":
+                if not is_deliverable_assistant_event(event):
+                    continue
                 attachments_text = self._format_cli_event_attachments(event.get("attachments"))
                 if not line_open:
                     print("🤖 Agent: ", end="", flush=True)
@@ -295,6 +305,8 @@ class AgentCLI(BaseAgentRunner):
         ):
             event_type = event.get("type")
             if event_type == "message_start":
+                if not is_live_streamable_event(event):
+                    continue
                 if line_open and console is not None:
                     console.print()
                 if console is not None:
@@ -303,6 +315,8 @@ class AgentCLI(BaseAgentRunner):
                 line_has_streamed_text = False
                 continue
             if event_type == "message_delta":
+                if not is_live_streamable_event(event):
+                    continue
                 if not line_open and console is not None:
                     console.print("[magenta]xAgent[/magenta]: ", end="")
                     line_open = True
@@ -313,6 +327,8 @@ class AgentCLI(BaseAgentRunner):
                     line_has_streamed_text = True
                 continue
             if event_type == "message_done":
+                if not is_deliverable_assistant_event(event):
+                    continue
                 attachments_text = self._format_cli_event_attachments(event.get("attachments"))
                 content = self._format_cli_output(event.get("content", ""))
                 if line_has_streamed_text:

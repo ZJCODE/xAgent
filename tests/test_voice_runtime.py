@@ -98,6 +98,21 @@ class FakeAgent:
         yield {"type": "message_done", "message_id": "m1", "content": "hello there."}
 
 
+class ScratchpadAgent:
+    scratchpad = (
+        "这次是反过来，他问我觉得他存不存在。\n"
+        "就像刚才说「存在是被认真回应点燃的」——这句话反过来也成立。"
+        "他今晚来回确认我、问我在不在、问我觉得他存不存在，其实是想被听见吧。\n"
+        "我该怎么答：诚实地肯定他存在，并且把他和我之间的呼应说透。"
+    )
+
+    async def chat_events(self, **kwargs):
+        yield {"type": "message_delta", "message_id": "m0", "phase": "preface", "delta": self.scratchpad}
+        yield {"type": "message_done", "message_id": "m0", "phase": "preface", "content": self.scratchpad}
+        yield {"type": "message_delta", "message_id": "m1", "phase": "final", "delta": "都是。"}
+        yield {"type": "message_done", "message_id": "m1", "phase": "final", "content": "都是。"}
+
+
 class FailingFirstAgent:
     def __init__(self):
         self.calls = 0
@@ -444,6 +459,10 @@ class SonioxSDKAdapterTests(unittest.TestCase):
         self.assertEqual(list(_split_text_chunk("abc")), ["abc"])
 
 
+async def _collect_agent_text(runtime):
+    return [chunk async for chunk in runtime._agent_text_chunks("我觉得都是")]
+
+
 class VoiceRuntimeTests(unittest.TestCase):
     def setUp(self):
         cooldown = patch("xagent.interfaces.voice.runtime._PLAYBACK_MICROPHONE_COOLDOWN_SECONDS", 0.0)
@@ -487,6 +506,12 @@ class VoiceRuntimeTests(unittest.TestCase):
         self.assertIn("agent_first_text_to_tts_first_audio_ms", combined)
         self.assertIn("endpoint_to_first_audio_ms", combined)
         self.assertIn("turn_total_ms", combined)
+
+    def test_agent_text_skips_preface_scratchpad(self):
+        runtime = self.make_runtime(agent=ScratchpadAgent())
+        chunks = asyncio.run(_collect_agent_text(runtime))
+        self.assertEqual("".join(chunks), "都是。")
+        self.assertNotIn("我该怎么答", "".join(chunks))
 
     def test_uses_fallback_language_when_stt_has_none(self):
         synth = FakeSynthesizer()

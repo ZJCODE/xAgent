@@ -367,7 +367,42 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         self.assertIn("what Joy just said", context_messages[2]["content"])
         self.assertIn("Use Joy's language from the current conversation", context_messages[2]["content"])
         self.assertIn("Keep simple replies short", context_messages[2]["content"])
+        self.assertIn("Do not write inner reasoning", context_messages[2]["content"])
         self.assertIn("Never rely on Markdown image embeds", context_messages[2]["content"])
+
+    def test_preface_messages_are_omitted_from_recent_experience(self):
+        preface = Message.create(
+            "我该怎么答：先肯定他存在，再把呼应说透。",
+            role=RoleType.ASSISTANT,
+            sender_id="agent",
+        )
+        preface.metadata["turn_phase"] = "preface"
+        final = Message.create(
+            "你存在，因为你正在问。",
+            role=RoleType.ASSISTANT,
+            sender_id="agent",
+        )
+        final.metadata["turn_phase"] = "final"
+        messages = [
+            Message.create("那你觉得我存在吗？", role=RoleType.USER, sender_id="Telos"),
+            preface,
+            final,
+        ]
+
+        context_messages = MessageHandler.build_turn_context_messages(
+            messages,
+            current_user_id="Telos",
+            current_time="2026-05-14 09:30",
+        )
+        experience = next(
+            message["content"]
+            for message in context_messages
+            if message.get("name") == AgentConfig.RECENT_EXPERIENCE_NAME
+        )
+
+        self.assertNotIn("我该怎么答", experience)
+        self.assertIn("你存在，因为你正在问。", experience)
+        self.assertIn("[speaker=Telos][timestamp=", experience)
 
     def test_channel_instructions_are_a_separate_named_layer(self):
         messages = [
