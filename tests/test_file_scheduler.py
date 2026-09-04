@@ -136,6 +136,7 @@ class ScheduledTaskTests(unittest.TestCase):
                     can_handle=lambda task: task.delivery_channel == "api",
                     dispatch=_raise_dispatch_error,
                     now_provider=lambda: run_at,
+                    retry_delays_seconds=(),
                 )
 
                 await scheduler.tick()
@@ -148,6 +149,161 @@ class ScheduledTaskTests(unittest.TestCase):
 
         async def _raise_dispatch_error(task):
             raise RuntimeError(f"boom: {task.content}")
+
+        asyncio.run(run_test())
+
+    def test_async_scheduler_retries_failed_one_shot_then_succeeds(self):
+        async def run_test():
+            with tempfile.TemporaryDirectory() as tmpdir:
+                run_at = datetime(2026, 6, 1, 14, 30, 0)
+                original = enqueue_scheduled_task(
+                    task_type="message",
+                    content="班次提醒",
+                    run_at=run_at,
+                    tasks_dir=tmpdir,
+                    channel="api",
+                    target={"user_id": "web_user"},
+                    user_id="web_user",
+                    title="Guardian",
+                )
+                attempts = {"n": 0}
+                current = {"now": run_at}
+
+                async def dispatch(task):
+                    attempts["n"] += 1
+                    if attempts["n"] == 1:
+                        raise RuntimeError("prepare failed")
+                    self.assertEqual(task.delivery_stable_key(), original.delivery_stable_key())
+
+                notices = []
+
+                async def on_terminal_failure(task, error):
+                    notices.append((task.task_id, str(error)))
+
+                scheduler = AsyncTaskScheduler(
+                    tmpdir,
+                    can_handle=lambda task: True,
+                    dispatch=dispatch,
+                    now_provider=lambda: current["now"],
+                    retry_delays_seconds=(60,),
+                    on_terminal_failure=on_terminal_failure,
+                )
+
+                await scheduler.tick()
+                active = list_task_records(tmpdir, include_failed=False)
+                self.assertEqual(attempts["n"], 1)
+                self.assertEqual(len(active), 1)
+                self.assertEqual(active[0].status, "active")
+                self.assertEqual(active[0].run_at, datetime(2026, 6, 1, 14, 31, 0))
+                self.assertEqual(active[0].occurrence_at, run_at)
+                self.assertEqual(active[0].delivery_attempts, 1)
+                self.assertEqual(active[0].payload["last_error"], "prepare failed")
+                self.assertEqual(
+                    active[0].delivery_stable_key(),
+                    f"scheduled:{original.task_id}:2026-06-01 14:30:00",
+                )
+                self.assertEqual(notices, [])
+
+                current["now"] = datetime(2026, 6, 1, 14, 31, 0)
+                await scheduler.tick()
+                archived = list_archived_task_records(tmpdir)
+                failed = list_task_records(tmpdir)
+                self.assertEqual(attempts["n"], 2)
+                self.assertEqual(len(archived), 1)
+                self.assertEqual(archived[0].task_id, original.task_id)
+                self.assertEqual(archived[0].payload["completion_reason"], "one_shot_succeeded")
+                self.assertNotIn("delivery_attempts", archived[0].payload)
+                self.assertEqual([record for record in failed if record.state == "failed"], [])
+                self.assertEqual(notices, [])
+
+        asyncio.run(run_test())
+
+    def test_async_scheduler_quarantines_one_shot_after_retries_exhausted(self):
+        async def run_test():
+            with tempfile.TemporaryDirectory() as tmpdir:
+                run_at = datetime(2026, 6, 1, 14, 30, 0)
+                original = enqueue_scheduled_task(
+                    task_type="message",
+                    content="班次提醒",
+                    run_at=run_at,
+                    tasks_dir=tmpdir,
+                    channel="feishu",
+                    target={"chat_id": "oc_chat"},
+                    user_id="ou_user",
+                    title="Stage MOOP",
+                )
+                attempts = {"n": 0}
+                current = {"now": run_at}
+                notices = []
+
+                async def dispatch(task):
+                    attempts["n"] += 1
+                    raise RuntimeError("prepare failed")
+
+                async def on_terminal_failure(task, error):
+                    notices.append((task.task_id, task.delivery_stable_key(), str(error)))
+
+                scheduler = AsyncTaskScheduler(
+                    tmpdir,
+                    can_handle=lambda task: True,
+                    dispatch=dispatch,
+                    now_provider=lambda: current["now"],
+                    retry_delays_seconds=(60,),
+                    on_terminal_failure=on_terminal_failure,
+                )
+
+                await scheduler.tick()
+                self.assertEqual(attempts["n"], 1)
+                self.assertEqual(notices, [])
+                current["now"] = datetime(2026, 6, 1, 14, 31, 0)
+                await scheduler.tick()
+                records = list_task_records(tmpdir)
+
+            self.assertEqual(attempts["n"], 2)
+            self.assertEqual(len(records), 1)
+            self.assertEqual(records[0].task_id, original.task_id)
+            self.assertEqual(records[0].state, "failed")
+            self.assertEqual(records[0].payload["last_error"], "prepare failed")
+            self.assertEqual(notices, [(original.task_id, original.delivery_stable_key(), "prepare failed")])
+
+        asyncio.run(run_test())
+
+    def test_record_scheduled_delivery_failure_stores_context_event(self):
+        async def run_test():
+            with tempfile.TemporaryDirectory() as tmpdir:
+                from xagent.core.runtime import record_scheduled_delivery_failure
+
+                stored = []
+
+                class Handler:
+                    async def store_context_event(self, content, **kwargs):
+                        stored.append((content, kwargs))
+
+                record = enqueue_scheduled_task(
+                    task_type="message",
+                    content="周四晨间 Reset",
+                    run_at=datetime(2026, 6, 4, 8, 0, 0),
+                    tasks_dir=tmpdir,
+                    channel="feishu",
+                    target={"chat_id": "oc_chat"},
+                    user_id="ou_user",
+                    title="Reset",
+                )
+                await record_scheduled_delivery_failure(
+                    type("Agent", (), {"message_handler": Handler()})(),
+                    record,
+                    RuntimeError("prepare failed"),
+                )
+
+            self.assertEqual(len(stored), 1)
+            content, kwargs = stored[0]
+            self.assertIn("will not retry", content)
+            self.assertIn("Reset", content)
+            self.assertIn("prepare failed", content)
+            self.assertEqual(kwargs["source"], "scheduler")
+            self.assertEqual(kwargs["event_type"], "delivery_failure")
+            self.assertEqual(kwargs["channel"], "feishu")
+            self.assertEqual(kwargs["recipient_id"], "ou_user")
 
         asyncio.run(run_test())
 

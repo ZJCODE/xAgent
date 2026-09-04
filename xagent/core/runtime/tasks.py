@@ -54,6 +54,8 @@ COMPLETION_REASON_RECURRENCE_EXHAUSTED = "recurrence_exhausted"
 COMPLETION_REASON_ONE_SHOT_SUCCEEDED = "one_shot_succeeded"
 DEFAULT_RUNTIME_POLL_INTERVAL_SECONDS = 1.0
 DEFAULT_MAX_CONCURRENT_TASK_DISPATCHES = 4
+# After a one-shot send fails, retry at 30s, 2m, 10m, then 30m before dying.
+DEFAULT_ONE_SHOT_RETRY_DELAYS_SECONDS = (30, 120, 600, 1800)
 SUPPORTED_TASK_TYPES = {TASK_TYPE_MESSAGE, TASK_TYPE_AGENT}
 SUPPORTED_LIFECYCLE_STATUSES = {
     TASK_STATUS_ACTIVE,
@@ -162,6 +164,28 @@ class ScheduledTaskRecord:
     def is_paused(self) -> bool:
         return self.status == TASK_STATUS_PAUSED
 
+    @property
+    def occurrence_at(self) -> datetime:
+        """Identity of this firing, preserved across delivery retries."""
+        raw = self.payload.get("occurrence_at") if isinstance(self.payload, dict) else None
+        if raw:
+            try:
+                return parse_run_at(str(raw))
+            except ValueError:
+                pass
+        return self.run_at
+
+    @property
+    def delivery_attempts(self) -> int:
+        try:
+            return max(0, int((self.payload or {}).get("delivery_attempts") or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    def delivery_stable_key(self) -> str:
+        """Idempotency key for channel sends. Stable across retries of one firing."""
+        return f"scheduled:{self.task_id}:{self.occurrence_at.isoformat(sep=' ')}"
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "name": self.name,
@@ -198,6 +222,8 @@ class ScheduledTaskRecord:
             "last_run_status": self.payload.get("last_run_status") if isinstance(self.payload, dict) else None,
             "completion_reason": self.payload.get("completion_reason") if isinstance(self.payload, dict) else None,
             "last_error": self.payload.get("last_error") if isinstance(self.payload, dict) else None,
+            "occurrence_at": self.occurrence_at.isoformat(sep=" "),
+            "delivery_attempts": self.delivery_attempts,
         }
 
 
@@ -702,6 +728,8 @@ class AsyncTaskScheduler:
         max_concurrent_dispatches: int = DEFAULT_MAX_CONCURRENT_TASK_DISPATCHES,
         logger_: Optional[logging.Logger] = None,
         now_provider: Callable[[], datetime] | None = None,
+        retry_delays_seconds: tuple[int, ...] = DEFAULT_ONE_SHOT_RETRY_DELAYS_SECONDS,
+        on_terminal_failure: Callable[[ScheduledTaskRecord, Exception], Awaitable[None]] | None = None,
     ):
         if poll_interval_seconds <= 0:
             raise ValueError("poll_interval_seconds must be positive")
@@ -714,6 +742,10 @@ class AsyncTaskScheduler:
         self.max_concurrent_dispatches = int(max_concurrent_dispatches)
         self.logger = logger_ or logging.getLogger(__name__)
         self.now_provider = now_provider or datetime.now
+        self.retry_delays_seconds = tuple(
+            int(delay) for delay in retry_delays_seconds if int(delay) > 0
+        )
+        self.on_terminal_failure = on_terminal_failure
         self._stop_event = asyncio.Event()
         self._wake_event = asyncio.Event()
         self._task: Optional[asyncio.Task[None]] = None
@@ -922,13 +954,29 @@ class AsyncTaskScheduler:
                 dispatch_error = exc
                 self.logger.exception("scheduled task failed -> %s: %s", claimed.name, exc)
                 if not claimed.recurrence:
+                    now = self.now_provider().replace(microsecond=0)
+                    retry_at = self._one_shot_retry_at(claimed, now=now)
+                    if retry_at is not None:
+                        try:
+                            self._reschedule_retry(claimed_path, claimed, retry_at, exc, now=now)
+                        except Exception as retry_exc:
+                            self.logger.exception(
+                                "scheduled task retry reschedule failed -> %s: %s",
+                                claimed.name,
+                                retry_exc,
+                            )
+                            self._fail_record(claimed_path, claimed, "failed", exc)
+                            await self._notify_terminal_failure(claimed, exc)
+                        return
                     self._fail_record(claimed_path, claimed, "failed", exc)
+                    await self._notify_terminal_failure(claimed, exc)
                     return
             try:
                 self._complete_record(claimed_path, claimed, dispatch_error=dispatch_error)
             except Exception as exc:
                 self.logger.exception("scheduled task completion failed -> %s: %s", claimed.name, exc)
                 self._fail_record(claimed_path, claimed, "completion_error", exc)
+                await self._notify_terminal_failure(claimed, exc)
 
     def _sleep_duration(self, next_run_at: Optional[datetime]) -> float:
         if next_run_at is None:
@@ -963,6 +1011,52 @@ class AsyncTaskScheduler:
             return
         except OSError as exc:
             self.logger.error("failed to quarantine structured task %s: %s", original_name, exc)
+
+    def _one_shot_retry_at(self, record: ScheduledTaskRecord, *, now: datetime) -> Optional[datetime]:
+        delays = self.retry_delays_seconds
+        if not delays:
+            return None
+        next_attempt = record.delivery_attempts + 1
+        if next_attempt > len(delays):
+            return None
+        return now + timedelta(seconds=delays[next_attempt - 1])
+
+    def _reschedule_retry(
+        self,
+        path: Path,
+        record: ScheduledTaskRecord,
+        retry_at: datetime,
+        error: Exception,
+        *,
+        now: datetime,
+    ) -> None:
+        payload = dict(record.payload)
+        payload["occurrence_at"] = record.occurrence_at.isoformat(sep=" ")
+        payload["delivery_attempts"] = record.delivery_attempts + 1
+        payload["run_at"] = retry_at.isoformat(sep=" ")
+        payload["updated_at"] = now.isoformat(sep=" ")
+        payload["last_run_at"] = now.isoformat(sep=" ")
+        payload["last_run_status"] = "failed"
+        payload["last_error"] = _safe_error_summary(error)
+        _replace_json_payload(path, payload)
+        _move_running_task(path, self.tasks_dir, retry_at, task_id=record.task_id)
+        self.logger.warning(
+            "scheduled one-shot retry %s/%s at %s -> %s: %s",
+            payload["delivery_attempts"],
+            len(self.retry_delays_seconds),
+            retry_at.isoformat(sep=" "),
+            record.name,
+            payload["last_error"],
+        )
+
+    async def _notify_terminal_failure(self, record: ScheduledTaskRecord, error: Exception) -> None:
+        callback = self.on_terminal_failure
+        if callback is None:
+            return
+        try:
+            await callback(record, error)
+        except Exception:
+            self.logger.exception("scheduled task failure notice failed -> %s", record.name)
 
     def _fail_record(
         self,
@@ -1042,6 +1136,7 @@ class AsyncTaskScheduler:
             }
         )
         payload.pop("last_error", None)
+        payload.pop("delivery_attempts", None)
         _replace_json_payload(path, payload)
         _move_task_to_archive(path, self.tasks_dir, now, task_id=record.task_id)
 
@@ -1056,6 +1151,8 @@ class AsyncTaskScheduler:
     ) -> None:
         payload = dict(record.payload)
         payload["run_at"] = next_run_at.isoformat(sep=" ")
+        payload["occurrence_at"] = next_run_at.isoformat(sep=" ")
+        payload.pop("delivery_attempts", None)
         payload["updated_at"] = now.isoformat(sep=" ")
         payload["last_run_at"] = now.isoformat(sep=" ")
         if dispatch_error is None:
@@ -1150,6 +1247,34 @@ def _safe_error_summary(error: Exception) -> str:
         text,
     )
     return text[:500]
+
+
+async def record_scheduled_delivery_failure(agent: Any, record: ScheduledTaskRecord, error: Exception) -> None:
+    """Persist a non-waking observation so the next user turn can see the miss."""
+    handler = getattr(agent, "message_handler", None)
+    store = getattr(handler, "store_context_event", None)
+    if not callable(store):
+        return
+    title = record.title or record.task_id
+    summary = _safe_error_summary(error)
+    await store(
+        (
+            "Scheduled delivery did not reach the recipient and will not retry. "
+            f"Title: {title}. Type: {record.task_type}. "
+            f"Intended at: {record.occurrence_at.isoformat(sep=' ')}. "
+            f"Error: {summary}"
+        ),
+        source="scheduler",
+        event_type="delivery_failure",
+        metadata={
+            "task_id": record.task_id,
+            "task_type": record.task_type,
+            "title": title,
+            "occurrence_at": record.occurrence_at.isoformat(sep=" "),
+        },
+        channel=record.delivery_channel or None,
+        recipient_id=record.delivery_user_id or None,
+    )
 
 
 def _record_from_any_file(path: Path) -> Optional[ScheduledTaskRecord]:

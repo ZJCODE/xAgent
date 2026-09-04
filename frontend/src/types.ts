@@ -107,6 +107,8 @@ export interface ScheduledTaskItem {
   last_run_status?: "succeeded" | "failed" | string | null;
   completion_reason?: string | null;
   last_error?: string | null;
+  occurrence_at?: string | null;
+  delivery_attempts?: number;
   state?: "pending" | "running" | "failed" | "completed" | string;
 }
 

@@ -27,7 +27,9 @@ def create_schedule_task_tool(*, tasks_dir: str):
         name="manage_scheduled_tasks",
         description=(
             "Create, list, duplicate, update, pause, resume, or delete scheduled tasks. "
-            "Use message tasks for fixed text, or agent tasks for due-time work that may need tools or reasoning. "
+            "Use message tasks when the exact text is already known, or agent tasks when due-time work may need tools or a fresh look. "
+            "Both types use the same delivery path with retries; message is not a weaker send mechanism. "
+            "One-shot tasks retry on send failure instead of dying after one miss. "
             "Choose schedule kind by intent: "
             "oneshot (run_at/delay_seconds) for one-time; "
             "daily for every day at a clock time; "
@@ -45,7 +47,7 @@ def create_schedule_task_tool(*, tasks_dir: str):
         ),
         param_descriptions={
             "action": "'create', 'list', 'duplicate', 'update', 'pause', 'resume', or 'delete'.",
-            "task_type": "'message' for fixed text, or 'agent' for a due-time agent turn.",
+            "task_type": "'message' to deliver fixed text, or 'agent' for a due-time agent turn. Delivery retries are the same for both.",
             "content": "Text to send or instruction to execute when due.",
             "run_at": "One-time local datetime, e.g. 20260601-143000 or 2026-06-01 14:30:00.",
             "delay_seconds": "One-time delay from now in seconds, or first run delay for interval schedules.",

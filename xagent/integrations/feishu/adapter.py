@@ -47,6 +47,7 @@ from ...core.runtime import (
     AsyncTaskScheduler,
     ScheduledDeliveryContext,
     SubconsciousDelivery,
+    record_scheduled_delivery_failure,
     resolve_contacts_path,
     scheduled_delivery_context,
     upsert_contact,
@@ -280,6 +281,7 @@ class FeishuAdapter:
             can_handle=self._can_handle_scheduled_task,
             dispatch=self._dispatch_scheduled_task,
             logger_=self.logger,
+            on_terminal_failure=self._on_scheduled_terminal_failure,
         )
         self._task_scheduler = task_scheduler
         await task_scheduler.start()
@@ -2003,6 +2005,9 @@ class FeishuAdapter:
             and self._channel is not None
         )
 
+    async def _on_scheduled_terminal_failure(self, task, error: Exception) -> None:
+        await record_scheduled_delivery_failure(self.agent, task, error)
+
     async def _dispatch_scheduled_task(self, task) -> None:
         assert self._channel is not None
         target = task.target
@@ -2014,11 +2019,9 @@ class FeishuAdapter:
             raise ValueError("scheduled Feishu task produced no content")
         message_id = str(target.get("message_id") or "").strip() or None
         is_group = bool(target.get("is_group"))
-        # Include run_at so recurring/interval dispatches are not Feishu-deduped
-        # by a stable task_id-only uuid across executions.
-        uuid_message_id = self._message_uuid(
-            f"scheduled:{task.task_id}:{task.run_at.isoformat(sep=' ')}"
-        )
+        # Occurrence timestamp keeps retries on one Feishu uuid, while later
+        # recurring firings still get a new uuid.
+        uuid_message_id = self._message_uuid(task.delivery_stable_key())
         if result.content:
             send_result = await send_message(
                 self._channel,
