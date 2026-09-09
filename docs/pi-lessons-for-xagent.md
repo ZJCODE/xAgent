@@ -249,19 +249,46 @@ xAgent 需要的扩展面小得多，而且必须服从 GOAL.md：
 | RPC/JSONL CLI 模式当主 API | 你们已有 Web/渠道事件。优先把现有 `chat_events` 做成稳定契约。 |
 | prompt cache 优化优先于日记 | cache 是性能；日记是产品。先正确再 cache。 |
 
-## 建议落地顺序（只改 Python 内核）
+## 下一步就做这一件：让 Stop 真的停
 
-按侵入性从低到高。每一项都可以单独 PR，不必「先重写 Agent」。
+不要先拆 `AgentLoop`，不要先做 STEER，不要先改 compaction。
 
-1. **`stop_reason` + 截断 tool 拒绝执行。** 改 `ModelClient` 和 `ToolExecutor`，行为修复，不动产品。
-2. **abort 传到 subprocess 和 HTTP 请求。** 补齐 `abort()` 自己写在 docstring 里却没做的事。
-3. **实现 `InboxKind.STEER` 队列。** 工具跑完再注入；观察仍然不唤醒。这是多渠道产品立刻能感到的差别。
-4. **usage 驱动 working context。** catalog 里写 `context_window`，compaction 用 token 而不是 12 条。切点避开孤立 tool result。
-5. **loop transcript 与生命流分离。** `convertToLlm` 成为唯一协议出口。潜意识改走同一 loop + `KIND` 不同。
-6. **把 `shouldStopAfterTurn` / `before_tool` 做成 hook。** 删掉 executor 里对生图/附件的类型特判。
-7. **模型 catalog + session_id。** 新 provider 只加数据。ASK 要么做真审批，要么删。
+Web 的 Stop 已经打到 `/chat/stop` → `agent.abort()`。测试也把当前弱契约写死了：等当前模型调用结束再跳过工具，或等整批工具跑完再停。`abort()` 的 docstring 自己承认不杀 shell。用户点停止时，正在流的模型和下在跑的 `run_command` 都会继续。
 
-不要并行做「插件市场」或「Node 内核」。那些不增强 GOAL.md。
+这是最小、用户能感到、又给后面所有建议垫缝的一步。STEER 需要「这一批工具结束」是一个真边界；compaction 需要回合之间能插入工作；抽出 harness 需要 cancellation 不是事后 flag。现在拆 loop 只是把这个 flag 原样搬走。
+
+### 这一 PR 做什么
+
+一个 PR，名字可以叫 **turn control**。只动回合控制，不碰日记、渠道、潜意识。
+
+1. **abort 取消正在进行的工作**
+   - `model_turn_events` 接到取消后关掉当前 HTTP/SDK 流，不要把这一轮收成完整 assistant 再查 flag。
+   - `run_command` 在 abort 时 `terminate()` 子进程。timeout 仍在，abort 是第三条退出路径。
+   - 已经跑完的工具不回滚（和现在一样，也和 PI 一样）。
+
+2. **半截话留下**
+   - 已流出的 assistant 文本写入 SQLite，`turn_phase: aborted`。
+   - 事件流继续发 `aborted` + `done`。生命流里要能看到「说到一半被停了」，下一轮模型也要看得到。现在是直接 `return`，半截丢了。
+
+3. **顺手加上 `stop_reason`**
+   - `ModelStreamEvent` 带上 `stop_reason`（至少 `stop` / `tool_use` / `length` / `aborted` / `error`）。
+   - `length`（输出被截断）时本批 tool call **全部不当真执行**，回一条错误 tool result 让模型重发。PI 的理由成立：截断参数经常仍能 `json.loads`。
+
+### 这一 PR 不做什么
+
+- 不抽出 `AgentLoop`
+- 不实现 `InboxKind.STEER`（Stop ≠ 插话；群里补一句是下一 PR）
+- 不改 12 条热窗口
+- 不改潜意识、日记、provider 列表
+
+### 完成标准
+
+- 点 Web Stop：当前流式输出停，shell 被杀掉，UI 立刻收到 `aborted`
+- idle 时 Stop 仍返回 `stopped: false`
+- 截断的 tool call 出现在 `iteration_messages` 里当错误结果，不进 `run_command`
+- `tests/test_agent_inbox.py` 里「等模型结束再跳过工具」的断言改成「模型调用被取消」；补一条 shell 被 kill 的测试
+
+做完之后，下一件才是 STEER：工具跑完再注入，观察仍不唤醒。那才是群聊插话。没有真 abort 之前做 STEER，会和 Stop 抢同一把锁，语义更混。
 
 ## GOAL.md 检查
 
