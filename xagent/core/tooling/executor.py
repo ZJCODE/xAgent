@@ -20,7 +20,14 @@ from ...tools.image_generation_tool import (
     is_generated_image_result,
 )
 from ...tools.see_image_tool import is_see_image_result, see_image_observation
+from ..inbox import bind_turn_abort, reset_turn_abort, turn_abort_event
 
+
+TRUNCATED_TOOL_CALL_REASON = (
+    "the response hit the output token limit, so its arguments may be truncated. "
+    "Re-issue the tool call with complete arguments."
+)
+ABORTED_TOOL_CALL_REASON = "the turn was aborted."
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +97,7 @@ class ToolExecutor:
         channel: Optional[str] = None,
         room_name: Optional[str] = None,
         inbox_kind: str = "",
+        abort_event: Optional[Any] = None,
     ) -> Optional[ToolDisplayResult]:
         """
         Handle tool calls by executing them concurrently with concurrency limit.
@@ -107,6 +115,7 @@ class ToolExecutor:
         self._turn_channel = channel
         self._turn_room_name = room_name
         self._turn_inbox_kind = inbox_kind
+        abort_token = bind_turn_abort(abort_event)
         try:
             return await self._handle_tool_calls_locked(
                 tool_calls,
@@ -114,6 +123,7 @@ class ToolExecutor:
                 max_concurrent_tools,
             )
         finally:
+            reset_turn_abort(abort_token)
             (
                 self._turn_user_id,
                 self._turn_channel,
@@ -134,23 +144,7 @@ class ToolExecutor:
         if not function_calls:
             return None
 
-        is_responses_call = self._has_responses_replay_items(function_calls)
-        if is_responses_call:
-            input_messages.extend(self._responses_replay_items(function_calls))
-        else:
-            assistant_content = self._tool_assistant_content(function_calls[0])
-            assistant_message = {
-                "role": "assistant",
-                "content": assistant_content if assistant_content else None,
-                "tool_calls": [self._to_chat_tool_call(tc) for tc in function_calls],
-            }
-            reasoning_content = self._tool_reasoning_content(function_calls[0])
-            if reasoning_content is not None:
-                assistant_message["reasoning_content"] = reasoning_content
-            content_blocks = self._tool_content_blocks(function_calls[0])
-            if content_blocks is not None:
-                assistant_message["content_blocks"] = content_blocks
-            input_messages.append(assistant_message)
+        is_responses_call = self._append_tool_call_replay(function_calls, input_messages)
 
         semaphore = asyncio.Semaphore(max_concurrent_tools)
 
@@ -188,6 +182,51 @@ class ToolExecutor:
 
         return None
 
+    async def record_failed_tool_calls(
+        self,
+        tool_calls: list,
+        input_messages: list,
+        *,
+        reason: str,
+    ) -> None:
+        """Append tool-call replay items and error results without executing."""
+        function_calls = [tc for tc in tool_calls if self._tool_name(tc)]
+        if not function_calls:
+            return
+        is_responses_call = self._append_tool_call_replay(function_calls, input_messages)
+        for tool_call in function_calls:
+            name = self._tool_name(tool_call) or "unknown"
+            call_id = self._tool_call_id(tool_call)
+            message = self._tool_result_message(
+                call_id,
+                f'Tool call "{name}" was not executed: {reason}',
+            )
+            input_messages.append(
+                self._to_responses_tool_result(message)
+                if is_responses_call
+                else message
+            )
+
+    def _append_tool_call_replay(self, function_calls: list, input_messages: list) -> bool:
+        is_responses_call = self._has_responses_replay_items(function_calls)
+        if is_responses_call:
+            input_messages.extend(self._responses_replay_items(function_calls))
+            return True
+        assistant_content = self._tool_assistant_content(function_calls[0])
+        assistant_message = {
+            "role": "assistant",
+            "content": assistant_content if assistant_content else None,
+            "tool_calls": [self._to_chat_tool_call(tc) for tc in function_calls],
+        }
+        reasoning_content = self._tool_reasoning_content(function_calls[0])
+        if reasoning_content is not None:
+            assistant_message["reasoning_content"] = reasoning_content
+        content_blocks = self._tool_content_blocks(function_calls[0])
+        if content_blocks is not None:
+            assistant_message["content_blocks"] = content_blocks
+        input_messages.append(assistant_message)
+        return False
+
     async def execute_single(
         self,
         tool_call,
@@ -195,6 +234,13 @@ class ToolExecutor:
         """Execute a single tool call and return (tool_message, display_result)."""
         name = self._tool_name(tool_call)
         call_id = self._tool_call_id(tool_call)
+        abort_event = turn_abort_event()
+        if abort_event is not None and abort_event.is_set():
+            tool_name = name or "unknown"
+            return self._tool_result_message(
+                call_id,
+                f'Tool call "{tool_name}" was not executed: {ABORTED_TOOL_CALL_REASON}',
+            ), None
         raw_arguments = self._tool_arguments(tool_call)
 
         try:

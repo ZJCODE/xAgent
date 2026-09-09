@@ -7,9 +7,30 @@ long-term memory carrier. Observations persist without waking a turn.
 from __future__ import annotations
 
 import asyncio
+from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional, Union
+
+_TURN_ABORT: ContextVar[Optional[asyncio.Event]] = ContextVar(
+    "xagent_turn_abort",
+    default=None,
+)
+
+
+def turn_abort_event() -> Optional[asyncio.Event]:
+    """Abort event for the in-flight waking turn, if any."""
+    return _TURN_ABORT.get()
+
+
+def bind_turn_abort(event: Optional[asyncio.Event]) -> Token:
+    """Bind this turn's abort event for tools and model calls."""
+    return _TURN_ABORT.set(event)
+
+
+def reset_turn_abort(token: Token) -> None:
+    """Restore the previous turn abort binding."""
+    _TURN_ABORT.reset(token)
 
 INBOX_KIND_METADATA_KEY = "inbox_kind"
 TASK_CONTENT_METADATA_KEY = "task_content"
@@ -118,14 +139,18 @@ class AgentInbox:
     def busy(self) -> bool:
         return self._turn_lock.locked()
 
+    @property
+    def abort_event(self) -> asyncio.Event:
+        return self._abort
+
     def abort_requested(self) -> bool:
         return self._abort.is_set()
 
     def request_abort(self) -> bool:
-        """Ask the in-flight turn to stop at the next iteration boundary.
+        """Cancel the in-flight model stream and running tools.
 
         Returns True when a turn is busy and the request was recorded.
-        Idle calls are a no-op.
+        Idle calls are a no-op. Already finished tool calls are not rolled back.
         """
         if not self._turn_lock.locked():
             return False

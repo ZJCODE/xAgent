@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import time
@@ -48,6 +49,7 @@ from .inbox import (
     normalize_inbox_kind,
 )
 from .handlers import MemoryHandler, MessageHandler, ModelClient
+from .handlers.model import STOP_REASON_LENGTH, ModelStreamEvent
 from .journal import JournalLLMService
 from .providers import (
     MODEL_API_OPENAI_RESPONSES,
@@ -59,6 +61,7 @@ from .providers import (
     normalize_provider_name,
 )
 from .tooling import ToolExecutor, ToolManager
+from .tooling.executor import TRUNCATED_TOOL_CALL_REASON
 from .tooling.guards import WorkspaceShellGuard
 from .working_context import (
     WorkingContextCompactor,
@@ -253,11 +256,10 @@ class Agent:
         return current
 
     def abort(self) -> bool:
-        """Stop the in-flight turn after the current model call or tool batch.
+        """Cancel the in-flight model stream and running tools.
 
-        Returns True when a turn was busy and will stop at the next boundary.
-        Does not roll back tools that already ran, and does not kill a running
-        shell command.
+        Returns True when a turn was busy and will stop. Does not roll back
+        tools that already finished.
         """
         return self.inbox.request_abort()
 
@@ -680,26 +682,46 @@ class Agent:
 
             for iteration_index in range(self.max_agent_loops):
                 if self.inbox.abort_requested():
-                    yield self._aborted_event()
-                    yield {"type": "done"}
+                    async for event in self._emit_aborted_turn(
+                        msg_handler=msg_handler,
+                        visible_text="",
+                        message_id=self._turn_message_id(user_msg, iteration_index),
+                        message_started=False,
+                        stream=stream,
+                        text_parts=[],
+                        room_name=room_name,
+                        channel=channel,
+                        user_id=user_id,
+                        turn_obs=turn_obs,
+                    ):
+                        yield event
                     return
 
                 message_id = self._turn_message_id(user_msg, iteration_index)
                 text_parts: list[str] = []
                 tool_calls = []
+                stop_reason = None
                 message_started = False
+                aborted = False
 
                 def ensure_live_message_started() -> dict:
                     nonlocal message_started
                     message_started = True
                     return self._message_start_event(message_id, "assistant")
 
-                async for model_event in self.model_client.model_turn_events(
-                    messages=input_messages,
+                async for model_event in self._iter_model_turn_events(
+                    input_messages=input_messages,
                     tool_specs=tool_specs,
                     instructions=instructions,
                     stream=stream,
                 ):
+                    if model_event.type == "aborted":
+                        aborted = True
+                        break
+
+                    if model_event.stop_reason:
+                        stop_reason = model_event.stop_reason
+
                     if model_event.type in {"delta", "text"} and model_event.delta:
                         text_parts.append(model_event.delta)
                         if stream:
@@ -731,10 +753,60 @@ class Agent:
                         return
 
                 visible_text = "".join(text_parts)
-                if self.inbox.abort_requested() and tool_calls:
-                    yield self._aborted_event()
-                    yield {"type": "done"}
+                if aborted or self.inbox.abort_requested():
+                    async for event in self._emit_aborted_turn(
+                        msg_handler=msg_handler,
+                        visible_text=visible_text,
+                        message_id=message_id,
+                        message_started=message_started,
+                        stream=stream,
+                        text_parts=text_parts,
+                        room_name=room_name,
+                        channel=channel,
+                        user_id=user_id,
+                        turn_obs=turn_obs,
+                    ):
+                        yield event
                     return
+
+                if tool_calls and stop_reason == STOP_REASON_LENGTH:
+                    if visible_text:
+                        if message_started:
+                            yield self._message_done_event(message_id, "preface", visible_text)
+                        else:
+                            for event in self._message_events(
+                                message_id=message_id,
+                                phase="preface",
+                                content=visible_text,
+                                stream=stream,
+                                deltas=text_parts,
+                            ):
+                                yield event
+                        await msg_handler.store_model_reply(
+                            visible_text,
+                            self._assistant_sender_id,
+                            metadata={"turn_phase": "preface"},
+                            room_name=room_name,
+                            channel=channel,
+                            recipient_id=room_name or user_id,
+                        )
+                    for tool_call in tool_calls:
+                        yield self._tool_event("tool_call", tool_call)
+                    record_failed = getattr(
+                        self.tool_executor, "record_failed_tool_calls", None
+                    )
+                    if callable(record_failed):
+                        await record_failed(
+                            tool_calls,
+                            iteration_messages,
+                            reason=TRUNCATED_TOOL_CALL_REASON,
+                        )
+                    for tool_call in tool_calls:
+                        yield self._tool_event("tool_result", tool_call)
+                    input_messages = msg_handler.sanitize_input_messages(
+                        list(iteration_messages)
+                    )
+                    continue
 
                 if tool_calls:
                     if visible_text:
@@ -769,6 +841,7 @@ class Agent:
                         channel=channel,
                         room_name=room_name,
                         inbox_kind=inbox_item.kind.value,
+                        abort_event=self.inbox.abort_event,
                     )
                     pending_see_image_paths = getattr(
                         self.tool_executor, "pending_see_image_paths", None
@@ -810,8 +883,19 @@ class Agent:
                         return
 
                     if self.inbox.abort_requested():
-                        yield self._aborted_event()
-                        yield {"type": "done"}
+                        async for event in self._emit_aborted_turn(
+                            msg_handler=msg_handler,
+                            visible_text="",
+                            message_id=message_id,
+                            message_started=False,
+                            stream=stream,
+                            text_parts=[],
+                            room_name=room_name,
+                            channel=channel,
+                            user_id=user_id,
+                            turn_obs=turn_obs,
+                        ):
+                            yield event
                         return
 
                     input_messages = msg_handler.sanitize_input_messages(list(iteration_messages))
@@ -874,6 +958,113 @@ class Agent:
             await self._observability_runtime().flush()
         except Exception as exc:
             logger.warning("Failed to flush observability events: %s", exc)
+
+    _MODEL_STREAM_END = object()
+
+    async def _iter_model_turn_events(
+        self,
+        *,
+        input_messages: list,
+        tool_specs: Optional[list],
+        instructions: Any,
+        stream: bool,
+    ) -> AsyncGenerator[ModelStreamEvent, None]:
+        """Yield model events, cancelling the provider stream when abort is set."""
+        stream_agen = self.model_client.model_turn_events(
+            messages=input_messages,
+            tool_specs=tool_specs,
+            instructions=instructions,
+            stream=stream,
+        )
+        aiter = stream_agen.__aiter__()
+        try:
+            while True:
+                if self.inbox.abort_requested():
+                    yield ModelStreamEvent(type="aborted", stop_reason="aborted")
+                    return
+                next_task = asyncio.create_task(self._anext_or_end(aiter))
+                abort_task = asyncio.create_task(self.inbox.abort_event.wait())
+                done, pending = await asyncio.wait(
+                    {next_task, abort_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                for task in pending:
+                    task.cancel()
+                for task in pending:
+                    try:
+                        await task
+                    except (asyncio.CancelledError, Exception):
+                        pass
+                if abort_task in done or self.inbox.abort_requested():
+                    if next_task.done() and not next_task.cancelled():
+                        try:
+                            next_task.exception()
+                        except (asyncio.CancelledError, Exception):
+                            pass
+                    yield ModelStreamEvent(type="aborted", stop_reason="aborted")
+                    return
+                event = next_task.result()
+                if event is self._MODEL_STREAM_END:
+                    return
+                yield event
+        finally:
+            await self._aclose_async_generator(aiter)
+
+    async def _anext_or_end(self, aiter):
+        try:
+            return await aiter.__anext__()
+        except StopAsyncIteration:
+            return self._MODEL_STREAM_END
+
+    @staticmethod
+    async def _aclose_async_generator(aiter) -> None:
+        aclose = getattr(aiter, "aclose", None)
+        if not callable(aclose):
+            return
+        try:
+            await aclose()
+        except (asyncio.CancelledError, Exception):
+            pass
+
+    async def _emit_aborted_turn(
+        self,
+        *,
+        msg_handler: MessageHandler,
+        visible_text: str,
+        message_id: str,
+        message_started: bool,
+        stream: bool,
+        text_parts: list[str],
+        room_name: Optional[str],
+        channel: Optional[str],
+        user_id: str,
+        turn_obs: Any,
+    ) -> AsyncGenerator[dict, None]:
+        """Persist any partial assistant text, then emit aborted/done."""
+        text = str(visible_text or "")
+        if text:
+            if message_started:
+                yield self._message_done_event(message_id, "aborted", text)
+            else:
+                for event in self._message_events(
+                    message_id=message_id,
+                    phase="aborted",
+                    content=text,
+                    stream=stream,
+                    deltas=text_parts,
+                ):
+                    yield event
+            await msg_handler.store_model_reply(
+                text,
+                self._assistant_sender_id,
+                metadata={"turn_phase": "aborted"},
+                room_name=room_name,
+                channel=channel,
+                recipient_id=room_name or user_id,
+            )
+            turn_obs.set_output(text)
+        yield self._aborted_event()
+        yield {"type": "done"}
 
     def _inbox_item_for_chat(
         self,

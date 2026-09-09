@@ -26,7 +26,12 @@ from xagent.core.providers import (
     ReasoningConfig,
 )
 from xagent.core.runtime import ScheduledDeliveryContext, scheduled_delivery_context
-from xagent.core.tooling.executor import ToolDisplayResult, ToolExecutor
+from xagent.core.inbox import bind_turn_abort, reset_turn_abort
+from xagent.core.tooling.executor import (
+    TRUNCATED_TOOL_CALL_REASON,
+    ToolDisplayResult,
+    ToolExecutor,
+)
 from xagent.core.tooling.manager import ToolManager
 from xagent.core.working_context import WorkingContextView
 from xagent.integrations.langfuse import NoopObservabilityRuntime
@@ -247,8 +252,11 @@ class PausingStreamingModelClient(CapturingModelClient):
 class FakeToolExecutor:
     def __init__(self):
         self.seen_input_messages = []
+        self.executed_tool_calls = []
+        self.failed_tool_calls = []
 
     async def handle_tool_calls(self, tool_calls, input_messages, max_concurrent_tools, **kwargs):
+        self.executed_tool_calls.append(list(tool_calls))
         self.seen_input_messages.append(list(input_messages))
         input_messages.extend([
             {
@@ -263,6 +271,25 @@ class FakeToolExecutor:
             {"role": "tool", "tool_call_id": "call-1", "content": "lookup result"},
         ])
         return None
+
+    async def record_failed_tool_calls(self, tool_calls, input_messages, *, reason):
+        self.failed_tool_calls.append((list(tool_calls), reason))
+        input_messages.extend([
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {"name": "lookup", "arguments": "{}"},
+                }],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call-1",
+                "content": f"Tool call \"lookup\" was not executed: {reason}",
+            },
+        ])
 
 
 class FakeAttachmentToolExecutor:
@@ -351,13 +378,13 @@ class AsyncChunkStream:
             raise StopAsyncIteration
 
 
-def _chat_response(content=None, tool_calls=None, reasoning_content=None):
+def _chat_response(content=None, tool_calls=None, reasoning_content=None, finish_reason="stop"):
     message = SimpleNamespace(
         content=content,
         tool_calls=tool_calls or [],
         reasoning_content=reasoning_content,
     )
-    return SimpleNamespace(choices=[SimpleNamespace(message=message, finish_reason="stop")])
+    return SimpleNamespace(choices=[SimpleNamespace(message=message, finish_reason=finish_reason)])
 
 
 def _anthropic_response(content):
@@ -423,7 +450,34 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([event.type for event in events], ["text", "tool_calls"])
         self.assertEqual(events[0].delta, "I will look that up first.")
         self.assertEqual(events[1].tool_calls[0].assistant_content, "I will look that up first.")
+        self.assertEqual(events[1].stop_reason, "stop")
         self.assertFalse(client.chat_completions.calls[0]["stream"])
+
+    async def test_model_turn_events_marks_length_stop_reason_on_tool_calls(self):
+        raw_tool_call = SimpleNamespace(
+            id="call-1",
+            type="function",
+            function=SimpleNamespace(name="lookup", arguments="{"),
+        )
+        client = FakeOpenAIClient([
+            _chat_response(
+                content="I will look that up first.",
+                tool_calls=[raw_tool_call],
+                finish_reason="length",
+            )
+        ])
+        model = ModelClient(client=client, model="test-model")
+
+        events = [
+            event async for event in model.model_turn_events(
+                messages=[{"role": "user", "content": "lookup"}],
+                tool_specs=[{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}],
+                stream=False,
+            )
+        ]
+
+        self.assertEqual([event.type for event in events], ["text", "tool_calls"])
+        self.assertEqual(events[1].stop_reason, "length")
 
     async def test_call_uses_chat_completions_with_system_message(self):
         client = FakeOpenAIClient([_chat_response(content="ok")])
@@ -1458,6 +1512,47 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
             [RoleType.USER, RoleType.ASSISTANT],
         )
 
+    async def test_chat_skips_truncated_tool_calls_and_continues(self):
+        storage = InMemoryMessageStorage()
+        truncated = ChatToolCall(
+            call_id="call-trunc",
+            name="lookup",
+            arguments='{"command":',
+        )
+        model_client = CapturingStreamingModelClient([
+            [
+                ModelStreamEvent(
+                    type="tool_calls",
+                    tool_calls=[truncated],
+                    stop_reason="length",
+                )
+            ],
+            [ModelStreamEvent(type="delta", delta="I did not run the truncated command.")],
+        ])
+        tool_executor = FakeToolExecutor()
+        agent = self._build_agent(
+            storage=storage,
+            model_client=model_client,
+            tool_executor=tool_executor,
+        )
+        agent.max_agent_loops = 3
+
+        result = await Agent.chat(
+            agent,
+            user_message="Run lookup",
+            user_id="bob",
+        )
+
+        self.assertEqual(result, "I did not run the truncated command.")
+        self.assertEqual(tool_executor.executed_tool_calls, [])
+        self.assertEqual(len(tool_executor.failed_tool_calls), 1)
+        failed_calls, reason = tool_executor.failed_tool_calls[0]
+        self.assertEqual(failed_calls[0].call_id, "call-trunc")
+        self.assertEqual(reason, TRUNCATED_TOOL_CALL_REASON)
+        self.assertEqual(len(model_client.calls), 2)
+        self.assertEqual(model_client.calls[1][3]["role"], "tool")
+        self.assertIn("was not executed", model_client.calls[1][3]["content"])
+
     async def test_chat_routes_image_input_as_attachment_for_non_vision_provider(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace_dir = Path(tmpdir).resolve()
@@ -2336,6 +2431,61 @@ class ToolExecutorTransientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(tool_message["content"], '{"value": "ok"}')
         self.assertIsNone(display_result)
         self.assertEqual(storage.messages, [])
+
+    async def test_execute_single_skips_when_turn_abort_is_set(self):
+        ran = False
+
+        async def lookup(value: str) -> dict:
+            nonlocal ran
+            ran = True
+            return {"value": value}
+
+        abort_event = asyncio.Event()
+        abort_event.set()
+        executor = ToolExecutor(
+            tool_manager=FakeToolManager(tools={"lookup": lookup}),
+            message_storage=InMemoryMessageStorage(),
+            client=None,
+        )
+        token = bind_turn_abort(abort_event)
+        try:
+            tool_message, display_result = await executor.execute_single(
+                FakeToolCall(name="lookup", arguments='{"value": "ok"}')
+            )
+        finally:
+            reset_turn_abort(token)
+
+        self.assertFalse(ran)
+        self.assertIsNone(display_result)
+        self.assertIn("was not executed", tool_message["content"])
+        self.assertIn("aborted", tool_message["content"])
+
+    async def test_record_failed_tool_calls_appends_error_without_executing(self):
+        ran = False
+
+        async def lookup() -> str:
+            nonlocal ran
+            ran = True
+            return "ok"
+
+        messages = [{"role": "user", "content": "run tool"}]
+        executor = ToolExecutor(
+            tool_manager=FakeToolManager(tools={"lookup": lookup}),
+            message_storage=InMemoryMessageStorage(),
+            client=None,
+        )
+
+        await executor.record_failed_tool_calls(
+            [FakeToolCall(name="lookup", call_id="call-1")],
+            messages,
+            reason=TRUNCATED_TOOL_CALL_REASON,
+        )
+
+        self.assertFalse(ran)
+        self.assertEqual(messages[1]["role"], "assistant")
+        self.assertEqual(messages[2]["role"], "tool")
+        self.assertIn("was not executed", messages[2]["content"])
+        self.assertIn("truncated", messages[2]["content"])
 
     async def test_execute_single_records_tool_observation(self):
         async def lookup(value: str) -> dict:

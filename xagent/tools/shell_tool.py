@@ -4,6 +4,7 @@ import logging
 from typing import Optional
 
 from xagent.core.config import AgentConfig
+from xagent.core.inbox import turn_abort_event
 from xagent.core.tooling.guards import WorkspaceEscapeError, resolve_workspace_cwd
 from xagent.utils.tool_decorator import function_tool
 
@@ -106,9 +107,28 @@ async def _run_shell_command(
             stderr=asyncio.subprocess.PIPE,
             cwd=cwd,
         )
-        stdout_bytes, stderr_bytes = await asyncio.wait_for(
-            process.communicate(), timeout=timeout
+        stdout_bytes, stderr_bytes, outcome = await _wait_for_shell_process(
+            process,
+            timeout=timeout,
+            abort_event=turn_abort_event(),
         )
+
+        if outcome == "timeout":
+            return {
+                "stdout": "",
+                "stderr": (
+                    f"Command timed out after {timeout}s. "
+                    f"Retry with higher timeout (max {AgentConfig.MAX_COMMAND_TIMEOUT}) "
+                    "if still progressing; otherwise split into smaller commands."
+                ),
+                "return_code": -1,
+            }
+        if outcome == "aborted":
+            return {
+                "stdout": "",
+                "stderr": "Command aborted.",
+                "return_code": -1,
+            }
 
         stdout = _truncate(stdout_bytes.decode("utf-8", errors="replace"), max_output)
         stderr = _truncate(stderr_bytes.decode("utf-8", errors="replace"), max_output)
@@ -124,22 +144,6 @@ async def _run_shell_command(
             "return_code": process.returncode,
         }
 
-    except asyncio.TimeoutError:
-        # Kill the timed-out process
-        try:
-            process.kill()  # type: ignore[possibly-undefined]
-            await process.wait()  # type: ignore[possibly-undefined]
-        except Exception:
-            pass
-        return {
-            "stdout": "",
-            "stderr": (
-                f"Command timed out after {timeout}s. "
-                f"Retry with higher timeout (max {AgentConfig.MAX_COMMAND_TIMEOUT}) "
-                "if still progressing; otherwise split into smaller commands."
-            ),
-            "return_code": -1,
-        }
     except Exception as e:
         logger.error("Command execution error: %s", e)
         return {
@@ -147,3 +151,65 @@ async def _run_shell_command(
             "stderr": str(e),
             "return_code": -1,
         }
+
+
+async def _wait_for_shell_process(
+    process: asyncio.subprocess.Process,
+    *,
+    timeout: int,
+    abort_event: Optional[asyncio.Event],
+) -> tuple[bytes, bytes, str]:
+    """Wait for a shell process, or stop it on timeout/abort.
+
+    Returns ``(stdout, stderr, outcome)`` where outcome is ``ok``, ``timeout``,
+    or ``aborted``.
+    """
+    communicate_task = asyncio.create_task(process.communicate())
+    abort_task: Optional[asyncio.Task] = None
+    if abort_event is not None:
+        abort_task = asyncio.create_task(abort_event.wait())
+
+    wait_tasks: set[asyncio.Task] = {communicate_task}
+    if abort_task is not None:
+        wait_tasks.add(abort_task)
+
+    done, pending = await asyncio.wait(
+        wait_tasks,
+        timeout=timeout,
+        return_when=asyncio.FIRST_COMPLETED,
+    )
+
+    if communicate_task in done and not communicate_task.cancelled():
+        for task in pending:
+            task.cancel()
+        for task in pending:
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+        stdout_bytes, stderr_bytes = communicate_task.result()
+        return stdout_bytes or b"", stderr_bytes or b"", "ok"
+
+    outcome = "aborted" if abort_task is not None and abort_task in done else "timeout"
+    await _kill_shell_process(process)
+    communicate_task.cancel()
+    for task in pending:
+        task.cancel()
+    try:
+        await communicate_task
+    except (asyncio.CancelledError, Exception):
+        pass
+    if abort_task is not None:
+        try:
+            await abort_task
+        except (asyncio.CancelledError, Exception):
+            pass
+    return b"", b"", outcome
+
+
+async def _kill_shell_process(process: asyncio.subprocess.Process) -> None:
+    try:
+        process.kill()
+        await process.wait()
+    except Exception:
+        pass
