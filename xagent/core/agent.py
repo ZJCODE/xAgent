@@ -719,7 +719,7 @@ class Agent:
                         aborted = True
                         break
 
-                    if model_event.stop_reason:
+                    if getattr(model_event, "stop_reason", None):
                         stop_reason = model_event.stop_reason
 
                     if model_event.type in {"delta", "text"} and model_event.delta:

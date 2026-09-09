@@ -1,6 +1,8 @@
 import asyncio
 import functools
 import logging
+import os
+import signal
 from typing import Optional
 
 from xagent.core.config import AgentConfig
@@ -106,6 +108,7 @@ async def _run_shell_command(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=cwd,
+            start_new_session=True,
         )
         stdout_bytes, stderr_bytes, outcome = await _wait_for_shell_process(
             process,
@@ -180,36 +183,42 @@ async def _wait_for_shell_process(
     )
 
     if communicate_task in done and not communicate_task.cancelled():
-        for task in pending:
-            task.cancel()
-        for task in pending:
-            try:
-                await task
-            except (asyncio.CancelledError, Exception):
-                pass
+        await _cancel_task(abort_task)
         stdout_bytes, stderr_bytes = communicate_task.result()
         return stdout_bytes or b"", stderr_bytes or b"", "ok"
 
     outcome = "aborted" if abort_task is not None and abort_task in done else "timeout"
-    await _kill_shell_process(process)
-    communicate_task.cancel()
-    for task in pending:
-        task.cancel()
+    await _cancel_task(abort_task)
+    # Kill the child, then let communicate() drain pipes. Cancelling
+    # communicate() while also wait()ing the same process can hang.
+    _kill_shell_process(process)
     try:
         await communicate_task
-    except (asyncio.CancelledError, Exception):
+    except asyncio.CancelledError:
+        raise
+    except Exception:
         pass
-    if abort_task is not None:
-        try:
-            await abort_task
-        except (asyncio.CancelledError, Exception):
-            pass
     return b"", b"", outcome
 
 
-async def _kill_shell_process(process: asyncio.subprocess.Process) -> None:
+def _kill_shell_process(process: asyncio.subprocess.Process) -> None:
+    """Kill the shell and any children in its session."""
+    if process.returncode is not None:
+        return
     try:
-        process.kill()
-        await process.wait()
-    except Exception:
+        os.killpg(process.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError, OSError):
+        try:
+            process.kill()
+        except ProcessLookupError:
+            pass
+
+
+async def _cancel_task(task: Optional[asyncio.Task]) -> None:
+    if task is None or task.done():
+        return
+    task.cancel()
+    try:
+        await task
+    except (asyncio.CancelledError, Exception):
         pass

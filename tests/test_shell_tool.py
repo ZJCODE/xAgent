@@ -33,7 +33,7 @@ class ShellTimeoutMessageTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["return_code"], -1)
         self.assertEqual(result["stderr"], "Command aborted.")
-        self.assertLess(elapsed, 5)
+        self.assertLess(elapsed, 2)
 
 
 if __name__ == "__main__":

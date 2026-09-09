@@ -264,7 +264,13 @@ class AgentInboxTests(unittest.IsolatedAsyncioTestCase):
                 yield type(
                     "Event",
                     (),
-                    {"type": "delta", "delta": "ok", "error": None, "tool_calls": None},
+                    {
+                        "type": "delta",
+                        "delta": "ok",
+                        "error": None,
+                        "tool_calls": None,
+                        "stop_reason": None,
+                    },
                 )()
 
         model_client = SerialModelClient()
