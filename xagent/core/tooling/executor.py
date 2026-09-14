@@ -20,7 +20,7 @@ from ...tools.image_generation_tool import (
     is_generated_image_result,
 )
 from ...tools.see_image_tool import is_see_image_result, see_image_observation
-from ..inbox import bind_turn_abort, reset_turn_abort, turn_abort_event
+from ..turn import current_turn_cancel
 
 
 TRUNCATED_TOOL_CALL_REASON = (
@@ -97,7 +97,6 @@ class ToolExecutor:
         channel: Optional[str] = None,
         room_name: Optional[str] = None,
         inbox_kind: str = "",
-        abort_event: Optional[Any] = None,
     ) -> Optional[ToolDisplayResult]:
         """
         Handle tool calls by executing them concurrently with concurrency limit.
@@ -115,7 +114,6 @@ class ToolExecutor:
         self._turn_channel = channel
         self._turn_room_name = room_name
         self._turn_inbox_kind = inbox_kind
-        abort_token = bind_turn_abort(abort_event)
         try:
             return await self._handle_tool_calls_locked(
                 tool_calls,
@@ -123,7 +121,6 @@ class ToolExecutor:
                 max_concurrent_tools,
             )
         finally:
-            reset_turn_abort(abort_token)
             (
                 self._turn_user_id,
                 self._turn_channel,
@@ -234,8 +231,8 @@ class ToolExecutor:
         """Execute a single tool call and return (tool_message, display_result)."""
         name = self._tool_name(tool_call)
         call_id = self._tool_call_id(tool_call)
-        abort_event = turn_abort_event()
-        if abort_event is not None and abort_event.is_set():
+        cancel = current_turn_cancel()
+        if cancel is not None and cancel.requested():
             tool_name = name or "unknown"
             return self._tool_result_message(
                 call_id,

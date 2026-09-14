@@ -26,7 +26,7 @@ from xagent.core.providers import (
     ReasoningConfig,
 )
 from xagent.core.runtime import ScheduledDeliveryContext, scheduled_delivery_context
-from xagent.core.inbox import bind_turn_abort, reset_turn_abort
+from xagent.core.turn import TurnCancel, bind_turn_cancel, reset_turn_cancel
 from xagent.core.tooling.executor import (
     TRUNCATED_TOOL_CALL_REASON,
     ToolDisplayResult,
@@ -2440,20 +2440,20 @@ class ToolExecutorTransientTests(unittest.IsolatedAsyncioTestCase):
             ran = True
             return {"value": value}
 
-        abort_event = asyncio.Event()
-        abort_event.set()
+        cancel = TurnCancel()
+        cancel.request()
         executor = ToolExecutor(
             tool_manager=FakeToolManager(tools={"lookup": lookup}),
             message_storage=InMemoryMessageStorage(),
             client=None,
         )
-        token = bind_turn_abort(abort_event)
+        token = bind_turn_cancel(cancel)
         try:
             tool_message, display_result = await executor.execute_single(
                 FakeToolCall(name="lookup", arguments='{"value": "ok"}')
             )
         finally:
-            reset_turn_abort(token)
+            reset_turn_cancel(token)
 
         self.assertFalse(ran)
         self.assertIsNone(display_result)

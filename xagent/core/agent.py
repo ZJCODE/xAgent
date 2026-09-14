@@ -1,4 +1,3 @@
-import asyncio
 import json
 import logging
 import time
@@ -48,8 +47,9 @@ from .inbox import (
     is_scheduled_work,
     normalize_inbox_kind,
 )
+from .turn import TurnAborted, iter_until_cancelled
 from .handlers import MemoryHandler, MessageHandler, ModelClient
-from .handlers.model import STOP_REASON_LENGTH, ModelStreamEvent
+from .handlers.model import STOP_REASON_LENGTH
 from .journal import JournalLLMService
 from .providers import (
     MODEL_API_OPENAI_RESPONSES,
@@ -702,58 +702,71 @@ class Agent:
                 tool_calls = []
                 stop_reason = None
                 message_started = False
-                aborted = False
 
                 def ensure_live_message_started() -> dict:
                     nonlocal message_started
                     message_started = True
                     return self._message_start_event(message_id, "assistant")
 
-                async for model_event in self._iter_model_turn_events(
-                    input_messages=input_messages,
-                    tool_specs=tool_specs,
-                    instructions=instructions,
-                    stream=stream,
-                ):
-                    if model_event.type == "aborted":
-                        aborted = True
-                        break
+                try:
+                    async for model_event in iter_until_cancelled(
+                        self.model_client.model_turn_events(
+                            messages=input_messages,
+                            tool_specs=tool_specs,
+                            instructions=instructions,
+                            stream=stream,
+                        ),
+                    ):
+                        if getattr(model_event, "stop_reason", None):
+                            stop_reason = model_event.stop_reason
 
-                    if getattr(model_event, "stop_reason", None):
-                        stop_reason = model_event.stop_reason
+                        if model_event.type in {"delta", "text"} and model_event.delta:
+                            text_parts.append(model_event.delta)
+                            if stream:
+                                if not message_started:
+                                    yield ensure_live_message_started()
+                                yield self._message_delta_event(
+                                    message_id,
+                                    "assistant",
+                                    model_event.delta,
+                                )
+                            continue
 
-                    if model_event.type in {"delta", "text"} and model_event.delta:
-                        text_parts.append(model_event.delta)
-                        if stream:
-                            if not message_started:
-                                yield ensure_live_message_started()
-                            yield self._message_delta_event(
-                                message_id,
-                                "assistant",
-                                model_event.delta,
+                        if model_event.type == "tool_calls":
+                            tool_calls = model_event.tool_calls
+                            continue
+
+                        if model_event.type == "error":
+                            payload = build_public_error(
+                                code=map_model_error(model_event.error),
+                                cause=model_event.error,
                             )
-                        continue
-
-                    if model_event.type == "tool_calls":
-                        tool_calls = model_event.tool_calls
-                        continue
-
-                    if model_event.type == "error":
-                        payload = build_public_error(
-                            code=map_model_error(model_event.error),
-                            cause=model_event.error,
-                        )
-                        turn_obs.set_error(
-                            error_id=payload["error_id"],
-                            code=payload["error_code"],
-                            message=payload["error"],
-                        )
-                        yield payload
-                        yield {"type": "done"}
-                        return
+                            turn_obs.set_error(
+                                error_id=payload["error_id"],
+                                code=payload["error_code"],
+                                message=payload["error"],
+                            )
+                            yield payload
+                            yield {"type": "done"}
+                            return
+                except TurnAborted:
+                    async for event in self._emit_aborted_turn(
+                        msg_handler=msg_handler,
+                        visible_text="".join(text_parts),
+                        message_id=message_id,
+                        message_started=message_started,
+                        stream=stream,
+                        text_parts=text_parts,
+                        room_name=room_name,
+                        channel=channel,
+                        user_id=user_id,
+                        turn_obs=turn_obs,
+                    ):
+                        yield event
+                    return
 
                 visible_text = "".join(text_parts)
-                if aborted or self.inbox.abort_requested():
+                if self.inbox.abort_requested():
                     async for event in self._emit_aborted_turn(
                         msg_handler=msg_handler,
                         visible_text=visible_text,
@@ -841,7 +854,6 @@ class Agent:
                         channel=channel,
                         room_name=room_name,
                         inbox_kind=inbox_item.kind.value,
-                        abort_event=self.inbox.abort_event,
                     )
                     pending_see_image_paths = getattr(
                         self.tool_executor, "pending_see_image_paths", None
@@ -958,73 +970,6 @@ class Agent:
             await self._observability_runtime().flush()
         except Exception as exc:
             logger.warning("Failed to flush observability events: %s", exc)
-
-    _MODEL_STREAM_END = object()
-
-    async def _iter_model_turn_events(
-        self,
-        *,
-        input_messages: list,
-        tool_specs: Optional[list],
-        instructions: Any,
-        stream: bool,
-    ) -> AsyncGenerator[ModelStreamEvent, None]:
-        """Yield model events, cancelling the provider stream when abort is set."""
-        stream_agen = self.model_client.model_turn_events(
-            messages=input_messages,
-            tool_specs=tool_specs,
-            instructions=instructions,
-            stream=stream,
-        )
-        aiter = stream_agen.__aiter__()
-        try:
-            while True:
-                if self.inbox.abort_requested():
-                    yield ModelStreamEvent(type="aborted", stop_reason="aborted")
-                    return
-                next_task = asyncio.create_task(self._anext_or_end(aiter))
-                abort_task = asyncio.create_task(self.inbox.abort_event.wait())
-                done, pending = await asyncio.wait(
-                    {next_task, abort_task},
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
-                for task in pending:
-                    task.cancel()
-                for task in pending:
-                    try:
-                        await task
-                    except (asyncio.CancelledError, Exception):
-                        pass
-                if abort_task in done or self.inbox.abort_requested():
-                    if next_task.done() and not next_task.cancelled():
-                        try:
-                            next_task.exception()
-                        except (asyncio.CancelledError, Exception):
-                            pass
-                    yield ModelStreamEvent(type="aborted", stop_reason="aborted")
-                    return
-                event = next_task.result()
-                if event is self._MODEL_STREAM_END:
-                    return
-                yield event
-        finally:
-            await self._aclose_async_generator(aiter)
-
-    async def _anext_or_end(self, aiter):
-        try:
-            return await aiter.__anext__()
-        except StopAsyncIteration:
-            return self._MODEL_STREAM_END
-
-    @staticmethod
-    async def _aclose_async_generator(aiter) -> None:
-        aclose = getattr(aiter, "aclose", None)
-        if not callable(aclose):
-            return
-        try:
-            await aclose()
-        except (asyncio.CancelledError, Exception):
-            pass
 
     async def _emit_aborted_turn(
         self,

@@ -6,7 +6,7 @@ import signal
 from typing import Optional
 
 from xagent.core.config import AgentConfig
-from xagent.core.inbox import turn_abort_event
+from xagent.core.turn import wait_first
 from xagent.core.tooling.guards import WorkspaceEscapeError, resolve_workspace_cwd
 from xagent.utils.tool_decorator import function_tool
 
@@ -110,11 +110,21 @@ async def _run_shell_command(
             cwd=cwd,
             start_new_session=True,
         )
-        stdout_bytes, stderr_bytes, outcome = await _wait_for_shell_process(
-            process,
-            timeout=timeout,
-            abort_event=turn_abort_event(),
-        )
+        communicate_task = asyncio.create_task(process.communicate())
+        status = await wait_first(communicate_task, timeout=timeout)
+        if status == "ok":
+            stdout_bytes, stderr_bytes = communicate_task.result()
+            outcome = "ok"
+        else:
+            outcome = status
+            _kill_shell_process(process)
+            try:
+                await communicate_task
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                pass
+            stdout_bytes, stderr_bytes = b"", b""
 
         if outcome == "timeout":
             return {
@@ -156,51 +166,6 @@ async def _run_shell_command(
         }
 
 
-async def _wait_for_shell_process(
-    process: asyncio.subprocess.Process,
-    *,
-    timeout: int,
-    abort_event: Optional[asyncio.Event],
-) -> tuple[bytes, bytes, str]:
-    """Wait for a shell process, or stop it on timeout/abort.
-
-    Returns ``(stdout, stderr, outcome)`` where outcome is ``ok``, ``timeout``,
-    or ``aborted``.
-    """
-    communicate_task = asyncio.create_task(process.communicate())
-    abort_task: Optional[asyncio.Task] = None
-    if abort_event is not None:
-        abort_task = asyncio.create_task(abort_event.wait())
-
-    wait_tasks: set[asyncio.Task] = {communicate_task}
-    if abort_task is not None:
-        wait_tasks.add(abort_task)
-
-    done, pending = await asyncio.wait(
-        wait_tasks,
-        timeout=timeout,
-        return_when=asyncio.FIRST_COMPLETED,
-    )
-
-    if communicate_task in done and not communicate_task.cancelled():
-        await _cancel_task(abort_task)
-        stdout_bytes, stderr_bytes = communicate_task.result()
-        return stdout_bytes or b"", stderr_bytes or b"", "ok"
-
-    outcome = "aborted" if abort_task is not None and abort_task in done else "timeout"
-    await _cancel_task(abort_task)
-    # Kill the child, then let communicate() drain pipes. Cancelling
-    # communicate() while also wait()ing the same process can hang.
-    _kill_shell_process(process)
-    try:
-        await communicate_task
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        pass
-    return b"", b"", outcome
-
-
 def _kill_shell_process(process: asyncio.subprocess.Process) -> None:
     """Kill the shell and any children in its session."""
     if process.returncode is not None:
@@ -212,13 +177,3 @@ def _kill_shell_process(process: asyncio.subprocess.Process) -> None:
             process.kill()
         except ProcessLookupError:
             pass
-
-
-async def _cancel_task(task: Optional[asyncio.Task]) -> None:
-    if task is None or task.done():
-        return
-    task.cancel()
-    try:
-        await task
-    except (asyncio.CancelledError, Exception):
-        pass

@@ -7,30 +7,12 @@ long-term memory carrier. Observations persist without waking a turn.
 from __future__ import annotations
 
 import asyncio
-from contextvars import ContextVar, Token
+from contextvars import Token
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional, Union
 
-_TURN_ABORT: ContextVar[Optional[asyncio.Event]] = ContextVar(
-    "xagent_turn_abort",
-    default=None,
-)
-
-
-def turn_abort_event() -> Optional[asyncio.Event]:
-    """Abort event for the in-flight waking turn, if any."""
-    return _TURN_ABORT.get()
-
-
-def bind_turn_abort(event: Optional[asyncio.Event]) -> Token:
-    """Bind this turn's abort event for tools and model calls."""
-    return _TURN_ABORT.set(event)
-
-
-def reset_turn_abort(token: Token) -> None:
-    """Restore the previous turn abort binding."""
-    _TURN_ABORT.reset(token)
+from .turn import TurnCancel, bind_turn_cancel, reset_turn_cancel
 
 INBOX_KIND_METADATA_KEY = "inbox_kind"
 TASK_CONTENT_METADATA_KEY = "task_content"
@@ -133,7 +115,8 @@ class AgentInbox:
 
     def __init__(self) -> None:
         self._turn_lock = asyncio.Lock()
-        self._abort = asyncio.Event()
+        self._cancel = TurnCancel()
+        self._cancel_token: Optional[Token] = None
 
     @property
     def busy(self) -> bool:
@@ -141,10 +124,10 @@ class AgentInbox:
 
     @property
     def abort_event(self) -> asyncio.Event:
-        return self._abort
+        return self._cancel.event
 
     def abort_requested(self) -> bool:
-        return self._abort.is_set()
+        return self._cancel.requested()
 
     def request_abort(self) -> bool:
         """Cancel the in-flight model stream and running tools.
@@ -154,14 +137,19 @@ class AgentInbox:
         """
         if not self._turn_lock.locked():
             return False
-        self._abort.set()
+        self._cancel.request()
         return True
 
     async def acquire_turn(self) -> None:
         await self._turn_lock.acquire()
-        self._abort.clear()
+        self._cancel.reset()
+        self._cancel_token = bind_turn_cancel(self._cancel)
 
     def release_turn(self) -> None:
-        self._abort.clear()
+        token = self._cancel_token
+        self._cancel_token = None
+        self._cancel.reset()
+        if token is not None:
+            reset_turn_cancel(token)
         if self._turn_lock.locked():
             self._turn_lock.release()
