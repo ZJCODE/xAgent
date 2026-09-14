@@ -20,6 +20,33 @@ from ..providers import (
 )
 
 
+STOP_REASON_STOP = "stop"
+STOP_REASON_LENGTH = "length"
+STOP_REASON_TOOL_USE = "tool_use"
+STOP_REASON_ABORTED = "aborted"
+STOP_REASON_ERROR = "error"
+
+
+def normalize_stop_reason(raw: Any) -> Optional[str]:
+    """Map provider finish/stop reasons onto the loop's small vocabulary."""
+    if raw is None:
+        return None
+    value = str(raw).strip().lower()
+    if not value:
+        return None
+    if value in {"length", "max_tokens", "max_output_tokens"}:
+        return STOP_REASON_LENGTH
+    if value in {"tool_calls", "tool_use"}:
+        return STOP_REASON_TOOL_USE
+    if value in {"stop", "end_turn", "stop_sequence"}:
+        return STOP_REASON_STOP
+    if value in {STOP_REASON_ABORTED, "aborted"}:
+        return STOP_REASON_ABORTED
+    if value in {STOP_REASON_ERROR, "error"}:
+        return STOP_REASON_ERROR
+    return None
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -114,6 +141,7 @@ class ModelStreamEvent:
     delta: str = ""
     tool_calls: list[ChatToolCall] = field(default_factory=list)
     error: Optional[ModelErrorEvent] = None
+    stop_reason: Optional[str] = None
 
 
 class ModelClient:
@@ -831,32 +859,49 @@ class ModelClient:
     def _chat_non_stream_turn_events(cls, response) -> list[ModelStreamEvent]:
         text = cls._extract_response_text(response)
         tool_calls = cls._extract_tool_calls(response)
-        return cls._completed_turn_events(text, tool_calls)
+        return cls._completed_turn_events(
+            text,
+            tool_calls,
+            stop_reason=cls._chat_response_stop_reason(response),
+        )
 
     @classmethod
     def _responses_non_stream_turn_events(cls, response) -> list[ModelStreamEvent]:
         text = cls._extract_responses_text(response)
         tool_calls = cls._extract_responses_tool_calls(response)
-        return cls._completed_turn_events(text, tool_calls)
+        return cls._completed_turn_events(
+            text,
+            tool_calls,
+            stop_reason=cls._responses_stop_reason(response),
+        )
 
     @classmethod
     def _anthropic_non_stream_turn_events(cls, response) -> list[ModelStreamEvent]:
         text = cls._extract_anthropic_response_text(response)
         tool_calls = cls._extract_anthropic_tool_calls(response)
-        return cls._completed_turn_events(text, tool_calls)
+        return cls._completed_turn_events(
+            text,
+            tool_calls,
+            stop_reason=normalize_stop_reason(cls._field(response, "stop_reason")),
+        )
 
     @classmethod
     def _completed_turn_events(
         cls,
         text: str,
         tool_calls: list[ChatToolCall],
+        stop_reason: Optional[str] = None,
     ) -> list[ModelStreamEvent]:
         events: list[ModelStreamEvent] = []
         if text:
             cls._set_tool_calls_assistant_content(tool_calls, text)
-            events.append(ModelStreamEvent(type="text", delta=text))
+            events.append(ModelStreamEvent(type="text", delta=text, stop_reason=stop_reason))
         if tool_calls:
-            events.append(ModelStreamEvent(type="tool_calls", tool_calls=tool_calls))
+            events.append(ModelStreamEvent(
+                type="tool_calls",
+                tool_calls=tool_calls,
+                stop_reason=stop_reason,
+            ))
         if not events:
             events.append(ModelStreamEvent(
                 type="error",
@@ -864,6 +909,7 @@ class ModelClient:
                     code="empty_model_response",
                     message="No valid output from model response.",
                 ),
+                stop_reason=stop_reason or STOP_REASON_ERROR,
             ))
         return events
 
@@ -939,8 +985,12 @@ class ModelClient:
         text_parts: list[str] = []
         reasoning_parts: list[str] = []
         tool_call_parts: dict[int, dict] = {}
+        stop_reason: Optional[str] = None
 
         async for chunk in response:
+            chunk_reason = self._chat_chunk_stop_reason(chunk)
+            if chunk_reason:
+                stop_reason = chunk_reason
             reasoning_delta = self._extract_stream_reasoning_delta(chunk)
             if reasoning_delta:
                 reasoning_parts.append(reasoning_delta)
@@ -950,7 +1000,7 @@ class ModelClient:
             content = self._extract_stream_text_delta(chunk)
             if content:
                 text_parts.append(content)
-                yield ModelStreamEvent(type="delta", delta=content)
+                yield ModelStreamEvent(type="delta", delta=content, stop_reason=stop_reason)
 
         reasoning_content = "".join(reasoning_parts) if reasoning_parts else None
         assistant_content = "".join(text_parts) or None
@@ -960,7 +1010,11 @@ class ModelClient:
             assistant_content=assistant_content,
         )
         if tool_calls:
-            yield ModelStreamEvent(type="tool_calls", tool_calls=tool_calls)
+            yield ModelStreamEvent(
+                type="tool_calls",
+                tool_calls=tool_calls,
+                stop_reason=stop_reason,
+            )
             return
 
         if not text_parts:
@@ -970,6 +1024,7 @@ class ModelClient:
                     code="empty_stream_response",
                     message="No valid output from model response.",
                 ),
+                stop_reason=stop_reason or STOP_REASON_ERROR,
             )
 
     async def _iter_responses_turn_events(self, response) -> AsyncGenerator[ModelStreamEvent, None]:
@@ -977,8 +1032,12 @@ class ModelClient:
         tool_call_parts: dict[int, dict] = {}
         response_items: list[dict] = []
         completed_response = None
+        stop_reason: Optional[str] = None
 
         async for event in response:
+            event_reason = self._responses_event_stop_reason(event)
+            if event_reason:
+                stop_reason = event_reason
             completed_response = self._merge_responses_stream_event(
                 tool_call_parts,
                 response_items,
@@ -988,7 +1047,7 @@ class ModelClient:
             content = self._extract_responses_stream_text_delta(event)
             if content:
                 text_parts.append(content)
-                yield ModelStreamEvent(type="delta", delta=content)
+                yield ModelStreamEvent(type="delta", delta=content, stop_reason=stop_reason)
 
         assistant_content = "".join(text_parts) or None
         tool_calls = self._finalize_responses_stream_tool_calls(
@@ -1000,9 +1059,15 @@ class ModelClient:
             tool_calls = self._extract_responses_tool_calls(completed_response)
             if assistant_content:
                 self._set_tool_calls_assistant_content(tool_calls, assistant_content)
+            if stop_reason is None:
+                stop_reason = self._responses_stop_reason(completed_response)
 
         if tool_calls:
-            yield ModelStreamEvent(type="tool_calls", tool_calls=tool_calls)
+            yield ModelStreamEvent(
+                type="tool_calls",
+                tool_calls=tool_calls,
+                stop_reason=stop_reason,
+            )
             return
 
         if not text_parts and completed_response is not None:
@@ -1023,13 +1088,17 @@ class ModelClient:
     async def _iter_anthropic_turn_events(self, response) -> AsyncGenerator[ModelStreamEvent, None]:
         text_parts: list[str] = []
         content_blocks: dict[int, dict] = {}
+        stop_reason: Optional[str] = None
 
         async for event in response:
+            event_reason = self._anthropic_event_stop_reason(event)
+            if event_reason:
+                stop_reason = event_reason
             self._merge_anthropic_stream_event(content_blocks, event)
             content = self._extract_anthropic_stream_text_delta(event)
             if content:
                 text_parts.append(content)
-                yield ModelStreamEvent(type="delta", delta=content)
+                yield ModelStreamEvent(type="delta", delta=content, stop_reason=stop_reason)
 
         assistant_content = "".join(text_parts) or None
         tool_calls = self._finalize_anthropic_stream_tool_calls(
@@ -1037,7 +1106,11 @@ class ModelClient:
             assistant_content=assistant_content,
         )
         if tool_calls:
-            yield ModelStreamEvent(type="tool_calls", tool_calls=tool_calls)
+            yield ModelStreamEvent(
+                type="tool_calls",
+                tool_calls=tool_calls,
+                stop_reason=stop_reason,
+            )
             return
 
         if not text_parts:
@@ -1193,6 +1266,60 @@ class ModelClient:
     def _first_choice(response) -> Any:
         choices = ModelClient._field(response, "choices") or []
         return choices[0] if choices else None
+
+    @classmethod
+    def _chat_response_stop_reason(cls, response) -> Optional[str]:
+        choice = cls._first_choice(response)
+        if choice is None:
+            return None
+        return normalize_stop_reason(cls._field(choice, "finish_reason"))
+
+    @classmethod
+    def _chat_chunk_stop_reason(cls, chunk) -> Optional[str]:
+        for choice in cls._chunk_choices(chunk):
+            reason = normalize_stop_reason(cls._field(choice, "finish_reason"))
+            if reason:
+                return reason
+        return None
+
+    @classmethod
+    def _responses_stop_reason(cls, response) -> Optional[str]:
+        if response is None:
+            return None
+        status = str(cls._field(response, "status") or "").strip().lower()
+        details = cls._field(response, "incomplete_details")
+        detail_reason = None
+        if isinstance(details, dict):
+            detail_reason = details.get("reason")
+        else:
+            detail_reason = cls._field(details, "reason")
+        normalized_detail = normalize_stop_reason(detail_reason)
+        if status == "incomplete":
+            return normalized_detail or STOP_REASON_LENGTH
+        if normalized_detail:
+            return normalized_detail
+        if status in {"completed", "complete"}:
+            return STOP_REASON_STOP
+        return normalize_stop_reason(status)
+
+    @classmethod
+    def _responses_event_stop_reason(cls, event) -> Optional[str]:
+        event_type = cls._field(event, "type")
+        if event_type == "response.incomplete":
+            return cls._responses_stop_reason(cls._field(event, "response")) or STOP_REASON_LENGTH
+        if event_type == "response.completed":
+            return cls._responses_stop_reason(cls._field(event, "response"))
+        return None
+
+    @classmethod
+    def _anthropic_event_stop_reason(cls, event) -> Optional[str]:
+        event_type = cls._field(event, "type")
+        if event_type == "message_delta":
+            delta = cls._field(event, "delta")
+            return normalize_stop_reason(cls._field(delta, "stop_reason"))
+        if event_type == "message_stop":
+            return normalize_stop_reason(cls._field(event, "stop_reason"))
+        return None
 
     @staticmethod
     def _extract_tool_calls(response) -> list:
@@ -1410,6 +1537,8 @@ class ModelClient:
     ) -> Any:
         event_type = cls._field(event, "type")
         if event_type == "response.completed":
+            return cls._field(event, "response")
+        if event_type == "response.incomplete":
             return cls._field(event, "response")
 
         if event_type == "response.output_item.added":

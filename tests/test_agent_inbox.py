@@ -26,6 +26,7 @@ from tests.test_agent_chat_flow import (
     FakeToolExecutor,
     FakeToolManager,
     InMemoryMessageStorage,
+    PausingStreamingModelClient,
 )
 
 
@@ -263,7 +264,13 @@ class AgentInboxTests(unittest.IsolatedAsyncioTestCase):
                 yield type(
                     "Event",
                     (),
-                    {"type": "delta", "delta": "ok", "error": None, "tool_calls": None},
+                    {
+                        "type": "delta",
+                        "delta": "ok",
+                        "error": None,
+                        "tool_calls": None,
+                        "stop_reason": None,
+                    },
                 )()
 
         model_client = SerialModelClient()
@@ -303,7 +310,7 @@ class AgentInboxTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(agent.abort())
         self.assertFalse(agent.inbox.busy)
 
-    async def test_abort_skips_tools_returned_by_the_current_model_call(self):
+    async def test_abort_cancels_the_current_model_call_without_waiting(self):
         storage = InMemoryMessageStorage()
         started = asyncio.Event()
         release = asyncio.Event()
@@ -337,12 +344,43 @@ class AgentInboxTests(unittest.IsolatedAsyncioTestCase):
         task = asyncio.create_task(run_turn())
         await started.wait()
         self.assertTrue(agent.abort())
-        release.set()
-        events = await task
+        events = await asyncio.wait_for(task, timeout=1.0)
         types = [event.get("type") for event in events]
         self.assertEqual(types, ["aborted", "done"])
-        self.assertEqual(tool_executor.seen_input_messages, [])
+        self.assertFalse(release.is_set())
+        self.assertEqual(tool_executor.executed_tool_calls, [])
         self.assertEqual(len(model_client.calls), 1)
+
+    async def test_abort_persists_partial_streamed_text(self):
+        storage = InMemoryMessageStorage()
+        release_event = asyncio.Event()
+        model_client = PausingStreamingModelClient(release_event)
+        agent = self._build_agent(storage, model_client)
+
+        events_agen = agent.chat_events(
+            user_message="Stream this",
+            user_id="bob",
+            stream=True,
+        )
+        aiter = events_agen.__aiter__()
+        first_event = await asyncio.wait_for(aiter.__anext__(), timeout=0.5)
+        second_event = await asyncio.wait_for(aiter.__anext__(), timeout=0.5)
+        self.assertEqual(first_event["type"], "message_start")
+        self.assertEqual(second_event["delta"], "Hel")
+
+        self.assertTrue(agent.abort())
+        remaining = []
+        async for event in aiter:
+            remaining.append(event)
+
+        self.assertFalse(release_event.is_set())
+        self.assertEqual(remaining[0]["type"], "message_done")
+        self.assertEqual(remaining[0]["phase"], "aborted")
+        self.assertEqual(remaining[0]["content"], "Hel")
+        self.assertEqual(remaining[1], {"type": "aborted"})
+        self.assertEqual(remaining[2], {"type": "done"})
+        self.assertEqual(storage.messages[-1].content, "Hel")
+        self.assertEqual(storage.messages[-1].metadata["turn_phase"], "aborted")
 
     async def test_abort_stops_after_the_current_tool_batch(self):
         storage = InMemoryMessageStorage()

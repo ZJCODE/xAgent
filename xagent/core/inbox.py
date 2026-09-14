@@ -7,9 +7,12 @@ long-term memory carrier. Observations persist without waking a turn.
 from __future__ import annotations
 
 import asyncio
+from contextvars import Token
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional, Union
+
+from .turn import TurnCancel, bind_turn_cancel, reset_turn_cancel
 
 INBOX_KIND_METADATA_KEY = "inbox_kind"
 TASK_CONTENT_METADATA_KEY = "task_content"
@@ -112,31 +115,41 @@ class AgentInbox:
 
     def __init__(self) -> None:
         self._turn_lock = asyncio.Lock()
-        self._abort = asyncio.Event()
+        self._cancel = TurnCancel()
+        self._cancel_token: Optional[Token] = None
 
     @property
     def busy(self) -> bool:
         return self._turn_lock.locked()
 
+    @property
+    def abort_event(self) -> asyncio.Event:
+        return self._cancel.event
+
     def abort_requested(self) -> bool:
-        return self._abort.is_set()
+        return self._cancel.requested()
 
     def request_abort(self) -> bool:
-        """Ask the in-flight turn to stop at the next iteration boundary.
+        """Cancel the in-flight model stream and running tools.
 
         Returns True when a turn is busy and the request was recorded.
-        Idle calls are a no-op.
+        Idle calls are a no-op. Already finished tool calls are not rolled back.
         """
         if not self._turn_lock.locked():
             return False
-        self._abort.set()
+        self._cancel.request()
         return True
 
     async def acquire_turn(self) -> None:
         await self._turn_lock.acquire()
-        self._abort.clear()
+        self._cancel.reset()
+        self._cancel_token = bind_turn_cancel(self._cancel)
 
     def release_turn(self) -> None:
-        self._abort.clear()
+        token = self._cancel_token
+        self._cancel_token = None
+        self._cancel.reset()
+        if token is not None:
+            reset_turn_cancel(token)
         if self._turn_lock.locked():
             self._turn_lock.release()

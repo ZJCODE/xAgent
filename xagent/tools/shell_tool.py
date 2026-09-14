@@ -1,9 +1,12 @@
 import asyncio
 import functools
 import logging
+import os
+import signal
 from typing import Optional
 
 from xagent.core.config import AgentConfig
+from xagent.core.turn import wait_first
 from xagent.core.tooling.guards import WorkspaceEscapeError, resolve_workspace_cwd
 from xagent.utils.tool_decorator import function_tool
 
@@ -105,10 +108,40 @@ async def _run_shell_command(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=cwd,
+            start_new_session=True,
         )
-        stdout_bytes, stderr_bytes = await asyncio.wait_for(
-            process.communicate(), timeout=timeout
-        )
+        communicate_task = asyncio.create_task(process.communicate())
+        status = await wait_first(communicate_task, timeout=timeout)
+        if status == "ok":
+            stdout_bytes, stderr_bytes = communicate_task.result()
+            outcome = "ok"
+        else:
+            outcome = status
+            _kill_shell_process(process)
+            try:
+                await communicate_task
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                pass
+            stdout_bytes, stderr_bytes = b"", b""
+
+        if outcome == "timeout":
+            return {
+                "stdout": "",
+                "stderr": (
+                    f"Command timed out after {timeout}s. "
+                    f"Retry with higher timeout (max {AgentConfig.MAX_COMMAND_TIMEOUT}) "
+                    "if still progressing; otherwise split into smaller commands."
+                ),
+                "return_code": -1,
+            }
+        if outcome == "aborted":
+            return {
+                "stdout": "",
+                "stderr": "Command aborted.",
+                "return_code": -1,
+            }
 
         stdout = _truncate(stdout_bytes.decode("utf-8", errors="replace"), max_output)
         stderr = _truncate(stderr_bytes.decode("utf-8", errors="replace"), max_output)
@@ -124,22 +157,6 @@ async def _run_shell_command(
             "return_code": process.returncode,
         }
 
-    except asyncio.TimeoutError:
-        # Kill the timed-out process
-        try:
-            process.kill()  # type: ignore[possibly-undefined]
-            await process.wait()  # type: ignore[possibly-undefined]
-        except Exception:
-            pass
-        return {
-            "stdout": "",
-            "stderr": (
-                f"Command timed out after {timeout}s. "
-                f"Retry with higher timeout (max {AgentConfig.MAX_COMMAND_TIMEOUT}) "
-                "if still progressing; otherwise split into smaller commands."
-            ),
-            "return_code": -1,
-        }
     except Exception as e:
         logger.error("Command execution error: %s", e)
         return {
@@ -147,3 +164,16 @@ async def _run_shell_command(
             "stderr": str(e),
             "return_code": -1,
         }
+
+
+def _kill_shell_process(process: asyncio.subprocess.Process) -> None:
+    """Kill the shell and any children in its session."""
+    if process.returncode is not None:
+        return
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError, OSError):
+        try:
+            process.kill()
+        except ProcessLookupError:
+            pass
