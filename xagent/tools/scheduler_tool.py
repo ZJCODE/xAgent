@@ -257,17 +257,28 @@ def create_schedule_task_tool(*, tasks_dir: str):
                 "error": str(exc),
             }
 
+        if not (content or "").strip():
+            return {
+                "ok": False,
+                "action": "create",
+                "error": "scheduled task content must not be empty",
+            }
+
         context = current_delivery_context()
         if context is None:
-            channel = "local"
-            target = {}
-            user_id = ""
-            source = {"warning": "No active channel context was available when this task was created."}
-        else:
-            channel = context.channel
-            target = dict(context.target)
-            user_id = context.user_id
-            source = context.metadata
+            return {
+                "ok": False,
+                "action": "create",
+                "error": (
+                    "No active delivery channel was available. "
+                    "Create this reminder from Web Chat, Feishu, Weixin, Voice, or CLI chat "
+                    "so it has a place to deliver when due."
+                ),
+            }
+        channel = context.channel
+        target = dict(context.target)
+        user_id = context.user_id
+        source = context.metadata
 
         try:
             task = enqueue_scheduled_task(

@@ -300,7 +300,10 @@ class FakeChatCompletions:
 
     async def create(self, **kwargs):
         self.calls.append(kwargs)
-        return self.responses.pop(0)
+        item = self.responses.pop(0)
+        if isinstance(item, BaseException):
+            raise item
+        return item
 
 
 class FakeResponses:
@@ -310,7 +313,10 @@ class FakeResponses:
 
     async def create(self, **kwargs):
         self.calls.append(kwargs)
-        return self.responses.pop(0)
+        item = self.responses.pop(0)
+        if isinstance(item, BaseException):
+            raise item
+        return item
 
 
 class FakeOpenAIClient:
@@ -444,6 +450,40 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(call["tool_choice"], "auto")
         self.assertNotIn("reasoning_effort", call)
         self.assertNotIn("max_completion_tokens", call)
+
+    async def test_call_retries_retryable_provider_errors(self):
+        class StatusError(Exception):
+            def __init__(self, status_code, message="fail"):
+                super().__init__(message)
+                self.status_code = status_code
+
+        client = FakeOpenAIClient([
+            ConnectionError("temporary network blip"),
+            _chat_response(content="recovered"),
+        ])
+        model = ModelClient(client=client, model="test-model")
+
+        with patch.object(AgentConfig, "RETRY_ATTEMPTS", 3), patch.object(AgentConfig, "RETRY_MIN_WAIT", 0), patch.object(AgentConfig, "RETRY_MAX_WAIT", 0):
+            reply_type, payload = await model.call(
+                messages=[{"role": "user", "content": "hello"}],
+                tool_specs=None,
+            )
+
+        self.assertEqual(reply_type, ReplyType.SIMPLE_REPLY)
+        self.assertEqual(payload, "recovered")
+        self.assertEqual(len(client.chat_completions.calls), 2)
+
+        auth_client = FakeOpenAIClient([StatusError(401, "invalid api key")])
+        auth_model = ModelClient(client=auth_client, model="test-model")
+        with patch.object(AgentConfig, "RETRY_ATTEMPTS", 3), patch.object(AgentConfig, "RETRY_MIN_WAIT", 0), patch.object(AgentConfig, "RETRY_MAX_WAIT", 0):
+            reply_type, payload = await auth_model.call(
+                messages=[{"role": "user", "content": "hello"}],
+                tool_specs=None,
+            )
+
+        self.assertEqual(reply_type, ReplyType.ERROR)
+        self.assertEqual(payload.code, "model_auth_failed")
+        self.assertEqual(len(auth_client.chat_completions.calls), 1)
 
     async def test_chat_reasoning_and_output_limits_map_by_provider(self):
         deepseek_client = FakeOpenAIClient([_chat_response(content="ok")])

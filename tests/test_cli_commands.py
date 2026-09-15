@@ -38,6 +38,7 @@ from xagent.interfaces.cli import (
     collect_feishu_init_selection_terminal_ui,
     handle_agents,
     handle_chat,
+    handle_doctor,
     handle_init,
     handle_init_feishu,
     handle_init_voice,
@@ -1366,6 +1367,44 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(saved["search"]["provider"], "qwen")
         self.assertEqual(saved["search"]["api_key"], "qwen-key")
         self.assertIn("search.provider", [change.path for change in update.changes])
+
+    def test_write_config_forces_restrictive_permissions(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir)
+            root = Path(tmpdir)
+            config_file = root / "config.yaml"
+            config_file.chmod(0o644)
+            config = yaml.safe_load(config_file.read_text(encoding="utf-8"))
+            write_config(root, config)
+            self.assertEqual(config_file.stat().st_mode & 0o777, 0o600)
+
+    def test_doctor_warns_about_open_config_permissions(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir)
+            config_file = Path(tmpdir) / "config.yaml"
+            config_file.chmod(0o644)
+            args = argparse.Namespace(config_dir=tmpdir, channels=None, online=False, agent=None)
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = handle_doctor(args)
+            output = stdout.getvalue()
+        self.assertEqual(exit_code, 1)
+        self.assertIn("too open", output)
+
+    def test_doctor_online_rejects_placeholder_api_key(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_runtime(tmpdir)
+            root = Path(tmpdir)
+            config_file = root / "config.yaml"
+            config = yaml.safe_load(config_file.read_text(encoding="utf-8"))
+            config["provider"]["api_key"] = "your_api_key_here"
+            config_file.write_text(yaml.safe_dump(config), encoding="utf-8")
+            config_file.chmod(0o600)
+            args = argparse.Namespace(config_dir=tmpdir, channels=None, online=True, agent=None)
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = handle_doctor(args)
+            output = stdout.getvalue()
+        self.assertEqual(exit_code, 1)
+        self.assertIn("placeholder api_key", output)
 
     def test_config_editor_updates_image_generation_provider_with_validation(self):
         with tempfile.TemporaryDirectory() as tmpdir:

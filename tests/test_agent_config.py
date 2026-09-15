@@ -265,13 +265,24 @@ provider:
         self.assertEqual(
             VISION_MODEL_OVERRIDES,
             {
-                (PROVIDER_DEEPSEEK, "deepseek-v4-flash"): False,
                 (PROVIDER_DEEPSEEK, "deepseek-v4-pro"): False,
                 (PROVIDER_DEEPSEEK, "deepseek-chat"): False,
                 (PROVIDER_DEEPSEEK, "deepseek-reasoner"): False,
             },
         )
         self.assertTrue(provider_supports_vision({"name": "openai"}))
+        self.assertTrue(
+            provider_supports_vision({"name": "openai", "model": "gpt-6-astra"})
+        )
+        self.assertTrue(
+            provider_supports_vision({"name": "openai", "model": "gpt-5.6-terra"})
+        )
+        self.assertTrue(
+            provider_supports_vision({"name": "openai", "model": "gpt-5.6-sol"})
+        )
+        self.assertTrue(
+            provider_supports_vision({"name": "openai", "model": "gpt-5.4-mini"})
+        )
         self.assertTrue(provider_supports_vision({"name": PROVIDER_QWEN}))
         self.assertTrue(provider_supports_vision({"name": PROVIDER_CUSTOM, "supports_vision": True}))
         self.assertFalse(provider_supports_vision({"name": PROVIDER_CUSTOM}))
@@ -280,7 +291,10 @@ provider:
 
         # DeepSeek: provider-capable with deletable per-model overrides.
         self.assertTrue(provider_supports_vision({"name": "deepseek"}))
-        self.assertFalse(
+        self.assertTrue(
+            provider_supports_vision({"name": "deepseek", "model": "deepseek-flash"})
+        )
+        self.assertTrue(
             provider_supports_vision({"name": "deepseek", "model": "deepseek-v4-flash"})
         )
         self.assertFalse(
@@ -304,7 +318,7 @@ provider:
             provider_supports_vision(
                 {
                     "name": "deepseek",
-                    "model": "deepseek-v4-flash-vision-exp",
+                    "model": "deepseek-flash",
                     "supports_vision": False,
                 }
             )
@@ -313,7 +327,7 @@ provider:
             provider_supports_vision(
                 {
                     "name": "deepseek",
-                    "model": "deepseek-v4-flash",
+                    "model": "deepseek-v4-pro",
                     "supports_vision": True,
                 }
             )
@@ -535,6 +549,54 @@ search:
 provider:
     name: "deepseek"
     model: "deepseek-v4-flash-vision-exp"
+    base_url: "https://api.deepseek.com"
+    api_key: "test-key"
+search:
+    provider: "none"
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            runner = BaseAgentRunner(config_dir=tmpdir)
+            config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+
+            self.assertNotIn("supports_vision", config["provider"])
+            self.assertTrue(runner.agent.supports_vision)
+            self.assertIn("see_image", runner.agent.tools)
+
+    def test_openai_astra_runner_enables_vision_without_yaml_flag(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+    name: "openai"
+    model: "gpt-6-astra"
+    base_url: "https://api.openai.com/v1"
+    api_key: "test-key"
+search:
+    provider: "none"
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            runner = BaseAgentRunner(config_dir=tmpdir)
+            config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+
+            self.assertNotIn("supports_vision", config["provider"])
+            self.assertTrue(runner.agent.supports_vision)
+            self.assertIn("see_image", runner.agent.tools)
+
+    def test_deepseek_flash_runner_enables_vision_without_yaml_flag(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+    name: "deepseek"
+    model: "deepseek-flash"
     base_url: "https://api.deepseek.com"
     api_key: "test-key"
 search:
@@ -864,7 +926,7 @@ provider:
     def test_collect_init_selection_deepseek_empty_custom_model_uses_model_placeholder(self):
         answers = iter([
             "2",
-            "4",
+            "3",
             "",
             ".",
         ])
@@ -884,7 +946,7 @@ provider:
     def test_collect_init_selection_supports_custom_model_name(self):
         answers = iter([
             "1",
-            "4",
+            "5",
             "gpt-5.4-lab",
             ".",
         ])
@@ -934,7 +996,8 @@ provider:
         selection = collect_init_selection_terminal_ui(ui=ui)
 
         self.assertIn("Custom", ui.model_options)
-        self.assertIn("deepseek-v4-flash-vision-exp", ui.model_options)
+        self.assertIn("deepseek-flash", ui.model_options)
+        self.assertIn("deepseek-v4-pro", ui.model_options)
         self.assertEqual(selection.provider, "deepseek")
         self.assertEqual(selection.model, "deepseek-v4-lab")
         self.assertEqual(selection.api_key, "your_api_key_here")

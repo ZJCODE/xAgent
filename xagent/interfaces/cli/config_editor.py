@@ -102,14 +102,30 @@ def validate_config(data: dict[str, Any]) -> None:
     runner._validate_config(data)
 
 
+CONFIG_FILE_MODE = 0o600
+CONFIG_DIR_MODE = 0o700
+
+
+def write_secret_file(path: Path, text: str, *, mode: int = CONFIG_FILE_MODE) -> None:
+    """Atomically write a secret-bearing file and force restrictive permissions."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp_path.write_text(text, encoding="utf-8")
+    try:
+        tmp_path.chmod(mode)
+    except OSError:
+        pass
+    tmp_path.replace(path)
+    try:
+        path.chmod(mode)
+    except OSError:
+        pass
+
+
 def write_config(config_dir: Path, data: dict[str, Any]) -> None:
     validate_config(data)
     path = config_path(config_dir)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    payload = yaml.safe_dump(data, sort_keys=False, allow_unicode=False)
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
-    tmp_path.write_text(payload, encoding="utf-8")
-    os.replace(tmp_path, path)
+    write_secret_file(path, yaml.safe_dump(data, sort_keys=False, allow_unicode=False))
 
 
 def _clone_config(config: dict[str, Any]) -> dict[str, Any]:

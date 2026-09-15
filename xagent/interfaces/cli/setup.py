@@ -34,6 +34,7 @@ from ...core.providers import (
 )
 from ..base import BaseAgentConfig
 from .agents import allocate_api_port
+from .config_editor import CONFIG_DIR_MODE, write_secret_file
 from .paths import config_path as _config_path
 from .paths import runtime_dir as _runtime_dir
 from .paths import setup_runtime_dir as _setup_runtime_dir
@@ -126,22 +127,29 @@ OPENAI_MODELS = (
     "gpt-5.6-terra",
     "gpt-5.6-luna",
     "gpt-5.6-sol",
+    "gpt-6-astra",
 )
+OPENAI_MODEL_DESCRIPTIONS = {
+    "gpt-5.6-terra": "Recommended everyday default — balances intelligence and cost.",
+    "gpt-5.6-luna": "Cost-sensitive / high-volume (heartbeat, diary, light chat).",
+    "gpt-5.6-sol": "GPT-5.6 flagship for complex professional work.",
+    "gpt-6-astra": "GPT-6 flagship for the hardest reasoning and coding.",
+}
 ANTHROPIC_MODELS = (
     "claude-sonnet-4-20250514",
     "claude-opus-4-1-20250805",
     "claude-3-5-haiku-20241022",
 )
 DEEPSEEK_MODELS = (
-    "deepseek-v4-flash",
+    "deepseek-flash",
     "deepseek-v4-pro",
-    "deepseek-v4-flash-vision-exp",
 )
 DEEPSEEK_MODEL_DESCRIPTIONS = {
-    "deepseek-v4-flash": "Everyday text default. This ID does not accept images yet.",
-    "deepseek-v4-pro": "Stronger text agent. This ID does not accept images yet.",
-    "deepseek-v4-flash-vision-exp": (
-        "Experimental multimodal Flash. Choose this when the agent needs to see images."
+    "deepseek-flash": (
+        "Everyday default (DeepSeek-V4.1-Flash). Accepts images alongside text."
+    ),
+    "deepseek-v4-pro": (
+        "Stronger text agent (DeepSeek-V4-Pro). Does not accept images."
     ),
 }
 QWEN_MODELS = (
@@ -163,8 +171,8 @@ IMAGE_GENERATION_PROVIDERS = (
 )
 
 _PROVIDER_DESCRIPTIONS = {
-    PROVIDER_OPENAI: "GPT family via the OpenAI platform.",
-    PROVIDER_DEEPSEEK: "DeepSeek chat and coding models.",
+    PROVIDER_OPENAI: "GPT-6 Astra and GPT-5.6 (Terra, Luna, Sol). All accept images.",
+    PROVIDER_DEEPSEEK: "DeepSeek Flash (vision) and V4 Pro.",
     PROVIDER_QWEN: "Qwen models via DashScope-compatible APIs.",
     PROVIDER_ANTHROPIC: "Claude models via Anthropic Messages.",
     PROVIDER_CUSTOM: "Bring your own OpenAI, Responses, or Anthropic endpoint.",
@@ -513,7 +521,7 @@ def apply_channel_setup(
         _ensure_api_port(channels_cfg)
         channels_cfg["weixin"] = _weixin_channel_config(selection)
 
-    config_file.write_text(yaml.safe_dump(config, sort_keys=False, allow_unicode=False), encoding="utf-8")
+    write_secret_file(config_file, yaml.safe_dump(config, sort_keys=False, allow_unicode=False))
     return {
         "channel": normalized,
         "config_path": str(config_file),
@@ -951,13 +959,7 @@ def _collect_init_selection_core(surface: InitPromptSurface) -> InitSelection:
     provider = surface.select_option(
         "Provider",
         KNOWN_PROVIDERS,
-        descriptions={
-            PROVIDER_OPENAI: "GPT family via the OpenAI platform.",
-            PROVIDER_DEEPSEEK: "DeepSeek chat and coding models.",
-            PROVIDER_QWEN: "Qwen models via DashScope-compatible APIs.",
-            PROVIDER_ANTHROPIC: "Claude models via Anthropic Messages.",
-            PROVIDER_CUSTOM: "Bring your own OpenAI, Responses, or Anthropic endpoint.",
-        },
+        descriptions=_PROVIDER_DESCRIPTIONS,
         subtitle="Choose the model provider to configure.",
     )
     model_api = ""
@@ -967,11 +969,7 @@ def _collect_init_selection_core(surface: InitPromptSurface) -> InitSelection:
         selected_model = surface.select_model_option(
             "OpenAI Model",
             OPENAI_MODELS,
-            descriptions={
-                "gpt-5.6-terra": "Recommended everyday default — balance of quality and cost.",
-                "gpt-5.6-luna": "Cost-sensitive / high-volume (heartbeat, diary, light chat).",
-                "gpt-5.6-sol": "Frontier capability for complex reasoning and coding.",
-            },
+            descriptions=OPENAI_MODEL_DESCRIPTIONS,
             default_index=0,
         )
         base_url = OPENAI_BASE_URL
@@ -1136,6 +1134,10 @@ def init_agent_directory(
 ) -> InitResult:
     resolved_dir = Path(config_dir or BaseAgentConfig.DEFAULT_CONFIG_DIR).expanduser().resolve()
     resolved_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        resolved_dir.chmod(CONFIG_DIR_MODE)
+    except OSError:
+        pass
     config_file = resolved_dir / BaseAgentConfig.CONFIG_FILENAME
     identity_file = resolved_dir / BaseAgentConfig.IDENTITY_FILENAME
     memory_dir = resolved_dir / BaseAgentConfig.MEMORY_DIRNAME
@@ -1180,7 +1182,7 @@ def init_agent_directory(
 
     selection = selection or _default_init_selection()
     port = allocate_api_port(root=registry_root)
-    config_file.write_text(_config_yaml(selection, port=port), encoding="utf-8")
+    write_secret_file(config_file, _config_yaml(selection, port=port))
     identity_file.write_text(selection.identity, encoding="utf-8")
 
     if not quiet:

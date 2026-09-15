@@ -6,6 +6,8 @@ import logging
 from pathlib import Path
 from typing import Any, Optional
 
+from ...core.runtime import ScheduledDeliveryContext, scheduled_delivery_context
+from ...integrations.api.constants import CHANNEL_API
 from ...schemas.attachment import dedupe_attachments
 from ...utils.image_utils import workspace_blob_relative_path
 from ..base import BaseAgentRunner
@@ -70,6 +72,17 @@ def _format_cli_attachments(attachments: Any, workspace_dir: str | Path | None) 
 
 def _default_cli_user_id() -> str:
     return "cli_user"
+
+
+def _cli_delivery_context(user_id: str):
+    return scheduled_delivery_context(
+        ScheduledDeliveryContext(
+            channel=CHANNEL_API,
+            user_id=user_id,
+            target={"user_id": user_id},
+            metadata={"source": "cli"},
+        )
+    )
 
 
 class AgentCLI(BaseAgentRunner):
@@ -189,10 +202,11 @@ class AgentCLI(BaseAgentRunner):
         user_id: Optional[str] = None,
     ):
         user_id = user_id or _default_cli_user_id()
-        response = await self.agent(
-            user_message=message,
-            user_id=user_id,
-        )
+        with _cli_delivery_context(user_id):
+            response = await self.agent(
+                user_message=message,
+                user_id=user_id,
+            )
         return self._format_cli_output(response) if isinstance(response, str) else response
 
     def _format_cli_output(self, content: Any) -> str:
@@ -223,53 +237,54 @@ class AgentCLI(BaseAgentRunner):
     ) -> None:
         line_open = False
         line_has_streamed_text = False
-        async for event in self.agent.chat_events(
-            user_message=user_message,
-            user_id=user_id,
-            stream=stream,
-            channel="cli",
-            inbox_kind="user_turn",
-        ):
-            event_type = event.get("type")
-            if event_type == "message_start":
-                if line_open:
-                    print()
-                print("🤖 Agent: ", end="", flush=True)
-                line_open = True
-                line_has_streamed_text = False
-                continue
-            if event_type == "message_delta":
-                if not line_open:
+        with _cli_delivery_context(user_id):
+            async for event in self.agent.chat_events(
+                user_message=user_message,
+                user_id=user_id,
+                stream=stream,
+                channel="cli",
+                inbox_kind="user_turn",
+            ):
+                event_type = event.get("type")
+                if event_type == "message_start":
+                    if line_open:
+                        print()
                     print("🤖 Agent: ", end="", flush=True)
                     line_open = True
                     line_has_streamed_text = False
-                delta = self._format_cli_output(event.get("delta", ""))
-                if delta:
-                    print(delta, end="", flush=True)
-                    line_has_streamed_text = True
-                continue
-            if event_type == "message_done":
-                attachments_text = self._format_cli_event_attachments(event.get("attachments"))
-                if not line_open:
-                    print("🤖 Agent: ", end="", flush=True)
-                    line_open = True
-                if not line_has_streamed_text:
-                    content = event.get("content", "")
-                    if content:
-                        print(self._format_cli_output(content), end="", flush=True)
-                if line_open:
-                    print()
-                    line_open = False
-                if attachments_text:
-                    print(attachments_text)
-                line_has_streamed_text = False
-                continue
-            if event_type == "error":
-                if line_open:
-                    print()
-                    line_open = False
-                print(f"❌ {event.get('error', 'Agent processing error.')}")
-                continue
+                    continue
+                if event_type == "message_delta":
+                    if not line_open:
+                        print("🤖 Agent: ", end="", flush=True)
+                        line_open = True
+                        line_has_streamed_text = False
+                    delta = self._format_cli_output(event.get("delta", ""))
+                    if delta:
+                        print(delta, end="", flush=True)
+                        line_has_streamed_text = True
+                    continue
+                if event_type == "message_done":
+                    attachments_text = self._format_cli_event_attachments(event.get("attachments"))
+                    if not line_open:
+                        print("🤖 Agent: ", end="", flush=True)
+                        line_open = True
+                    if not line_has_streamed_text:
+                        content = event.get("content", "")
+                        if content:
+                            print(self._format_cli_output(content), end="", flush=True)
+                    if line_open:
+                        print()
+                        line_open = False
+                    if attachments_text:
+                        print(attachments_text)
+                    line_has_streamed_text = False
+                    continue
+                if event_type == "error":
+                    if line_open:
+                        print()
+                        line_open = False
+                    print(f"❌ {event.get('error', 'Agent processing error.')}")
+                    continue
 
         if line_open:
             print()
@@ -286,51 +301,52 @@ class AgentCLI(BaseAgentRunner):
         line_open = False
         line_has_streamed_text = False
 
-        async for event in self.agent.chat_events(
-            user_message=user_message,
-            user_id=user_id,
-            stream=stream,
-            channel="cli",
-            inbox_kind="user_turn",
-        ):
-            event_type = event.get("type")
-            if event_type == "message_start":
-                if line_open and console is not None:
-                    console.print()
-                if console is not None:
-                    console.print("[magenta]xAgent[/magenta]: ", end="")
-                line_open = True
-                line_has_streamed_text = False
-                continue
-            if event_type == "message_delta":
-                if not line_open and console is not None:
-                    console.print("[magenta]xAgent[/magenta]: ", end="")
+        with _cli_delivery_context(user_id):
+            async for event in self.agent.chat_events(
+                user_message=user_message,
+                user_id=user_id,
+                stream=stream,
+                channel="cli",
+                inbox_kind="user_turn",
+            ):
+                event_type = event.get("type")
+                if event_type == "message_start":
+                    if line_open and console is not None:
+                        console.print()
+                    if console is not None:
+                        console.print("[magenta]xAgent[/magenta]: ", end="")
                     line_open = True
                     line_has_streamed_text = False
-                delta = self._format_cli_output(event.get("delta", ""))
-                if delta and console is not None:
-                    console.print(delta, end="", markup=False, highlight=False, soft_wrap=True)
-                    line_has_streamed_text = True
-                continue
-            if event_type == "message_done":
-                attachments_text = self._format_cli_event_attachments(event.get("attachments"))
-                content = self._format_cli_output(event.get("content", ""))
-                if line_has_streamed_text:
-                    if console is not None:
-                        console.print()
-                elif content:
-                    ui.print_panel(content, title="xAgent", border_style="green")
-                else:
-                    ui.print_panel("", title="xAgent", border_style="green")
-                if attachments_text:
-                    ui.print_panel(attachments_text, title="Attachments")
-                line_open = False
-                line_has_streamed_text = False
-                continue
-            if event_type == "error":
-                ui.print_panel(event.get("error", "Agent processing error."), title="Error", border_style="red")
-                line_open = False
-                line_has_streamed_text = False
+                    continue
+                if event_type == "message_delta":
+                    if not line_open and console is not None:
+                        console.print("[magenta]xAgent[/magenta]: ", end="")
+                        line_open = True
+                        line_has_streamed_text = False
+                    delta = self._format_cli_output(event.get("delta", ""))
+                    if delta and console is not None:
+                        console.print(delta, end="", markup=False, highlight=False, soft_wrap=True)
+                        line_has_streamed_text = True
+                    continue
+                if event_type == "message_done":
+                    attachments_text = self._format_cli_event_attachments(event.get("attachments"))
+                    content = self._format_cli_output(event.get("content", ""))
+                    if line_has_streamed_text:
+                        if console is not None:
+                            console.print()
+                    elif content:
+                        ui.print_panel(content, title="xAgent", border_style="green")
+                    else:
+                        ui.print_panel("", title="xAgent", border_style="green")
+                    if attachments_text:
+                        ui.print_panel(attachments_text, title="Attachments")
+                    line_open = False
+                    line_has_streamed_text = False
+                    continue
+                if event_type == "error":
+                    ui.print_panel(event.get("error", "Agent processing error."), title="Error", border_style="red")
+                    line_open = False
+                    line_has_streamed_text = False
 
         if line_open and console is not None:
             console.print()

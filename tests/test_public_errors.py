@@ -6,14 +6,20 @@ import unittest
 from unittest.mock import patch
 
 from xagent.core.errors import (
+    ERROR_AUTH_FAILED,
     ERROR_EMPTY_RESPONSE,
     ERROR_INTERNAL,
+    ERROR_MODEL_NOT_FOUND,
     ERROR_MODEL_UNAVAILABLE,
+    ERROR_NETWORK,
+    ERROR_QUOTA_EXCEEDED,
     ERROR_TIMEOUT,
     DEFAULT_MESSAGES,
     build_public_error,
+    is_retryable_model_exception,
     map_model_error,
     map_model_error_code,
+    model_error_code_from_exception,
 )
 from xagent.core.handlers.model import ModelErrorEvent
 
@@ -36,6 +42,10 @@ class PublicErrorSurfaceTests(unittest.TestCase):
         self.assertEqual(map_model_error_code("model_call_failed"), ERROR_MODEL_UNAVAILABLE)
         self.assertEqual(map_model_error_code("model_stream_failed"), ERROR_MODEL_UNAVAILABLE)
         self.assertEqual(map_model_error_code("model_stream_error"), ERROR_MODEL_UNAVAILABLE)
+        self.assertEqual(map_model_error_code("model_auth_failed"), ERROR_AUTH_FAILED)
+        self.assertEqual(map_model_error_code("model_quota_exceeded"), ERROR_QUOTA_EXCEEDED)
+        self.assertEqual(map_model_error_code("model_not_found"), ERROR_MODEL_NOT_FOUND)
+        self.assertEqual(map_model_error_code("model_network_error"), ERROR_NETWORK)
         self.assertEqual(map_model_error_code("empty_model_response"), ERROR_EMPTY_RESPONSE)
         self.assertEqual(map_model_error_code("empty_stream_response"), ERROR_EMPTY_RESPONSE)
         self.assertEqual(map_model_error_code("unknown_code"), ERROR_MODEL_UNAVAILABLE)
@@ -49,6 +59,27 @@ class PublicErrorSurfaceTests(unittest.TestCase):
             ),
             ERROR_EMPTY_RESPONSE,
         )
+
+    def test_classify_provider_exceptions(self):
+        class StatusError(Exception):
+            def __init__(self, status_code):
+                super().__init__(f"HTTP {status_code}")
+                self.status_code = status_code
+
+        self.assertEqual(model_error_code_from_exception(StatusError(401)), "model_auth_failed")
+        self.assertEqual(model_error_code_from_exception(StatusError(403)), "model_auth_failed")
+        self.assertEqual(model_error_code_from_exception(StatusError(402)), "model_quota_exceeded")
+        self.assertEqual(model_error_code_from_exception(StatusError(429)), "model_quota_exceeded")
+        self.assertEqual(model_error_code_from_exception(StatusError(404)), "model_not_found")
+        self.assertEqual(model_error_code_from_exception(StatusError(500)), "model_call_failed")
+        self.assertEqual(model_error_code_from_exception(ConnectionError("down")), "model_network_error")
+        self.assertEqual(model_error_code_from_exception(RuntimeError("provider rejected messages")), "model_call_failed")
+        self.assertTrue(is_retryable_model_exception(ConnectionError("down")))
+        self.assertTrue(is_retryable_model_exception(StatusError(429)))
+        self.assertTrue(is_retryable_model_exception(StatusError(503)))
+        self.assertFalse(is_retryable_model_exception(StatusError(401)))
+        self.assertFalse(is_retryable_model_exception(StatusError(404)))
+        self.assertFalse(is_retryable_model_exception(RuntimeError("provider rejected messages")))
 
     def test_build_public_error_hides_cause_from_payload(self):
         payload = build_public_error(

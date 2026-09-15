@@ -126,9 +126,13 @@ class AgentEditSetupHelperTests(unittest.TestCase):
         self.assertEqual(config["provider"]["model"], "deepseek-v4-pro")
         self.assertNotIn("supports_vision", config["provider"])
         self.assertFalse(schema["model"]["current"]["supports_vision"])
-        self.assertIn(
-            "deepseek-v4-flash-vision-exp",
+        self.assertEqual(
+            schema["model"]["models"]["openai"],
+            ["gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-6-astra"],
+        )
+        self.assertEqual(
             schema["model"]["models"]["deepseek"],
+            ["deepseek-flash", "deepseek-v4-pro"],
         )
 
 

@@ -48,11 +48,18 @@ def register_api_proxy(
 
         return handler
 
-    for route_path in ("/chat", "/chat/stop", "/observe", "/health", "/i/health"):
+    for route_path in ("/chat", "/chat/stop", "/observe"):
         app.add_api_route(
             route_path,
             _make_root_proxy(route_path),
-            methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
+            methods=["POST", "OPTIONS"],
+            include_in_schema=False,
+        )
+    for route_path in ("/health", "/i/health"):
+        app.add_api_route(
+            route_path,
+            _make_root_proxy(route_path),
+            methods=["GET", "HEAD", "OPTIONS"],
             include_in_schema=False,
         )
 

@@ -54,9 +54,12 @@ VISION_CAPABLE_PROVIDERS = frozenset({
 
 # Exact (provider, model) overrides that differ from the provider default.
 # Delete a row when that model ID starts accepting images; do not use prefixes
-# (e.g. "flash") or vision-capable SKUs like deepseek-v4-flash-vision-exp are hit.
+# (e.g. "flash") or vision-capable SKUs like deepseek-flash are hit.
+# OpenAI latest chat models (GPT-6 Astra, GPT-5.6 Terra/Luna/Sol) all accept
+# images and inherit the provider default — no per-model rows.
+# deepseek-v4-flash / deepseek-v4-flash-vision-exp are retired aliases that
+# DeepSeek now serves with V4.1-Flash, so they inherit the provider default.
 VISION_MODEL_OVERRIDES: dict[tuple[str, str], bool] = {
-    (PROVIDER_DEEPSEEK, "deepseek-v4-flash"): False,
     (PROVIDER_DEEPSEEK, "deepseek-v4-pro"): False,
     (PROVIDER_DEEPSEEK, "deepseek-chat"): False,
     (PROVIDER_DEEPSEEK, "deepseek-reasoner"): False,

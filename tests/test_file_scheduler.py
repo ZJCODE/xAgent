@@ -856,14 +856,19 @@ class ScheduledTaskTests(unittest.TestCase):
         async def run_test():
             with tempfile.TemporaryDirectory() as tmpdir:
                 tool = create_schedule_task_tool(tasks_dir=tmpdir)
-                result = await tool(
-                    action="create",
-                    task_type="message",
-                    content="hey",
-                    interval_seconds=600,
-                    duration_seconds=18000,
-                    title="Hey reminder",
-                )
+                with scheduled_delivery_context(ScheduledDeliveryContext(
+                    channel="api",
+                    user_id="alice",
+                    target={"user_id": "alice"},
+                )):
+                    result = await tool(
+                        action="create",
+                        task_type="message",
+                        content="hey",
+                        interval_seconds=600,
+                        duration_seconds=18000,
+                        title="Hey reminder",
+                    )
                 records = list_task_records(tmpdir)
 
             self.assertTrue(result["ok"])
@@ -879,13 +884,18 @@ class ScheduledTaskTests(unittest.TestCase):
         async def run_test():
             with tempfile.TemporaryDirectory() as tmpdir:
                 tool = create_schedule_task_tool(tasks_dir=tmpdir)
-                created = await tool(
-                    action="create",
-                    task_type="message",
-                    content="记得走路",
-                    recurrence=[{"kind": "weekly", "time": "10:00:00", "weekdays": ["wed", "fri"]}],
-                    title="走路提醒",
-                )
+                with scheduled_delivery_context(ScheduledDeliveryContext(
+                    channel="api",
+                    user_id="alice",
+                    target={"user_id": "alice"},
+                )):
+                    created = await tool(
+                        action="create",
+                        task_type="message",
+                        content="记得走路",
+                        recurrence=[{"kind": "weekly", "time": "10:00:00", "weekdays": ["wed", "fri"]}],
+                        title="走路提醒",
+                    )
                 listed = await tool(action="list")
                 deleted = await tool(action="delete", task_id=created["task"]["task_id"])
                 listed_again = await tool(action="list")
@@ -903,6 +913,40 @@ class ScheduledTaskTests(unittest.TestCase):
             self.assertEqual(listed_again["total"], 0)
 
         asyncio.run(run_test())
+
+    def test_manage_scheduled_tasks_create_without_context_is_rejected(self):
+        async def run_test():
+            with tempfile.TemporaryDirectory() as tmpdir:
+                tool = create_schedule_task_tool(tasks_dir=tmpdir)
+                result = await tool(
+                    action="create",
+                    task_type="message",
+                    content="喝水",
+                    delay_seconds=60,
+                )
+                records = list_task_records(tmpdir)
+
+            self.assertFalse(result["ok"])
+            self.assertIn("No active delivery channel", result["error"])
+            self.assertEqual(records, [])
+
+        asyncio.run(run_test())
+
+    def test_api_dispatcher_adopts_local_and_unspecified_channels(self):
+        from types import SimpleNamespace
+
+        from xagent.integrations.api.task_dispatch import TaskDispatchService
+
+        service = TaskDispatchService(
+            agent=SimpleNamespace(),
+            chat=SimpleNamespace(),
+            delivery=SimpleNamespace(),
+        )
+        self.assertTrue(service.can_handle(SimpleNamespace(kind="task", delivery_channel="api")))
+        self.assertTrue(service.can_handle(SimpleNamespace(kind="task", delivery_channel="local")))
+        self.assertTrue(service.can_handle(SimpleNamespace(kind="task", delivery_channel="")))
+        self.assertFalse(service.can_handle(SimpleNamespace(kind="task", delivery_channel="feishu")))
+        self.assertFalse(service.can_handle(SimpleNamespace(kind="job", delivery_channel="api")))
 
     def test_manage_scheduled_tasks_validates_required_time_and_content(self):
         async def run_test():

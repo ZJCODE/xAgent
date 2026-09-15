@@ -43,7 +43,9 @@ class TaskDispatchService:
     def can_handle(self, task) -> bool:
         if task.kind != "task":
             return False
-        return task.delivery_channel == CHANNEL_API
+        # ``local`` records predate channel-scoped delivery; the api channel is
+        # the default home surface, so it adopts them instead of leaving them undeliverable.
+        return task.delivery_channel in (CHANNEL_API, "", "local")
 
     async def dispatch(self, task) -> None:
         result = await self._scheduled_task_result(task)
@@ -109,7 +111,7 @@ class TaskDispatchService:
                     chat_events,
                     prompt=prompt,
                     user_id=user_id,
-                    channel=task.delivery_channel or CHANNEL_API,
+                    channel=CHANNEL_API if task.delivery_channel in (CHANNEL_API, "", "local") else task.delivery_channel,
                     deadline=deadline,
                 )
         finally:

@@ -1143,6 +1143,10 @@ def handle_doctor(args: argparse.Namespace) -> int:
     print(f"Runtime dir: {config_dir}")
     if config_file.is_file():
         print(f"Config: ok ({config_file})")
+        mode = config_file.stat().st_mode & 0o777
+        if mode & 0o077:
+            print(f"Config permissions: too open ({oct(mode)}); expected 600")
+            ok = False
     else:
         print(f"Config: missing ({config_file})")
         ok = False
@@ -1194,8 +1198,42 @@ def handle_doctor(args: argparse.Namespace) -> int:
             print(f"Voice: {exc}")
             ok = False
     if args.online:
-        print("Online checks are not implemented yet.")
+        online_ok, online_message = _provider_online_check(config)
+        print(online_message)
+        if not online_ok:
+            ok = False
     return 0 if ok else 1
+
+
+def _provider_online_check(config: dict[str, Any]) -> tuple[bool, str]:
+    """Ping the configured provider without writing a conversation."""
+    from ...core.providers import provider_base_url
+    from ...tools.search_tool import is_placeholder_api_key
+
+    provider_cfg = config.get("provider") if isinstance(config.get("provider"), dict) else {}
+    api_key = str(provider_cfg.get("api_key") or "").strip()
+    if is_placeholder_api_key(api_key):
+        return False, "Provider: missing or placeholder api_key"
+
+    base_url = str(provider_cfg.get("base_url") or "").strip().rstrip("/")
+    if not base_url:
+        base_url = provider_base_url(str(provider_cfg.get("name") or "")).rstrip("/")
+    url = f"{base_url}/models"
+    try:
+        import httpx
+
+        response = httpx.get(
+            url,
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=10.0,
+        )
+    except Exception as exc:
+        return False, f"Provider: could not reach {url} ({exc})"
+    if response.status_code in (401, 403):
+        return False, "Provider: API key rejected"
+    if 200 <= response.status_code < 300:
+        return True, "Provider: ok"
+    return True, f"Provider: reachable (HTTP {response.status_code} from /models)"
 
 
 def handle_version(_args: argparse.Namespace) -> int:

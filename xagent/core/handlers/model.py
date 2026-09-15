@@ -3,9 +3,10 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, AsyncGenerator, Awaitable, Callable, Optional, Union
 
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_exception, wait_exponential
 
 from ..config import AgentConfig, ReplyType
+from ..errors import is_retryable_model_exception, model_error_code_from_exception
 from ..providers import (
     MODEL_API_ANTHROPIC_MESSAGES,
     MODEL_API_OPENAI_CHAT_COMPLETIONS,
@@ -106,6 +107,17 @@ class ModelErrorEvent:
     details: Optional[str] = None
 
 
+def _model_error_event(exc: BaseException, *, stream: bool = False) -> ModelErrorEvent:
+    code = model_error_code_from_exception(exc)
+    if stream and code == "model_call_failed":
+        code = "model_stream_failed"
+    return ModelErrorEvent(
+        code=code,
+        message="Model stream failed." if stream else "Model call failed.",
+        details=str(exc),
+    )
+
+
 @dataclass
 class ModelStreamEvent:
     """Provider-neutral streaming event emitted by a single model response."""
@@ -135,10 +147,6 @@ class ModelClient:
         self.max_tokens = max_tokens
         self.reasoning = reasoning
 
-    @retry(
-        stop=stop_after_attempt(AgentConfig.RETRY_ATTEMPTS),
-        wait=wait_exponential(multiplier=1, min=AgentConfig.RETRY_MIN_WAIT, max=AgentConfig.RETRY_MAX_WAIT)
-    )
     async def call(
         self,
         messages: list,
@@ -160,52 +168,73 @@ class ModelClient:
             Tuple of (ReplyType, response_object).
         """
         try:
-            if self.model_api == MODEL_API_ANTHROPIC_MESSAGES:
-                response = await self.client.messages.create(
-                    **self._build_anthropic_create_params(
-                        messages=messages,
-                        tool_specs=tool_specs,
-                        instructions=instructions,
-                        stream=stream,
-                    )
-                )
-                if stream:
-                    return await self._handle_anthropic_stream(response, store_reply)
-                return self._handle_anthropic_non_stream(response)
+            return await self._call_once(
+                messages,
+                tool_specs,
+                instructions=instructions,
+                stream=stream,
+                store_reply=store_reply,
+            )
+        except Exception as e:
+            logger.exception("Model call failed: %s", e)
+            return ReplyType.ERROR, _model_error_event(e)
 
-            if self.model_api == MODEL_API_OPENAI_RESPONSES:
-                response = await self.client.responses.create(
-                    **self._build_responses_create_params(
-                        messages=messages,
-                        tool_specs=tool_specs,
-                        instructions=instructions,
-                        stream=stream,
-                    )
-                )
-                if stream:
-                    return await self._handle_responses_stream(response, store_reply)
-                return self._handle_responses_non_stream(response)
-
-            response = await self.client.chat.completions.create(
-                **self._build_create_params(
+    @retry(
+        stop=lambda retry_state: retry_state.attempt_number >= AgentConfig.RETRY_ATTEMPTS,
+        wait=lambda retry_state: wait_exponential(
+            multiplier=1,
+            min=AgentConfig.RETRY_MIN_WAIT,
+            max=AgentConfig.RETRY_MAX_WAIT,
+        )(retry_state),
+        retry=retry_if_exception(is_retryable_model_exception),
+        reraise=True,
+    )
+    async def _call_once(
+        self,
+        messages: list,
+        tool_specs: Optional[list],
+        instructions: Optional[Union[str, list[dict]]] = None,
+        stream: bool = False,
+        store_reply: Optional[Callable[..., Awaitable]] = None,
+    ) -> tuple[ReplyType, object]:
+        if self.model_api == MODEL_API_ANTHROPIC_MESSAGES:
+            response = await self.client.messages.create(
+                **self._build_anthropic_create_params(
                     messages=messages,
                     tool_specs=tool_specs,
                     instructions=instructions,
                     stream=stream,
                 )
             )
-
             if stream:
-                return await self._handle_stream(response, store_reply)
-            return self._handle_non_stream(response)
+                return await self._handle_anthropic_stream(response, store_reply)
+            return self._handle_anthropic_non_stream(response)
 
-        except Exception as e:
-            logger.exception("Model call failed: %s", e)
-            return ReplyType.ERROR, ModelErrorEvent(
-                code="model_call_failed",
-                message="Model call failed.",
-                details=str(e),
+        if self.model_api == MODEL_API_OPENAI_RESPONSES:
+            response = await self.client.responses.create(
+                **self._build_responses_create_params(
+                    messages=messages,
+                    tool_specs=tool_specs,
+                    instructions=instructions,
+                    stream=stream,
+                )
             )
+            if stream:
+                return await self._handle_responses_stream(response, store_reply)
+            return self._handle_responses_non_stream(response)
+
+        response = await self.client.chat.completions.create(
+            **self._build_create_params(
+                messages=messages,
+                tool_specs=tool_specs,
+                instructions=instructions,
+                stream=stream,
+            )
+        )
+
+        if stream:
+            return await self._handle_stream(response, store_reply)
+        return self._handle_non_stream(response)
 
     async def stream_turn(
         self,
@@ -279,11 +308,7 @@ class ModelClient:
             logger.exception("Model stream failed: %s", exc)
             yield ModelStreamEvent(
                 type="error",
-                error=ModelErrorEvent(
-                    code="model_stream_failed",
-                    message="Model stream failed.",
-                    details=str(exc),
-                ),
+                error=_model_error_event(exc, stream=True),
             )
 
     async def _non_stream_turn_events(

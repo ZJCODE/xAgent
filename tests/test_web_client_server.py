@@ -36,7 +36,7 @@ class WebClientServerTests(unittest.IsolatedAsyncioTestCase):
         )
         client = TestClient(server.app)
 
-        for path in ("/", "/memory", "/workspace", "/message", "/agent", "/skills", "/tasks"):
+        for path in ("/", "/chat", "/memory", "/workspace", "/message", "/agent", "/skills", "/tasks"):
             response = client.get(path)
             self.assertEqual(response.status_code, 200, path)
             self.assertIn("text/html", response.headers.get("content-type", ""))
@@ -143,7 +143,7 @@ class WebClientMultiAgentTests(unittest.IsolatedAsyncioTestCase):
         payload = response.json()
         self.assertIn("openai", {row["id"] for row in payload["providers"]})
         self.assertEqual(
-            ["gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6-sol"],
+            ["gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-6-astra"],
             payload["models"]["openai"],
         )
         self.assertTrue(all("Decide later" not in models for models in payload["models"].values()))

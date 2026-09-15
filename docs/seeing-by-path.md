@@ -108,7 +108,8 @@ No new memory write. No nested vision model. No skill load.
 - Heuristic auto-open of "the last image from this person" without `see_image`.
 - Giving diary maintenance vision.
 - Marking Anthropic (and any other actually capable provider) in `VISION_CAPABLE_PROVIDERS`. Adjacent, not this job.
-- DeepSeek is already in `VISION_CAPABLE_PROVIDERS` with deletable `VISION_MODEL_OVERRIDES` for IDs that still reject images (`deepseek-v4-flash`, `deepseek-v4-pro`, legacy aliases). When those IDs start accepting images, delete the override rows; do not migrate agent yaml.
+- OpenAI is in `VISION_CAPABLE_PROVIDERS`. Current catalog (`gpt-6-astra`, `gpt-5.6-terra` / `luna` / `sol`, plus older chat IDs) inherits the provider default — all accept images. Do not migrate agent yaml.
+- DeepSeek is in `VISION_CAPABLE_PROVIDERS`. Current Flash (`deepseek-flash`, plus retired aliases `deepseek-v4-flash` / `deepseek-v4-flash-vision-exp` now served by V4.1-Flash) accepts images. `VISION_MODEL_OVERRIDES` still disables `deepseek-v4-pro` and older chat/reasoner IDs. Do not migrate agent yaml.
 - Domain skills for *how* to read a class of image.
 - Changing inbound Web/API first-upload to compress on disk. Inject-time compress is enough for the eyes; on-disk original can stay.
 

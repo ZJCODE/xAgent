@@ -10,6 +10,10 @@ logger = logging.getLogger(__name__)
 
 # Stable public taxonomy exposed to clients.
 ERROR_INVALID_INPUT = "invalid_input"
+ERROR_AUTH_FAILED = "auth_failed"
+ERROR_QUOTA_EXCEEDED = "quota_exceeded"
+ERROR_MODEL_NOT_FOUND = "model_not_found"
+ERROR_NETWORK = "network_error"
 ERROR_MODEL_UNAVAILABLE = "model_unavailable"
 ERROR_EMPTY_RESPONSE = "empty_response"
 ERROR_TURN_EXHAUSTED = "turn_exhausted"
@@ -19,6 +23,10 @@ ERROR_INTERNAL = "internal"
 
 DEFAULT_MESSAGES: Mapping[str, str] = {
     ERROR_INVALID_INPUT: "Invalid input. Please check your request and try again.",
+    ERROR_AUTH_FAILED: "The provider rejected the API key. Check provider.api_key in config.yaml.",
+    ERROR_QUOTA_EXCEEDED: "The provider reported a quota or rate limit. Check your account balance.",
+    ERROR_MODEL_NOT_FOUND: "The provider does not recognize this model. Check provider.model.",
+    ERROR_NETWORK: "Could not reach the provider. Check provider.base_url and your network.",
     ERROR_MODEL_UNAVAILABLE: "Model request failed. Please try again.",
     ERROR_EMPTY_RESPONSE: "The model returned no response. Please try again.",
     ERROR_TURN_EXHAUSTED: "Sorry, I could not generate a response after multiple attempts.",
@@ -29,6 +37,10 @@ DEFAULT_MESSAGES: Mapping[str, str] = {
 
 STATUS_BY_CODE: Mapping[str, int] = {
     ERROR_INVALID_INPUT: 400,
+    ERROR_AUTH_FAILED: 401,
+    ERROR_QUOTA_EXCEEDED: 429,
+    ERROR_MODEL_NOT_FOUND: 404,
+    ERROR_NETWORK: 502,
     ERROR_MODEL_UNAVAILABLE: 502,
     ERROR_EMPTY_RESPONSE: 502,
     ERROR_TURN_EXHAUSTED: 503,
@@ -38,12 +50,18 @@ STATUS_BY_CODE: Mapping[str, int] = {
 }
 
 _MODEL_CODE_MAP: Mapping[str, str] = {
+    "model_auth_failed": ERROR_AUTH_FAILED,
+    "model_quota_exceeded": ERROR_QUOTA_EXCEEDED,
+    "model_not_found": ERROR_MODEL_NOT_FOUND,
+    "model_network_error": ERROR_NETWORK,
     "model_call_failed": ERROR_MODEL_UNAVAILABLE,
     "model_stream_failed": ERROR_MODEL_UNAVAILABLE,
     "model_stream_error": ERROR_MODEL_UNAVAILABLE,
     "empty_model_response": ERROR_EMPTY_RESPONSE,
     "empty_stream_response": ERROR_EMPTY_RESPONSE,
 }
+
+RETRYABLE_HTTP_STATUS_CODES = frozenset({408, 429, 500, 502, 503, 504})
 
 
 def new_error_id() -> str:
@@ -56,6 +74,45 @@ def map_model_error_code(model_code: Optional[str]) -> str:
     if not model_code:
         return ERROR_MODEL_UNAVAILABLE
     return _MODEL_CODE_MAP.get(str(model_code), ERROR_MODEL_UNAVAILABLE)
+
+
+def model_http_status(exc: BaseException) -> Optional[int]:
+    """Best-effort HTTP status from OpenAI/Anthropic/httpx-style exceptions."""
+    status = getattr(exc, "status_code", None)
+    if isinstance(status, int):
+        return status
+    response = getattr(exc, "response", None)
+    nested = getattr(response, "status_code", None) if response is not None else None
+    return nested if isinstance(nested, int) else None
+
+
+def model_error_code_from_exception(exc: BaseException) -> str:
+    """Map a provider SDK exception onto a stable internal model error code."""
+    status = model_http_status(exc)
+    if status in (401, 403):
+        return "model_auth_failed"
+    if status in (402, 429):
+        return "model_quota_exceeded"
+    if status == 404:
+        return "model_not_found"
+    if status is None and _looks_like_network_error(exc):
+        return "model_network_error"
+    return "model_call_failed"
+
+
+def is_retryable_model_exception(exc: BaseException) -> bool:
+    """Return whether tenacity should retry this provider exception."""
+    status = model_http_status(exc)
+    if status is not None:
+        return status in RETRYABLE_HTTP_STATUS_CODES
+    return _looks_like_network_error(exc)
+
+
+def _looks_like_network_error(exc: BaseException) -> bool:
+    if isinstance(exc, (ConnectionError, TimeoutError, OSError)):
+        return True
+    typename = type(exc).__name__.lower()
+    return any(hint in typename for hint in ("connect", "timeout", "network"))
 
 
 def map_model_error(error: Any) -> str:
