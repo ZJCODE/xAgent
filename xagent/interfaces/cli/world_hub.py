@@ -247,6 +247,71 @@ def create_world_on_disk(name: str, *, root: Optional[Path] = None) -> tuple[int
     return 0, {"id": config.world_id, "name": config.name}, ""
 
 
+def delete_world_on_hub(world_id: str, *, host: Optional[str] = None, port: Optional[int] = None) -> tuple[int, dict[str, Any], str]:
+    encoded = quote(str(world_id).strip(), safe="")
+    url = (
+        world_hub_public_url(host=host, port=port).rstrip("/")
+        + f"/worlds/{encoded}/delete?confirm={encoded}"
+    )
+    return _http_json("GET", url, timeout=5.0)
+
+
+def delete_world_on_disk(world_id: str, *, root: Optional[Path] = None) -> tuple[int, dict[str, Any], str]:
+    from agents_world.paths import remove_world_dir, validate_world_id
+
+    data_root = (root or world_hub_runtime_root()).expanduser().resolve()
+    label = str(world_id or "").strip()
+    if not label:
+        return 1, {}, "world id is required"
+    try:
+        wid = validate_world_id(label)
+        removed = remove_world_dir(wid, root=data_root)
+    except FileNotFoundError as exc:
+        return 1, {}, str(exc)
+    except ValueError as exc:
+        return 1, {}, str(exc)
+    return 0, {"id": wid, "deleted": True, "path": str(removed)}, ""
+
+
+def _confirm_world_delete(world_id: str, path: Path, *, assume_yes: bool) -> bool:
+    if assume_yes:
+        return True
+    if not sys.stdin.isatty():
+        print("Refusing to delete without confirmation. Re-run with --yes to confirm.")
+        return False
+    prompt = (
+        f"Remove world {world_id!r} and delete all data at:\n"
+        f"{path}\n"
+        "This removes the event log and spoken files. Anyone present will be disconnected."
+    )
+    answer = input(f"{prompt}\nType {world_id!r} to confirm: ").strip()
+    return answer == world_id
+
+
+def clear_local_presence_for_world(world_id: str) -> list[str]:
+    """Stop local agents from auto-rejoining a world that no longer exists."""
+    cleared: list[str] = []
+    registry = load_agent_registry_or_empty()
+    for name, entry in sorted(registry.agents.items()):
+        presence = read_world_presence(entry.path)
+        if not presence:
+            continue
+        recorded = str(presence.get("world_id") or "").strip() or world_id_from_url(
+            str(presence.get("world_url") or "")
+        )
+        if recorded != world_id:
+            continue
+        if presence.get("want_present") and running_pid(managed_paths(entry.path, CHANNEL_API).pid_path) is not None:
+            _http_json(
+                "POST",
+                agent_api_public_url(entry.path).rstrip("/") + "/world/leave",
+                timeout=2.0,
+            )
+        mark_world_left(entry.path)
+        cleared.append(name)
+    return cleared
+
+
 def _resolved_hub_bind(args: argparse.Namespace) -> tuple[str, int]:
     cfg = world_hub_config()
     host = str(getattr(args, "host", None) or cfg["host"] or DEFAULT_WORLD_HOST).strip() or DEFAULT_WORLD_HOST
@@ -533,6 +598,55 @@ def handle_world_create(args: argparse.Namespace) -> int:
         print(f"Error: {error or 'failed to create world'}")
         return code
     print(json.dumps({"id": payload.get("id"), "name": payload.get("name")}, ensure_ascii=False))
+    return 0
+
+
+def handle_world_remove(args: argparse.Namespace) -> int:
+    from agents_world.paths import validate_world_id, world_data_dir
+
+    world_id = str(getattr(args, "world", "") or getattr(args, "world_id", "") or "").strip()
+    if not world_id:
+        print("Error: world id is required")
+        return 1
+    try:
+        world_id = validate_world_id(world_id)
+    except ValueError as exc:
+        print(f"Error: {exc}")
+        return 1
+
+    host, port = _resolved_hub_bind(args)
+    known = {str(item.get("id") or "") for item in list_world_summaries(host=host, port=port)}
+    data_root = world_hub_runtime_root()
+    data_dir = world_data_dir(world_id, root=data_root)
+    if world_id not in known and not data_dir.exists():
+        print(f"Error: unknown world {world_id!r}. List worlds with: xagent world list")
+        return 1
+
+    if not _confirm_world_delete(world_id, data_dir, assume_yes=bool(getattr(args, "yes", False))):
+        print("Remove cancelled.")
+        return 1
+
+    if world_hub_is_running() and wait_for_world_hub(host=host, port=port, timeout=1.0):
+        status, payload, error = delete_world_on_hub(world_id, host=host, port=port)
+        if status == 200:
+            cleared = clear_local_presence_for_world(world_id)
+            print(json.dumps({"id": payload.get("id") or world_id, "deleted": True}, ensure_ascii=False))
+            for agent_name in cleared:
+                print(f"{agent_name}: recorded leave from {world_id}")
+            return 0
+        if status != 404:
+            message = payload.get("error") or error or f"HTTP {status}"
+            print(f"Error: {message}")
+            return 1
+
+    code, payload, error = delete_world_on_disk(world_id)
+    if code != 0:
+        print(f"Error: {error or 'failed to delete world'}")
+        return code
+    cleared = clear_local_presence_for_world(world_id)
+    print(json.dumps({"id": payload.get("id") or world_id, "deleted": True}, ensure_ascii=False))
+    for agent_name in cleared:
+        print(f"{agent_name}: recorded leave from {world_id}")
     return 0
 
 

@@ -12,7 +12,7 @@ from urllib.parse import quote
 
 from . import DEFAULT_HOST, DEFAULT_PORT, __version__
 from .config import WorldConfig
-from .paths import allocate_world_id, list_world_ids, world_data_dir
+from .paths import allocate_world_id, list_world_ids, remove_world_dir, world_data_dir
 from .store import open_store_for_world
 
 
@@ -36,6 +36,14 @@ def main(argv: Optional[list[str]] = None) -> int:
     create_p = sub.add_parser("create", help="Create a world on disk (no server)")
     create_p.add_argument("--name", required=True, help="World display name")
     create_p.add_argument(
+        "--data-root",
+        default="",
+        help="Override data root (default: ~/.xagent)",
+    )
+
+    remove_p = sub.add_parser("remove", help="Delete a world on disk (no server)")
+    remove_p.add_argument("--world-id", required=True, help="World to delete")
+    remove_p.add_argument(
         "--data-root",
         default="",
         help="Override data root (default: ~/.xagent)",
@@ -80,6 +88,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         return asyncio.run(_cmd_serve(args))
     if args.command == "create":
         return _cmd_create(args)
+    if args.command == "remove":
+        return _cmd_remove(args)
     if args.command == "join":
         return asyncio.run(_cmd_join(args))
     if args.command == "dummy":
@@ -109,6 +119,24 @@ def _cmd_create(args: argparse.Namespace) -> int:
     store = open_store_for_world(config, root=root or None)
     store.close()
     print(json.dumps({"id": config.world_id, "name": config.name}))
+    return 0
+
+
+def _cmd_remove(args: argparse.Namespace) -> int:
+    root = args.data_root or None
+    world_id = str(args.world_id or "").strip()
+    if not world_id:
+        print("world_id is required", file=sys.stderr)
+        return 1
+    try:
+        removed = remove_world_dir(world_id, root=root)
+    except FileNotFoundError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    print(json.dumps({"id": world_id, "deleted": True, "path": str(removed)}))
     return 0
 
 

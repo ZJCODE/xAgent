@@ -17,7 +17,14 @@ from .clock import Clock, default_clock
 from .config import WorldConfig
 from .http import process_http_request
 from .models import ClientMessage, encode_error
-from .paths import allocate_world_id, list_world_ids, resolve_data_root, validate_world_id, world_data_dir
+from .paths import (
+    allocate_world_id,
+    list_world_ids,
+    remove_world_dir,
+    resolve_data_root,
+    validate_world_id,
+    world_data_dir,
+)
 from .store import WorldStore, open_store_for_world
 from .world import World
 
@@ -66,7 +73,7 @@ class WorldHub:
                     "id": world.world_id,
                     "name": world.store.name,
                     "latest_seq": world.store.max_seq(),
-                    "present_count": len(world.store.list_present()),
+                    "present_count": len(world.list_live_present()),
                 }
             )
         return out
@@ -87,6 +94,23 @@ class WorldHub:
         world = World(store, config, clock=self.clock)
         self._worlds[wid] = world
         return world
+
+    async def delete_world(self, world_id: str) -> dict[str, Any]:
+        """Drop a world from the hub and delete its directory.
+
+        Connected inhabitants are disconnected. The id is then free for create.
+        """
+        wid = validate_world_id(world_id)
+        world = self._worlds.pop(wid, None)
+        if world is not None:
+            world.disconnect_all(code="world_gone", message=f"world deleted: {wid}")
+            await world.close()
+        data_dir = world_data_dir(wid, root=self.data_root)
+        if world is None and not data_dir.exists():
+            raise FileNotFoundError(f"unknown world: {wid}")
+        if data_dir.exists():
+            remove_world_dir(wid, root=self.data_root)
+        return {"id": wid, "deleted": True}
 
     def _load_existing(self) -> None:
         for world_id in list_world_ids(root=self.data_root):

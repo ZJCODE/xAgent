@@ -177,6 +177,11 @@ class WorldStore:
         ).fetchone()
         return row is not None
 
+    def clear_presence(self) -> None:
+        """Nobody is here until they join this process. Crash/restart must not ghost people."""
+        self._conn.execute("UPDATE presence SET present = 0")
+        self._commit()
+
     def files_dir(self) -> Path:
         path = self.db_path.parent / "files"
         path.mkdir(parents=True, exist_ok=True)

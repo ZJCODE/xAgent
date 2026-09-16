@@ -33,6 +33,7 @@ export default defineConfig({
     port: 5174,
     proxy: {
       "/neighbors": "http://127.0.0.1:7182",
+      "/worlds": "http://127.0.0.1:7182",
       "/files": "http://127.0.0.1:7182",
     },
   },

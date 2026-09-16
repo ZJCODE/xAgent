@@ -68,6 +68,7 @@ class WorldInhabitant:
         self.logger = logger or logging.getLogger(self.__class__.__name__)
         self.world_url = ""
         self.world_id = ""
+        self.world_name = ""
         self._client: Optional[WorldClient] = None
         self._task: Optional[asyncio.Task[None]] = None
         self._recent: list[dict[str, Any]] = []
@@ -75,6 +76,7 @@ class WorldInhabitant:
         self._join_lock = asyncio.Lock()
         self._mind_lock = asyncio.Lock()
         self._speech_tasks: set[asyncio.Task[None]] = set()
+        self._entered = False
 
     @property
     def connected(self) -> bool:
@@ -85,6 +87,7 @@ class WorldInhabitant:
             "connected": self.connected,
             "world_url": self.world_url,
             "world_id": self.world_id,
+            "world_name": self.world_name,
             "member_id": self.member_id,
             "display_name": self.display_name,
         }
@@ -96,6 +99,7 @@ class WorldInhabitant:
             await self.leave()
             self.world_url = world_url
             self.world_id = ""
+            self.world_name = ""
             self._recent = []
             self._names = {}
             self._task = asyncio.create_task(self._run(), name=f"world-{self.member_id}")
@@ -111,6 +115,7 @@ class WorldInhabitant:
         if speech:
             await asyncio.gather(*speech, return_exceptions=True)
         client = self._client
+        await self._note_own_leave()
         if client is not None:
             try:
                 await client.leave()
@@ -243,7 +248,10 @@ class WorldInhabitant:
                 display_name=self.display_name,
             ) as client:
                 self._client = client
-                self.world_id = str((client.welcome or {}).get("world_id") or "")
+                welcome = client.welcome or {}
+                self.world_id = str(welcome.get("world_id") or "")
+                self.world_name = str(welcome.get("name") or self.world_id)
+                self._names[self.member_id] = self.display_name
                 await client.join()
                 async for msg in client.events():
                     await self._handle(msg)
@@ -253,6 +261,7 @@ class WorldInhabitant:
             self.logger.exception("world inhabitant disconnected: member_id=%s", self.member_id)
         finally:
             self._client = None
+            await self._note_own_leave()
 
     async def _handle(self, msg: dict[str, Any]) -> None:
         msg_type = msg.get("type")
@@ -264,6 +273,12 @@ class WorldInhabitant:
                 return
             self._recent = []
             self._remember(events)
+            self._names.setdefault(self.member_id, self.display_name)
+            self._entered = True
+            await self._observe(
+                {"actor_id": self.member_id, "kind": "join"},
+                event_type="join",
+            )
             return
         if msg_type != "event":
             return
@@ -310,6 +325,9 @@ class WorldInhabitant:
             if member_id:
                 self._names[member_id] = name or member_id
 
+    def _place_label(self) -> str:
+        return str(self.world_name or self.world_id or "the world").strip() or "the world"
+
     def _speaker_label(self, actor_id: str) -> str:
         actor = str(actor_id or "").strip()
         if not actor:
@@ -329,7 +347,7 @@ class WorldInhabitant:
                 if line:
                     lines.append(line)
             elif kind in {"join", "leave"}:
-                lines.append(f"[{kind}] {speaker}")
+                lines.append(_presence_line(speaker, str(kind), self._place_label()))
         return "\n".join(lines)
 
     async def _hear_utterance(self, event: dict[str, Any]) -> None:
@@ -368,12 +386,21 @@ class WorldInhabitant:
         except Exception:
             self.logger.exception("world hear failed: member_id=%s", self.member_id)
 
+    async def _note_own_leave(self) -> None:
+        if not self._entered:
+            return
+        self._entered = False
+        await self._observe(
+            {"actor_id": self.member_id, "kind": "leave"},
+            event_type="leave",
+        )
+
     async def _observe(self, event: dict[str, Any], *, event_type: str) -> None:
         text = str(event.get("text") or "").strip()
         actor = str(event.get("actor_id") or "")
         speaker = self._speaker_label(actor)
         if event_type in {"join", "leave"}:
-            context = f"{speaker} {event_type}ed"
+            context = _presence_line(speaker, event_type, self._place_label())
         elif text:
             context = f"{speaker}: {text}"
         else:
@@ -386,6 +413,7 @@ class WorldInhabitant:
                 event_type=event_type,
                 metadata={
                     "world_id": self.world_id,
+                    "world_name": self.world_name or self.world_id,
                     "actor_id": actor,
                     "sender_id": actor,
                     "sender_name": sender_name,
@@ -686,6 +714,16 @@ def _world_http_origin(world_url: str) -> str:
     if parsed.scheme and parsed.netloc:
         return f"{parsed.scheme}://{parsed.netloc}"
     return origin.rstrip("/")
+
+
+def _presence_line(speaker: str, kind: str, place: str) -> str:
+    who = str(speaker or "").strip() or "someone"
+    where = str(place or "").strip() or "the world"
+    if kind == "join":
+        return f"{who} joined {where}"
+    if kind == "leave":
+        return f"{who} left {where}"
+    return f"{who} {kind} {where}"
 
 
 def _attachment_names(raw: Any) -> list[str]:

@@ -15,6 +15,7 @@ from xagent.interfaces.cli import (
     handle_world_join,
     handle_world_leave,
     handle_world_list,
+    handle_world_remove,
     handle_world_start,
     handle_world_status,
     handle_world_stop,
@@ -26,6 +27,7 @@ from xagent.interfaces.cli.processes import StartResult, iter_managed_process_re
 from xagent.interfaces.cli.world_hub import (
     DEFAULT_WORLD_PORT,
     create_world_on_disk,
+    delete_world_on_disk,
     list_world_summaries_from_disk,
     restore_local_world_presence,
     world_hub_config,
@@ -64,12 +66,17 @@ class WorldCliTests(unittest.TestCase):
         chat = parser.parse_args(["world", "chat", "plaza"])
         self.assertEqual(chat.world, "plaza")
         self.assertEqual(chat.member_id, "human")
+        remove = parser.parse_args(["world", "remove", "plaza", "--yes"])
+        self.assertEqual(remove.handler, handle_world_remove)
+        self.assertEqual(remove.world, "plaza")
+        self.assertTrue(remove.yes)
         start_open = parser.parse_args(["world", "start", "--open"])
         self.assertTrue(start_open.open_browser)
         for command in (
             ["world", "status", "--open"],
             ["world", "list", "--open"],
             ["world", "create", "plaza", "--open"],
+            ["world", "remove", "plaza", "--open"],
             ["world", "join", "plaza", "--open"],
             ["world", "chat", "plaza", "--open"],
         ):
@@ -81,6 +88,7 @@ class WorldCliTests(unittest.TestCase):
         self.assertIn("world", help_text)
         self.assertIn("xagent world start", help_text)
         self.assertIn("xagent world join plaza", help_text)
+        self.assertIn("xagent world remove plaza", help_text)
 
     def test_launcher_options_include_world(self):
         titles = [option.title for option in _launcher_options(initialized=True)]
@@ -100,7 +108,7 @@ class WorldCliTests(unittest.TestCase):
             titles = [option.title for option in _world_hub_actions(Path(tmpdir))]
         self.assertEqual(
             titles,
-            ["Open", "Start", "Stop", "Restart", "Logs", "List", "Create", "Join", "Leave", "Chat", "Back"],
+            ["Open", "Start", "Stop", "Restart", "Logs", "Back"],
         )
 
     def test_world_hub_paths_are_machine_level(self):
@@ -214,6 +222,74 @@ class WorldCliTests(unittest.TestCase):
             self.assertEqual(exit_code, 0)
             listed = json.loads(stdout.getvalue())
             self.assertEqual(listed["worlds"][0]["id"], "plaza")
+
+    def test_remove_world_on_disk(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir).resolve()
+            code, payload, error = create_world_on_disk("plaza", root=root)
+            self.assertEqual(code, 0, error)
+            self.assertTrue((root / "worlds" / "plaza" / "world.sqlite3").is_file())
+
+            args = argparse.Namespace(world="plaza", host=None, port=None, yes=False)
+            with patch("xagent.interfaces.cli.world_hub.world_hub_is_running", return_value=False):
+                with patch("xagent.interfaces.cli.world_hub.world_hub_runtime_root", return_value=root):
+                    with patch("xagent.interfaces.cli.world_hub.fetch_hub_worlds", return_value=None):
+                        with patch("sys.stdin.isatty", return_value=False):
+                            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                                exit_code = handle_world_remove(args)
+            self.assertEqual(exit_code, 1)
+            self.assertIn("--yes", stdout.getvalue())
+            self.assertTrue((root / "worlds" / "plaza" / "world.sqlite3").is_file())
+
+            args.yes = True
+            with patch("xagent.interfaces.cli.world_hub.world_hub_is_running", return_value=False):
+                with patch("xagent.interfaces.cli.world_hub.world_hub_runtime_root", return_value=root):
+                    with patch("xagent.interfaces.cli.world_hub.fetch_hub_worlds", return_value=None):
+                        with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                            exit_code = handle_world_remove(args)
+            self.assertEqual(exit_code, 0)
+            removed = json.loads(stdout.getvalue().splitlines()[0])
+            self.assertEqual(removed["id"], "plaza")
+            self.assertTrue(removed["deleted"])
+            self.assertFalse((root / "worlds" / "plaza").exists())
+
+            code, payload, error = delete_world_on_disk("plaza", root=root)
+            self.assertEqual(code, 1)
+            self.assertIn("unknown world", error)
+
+            with patch("xagent.interfaces.cli.world_hub.world_hub_is_running", return_value=False):
+                with patch("xagent.interfaces.cli.world_hub.world_hub_runtime_root", return_value=root):
+                    with patch("xagent.interfaces.cli.world_hub.fetch_hub_worlds", return_value=None):
+                        with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                            exit_code = handle_world_remove(argparse.Namespace(world="plaza", host=None, port=None, yes=True))
+            self.assertEqual(exit_code, 1)
+            self.assertIn("unknown world", stdout.getvalue())
+
+    def test_remove_clears_local_presence(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir).resolve()
+            agent_dir = root / "agents" / "work"
+            _write_runtime(str(agent_dir))
+            create_world_on_disk("plaza", root=root)
+            mark_world_presence(
+                agent_dir,
+                world_url="ws://127.0.0.1:7182/ws/plaza",
+                member_id="work",
+                world_id="plaza",
+                want_present=True,
+            )
+            with patch("xagent.interfaces.cli.agents.BaseAgentConfig.DEFAULT_CONFIG_DIR", str(root)):
+                register_agent("work", title="Work", make_active=True)
+                args = argparse.Namespace(world="plaza", host=None, port=None, yes=True)
+                with patch("xagent.interfaces.cli.world_hub.world_hub_is_running", return_value=False):
+                    with patch("xagent.interfaces.cli.world_hub.world_hub_runtime_root", return_value=root):
+                        with patch("xagent.interfaces.cli.world_hub.fetch_hub_worlds", return_value=None):
+                            with patch("xagent.interfaces.cli.world_hub.running_pid", return_value=None):
+                                with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                                    exit_code = handle_world_remove(args)
+            self.assertEqual(exit_code, 0)
+            self.assertIn("recorded leave from plaza", stdout.getvalue())
+            self.assertFalse(read_world_presence(agent_dir)["want_present"])
 
     def test_join_requires_running_hub(self):
         with tempfile.TemporaryDirectory() as tmpdir:

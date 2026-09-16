@@ -43,6 +43,7 @@ interface WorldState {
   gateError: string;
   agentError: string;
   createError: string;
+  deleteError: string;
 }
 
 interface WorldContextValue extends WorldState {
@@ -56,10 +57,12 @@ interface WorldContextValue extends WorldState {
   removeFile: (id: string) => void;
   sending: boolean;
   creating: boolean;
+  deleting: boolean;
   sidebarOpen: boolean;
   setSidebarOpen: (value: boolean) => void;
   enterWorld: (worldId: string) => Promise<void>;
   createWorld: () => Promise<boolean>;
+  deleteWorld: (worldId: string) => Promise<boolean>;
   speak: () => Promise<void>;
   knockAgent: (agent: NeighborAgent, action: "join" | "leave") => Promise<void>;
   displayOf: (id: string) => string;
@@ -84,6 +87,7 @@ const initialState: WorldState = {
   gateError: "",
   agentError: "",
   createError: "",
+  deleteError: "",
 };
 
 function closeIfNarrow() {
@@ -98,6 +102,7 @@ export function WorldProvider({ children }: { children: ReactNode }) {
   const [attachError, setAttachError] = useState("");
   const [sending, setSending] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const seenRef = useRef(new Set<number>());
@@ -231,6 +236,21 @@ export function WorldProvider({ children }: { children: ReactNode }) {
           statusKind: "bad",
           joined: false,
           gateError: "This body is already present elsewhere",
+        }));
+        return;
+      }
+      if (msg.code === "world_gone") {
+        setState((prev) => ({
+          ...prev,
+          status: "Deleted",
+          statusKind: "bad",
+          joined: false,
+          connected: false,
+          worldId: "",
+          worldName: "Select a world",
+          present: [],
+          events: [],
+          gateError: "This world was deleted",
         }));
         return;
       }
@@ -420,6 +440,58 @@ export function WorldProvider({ children }: { children: ReactNode }) {
     }
   }, [createName, enterWorld, refreshWorlds]);
 
+  const deleteWorld = useCallback(async (worldId: string) => {
+    const targetId = worldId.trim();
+    if (!targetId) {
+      setState((prev) => ({ ...prev, deleteError: "World id is required" }));
+      return false;
+    }
+    setDeleting(true);
+    setState((prev) => ({ ...prev, deleteError: "" }));
+    try {
+      const params = new URLSearchParams({ confirm: targetId });
+      const res = await fetch(`/worlds/${encodeURIComponent(targetId)}/delete?${params.toString()}`);
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setState((prev) => ({
+          ...prev,
+          deleteError: String((body as { error?: string }).error || res.statusText || "Delete failed"),
+        }));
+        return false;
+      }
+      if (stateRef.current.worldId === targetId) {
+        disconnectSocket();
+      }
+      const worlds = await refreshWorlds();
+      setState((prev) => {
+        if (prev.worldId !== targetId) {
+          return { ...prev, worlds, deleteError: "" };
+        }
+        return {
+          ...prev,
+          worlds,
+          worldId: "",
+          worldName: "Select a world",
+          present: [],
+          events: [],
+          joined: false,
+          connected: false,
+          status: "idle",
+          statusKind: "",
+          gateError: "",
+          deleteError: "",
+        };
+      });
+      return true;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Delete failed";
+      setState((prev) => ({ ...prev, deleteError: message }));
+      return false;
+    } finally {
+      setDeleting(false);
+    }
+  }, [disconnectSocket, refreshWorlds]);
+
   const addFiles = useCallback((files: FileList | File[]) => {
     const incoming = Array.from(files);
     if (!incoming.length) return;
@@ -577,10 +649,12 @@ export function WorldProvider({ children }: { children: ReactNode }) {
       removeFile,
       sending,
       creating,
+      deleting,
       sidebarOpen,
       setSidebarOpen,
       enterWorld,
       createWorld,
+      deleteWorld,
       speak,
       knockAgent,
       displayOf,
@@ -594,9 +668,11 @@ export function WorldProvider({ children }: { children: ReactNode }) {
       attachError,
       sidebarOpen,
       creating,
+      deleting,
       sending,
       enterWorld,
       createWorld,
+      deleteWorld,
       speak,
       addFiles,
       removeFile,

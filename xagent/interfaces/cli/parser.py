@@ -37,7 +37,7 @@ class XAgentArgumentParser(argparse.ArgumentParser):
             "Use Now:",
             "  chat        Chat in the terminal",
             "  web         Manage the browser web UI",
-            "  world       Manage the shared world hub",
+            "  world       Start the shared world hub",
             "  voice       Use microphone / speaker mode for this session",
             "",
             "Keep Running:",
@@ -45,7 +45,7 @@ class XAgentArgumentParser(argparse.ArgumentParser):
             "  voice       Voice channel: start, stop, restart, status, logs",
             "  feishu      Feishu bot: setup, start, stop, restart, status, logs",
             "  weixin      Weixin DM: setup, start, stop, restart, status, logs",
-            "  world       World hub: start, stop, restart, status, logs, join, leave",
+            "  world       World hub: start, stop, restart, status, logs, join, leave, remove",
             "  status      Show all configured channel processes",
             "  processes   List or restart all managed background processes",
             "",
@@ -71,6 +71,7 @@ class XAgentArgumentParser(argparse.ArgumentParser):
             "  xagent world start",
             "  xagent world open",
             "  xagent world create plaza",
+            "  xagent world remove plaza",
             "  xagent world join plaza",
             "  xagent status",
             "  xagent api logs -f",
@@ -378,6 +379,12 @@ def _add_world_lifecycle_subparsers(parent_parser: argparse.ArgumentParser) -> N
     _add_world_bind_arguments(create_parser)
     create_parser.set_defaults(handler=world_hub.handle_world_create)
 
+    remove_parser = sub.add_parser("remove", help="Delete a world and its event log")
+    remove_parser.add_argument("world", help="World id to delete")
+    _add_world_bind_arguments(remove_parser)
+    remove_parser.add_argument("--yes", action="store_true", help="Confirm deletion without prompting")
+    remove_parser.set_defaults(handler=world_hub.handle_world_remove)
+
     join_parser = sub.add_parser("join", help="Invite an agent into a world")
     join_parser.add_argument("world", help="World id to join")
     _add_agent_argument(join_parser)
@@ -522,7 +529,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_web_lifecycle_subparsers(web_parser)
     _show_help_on_missing_action(web_parser)
 
-    world_parser = subparsers.add_parser("world", help="Manage the shared world hub")
+    world_parser = subparsers.add_parser("world", help="Start the shared world hub")
     _add_world_lifecycle_subparsers(world_parser)
     _show_help_on_missing_action(world_parser)
 

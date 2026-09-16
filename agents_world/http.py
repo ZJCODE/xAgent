@@ -1,7 +1,7 @@
 """HTTP sidecar on the hub port: page, world catalog, neighbors, files.
 
 This is not world physics. WebSocket upgrades to /ws/{world_id} continue into World.
-websockets does not read request bodies, so create uses path + query.
+websockets does not read request bodies, so create and delete use path + query.
 """
 
 from __future__ import annotations
@@ -81,6 +81,17 @@ async def process_http_request(
             return _not_found()
         return await _create_world(hub, name=_query_one(query, "name"))
 
+    # GET /worlds/{id}/delete?confirm={id}
+    raw_delete_id = _parse_world_delete_path(path)
+    if raw_delete_id is not None and method == "GET":
+        if hub is None:
+            return _not_found()
+        return await _delete_world(
+            hub,
+            world_id=raw_delete_id,
+            confirm=_query_one(query, "confirm"),
+        )
+
     world_file = _parse_world_file_path(path)
     if world_file is not None and method == "GET":
         return _world_file_response(hub, *world_file)
@@ -103,6 +114,13 @@ async def process_http_request(
 def _query_one(query: dict[str, list[str]], key: str) -> str:
     values = query.get(key) or []
     return str(values[0] if values else "").strip()
+
+
+def _parse_world_delete_path(path: str) -> Optional[str]:
+    parts = [p for p in path.split("/") if p]
+    if len(parts) != 3 or parts[0] != "worlds" or parts[2] != "delete":
+        return None
+    return unquote(parts[1])
 
 
 def _parse_world_file_path(path: str) -> Optional[tuple[str, str]]:
@@ -135,6 +153,26 @@ async def _create_world(hub: "WorldHub", *, name: str) -> Response:
             "present_count": 0,
         },
     )
+
+
+async def _delete_world(hub: "WorldHub", *, world_id: str, confirm: str) -> Response:
+    try:
+        wid = validate_world_id(world_id)
+    except ValueError as exc:
+        return _json_response(400, "Bad Request", {"error": str(exc)})
+    if confirm != wid:
+        return _json_response(
+            400,
+            "Bad Request",
+            {"error": "confirm query must equal the world id"},
+        )
+    try:
+        result = await hub.delete_world(wid)
+    except FileNotFoundError as exc:
+        return _json_response(404, "Not Found", {"error": str(exc)})
+    except ValueError as exc:
+        return _json_response(400, "Bad Request", {"error": str(exc)})
+    return _json_response(200, "OK", result)
 
 
 def _world_file_response(hub: Optional["WorldHub"], world_id: str, file_id: str) -> Response:

@@ -30,7 +30,6 @@ from .models import (
     WorldEvent,
     encode_error,
     encode_server_message,
-    member_to_dict,
 )
 from .paths import validate_member_id
 from .store import WorldStore
@@ -74,6 +73,22 @@ class World:
 
     async def start(self) -> None:
         self.store.ensure_world_epoch()
+        self.store.clear_presence()
+
+    def list_live_present(self) -> list[dict[str, str]]:
+        rows = [
+            {"member_id": session.member_id, "display_name": session.display_name}
+            for session in self._sessions.values()
+            if session.present
+        ]
+        rows.sort(key=lambda item: (item["display_name"].lower(), item["member_id"]))
+        return rows
+
+    def disconnect_all(self, *, code: str = "world_gone", message: str = "world deleted") -> None:
+        """Kick every connected session. Does not close the store."""
+        for session in list(self._sessions.values()):
+            self.push_error(session, code, message)
+            session.replaced.set()
 
     async def close(self) -> None:
         if self._closed:
@@ -89,6 +104,10 @@ class World:
         if pumps:
             await asyncio.gather(*pumps, return_exceptions=True)
         self._sessions.clear()
+        try:
+            self.store.clear_presence()
+        except Exception:
+            pass
         try:
             self.store.close()
         except Exception:
@@ -290,7 +309,7 @@ class World:
         if event is not None:
             self._fanout(event, exclude={session.member_id})
 
-        present = [member_to_dict_from_presence(p) for p in self.store.list_present()]
+        present = self.list_live_present()
         history = [e.to_dict(world_id=self.world_id) for e in self.store.recent_events(limit=SNAPSHOT_HISTORY_LIMIT)]
         self._enqueue(
             session,
@@ -493,14 +512,3 @@ class World:
             packed.append(entry)
         body["attachments"] = packed
         return body
-
-
-def member_to_dict_from_presence(record: Any) -> dict[str, Any]:
-    from .models import PresenceRecord
-
-    if isinstance(record, PresenceRecord):
-        return {
-            "member_id": record.member_id,
-            "display_name": record.display_name,
-        }
-    return member_to_dict(record)

@@ -101,19 +101,12 @@ from .setup import (
 from .terminal_ui import MenuOption, ReturnToLauncherHome, TerminalUI
 from .web_client import web_client_config, web_client_paths
 from .world_hub import (
-    handle_world_chat,
-    handle_world_create,
-    handle_world_join,
-    handle_world_leave,
-    handle_world_list,
     handle_world_logs,
     handle_world_open,
     handle_world_restart,
     handle_world_start,
     handle_world_stop,
-    list_world_summaries,
     world_hub_config,
-    world_hub_is_running,
     world_hub_paths,
 )
 
@@ -145,7 +138,7 @@ def _launcher_options(*, initialized: bool, has_agents: bool = True) -> list[Men
         MenuOption(
             key="world",
             title="World",
-            description="Manage the shared world hub and who is present.",
+            description="Start the shared world hub.",
         ),
         MenuOption(
             key="inspect",
@@ -318,11 +311,6 @@ def _world_hub_actions(config_dir: Path) -> list[MenuOption]:
             disabled=not hub_ready,
         ),
         MenuOption("logs", "Logs", "View and follow the latest log output in real time."),
-        MenuOption("list", "List", "Show worlds on this machine."),
-        MenuOption("create", "Create", "Create a world."),
-        MenuOption("join", "Join", "Invite the active agent into a world."),
-        MenuOption("leave", "Leave", "Ask the active agent to leave."),
-        MenuOption("chat", "Chat", "Enter a world yourself in the terminal."),
         MenuOption("back", "Back", "Return to the main launcher."),
     ]
 
@@ -342,113 +330,8 @@ def _run_world_lifecycle_action(config_dir: Path, action: str) -> int:
         )
     if action == "logs":
         return handle_world_logs(_launcher_args(config_dir=str(config_dir), lines=80, follow=False))
-    if action == "list":
-        return handle_world_list(_launcher_args(host=None, port=None, json_output=False))
-    if action == "leave":
-        return handle_world_leave(_launcher_args(config_dir=str(config_dir), agent=None))
     print(f"Unknown world action: {action}")
     return 1
-
-
-def _confirm_start_world_hub(ui: TerminalUI) -> bool:
-    if world_hub_is_running():
-        return True
-    choice = ui.confirm("World hub is not running. Start it now?", default=True)
-    if not choice:
-        return False
-    exit_code = handle_world_start(_launcher_args(host=None, port=None, open_browser=False))
-    return exit_code == 0
-
-
-def _select_or_create_world(ui: TerminalUI) -> Optional[str]:
-    worlds = list_world_summaries()
-    if not worlds:
-        name = ui.ask_text("World name", subtitle="No worlds yet. Create one to continue.")
-        if not str(name or "").strip():
-            return None
-        exit_code = handle_world_create(_launcher_args(name=str(name).strip(), host=None, port=None))
-        if exit_code != 0:
-            return None
-        created = list_world_summaries()
-        if created:
-            return str(created[-1].get("id") or name).strip()
-        return str(name).strip()
-    options = [
-        MenuOption(
-            str(item.get("id") or ""),
-            str(item.get("name") or item.get("id") or ""),
-            f"id={item.get('id')} present={item.get('present_count', 0)}",
-        )
-        for item in worlds
-        if item.get("id")
-    ]
-    options.append(MenuOption("create", "Create a new world", "Make another place."))
-    selected = ui.select(label="World", options=options)
-    if selected is None:
-        return None
-    if selected.key == "create":
-        name = ui.ask_text("World name")
-        if not str(name or "").strip():
-            return None
-        exit_code = handle_world_create(_launcher_args(name=str(name).strip(), host=None, port=None))
-        if exit_code != 0:
-            return None
-        created = list_world_summaries()
-        matching = [item for item in created if str(item.get("name") or "") == str(name).strip()]
-        if matching:
-            return str(matching[-1].get("id") or name).strip()
-        return str(name).strip()
-    return selected.key
-
-
-def _run_world_join_flow(ui: TerminalUI, config_dir: Path) -> int:
-    if not _confirm_start_world_hub(ui):
-        return 1
-    world_id = _select_or_create_world(ui)
-    if not world_id:
-        return 1
-    from .processes import managed_paths as _managed_paths
-
-    api_running = running_pid(_managed_paths(config_dir, CHANNEL_API).pid_path) is not None
-    start_api = False
-    if not api_running:
-        choice = ui.confirm("This agent's API channel is not running. Start it so the agent can enter?", default=True)
-        if not choice:
-            return 1
-        start_api = True
-    return handle_world_join(
-        _launcher_args(
-            world=world_id,
-            config_dir=str(config_dir),
-            agent=None,
-            host=None,
-            port=None,
-            member_id=None,
-            name=None,
-            start_hub=False,
-            start_api=start_api,
-            open_browser=False,
-        )
-    )
-
-
-def _run_world_chat_flow(ui: TerminalUI) -> int:
-    if not _confirm_start_world_hub(ui):
-        return 1
-    world_id = _select_or_create_world(ui)
-    if not world_id:
-        return 1
-    return handle_world_chat(
-        _launcher_args(
-            world=world_id,
-            host=None,
-            port=None,
-            member_id="human",
-            name=None,
-            start_hub=False,
-            open_browser=False,
-        )
-    )
 
 
 def _launcher_config_snapshot(config_dir: Path) -> dict[str, Any]:
@@ -676,10 +559,13 @@ def _launcher_help_content(*, config_dir: Path, initialized: bool) -> Text:
     content.append("\n    Start the shared world hub.\n")
     content.append("  ")
     content.append(_format_init_command("xagent world open", config_dir=config_dir), style="cyan")
-    content.append("\n    Open the inhabitant page in your browser.\n")
+    content.append("\n    Open the inhabitant page; create worlds and invite agents there.\n")
     content.append("  ")
     content.append(_format_init_command("xagent world join plaza", config_dir=config_dir), style="cyan")
-    content.append("\n    Invite the active agent into a world.\n")
+    content.append("\n    Or invite from the CLI when scripting.\n")
+    content.append("  ")
+    content.append(_format_init_command("xagent world remove plaza", config_dir=config_dir), style="cyan")
+    content.append("\n    Delete a world and its event log; pass --yes to skip the prompt.\n")
     content.append("  ")
     content.append(_format_init_command("xagent voice start", config_dir=config_dir), style="cyan")
     content.append("\n    Start the voice channel.\n")
@@ -2305,19 +2191,7 @@ def _run_world_launcher(config_dir: Path) -> int:
                 ui.clear()
                 return 0
             ui.clear()
-            if option.key == "join":
-                exit_code = _run_world_join_flow(ui, config_dir)
-            elif option.key == "chat":
-                exit_code = _run_world_chat_flow(ui)
-            elif option.key == "create":
-                name = ui.ask_text("World name")
-                if not str(name or "").strip():
-                    continue
-                exit_code = handle_world_create(
-                    _launcher_args(name=str(name).strip(), host=None, port=None)
-                )
-            else:
-                exit_code = _run_world_lifecycle_action(config_dir, str(option.key))
+            exit_code = _run_world_lifecycle_action(config_dir, str(option.key))
             if exit_code != 0:
                 ui.print_panel(f"World action exited with status {exit_code}.", title="World")
             ui.pause("Press Enter to return to World")

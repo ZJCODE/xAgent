@@ -135,6 +135,32 @@ class WorldInhabitantTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await inhabitant.leave()
 
+    async def test_observes_own_join_and_leave(self):
+        inhabitant = WorldInhabitant(self.agent, member_id="agent1", display_name="一号")
+        await inhabitant.join(world_url=self.url)
+        try:
+            await self._wait_present()
+            for _ in range(50):
+                if self.agent.observed:
+                    break
+                await asyncio.sleep(0.05)
+            self.assertEqual(self.agent.observed[0]["context"], "一号 joined 大厅")
+            self.assertEqual(self.agent.observed[0]["metadata"]["actor_id"], "agent1")
+        finally:
+            await inhabitant.leave()
+        self.assertEqual(self.agent.observed[-1]["context"], "一号 left 大厅")
+        self.assertEqual(self.agent.observed[-1]["metadata"]["actor_id"], "agent1")
+
+    async def test_join_leave_observations_name_the_world(self):
+        inhabitant = WorldInhabitant(self.agent, member_id="agent1", display_name="一号")
+        inhabitant.world_id = "my-world"
+        inhabitant.world_name = "my-world"
+        await inhabitant._observe({"actor_id": "player2", "kind": "join", "seq": 1}, event_type="join")
+        await inhabitant._observe({"actor_id": "human", "kind": "leave", "seq": 2}, event_type="leave")
+        self.assertEqual(self.agent.observed[0]["context"], "player2 joined my-world")
+        self.assertEqual(self.agent.observed[1]["context"], "human left my-world")
+        self.assertEqual(self.agent.observed[0]["metadata"]["world_name"], "my-world")
+
     async def test_silence_stores_utterance_as_user_message(self):
         self.agent.should_reply = False
         inhabitant = WorldInhabitant(self.agent, member_id="agent1", display_name="一号")

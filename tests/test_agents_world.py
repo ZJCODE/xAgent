@@ -125,6 +125,30 @@ class PathSafetyTests(unittest.TestCase):
             self.assertEqual(path.name, "plaza")
             self.assertEqual(path.parent.name, "worlds")
 
+    def test_remove_world_dir_deletes_and_rejects_traversal(self):
+        from agents_world.cli import main as agents_world_main
+        from agents_world.config import WorldConfig
+        from agents_world.paths import remove_world_dir
+        from agents_world.store import open_store_for_world
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = WorldConfig.create(world_id="plaza", name="plaza")
+            store = open_store_for_world(config, root=root)
+            store.close()
+            removed = remove_world_dir("plaza", root=root)
+            self.assertEqual(removed.name, "plaza")
+            self.assertFalse(removed.exists())
+            with self.assertRaises(FileNotFoundError):
+                remove_world_dir("plaza", root=root)
+            with self.assertRaises(ValueError):
+                remove_world_dir("..", root=root)
+
+            self.assertEqual(agents_world_main(["create", "--name", "cafe", "--data-root", str(root)]), 0)
+            self.assertTrue((root / "worlds" / "cafe" / "world.sqlite3").is_file())
+            self.assertEqual(agents_world_main(["remove", "--world-id", "cafe", "--data-root", str(root)]), 0)
+            self.assertFalse((root / "worlds" / "cafe").exists())
+
 
 class WorldPhysicsTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -187,6 +211,21 @@ class WorldPhysicsTests(unittest.IsolatedAsyncioTestCase):
         events = store2.recent_events(limit=50)
         store2.close()
         self.assertTrue(any(e.kind == EventKind.UTTERANCE and e.text == "remember me" for e in events))
+
+    async def test_presence_does_not_survive_restart(self):
+        _, alice = await self._attach("alice")
+        await self._act(alice, "join", {})
+        self.assertTrue(self.store.is_present("alice"))
+        await self.world.close()
+        store2 = open_store_for_world(self.config, root=self.root, clock=self.clock)
+        world2 = World(store2, self.config, clock=self.clock)
+        try:
+            self.assertFalse(store2.is_present("alice"))
+            await world2.start()
+            self.assertFalse(store2.is_present("alice"))
+            self.assertEqual(world2.list_live_present(), [])
+        finally:
+            await world2.close()
 
     async def test_welcome_advertises_protocol_and_heads(self):
         cap, _ = await self._attach("alice")
@@ -516,6 +555,7 @@ class WorldHubTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Invite", blob)
         self.assertIn("Dismiss", blob)
         self.assertIn("New world", blob)
+        self.assertIn("Delete world", blob)
         self.assertIn("Attach file", blob)
         self.assertIn("Type @ to mention someone", blob)
         self.assertIn("world-mention-menu", blob)
@@ -558,6 +598,86 @@ class WorldHubTests(unittest.IsolatedAsyncioTestCase):
         status, _, body = await _http_get(self.port, "/worlds")
         ids = {item["id"] for item in json.loads(body.decode("utf-8"))["worlds"]}
         self.assertIn("keep", ids)
+
+    async def test_hub_restart_forgets_presence(self):
+        await _http_get(self.port, "/worlds/create?name=hall")
+        from agents_world.client import WorldClient
+
+        alice = WorldClient(self._ws("hall"), member_id="alice")
+        await alice.connect()
+        await alice.join()
+        await alice.wait_for(lambda m: m.get("type") == "snapshot")
+        status, _, body = await _http_get(self.port, "/worlds")
+        halls = [
+            item
+            for item in json.loads(body.decode("utf-8"))["worlds"]
+            if item["id"] == "hall"
+        ]
+        self.assertEqual(halls[0]["present_count"], 1)
+
+        await self.hub.stop()
+        await alice.close()
+        self.hub = WorldHub.create(host="127.0.0.1", port=0, data_root=str(self.root))
+        self.port = await self.hub.start()
+        status, _, body = await _http_get(self.port, "/worlds")
+        halls = [
+            item
+            for item in json.loads(body.decode("utf-8"))["worlds"]
+            if item["id"] == "hall"
+        ]
+        self.assertEqual(halls[0]["present_count"], 0)
+
+        async with WorldClient(self._ws("hall"), member_id="bob") as bob:
+            await bob.join()
+            snap = await bob.wait_for(lambda m: m.get("type") == "snapshot")
+            present_ids = {item.get("member_id") for item in snap.get("present") or []}
+            self.assertEqual(present_ids, {"bob"})
+            self.assertNotIn("alice", present_ids)
+
+    async def test_delete_world_requires_confirm_and_frees_id(self):
+        status, _, body = await _http_get(self.port, "/worlds/create?name=plaza")
+        self.assertEqual(status, 201)
+        data_dir = self.root / "worlds" / "plaza"
+        self.assertTrue((data_dir / "world.sqlite3").is_file())
+
+        status, _, body = await _http_get(self.port, "/worlds/plaza/delete")
+        self.assertEqual(status, 400)
+        self.assertIn("confirm", json.loads(body.decode("utf-8"))["error"])
+
+        status, _, body = await _http_get(self.port, "/worlds/plaza/delete?confirm=other")
+        self.assertEqual(status, 400)
+
+        status, _, body = await _http_get(self.port, "/worlds/missing/delete?confirm=missing")
+        self.assertEqual(status, 404)
+
+        status, _, body = await _http_get(self.port, f"/worlds/{quote('大厅')}/delete?confirm={quote('大厅')}")
+        self.assertEqual(status, 400)
+
+        from agents_world.client import WorldClient
+
+        async with WorldClient(self._ws("plaza"), member_id="alice") as alice:
+            await alice.join()
+            await alice.wait_for(lambda m: m.get("type") == "snapshot")
+            status, _, body = await _http_get(self.port, "/worlds/plaza/delete?confirm=plaza")
+            self.assertEqual(status, 200)
+            payload = json.loads(body.decode("utf-8"))
+            self.assertEqual(payload["id"], "plaza")
+            self.assertTrue(payload["deleted"])
+            closed = await alice.wait_for(
+                lambda m: m.get("type") in {"error", "_closed"},
+                timeout=3.0,
+            )
+            if closed.get("type") == "error":
+                self.assertEqual(closed.get("code"), "world_gone")
+
+        self.assertFalse(data_dir.exists())
+        status, _, body = await _http_get(self.port, "/worlds")
+        ids = {item["id"] for item in json.loads(body.decode("utf-8"))["worlds"]}
+        self.assertNotIn("plaza", ids)
+
+        status, _, body = await _http_get(self.port, "/worlds/create?name=plaza")
+        self.assertEqual(status, 201)
+        self.assertEqual(json.loads(body.decode("utf-8"))["id"], "plaza")
 
 
 if __name__ == "__main__":

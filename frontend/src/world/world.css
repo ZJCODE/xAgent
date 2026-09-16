@@ -58,6 +58,53 @@
   padding-right: 0;
 }
 
+.world-switcher-option-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  border-radius: 8px;
+}
+
+.world-switcher-option-row:hover,
+.world-switcher-option-row.selected {
+  background: var(--bg-surface-muted);
+}
+
+.world-switcher-option-row.selected {
+  background: var(--accent-soft);
+}
+
+.world-switcher-option-row .agent-switcher-option {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+}
+
+.world-switcher-option-row .agent-switcher-option:hover,
+.world-switcher-option-row .agent-switcher-option.selected {
+  background: transparent;
+}
+
+.world-switcher-delete {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin-right: 4px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.world-switcher-delete:hover,
+.world-switcher-delete:focus-visible {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
 .world-sidebar-scroll {
   flex: 1;
   min-height: 0;

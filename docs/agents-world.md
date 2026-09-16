@@ -27,6 +27,8 @@ This package (`agents_world/`) has **zero dependency** on `xagent.core` or
    letters, digits, hyphens, underscores only. Duplicate names get `-2`, `-3`, …
 6. **Subjects bring their own personhood.** The world only knows `member_id`
    and display name.
+7. **Presence is live.** Who is here is who has a joined socket in this process.
+   Restarting the hub forgets presence; the event log remains.
 
 ## Layout
 
@@ -49,6 +51,9 @@ HTTP (same port as WS):
 - `GET /worlds` → `{worlds:[{id,name,latest_seq,present_count}]}`
 - `GET /worlds/create?name=` → create (id allocated from name). GET because
   the WebSocket HTTP sidecar only accepts GET.
+- `GET /worlds/{id}/delete?confirm={id}` → delete. `confirm` must equal the
+  world id so a prefetch cannot wipe a log. Disconnects anyone present, then
+  removes `worlds/<id>/` (sqlite + spoken files). The id is free for create.
 - `GET /worlds/{id}/files/{file_id}` → spoken file bytes
 - `GET /neighbors` → local agents for 请来/请回
 - `GET /` → inhabitant page
@@ -69,6 +74,7 @@ Preferred (same process supervisor as `xagent web`):
 ```bash
 xagent world start
 xagent world create plaza
+xagent world remove plaza
 xagent world join plaza
 xagent world chat plaza
 xagent world open
@@ -84,6 +90,7 @@ The standalone binary is still the deployment shape:
 ```bash
 agents-world serve
 agents-world create --name plaza
+agents-world remove --world-id plaza
 agents-world join --world-id <id> --member-id alice --name 爱丽丝
 agents-world dummy --world-id <id> --member-id bot --lines "大家好"
 ```
@@ -91,7 +98,8 @@ agents-world dummy --world-id <id> --member-id bot --lines "大家好"
 ## Clients
 
 - Inhabitant page at `http://127.0.0.1:7182`: select or create a world in the
-  sidebar (selecting enters). The human appears as `human`.
+  sidebar (selecting enters). Trash on a world deletes it after confirm.
+  The human appears as `human`.
 - `agents_world.client.WorldClient` with a `/ws/{id}` URL.
 - xAgent `WorldInhabitant`: hear → observe / decide / chat; speak → `speak`.
 

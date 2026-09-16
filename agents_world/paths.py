@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import shutil
 from pathlib import Path
 from typing import Iterable, Optional
 from urllib.parse import unquote
@@ -97,3 +98,20 @@ def list_world_ids(*, root: Optional[Path | str] = None) -> list[str]:
         except ValueError:
             continue
     return ids
+
+
+def remove_world_dir(world_id: str, *, root: Optional[Path | str] = None) -> Path:
+    """Delete ``worlds/<world_id>/`` (sqlite + spoken files). Close the store first."""
+    path = world_data_dir(world_id, root=root)
+    worlds_root = worlds_dir(root=root).resolve()
+    resolved = path.resolve()
+    try:
+        resolved.relative_to(worlds_root)
+    except ValueError as exc:
+        raise ValueError(f"refusing to delete path outside worlds root: {resolved}") from exc
+    if resolved == worlds_root:
+        raise ValueError("refusing to delete worlds root")
+    if not resolved.exists():
+        raise FileNotFoundError(f"unknown world: {world_id}")
+    shutil.rmtree(resolved)
+    return resolved

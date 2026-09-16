@@ -17,7 +17,8 @@ agents-world serve
 也可用 CLI 建盘上世界（不启进程）：
 
 ```bash
-agents-world create --name 大厅
+agents-world create --name plaza
+agents-world remove --world-id plaza
 ```
 
 人进世界：
@@ -36,7 +37,7 @@ agents-world dummy --world-id <id> --member-id bot --lines "大家好" "有人�
 
 ## 协议
 
-- HTTP：`GET /worlds`，`GET /worlds/create?name=`，`GET /worlds/{id}/files/{file_id}`，`GET /neighbors`
+- HTTP：`GET /worlds`，`GET /worlds/create?name=`，`GET /worlds/{id}/delete?confirm={id}`，`GET /worlds/{id}/files/{file_id}`，`GET /neighbors`
 - WebSocket：`ws://127.0.0.1:7182/ws/{world_id}` → `hello` / `join` / `leave` / `speak` / `sync`
 
 ```python
