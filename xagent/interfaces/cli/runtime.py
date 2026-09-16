@@ -779,6 +779,25 @@ def handle_status_all(args: argparse.Namespace) -> int:
         print(f"  url: {web_client_public_url(config)}")
         print(f"  pid: {paths.pid_path}")
         print(f"  log: {paths.log_path}")
+
+    from .world_hub import list_world_summaries, world_hub_config, world_hub_paths, world_hub_public_url
+
+    world_cfg = world_hub_config()
+    if world_cfg.get("enabled", True):
+        world_paths = world_hub_paths()
+        world_pid = running_pid(world_paths.pid_path)
+        print()
+        print("World hub:")
+        pid_text = f" pid={world_pid}" if world_pid is not None else ""
+        status = "running" if world_pid is not None else "stopped"
+        print(f"  status: {status}{pid_text}")
+        print(f"  url: {world_hub_public_url()}")
+        print(f"  pid: {world_paths.pid_path}")
+        print(f"  log: {world_paths.log_path}")
+        worlds = list_world_summaries()
+        if worlds:
+            names = ", ".join(str(item.get("id") or "") for item in worlds)
+            print(f"  worlds: {names}")
     return 0
 
 
@@ -1197,6 +1216,25 @@ def handle_doctor(args: argparse.Namespace) -> int:
         except Exception as exc:
             print(f"Voice: {exc}")
             ok = False
+    from .world_hub import wait_for_agent_world_api, wait_for_world_hub, world_hub_is_running, world_hub_public_url
+
+    if world_hub_is_running():
+        if wait_for_world_hub(timeout=1.0):
+            print(f"World hub: reachable ({world_hub_public_url()})")
+        else:
+            print("World hub: process is running but /worlds is not reachable")
+            ok = False
+    else:
+        print("World hub: not running (xagent world start)")
+    if CHANNEL_API in channels:
+        api_pid = running_pid(managed_paths(config_dir, CHANNEL_API).pid_path)
+        if api_pid is None:
+            print("World API: api channel is not running")
+        elif wait_for_agent_world_api(config_dir, timeout=0.6):
+            print("World API: /world/status ok")
+        else:
+            print("World API: api channel is running but /world/status is not reachable")
+            ok = False
     if args.online:
         online_ok, online_message = _provider_online_check(config)
         print(online_message)
@@ -1275,15 +1313,19 @@ def print_quick_start() -> None:
     print("Use now:")
     print("  xagent chat                     Chat in the terminal")
     print("  xagent web open                 Open the browser web client")
+    print("  xagent world open               Open the world inhabitant page")
     print("  xagent voice                    Use microphone / speaker mode")
     print("")
     print("Keep running:")
     print("  xagent api start                Start the api channel")
     print("  xagent web start                Start the browser web client")
+    print("  xagent world start              Start the shared world hub")
+    print("  xagent world join plaza         Invite the active agent into a world")
     print("  xagent voice start              Start voice channel")
     print("  xagent status                   Show channel and client status")
     print("  xagent api logs -f              Follow api channel logs")
     print("  xagent web logs -f              Follow web client logs")
+    print("  xagent world logs -f            Follow world hub logs")
     print("")
     print("Setup and inspect:")
     print("  xagent setup                    Reconfigure the active agent")

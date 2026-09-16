@@ -244,6 +244,17 @@ def iter_managed_process_refs(*, root: Optional[Path] = None) -> list[ManagedPro
         )
     )
 
+    from .world_hub import world_hub_paths
+
+    world_paths = world_hub_paths(root=root_path)
+    refs.append(
+        ManagedProcessRef(
+            scope="world",
+            pid_path=world_paths.pid_path,
+            log_path=world_paths.log_path,
+        )
+    )
+
     try:
         registry = load_agent_registry(root=root_path)
         agent_dirs = [(name, entry.path) for name, entry in sorted(registry.agents.items())]

@@ -25,6 +25,8 @@ from .channels import (
 )
 from .processes import managed_paths, running_pid
 from .web_client import DEFAULT_WEB_CLIENT_PORT, web_client_config, web_client_paths
+from .world_hub import world_hub_browse_host, world_hub_config, world_hub_paths
+from ...integrations.world.presence import read_world_presence
 
 STATUS_OK = "ok"
 STATUS_IDLE = "idle"
@@ -111,6 +113,7 @@ def build_runtime_overview(config_dir: Path) -> RuntimeOverview:
                 _voice_item(config_dir, config),
                 _service_item(config_dir, CHANNEL_API, api_config(config)),
                 _web_client_item(config_dir, config),
+                _world_item(config_dir, config),
                 _service_item(config_dir, CHANNEL_FEISHU, feishu_config(config)),
                 _service_item(config_dir, CHANNEL_WEIXIN, weixin_config(config)),
             )
@@ -263,6 +266,33 @@ def _web_client_target(web_cfg: dict[str, Any]) -> str:
     if ":" in browse_host and not browse_host.startswith("["):
         browse_host = f"[{browse_host}]"
     return f"{browse_host}:{port}"
+
+
+def _world_item(config_dir: Path, config: dict[str, Any]) -> OverviewItem:
+    del config
+    hub_cfg = world_hub_config()
+    if not hub_cfg.get("enabled", True):
+        return OverviewItem("World", "off", STATUS_DISABLED, "world")
+    pid = running_pid(world_hub_paths().pid_path)
+    detail = _world_hub_target(hub_cfg)
+    presence = read_world_presence(config_dir)
+    if presence and presence.get("world_id"):
+        place = str(presence.get("world_id"))
+        if presence.get("want_present"):
+            detail = f"{detail} · in {place}"
+        else:
+            detail = f"{detail} · last {place}"
+    if pid is None:
+        return OverviewItem("World", "stopped", STATUS_IDLE, detail)
+    return OverviewItem("World", "running", STATUS_OK, f"{detail} pid {pid}")
+
+
+def _world_hub_target(hub_cfg: dict[str, Any]) -> str:
+    host = world_hub_browse_host(str(hub_cfg.get("host") or "127.0.0.1"))
+    port = str(hub_cfg.get("port") or 7182)
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    return f"{host}:{port}"
 
 
 def _data_item(config_dir: Path) -> OverviewItem:

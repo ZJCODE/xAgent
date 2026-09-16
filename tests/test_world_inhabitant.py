@@ -16,6 +16,7 @@ from agents_world.client import WorldClient
 from agents_world.server import WorldHub
 from xagent.core.runtime import current_delivery_context, scheduled_delivery_context
 from xagent.integrations.world import WorldInhabitant
+from xagent.integrations.world.presence import mark_world_presence, read_world_presence
 from xagent.interfaces.server import AgentHTTPServer
 from xagent.tools.scheduler_tool import create_schedule_task_tool
 
@@ -428,6 +429,44 @@ class WorldJoinRouteTests(unittest.TestCase):
                 self.assertNotIn("room_id", status)
                 left = client.post("/world/leave").json()
                 self.assertFalse(left["connected"])
+                presence = read_world_presence(config_dir)
+                self.assertIsNotNone(presence)
+                self.assertFalse(presence["want_present"])
+                self.assertEqual(presence["world_url"], "ws://127.0.0.1:9")
+
+    def test_api_autojoins_persisted_world_on_startup(self):
+        with tempfile.TemporaryDirectory() as raw:
+            config_dir = Path(raw)
+            (config_dir / "config.yaml").write_text("{}\n", encoding="utf-8")
+            mark_world_presence(
+                config_dir,
+                world_url="ws://127.0.0.1:9/ws/plaza",
+                member_id="agent1",
+                display_name="Agent One",
+                world_id="plaza",
+                want_present=True,
+            )
+            server = AgentHTTPServer(config_dir=str(config_dir), agent=StubAgent())
+            with TestClient(server.app) as client:
+                status = client.get("/world/status").json()
+            self.assertTrue(status["connected"])
+            self.assertEqual(status["member_id"], "agent1")
+            self.assertEqual(status["world_url"], "ws://127.0.0.1:9/ws/plaza")
+
+    def test_api_skips_autojoin_when_disabled(self):
+        with tempfile.TemporaryDirectory() as raw:
+            config_dir = Path(raw)
+            (config_dir / "config.yaml").write_text("world:\n  autojoin: false\n", encoding="utf-8")
+            mark_world_presence(
+                config_dir,
+                world_url="ws://127.0.0.1:9/ws/plaza",
+                member_id="agent1",
+                want_present=True,
+            )
+            server = AgentHTTPServer(config_dir=str(config_dir), agent=StubAgent())
+            with TestClient(server.app) as client:
+                status = client.get("/world/status").json()
+            self.assertFalse(status["connected"])
 
 
 if __name__ == "__main__":

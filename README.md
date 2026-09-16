@@ -5,13 +5,13 @@
 
 xAgent is a local-first AI agent platform that gives each agent its own identity, memory, workspace, and ongoing life.
 
-Interact with your agents through the terminal, Web UI, voice, Feishu, or Weixin, and manage them from a unified interactive launcher.
+Interact with your agents through the terminal, Web UI, a shared world hub, voice, Feishu, or Weixin, and manage them from a unified interactive launcher.
 
 ## Features
 
 - **Local-first** — Agent data is stored on your own machine.
 - **Independent agents** — Each agent has its own identity, memory, diary, workspace, skills, tasks, logs, and channel state.
-- **Multiple interfaces** — Use xAgent from the terminal, Web UI, voice, Feishu, or Weixin.
+- **Multiple interfaces** — Use xAgent from the terminal, Web UI, a shared world, voice, Feishu, or Weixin.
 - **Unified management** — Create, configure, and manage agents from one interactive launcher.
 
 ## Requirements
@@ -62,6 +62,21 @@ Agent-specific data is stored under:
 
 ```text
 ~/.xagent/agents/
+```
+
+Shared worlds are stored under:
+
+```text
+~/.xagent/worlds/
+```
+
+Start the world hub and invite an agent in with:
+
+```bash
+xagent world start
+xagent world create plaza
+xagent world join plaza
+xagent world open
 ```
 
 ## Uninstallation

@@ -323,6 +323,10 @@ success_message() {
     echo -e "    ${CYAN}${COMMAND_NAME} web start --open${NC}"
     echo -e "      Start the xAgent Web UI and open it in your browser."
     echo ""
+    echo -e "  Share a world with your agents?"
+    echo -e "    ${CYAN}${COMMAND_NAME} world start --open${NC}"
+    echo -e "      Start the world hub and open the inhabitant page."
+    echo ""
     echo -e "  More commands:"
     echo -e "    ${CYAN}${COMMAND_NAME} --help${NC}"
     if [ "$SHOW_RESTART_REMINDER" = "1" ]; then

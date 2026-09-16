@@ -15,11 +15,14 @@ from .processes import (
 )
 from .runtime import _start_background_channel, _start_background_web
 from .web_client import web_client_paths
+from .world_hub import _start_background_world, world_hub_paths
 
 
 def _format_process_label(row: dict[str, Any]) -> str:
     if row["scope"] == "web":
         return "web"
+    if row["scope"] == "world":
+        return "world"
     agent = row.get("agent", "?")
     channel = row.get("channel", "?")
     return f"{agent}/{channel}"
@@ -80,7 +83,12 @@ def handle_processes_restart(args: argparse.Namespace) -> int:
     ok = True
 
     for ref in running_refs:
-        label = "web" if ref.scope == "web" else f"{ref.agent}/{ref.channel}"
+        if ref.scope == "web":
+            label = "web"
+        elif ref.scope == "world":
+            label = "world"
+        else:
+            label = f"{ref.agent}/{ref.channel}"
 
         if ref.scope == "web":
             paths = web_client_paths()
@@ -95,6 +103,24 @@ def handle_processes_restart(args: argparse.Namespace) -> int:
             started, _already_running = _start_background_web(args)
             entry_ok = started
             message = "restarted" if started else "failed to restart"
+        elif ref.scope == "world":
+            paths = world_hub_paths()
+            stopped, message = stop_managed_process(paths.pid_path)
+            if not stopped:
+                ok = False
+                restarted.append({"label": label, "scope": ref.scope, "ok": False, "message": message})
+                if not getattr(args, "json_output", False):
+                    print(f"{label}: {message}")
+                continue
+
+            restart_args = argparse.Namespace(host=None, port=None, open_browser=False)
+            started, _already_running = _start_background_world(restart_args)
+            entry_ok = started
+            message = "restarted" if started else "failed to restart"
+            if started:
+                from .world_hub import _after_hub_up
+
+                _after_hub_up(restart_args, restore=True)
         else:
             stopped, message = stop_managed_process(ref.pid_path)
             if not stopped:

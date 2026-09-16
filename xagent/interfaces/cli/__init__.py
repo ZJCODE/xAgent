@@ -30,6 +30,7 @@ from .launcher import (
     _run_agent_launcher,
     _run_channel_launcher,
     _run_web_launcher,
+    _run_world_launcher,
     _run_inspect_launcher,
     _run_interactive_launcher,
     _run_model_config_launcher,
@@ -82,7 +83,20 @@ from .setup import (
     init_agent_directory,
 )
 from .terminal_ui import ReturnToLauncherHome, SetupCancelled, TerminalUI, rich_terminal_available
-from .update import handle_update
+from .world_hub import (
+    handle_run_world_internal,
+    handle_world_chat,
+    handle_world_create,
+    handle_world_join,
+    handle_world_leave,
+    handle_world_list,
+    handle_world_logs,
+    handle_world_open,
+    handle_world_restart,
+    handle_world_start,
+    handle_world_status,
+    handle_world_stop,
+)
 
 __all__ = [
     "AgentCLI",
@@ -128,6 +142,18 @@ __all__ = [
     "handle_web_status",
     "handle_web_logs",
     "handle_web_open",
+    "handle_world_chat",
+    "handle_world_create",
+    "handle_world_join",
+    "handle_world_leave",
+    "handle_world_list",
+    "handle_world_logs",
+    "handle_world_open",
+    "handle_world_restart",
+    "handle_world_start",
+    "handle_world_status",
+    "handle_world_stop",
+    "handle_run_world_internal",
     "handle_version",
     "handle_voice",
     "init_agent_directory",

@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from . import agents, processes_status, runtime, setup, update
+from . import agents, processes_status, runtime, setup, update, world_hub
 from .channels import CHANNEL_API, CHANNEL_FEISHU, CHANNEL_VOICE, CHANNEL_WEIXIN
 
 
@@ -37,6 +37,7 @@ class XAgentArgumentParser(argparse.ArgumentParser):
             "Use Now:",
             "  chat        Chat in the terminal",
             "  web         Manage the browser web UI",
+            "  world       Manage the shared world hub",
             "  voice       Use microphone / speaker mode for this session",
             "",
             "Keep Running:",
@@ -44,6 +45,7 @@ class XAgentArgumentParser(argparse.ArgumentParser):
             "  voice       Voice channel: start, stop, restart, status, logs",
             "  feishu      Feishu bot: setup, start, stop, restart, status, logs",
             "  weixin      Weixin DM: setup, start, stop, restart, status, logs",
+            "  world       World hub: start, stop, restart, status, logs, join, leave",
             "  status      Show all configured channel processes",
             "  processes   List or restart all managed background processes",
             "",
@@ -66,6 +68,10 @@ class XAgentArgumentParser(argparse.ArgumentParser):
             "  xagent api start",
             "  xagent web start",
             "  xagent web open",
+            "  xagent world start",
+            "  xagent world open",
+            "  xagent world create plaza",
+            "  xagent world join plaza",
             "  xagent status",
             "  xagent api logs -f",
             "  xagent voice setup",
@@ -309,6 +315,88 @@ def _add_channel_lifecycle_subparsers(
     logs_parser.set_defaults(handler=runtime.handle_logs, channels=[channel])
 
 
+def _add_world_hub_arguments(parser: argparse.ArgumentParser, *, open_by_default: bool = False) -> None:
+    parser.add_argument("--host", default=None, help="World hub host override")
+    parser.add_argument("--port", type=int, default=None, help="World hub port override")
+    if open_by_default:
+        parser.add_argument(
+            "--open",
+            action=argparse.BooleanOptionalAction,
+            default=True,
+            dest="open_browser",
+            help="Open the inhabitant page in a browser",
+        )
+    else:
+        parser.add_argument(
+            "--open",
+            action="store_true",
+            dest="open_browser",
+            help="Open the inhabitant page in a browser",
+        )
+
+
+def _add_world_lifecycle_subparsers(parent_parser: argparse.ArgumentParser) -> None:
+    sub = parent_parser.add_subparsers(dest="world_action", metavar="<action>")
+    sub.required = True
+
+    open_parser = sub.add_parser("open", help="Open the inhabitant page in a browser")
+    _add_world_hub_arguments(open_parser)
+    open_parser.set_defaults(handler=world_hub.handle_world_open)
+
+    start_parser = sub.add_parser("start", help="Start the world hub in the background")
+    _add_world_hub_arguments(start_parser)
+    start_parser.set_defaults(handler=world_hub.handle_world_start)
+
+    stop_parser = sub.add_parser("stop", help="Stop the background world hub")
+    stop_parser.set_defaults(handler=world_hub.handle_world_stop)
+
+    restart_parser = sub.add_parser("restart", help="Restart the background world hub")
+    _add_world_hub_arguments(restart_parser)
+    restart_parser.set_defaults(handler=world_hub.handle_world_restart)
+
+    status_parser = sub.add_parser("status", help="Show world hub status")
+    _add_world_hub_arguments(status_parser)
+    status_parser.add_argument("--json", action="store_true", dest="json_output", help="Print machine-readable JSON")
+    status_parser.set_defaults(handler=world_hub.handle_world_status)
+
+    logs_parser = sub.add_parser("logs", help="Show world hub logs")
+    logs_parser.add_argument("--lines", type=int, default=80, help="Number of trailing log lines to print")
+    logs_parser.add_argument("--follow", "-f", action="store_true", help="Follow log output")
+    logs_parser.set_defaults(handler=world_hub.handle_world_logs)
+
+    list_parser = sub.add_parser("list", help="List worlds on this machine")
+    _add_world_hub_arguments(list_parser)
+    list_parser.add_argument("--json", action="store_true", dest="json_output", help="Print machine-readable JSON")
+    list_parser.set_defaults(handler=world_hub.handle_world_list)
+
+    create_parser = sub.add_parser("create", help="Create a world")
+    create_parser.add_argument("name", help="World name (also used as the world id)")
+    _add_world_hub_arguments(create_parser)
+    create_parser.set_defaults(handler=world_hub.handle_world_create)
+
+    join_parser = sub.add_parser("join", help="Invite an agent into a world")
+    join_parser.add_argument("world", help="World id to join")
+    _add_agent_argument(join_parser)
+    _add_world_hub_arguments(join_parser)
+    join_parser.add_argument("--member-id", dest="member_id", default=None, help="World member id (default: agent name)")
+    join_parser.add_argument("--name", default=None, help="Display name (default: member id)")
+    join_parser.add_argument("--start-hub", action="store_true", dest="start_hub", help="Start the world hub if it is not running")
+    join_parser.add_argument("--start-api", action="store_true", dest="start_api", help="Start this agent's API channel if it is not running")
+    join_parser.set_defaults(handler=world_hub.handle_world_join)
+
+    leave_parser = sub.add_parser("leave", help="Ask an agent to leave the world")
+    _add_agent_argument(leave_parser)
+    leave_parser.set_defaults(handler=world_hub.handle_world_leave)
+
+    chat_parser = sub.add_parser("chat", help="Join a world yourself in the terminal")
+    chat_parser.add_argument("world", help="World id to enter")
+    _add_world_hub_arguments(chat_parser)
+    chat_parser.add_argument("--member-id", dest="member_id", default="human", help="Your member id (default: human)")
+    chat_parser.add_argument("--name", default=None, help="Display name (default: member id)")
+    chat_parser.add_argument("--start-hub", action="store_true", dest="start_hub", help="Start the world hub if it is not running")
+    chat_parser.set_defaults(handler=world_hub.handle_world_chat)
+
+
 def _add_web_lifecycle_subparsers(parent_parser: argparse.ArgumentParser) -> None:
     sub = parent_parser.add_subparsers(dest="web_action", metavar="<action>")
     sub.required = True
@@ -429,6 +517,10 @@ def build_parser() -> argparse.ArgumentParser:
     web_parser = subparsers.add_parser("web", help="Manage the browser web client")
     _add_web_lifecycle_subparsers(web_parser)
     _show_help_on_missing_action(web_parser)
+
+    world_parser = subparsers.add_parser("world", help="Manage the shared world hub")
+    _add_world_lifecycle_subparsers(world_parser)
+    _show_help_on_missing_action(world_parser)
 
     feishu_parser = subparsers.add_parser("feishu", help="Manage the Feishu bot")
     _add_channel_lifecycle_subparsers(feishu_parser, CHANNEL_FEISHU, dest="feishu_action", has_setup=True)
@@ -610,6 +702,12 @@ def build_parser() -> argparse.ArgumentParser:
     _add_web_client_arguments(internal_web)
     internal_web.set_defaults(handler=runtime.handle_run_web_internal)
     _hide_subparser_choice(subparsers, "_run-web")
+
+    internal_world = subparsers.add_parser("_run-world", help=argparse.SUPPRESS)
+    _add_world_hub_arguments(internal_world)
+    internal_world.add_argument("--data-root", dest="data_root", default=None, help=argparse.SUPPRESS)
+    internal_world.set_defaults(handler=world_hub.handle_run_world_internal)
+    _hide_subparser_choice(subparsers, "_run-world")
 
     internal_update = subparsers.add_parser("_update-worker", help=argparse.SUPPRESS)
     internal_update.add_argument(

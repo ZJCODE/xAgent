@@ -136,6 +136,7 @@ class InstallScriptTests(unittest.TestCase):
 
             self.assertIn("Get started:", result.stdout)
             self.assertIn("xagent web start --open", result.stdout)
+            self.assertIn("xagent world start --open", result.stdout)
             self.assertIn("xagent --help", result.stdout)
             self.assertNotIn("To run xagent in this terminal:", result.stdout)
 

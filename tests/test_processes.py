@@ -52,6 +52,7 @@ class ManagedProcessTests(unittest.TestCase):
                 }
 
                 self.assertIn(("web", None, None), labels)
+                self.assertIn(("world", None, None), labels)
                 self.assertIn(("agent", "default", "api"), labels)
                 self.assertIn(("agent", "work", "feishu"), labels)
 

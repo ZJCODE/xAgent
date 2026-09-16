@@ -64,9 +64,26 @@ WebSocket:
 
 ## CLI
 
+Preferred (same process supervisor as `xagent web`):
+
+```bash
+xagent world start
+xagent world create plaza
+xagent world join plaza
+xagent world chat plaza
+xagent world open
+```
+
+`xagent world start` runs the hub in the background with PID/log files under
+`~/.xagent/run` and `~/.xagent/logs`. Invite an agent with `join` (that agent
+needs its API channel running). `chat` is you entering as a human in the
+terminal; `xagent chat` remains 1:1 with your agent.
+
+The standalone binary is still the deployment shape:
+
 ```bash
 agents-world serve
-agents-world create --name 大厅
+agents-world create --name plaza
 agents-world join --world-id <id> --member-id alice --name 爱丽丝
 agents-world dummy --world-id <id> --member-id bot --lines "大家好"
 ```

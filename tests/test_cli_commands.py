@@ -982,6 +982,7 @@ class CLICommandTests(unittest.TestCase):
         empty_titles = [option.title for option in empty_options]
         self.assertIn("Help", reset_titles)
         self.assertIn("Web UI", reset_titles)
+        self.assertIn("World", reset_titles)
         self.assertNotIn("Setup", empty_titles)
         self.assertNotIn("Doctor", reset_titles)
         self.assertNotIn("Version", reset_titles)
@@ -1011,7 +1012,7 @@ class CLICommandTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             _write_runtime(tmpdir, feishu=True, voice=True)
 
-            with patch("xagent.interfaces.cli.overview.running_pid", side_effect=[1357, 26807, 99999, 72069, None]):
+            with patch("xagent.interfaces.cli.overview.running_pid", side_effect=[1357, 26807, 99999, None, 72069, None]):
                 subtitle = _launcher_overview_subtitle(build_runtime_overview(Path(tmpdir)))
 
         self.assertIn("Voice      running  soniox half-duplex pid 1357", subtitle)
@@ -1261,6 +1262,10 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(web_item.status, "idle")
         self.assertEqual(web_item.value, "stopped")
         self.assertIn(str(DEFAULT_WEB_CLIENT_PORT), web_item.detail)
+        world_item = next(item for item in overview.items if item.name == "World")
+        self.assertEqual(world_item.status, "idle")
+        self.assertEqual(world_item.value, "stopped")
+        self.assertIn("7182", world_item.detail)
         image_item = next(item for item in overview.items if item.name == "Image")
         self.assertEqual(image_item.value, "not set")
         self.assertEqual(image_item.status, "disabled")
@@ -1285,7 +1290,7 @@ class CLICommandTests(unittest.TestCase):
     def test_runtime_overview_shows_api_and_web_client_when_running(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             _write_runtime(tmpdir)
-            with patch("xagent.interfaces.cli.overview.running_pid", side_effect=[26807, 99999]):
+            with patch("xagent.interfaces.cli.overview.running_pid", side_effect=[26807, 99999, None]):
                 overview = build_runtime_overview(Path(tmpdir))
 
         api_item = next(item for item in overview.items if item.name == "API")
@@ -1339,9 +1344,9 @@ class CLICommandTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             _write_runtime(tmpdir, voice=True)
 
-            with patch("xagent.interfaces.cli.overview.running_pid", side_effect=[None, None, None]):
+            with patch("xagent.interfaces.cli.overview.running_pid", side_effect=[None, None, None, None]):
                 stopped = build_runtime_overview(Path(tmpdir))
-            with patch("xagent.interfaces.cli.overview.running_pid", side_effect=[9753, None, None]):
+            with patch("xagent.interfaces.cli.overview.running_pid", side_effect=[9753, None, None, None]):
                 running = build_runtime_overview(Path(tmpdir))
 
         stopped_voice = next(item for item in stopped.items if item.name == "Voice")
@@ -2355,6 +2360,7 @@ class CLICommandTests(unittest.TestCase):
         self.assertIn("Advanced:", help_text)
         self.assertIn("Common Flows:", help_text)
         self.assertIn("  web", help_text)
+        self.assertIn("  world", help_text)
         self.assertIn("  voice", help_text)
         self.assertIn("  agents", help_text)
         self.assertIn("  api", help_text)

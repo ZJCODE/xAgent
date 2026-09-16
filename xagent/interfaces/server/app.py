@@ -1,5 +1,6 @@
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Optional
 
 import uvicorn
@@ -20,6 +21,7 @@ from ...core.runtime import (
     resolve_contacts_path,
 )
 from ...integrations.api import ApiChannelAdapter, ChatLimits, input_attachments, input_image_sources
+from ...integrations.world import WorldInhabitant
 
 
 class AgentHTTPServer(AdminService):
@@ -116,6 +118,38 @@ class AgentHTTPServer(AdminService):
             raise RuntimeError("world inhabitant is not present")
         await inhabitant.dispatch_scheduled_task(task)
 
+    async def _restore_world_presence(self) -> None:
+        from ...integrations.world.presence import read_world_presence
+
+        config = self.config if isinstance(self.config, dict) else {}
+        world_cfg = config.get("world") if isinstance(config.get("world"), dict) else {}
+        if not bool(world_cfg.get("autojoin", True)):
+            return
+        presence = read_world_presence(self.config_dir)
+        if not presence or not presence.get("want_present"):
+            return
+        world_url = str(presence.get("world_url") or "").strip()
+        if not world_url:
+            return
+        member_id = str(presence.get("member_id") or Path(self.config_dir).name).strip()
+        display_name = str(presence.get("display_name") or member_id).strip() or member_id
+        inhabitant = WorldInhabitant(
+            self.agent,
+            member_id=member_id,
+            display_name=display_name,
+            logger=self.logger,
+        )
+        self.world_inhabitant = inhabitant
+        try:
+            await inhabitant.join(world_url=world_url)
+            self.logger.info(
+                "Autojoined world %s as %s",
+                presence.get("world_id") or world_url,
+                member_id,
+            )
+        except Exception:
+            self.logger.exception("Failed to autojoin world %s", world_url)
+
     @asynccontextmanager
     async def _lifespan(self, app: FastAPI):
         heartbeat = create_runtime_heartbeat(
@@ -133,6 +167,7 @@ class AgentHTTPServer(AdminService):
                     heartbeat.interval_seconds,
                 )
             await self.api.start()
+            await self._restore_world_presence()
             self._world_task_scheduler = AsyncTaskScheduler(
                 self.tasks_dir,
                 can_handle=self._world_can_handle_scheduled_task,

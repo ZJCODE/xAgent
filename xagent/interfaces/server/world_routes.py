@@ -9,6 +9,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, ConfigDict
 
 from ...integrations.world import WorldInhabitant
+from ...integrations.world.presence import mark_world_left, mark_world_presence
 
 if TYPE_CHECKING:
     from .app import AgentHTTPServer
@@ -48,11 +49,21 @@ def register_world_routes(app: FastAPI, server: "AgentHTTPServer") -> None:
             server.world_inhabitant = inhabitant
         else:
             inhabitant.display_name = display_name
-        return await inhabitant.join(world_url=world_url)
+        status = await inhabitant.join(world_url=world_url)
+        mark_world_presence(
+            server.config_dir,
+            world_url=world_url,
+            member_id=member_id,
+            display_name=display_name,
+            world_id=str(status.get("world_id") or ""),
+            want_present=True,
+        )
+        return status
 
     @app.post("/world/leave")
     async def world_leave():
         inhabitant = getattr(server, "world_inhabitant", None)
+        mark_world_left(server.config_dir)
         if inhabitant is None:
             return {"connected": False}
         return await inhabitant.leave()
