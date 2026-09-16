@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,6 +11,7 @@ from typing import Any, Optional
 import yaml
 
 from .models import Room
+from .paths import validate_room_id, validate_world_id
 
 _DURATION_RE = re.compile(
     r"^\+(?:(?P<hours>\d+)h)?(?:(?P<minutes>\d+)m)?(?:(?P<seconds>\d+)s)?$"
@@ -22,6 +24,14 @@ class ScheduledScene:
     text: str
     delay_seconds: float
     at_raw: str
+
+    def fire_key(self) -> str:
+        digest = hashlib.sha256(self.text.encode("utf-8")).hexdigest()[:12]
+        return f"{self.room_id}:{self.at_raw}:{digest}"
+
+
+def scene_fire_key(scheduled: ScheduledScene) -> str:
+    return scheduled.fire_key()
 
 
 @dataclass(frozen=True)
@@ -61,9 +71,7 @@ def load_scene_file(path: Path | str) -> SceneConfig:
 
 
 def parse_scene_config(data: dict[str, Any]) -> SceneConfig:
-    world_id = str(data.get("world") or "").strip()
-    if not world_id:
-        raise ValueError("scene.world is required")
+    world_id = validate_world_id(str(data.get("world") or "").strip())
 
     rooms_raw = data.get("rooms") or []
     if not isinstance(rooms_raw, list) or not rooms_raw:
@@ -74,11 +82,9 @@ def parse_scene_config(data: dict[str, Any]) -> SceneConfig:
     for item in rooms_raw:
         if not isinstance(item, dict):
             raise ValueError("each room must be a mapping")
-        room_id = str(item.get("id") or "").strip()
+        room_id = validate_room_id(str(item.get("id") or "").strip())
         name = str(item.get("name") or room_id).strip()
         setting = str(item.get("setting") or "").strip()
-        if not room_id:
-            raise ValueError("room.id is required")
         if room_id in seen:
             raise ValueError(f"duplicate room.id: {room_id}")
         seen.add(room_id)
@@ -97,6 +103,8 @@ def parse_scene_config(data: dict[str, Any]) -> SceneConfig:
             raise ValueError("each scene entry must be a mapping")
         at_raw = str(item.get("at") or "").strip()
         room_id = str(item.get("room") or "").strip()
+        if room_id:
+            room_id = validate_room_id(room_id)
         text = str(item.get("text") or "").strip()
         if not at_raw or not room_id or not text:
             raise ValueError("scene entries require at, room, and text")

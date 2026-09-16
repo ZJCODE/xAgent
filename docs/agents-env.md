@@ -21,7 +21,8 @@ This package (`agents_env/`) has **zero dependency** on `xagent.core` or
    is serialized by the world process. Silence is real wall-clock time, not a
    turn queue.
 4. **The world outlives any subject.** The room and clock keep going when no
-   one is thinking. Env is a long-lived process with a durable log.
+   one is thinking. Env is a long-lived process with a durable log. Delivery
+   of perceptions is per-subject and must not stall the world's clock.
 5. **Audience is physics.** A public room reaches everyone present. A 1:1 is
    another room with two people. No separate ACL layer.
 6. **Subjects bring their own personhood.** The world only knows a stable
@@ -37,17 +38,27 @@ This package (`agents_env/`) has **zero dependency** on `xagent.core` or
 - `join` / `leave` change Presence. Only present members receive live events.
   On join, the client may receive that room's existing public history (digital
   group realism, not acoustic decay).
-- Actions: `join`, `leave`, `speak`. Perception: pushed or synced `event`.
+- Actions: `join`, `leave`, `speak`, `sync`. Perception: pushed `event`,
+  `snapshot`, or `lagged` (this socket fell behind; `sync` to catch up).
 - A successful speak is acknowledged by the utterance appearing in the log
-  (self-echo). Clients treat the log as ground truth.
-- Scene events (`clock`, ambience, join/leave announcements) are emitted by
-  the world with `actor_id=world`. They are observations, not requests.
+  (self-echo). Clients treat the log as ground truth and should deduplicate by
+  `seq`.
+- Scene events (clock, ambience) are emitted by the world with
+  `actor_id=world`. They are observations, not requests. Relative `+5m` delays
+  are anchored to a persisted world epoch so a restart does not replay them.
 - Mentions (`@`) are structured metadata on an utterance. The world never
   forces a reply.
+- Join/leave events are structured (`kind` + `actor_id`); `text` is empty.
+  Clients render their own language. Display names live on the roster, not in
+  log prose.
+- `seq` is the world's total order. `room_seq` is monotonic inside one room so
+  a client can detect a gap in that room without seeing other rooms.
 - Forbidden inside the world: LLM calls, speech scheduling, reading agent
   memory.
 - Smart NPCs are other clients. The world may only emit mute props as `scene`
   events (plaque, chime, light).
+- Commit of an event is independent of delivering it. A slow or dead inhabitant
+  cannot freeze other rooms. A dropped socket produces a `leave` event.
 
 ## Objects
 
@@ -57,11 +68,14 @@ This package (`agents_env/`) has **zero dependency** on `xagent.core` or
 | Room | `id`, `name`, `setting` |
 | Member | `id`, `display_name` (surface only; no persona fields) |
 | Presence | `(member_id, room_id)`, present?, live connection |
-| Event | `seq`, `ts`, `room_id`, `kind`, `actor_id`, `text`, `mentions` |
+| Event | `seq`, `room_seq`, `ts`, `room_id`, `kind`, `actor_id`, `text`, `mentions` |
 
-`kind` is only: `utterance` | `join` | `leave` | `scene`.
+`kind` is only: `utterance` | `join` | `leave` | `scene`. Unknown kinds must be
+passed through by clients so old inhabitants survive a newer log.
 
 ## Wire protocol (JSON over WebSocket)
+
+Current `protocol_version` is `1`.
 
 Client → World:
 
@@ -73,13 +87,23 @@ Client → World:
 
 World → Client:
 
-- `welcome {world_id, rooms}`
+- `welcome {protocol_version, world_id, rooms, member_id, display_name, present_rooms}`
+  - each room includes `latest_seq` and `latest_room_seq`
 - `event` (including own utterances as ack)
 - `snapshot` (on join: setting, present members, recent log)
-- `error {message}`
+  - `sync: true` snapshots also include `has_more` and `next_after_seq`
+- `lagged {room_id, after_seq}` — outbound buffer overflow; client should `sync`
+- `error {code, message}`
+
+Error `code` values include: `bad_payload`, `unknown_type`, `unknown_room`,
+`not_present`, `text_required`, `text_too_long`, `rate_limited`,
+`session_inactive`, `replaced`, `hello_timeout`, `internal`.
 
 Same `member_id` reconnects as the same body. A newer connection replaces the
-older one so one body occupies one place.
+older one so one body occupies one place; the old socket is closed.
+
+Use `agents_env.client.WorldClient` as the reference inhabitant rather than
+re-implementing the handshake.
 
 ## Storage and process
 
@@ -88,6 +112,8 @@ older one so one body occupies one place.
 - Never write into `~/.xagent/agents/<name>/`.
 - Scene YAML describes only the stage (rooms, setting text, timed ambience).
   No persona, model, or system prompt.
+- `world_id` / `room_id` / `member_id` are `[A-Za-z0-9._-]` and cannot escape
+  the data root.
 
 Example scene:
 
@@ -107,6 +133,7 @@ scenes:
 
 Phase one ships:
 
+- **Reference client** (`agents_env.client.WorldClient`)
 - **Human CLI** (`agents-env join`) — humans are first-class inhabitants.
 - **Dummy client** (`agents-env dummy`) — scripted presence for proving the venue.
 
@@ -130,5 +157,5 @@ hear → own `observe` / `chat`; speak → `speak`; never treat the room log as 
 - **Memory / journal** — world log ≠ diary
 - **Unified memory** — world does not partition memory per user
 - **Sharing** — world never reads diaries; only spoken text enters the medium
-- **Attribution / continuity** — `seq` + `ts` + `actor_id` + `room_id` persist
+- **Attribution / continuity** — `seq` + `room_seq` + `ts` + `actor_id` + `room_id` persist
 - **Environment-aware** — `scene` is observation, not a request to anyone

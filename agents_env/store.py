@@ -4,30 +4,52 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Iterable, Iterator, Optional
 
 from . import WORLD_ACTOR_ID
+from .clock import Clock, default_clock
 from .models import EventKind, Member, PresenceRecord, Room, WorldEvent
+from .paths import world_data_dir
 from .scene import SceneConfig
 
 
 class WorldStore:
     """Durable venue state. Never imports or writes agent memory."""
 
-    def __init__(self, db_path: Path, *, world_id: str):
+    def __init__(self, db_path: Path, *, world_id: str, clock: Optional[Clock] = None):
         self.db_path = Path(db_path)
         self.world_id = world_id
+        self.clock = default_clock(clock)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        self._conn = sqlite3.connect(self.db_path, check_same_thread=False, timeout=5.0)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA synchronous=NORMAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
+        self._tx_depth = 0
         self._init_schema()
 
     def close(self) -> None:
         self._conn.close()
+
+    @contextmanager
+    def transaction(self) -> Iterator["WorldStore"]:
+        self._tx_depth += 1
+        try:
+            yield self
+            self._tx_depth -= 1
+            if self._tx_depth == 0:
+                self._conn.commit()
+        except Exception:
+            self._tx_depth = 0
+            self._conn.rollback()
+            raise
+
+    def _commit(self) -> None:
+        if self._tx_depth == 0:
+            self._conn.commit()
 
     def _init_schema(self) -> None:
         self._conn.executescript(
@@ -61,15 +83,68 @@ class WorldStore:
                 actor_id TEXT NOT NULL,
                 text TEXT NOT NULL,
                 mentions_json TEXT NOT NULL DEFAULT '[]',
+                room_seq INTEGER NOT NULL DEFAULT 0,
                 FOREIGN KEY (room_id) REFERENCES rooms(id)
             );
+            CREATE INDEX IF NOT EXISTS idx_events_room_seq ON events(room_id, seq);
+            CREATE INDEX IF NOT EXISTS idx_events_room_room_seq ON events(room_id, room_seq);
             """
         )
+        self._ensure_room_seq_column()
         self._conn.execute(
             "INSERT OR REPLACE INTO meta(key, value) VALUES ('world_id', ?)",
             (self.world_id,),
         )
         self._conn.commit()
+
+    def _ensure_room_seq_column(self) -> None:
+        cols = {str(row["name"]) for row in self._conn.execute("PRAGMA table_info(events)")}
+        if "room_seq" not in cols:
+            self._conn.execute(
+                "ALTER TABLE events ADD COLUMN room_seq INTEGER NOT NULL DEFAULT 0"
+            )
+        missing = self._conn.execute(
+            "SELECT COUNT(*) AS n FROM events WHERE room_seq = 0"
+        ).fetchone()
+        if missing and int(missing["n"]) > 0:
+            self._conn.execute(
+                """
+                UPDATE events
+                SET room_seq = (
+                    SELECT COUNT(*)
+                    FROM events AS e2
+                    WHERE e2.room_id = events.room_id AND e2.seq <= events.seq
+                )
+                WHERE room_seq = 0
+                """
+            )
+
+    def get_meta(self, key: str) -> Optional[str]:
+        row = self._conn.execute(
+            "SELECT value FROM meta WHERE key = ?", (key,)
+        ).fetchone()
+        return None if row is None else str(row["value"])
+
+    def set_meta(self, key: str, value: str) -> None:
+        self._conn.execute(
+            "INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)",
+            (key, value),
+        )
+        self._commit()
+
+    def ensure_world_epoch(self) -> float:
+        raw = self.get_meta("world_epoch")
+        if raw:
+            return float(raw)
+        epoch = float(self.clock.now())
+        self.set_meta("world_epoch", str(epoch))
+        return epoch
+
+    def scene_already_fired(self, key: str) -> bool:
+        return self.get_meta(scene_meta_key(key)) is not None
+
+    def mark_scene_fired(self, key: str, *, seq: int) -> None:
+        self.set_meta(scene_meta_key(key), str(seq))
 
     def bootstrap_rooms(self, rooms: Iterable[Room]) -> None:
         for room in rooms:
@@ -82,7 +157,7 @@ class WorldStore:
                 """,
                 (room.id, room.name, room.setting),
             )
-        self._conn.commit()
+        self._commit()
 
     def list_rooms(self) -> list[Room]:
         rows = self._conn.execute(
@@ -108,7 +183,7 @@ class WorldStore:
             """,
             (member_id, name),
         )
-        self._conn.commit()
+        self._commit()
         return Member(id=member_id, display_name=name)
 
     def get_member(self, member_id: str) -> Optional[Member]:
@@ -128,22 +203,7 @@ class WorldStore:
             """,
             (member_id, room_id, 1 if present else 0),
         )
-        self._conn.commit()
-
-    def clear_member_presence(self, member_id: str) -> list[str]:
-        """Mark member absent everywhere. Returns rooms they left."""
-        rows = self._conn.execute(
-            "SELECT room_id FROM presence WHERE member_id = ? AND present = 1",
-            (member_id,),
-        ).fetchall()
-        room_ids = [str(r["room_id"]) for r in rows]
-        if room_ids:
-            self._conn.execute(
-                "UPDATE presence SET present = 0 WHERE member_id = ?",
-                (member_id,),
-            )
-            self._conn.commit()
-        return room_ids
+        self._commit()
 
     def list_present(self, room_id: str) -> list[PresenceRecord]:
         rows = self._conn.execute(
@@ -177,24 +237,32 @@ class WorldStore:
         self,
         *,
         room_id: str,
-        kind: EventKind,
+        kind: EventKind | str,
         actor_id: str,
         text: str,
-        mentions: Optional[Iterable[str]] = None,
+        mentions: Optional[list[str] | tuple[str, ...]] = None,
         ts: Optional[float] = None,
     ) -> WorldEvent:
-        event_ts = float(ts if ts is not None else time.time())
+        event_ts = float(ts if ts is not None else self.clock.now())
         mention_list = [str(m).strip() for m in (mentions or []) if str(m).strip()]
         mentions_json = json.dumps(mention_list, ensure_ascii=False)
+        kind_value = kind.value if isinstance(kind, EventKind) else str(kind)
         cur = self._conn.execute(
             """
-            INSERT INTO events(ts, room_id, kind, actor_id, text, mentions_json)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO events(ts, room_id, kind, actor_id, text, mentions_json, room_seq)
+            VALUES (
+                ?, ?, ?, ?, ?, ?,
+                (SELECT COALESCE(MAX(room_seq), 0) + 1 FROM events WHERE room_id = ?)
+            )
             """,
-            (event_ts, room_id, kind.value, actor_id, text, mentions_json),
+            (event_ts, room_id, kind_value, actor_id, text, mentions_json, room_id),
         )
-        self._conn.commit()
+        self._commit()
         seq = int(cur.lastrowid)
+        row = self._conn.execute(
+            "SELECT room_seq FROM events WHERE seq = ?", (seq,)
+        ).fetchone()
+        room_seq = int(row["room_seq"]) if row else 0
         return WorldEvent(
             seq=seq,
             ts=event_ts,
@@ -203,12 +271,19 @@ class WorldStore:
             actor_id=actor_id,
             text=text,
             mentions=tuple(mention_list),
+            room_seq=room_seq,
         )
 
-    def events_after(self, room_id: str, after_seq: int = 0, *, limit: int = 200) -> list[WorldEvent]:
+    def events_after(
+        self,
+        room_id: str,
+        after_seq: int = 0,
+        *,
+        limit: int = 200,
+    ) -> list[WorldEvent]:
         rows = self._conn.execute(
             """
-            SELECT seq, ts, room_id, kind, actor_id, text, mentions_json
+            SELECT seq, ts, room_id, kind, actor_id, text, mentions_json, room_seq
             FROM events
             WHERE room_id = ? AND seq > ?
             ORDER BY seq ASC
@@ -216,12 +291,12 @@ class WorldStore:
             """,
             (room_id, after_seq, limit),
         ).fetchall()
-        return [WorldEvent.from_row(**dict(r)) for r in rows]
+        return [_event_from_row(r) for r in rows]
 
     def recent_events(self, room_id: str, *, limit: int = 50) -> list[WorldEvent]:
         rows = self._conn.execute(
             """
-            SELECT seq, ts, room_id, kind, actor_id, text, mentions_json
+            SELECT seq, ts, room_id, kind, actor_id, text, mentions_json, room_seq
             FROM events
             WHERE room_id = ?
             ORDER BY seq DESC
@@ -229,26 +304,50 @@ class WorldStore:
             """,
             (room_id, limit),
         ).fetchall()
-        events = [WorldEvent.from_row(**dict(r)) for r in rows]
+        events = [_event_from_row(r) for r in rows]
         events.reverse()
         return events
+
+    def room_heads(self) -> dict[str, dict[str, int]]:
+        heads = {
+            room.id: {"latest_seq": 0, "latest_room_seq": 0} for room in self.list_rooms()
+        }
+        rows = self._conn.execute(
+            """
+            SELECT room_id, MAX(seq) AS seq, MAX(room_seq) AS room_seq
+            FROM events
+            GROUP BY room_id
+            """
+        ).fetchall()
+        for row in rows:
+            heads[str(row["room_id"])] = {
+                "latest_seq": int(row["seq"] or 0),
+                "latest_room_seq": int(row["room_seq"] or 0),
+            }
+        return heads
 
     def max_seq(self) -> int:
         row = self._conn.execute("SELECT COALESCE(MAX(seq), 0) AS m FROM events").fetchone()
         return int(row["m"] if row else 0)
 
 
-def world_data_dir(world_id: str, *, root: Optional[Path] = None) -> Path:
-    from .paths import resolve_data_root
-
-    base = resolve_data_root(root)
-    return base / "worlds" / world_id
+def _event_from_row(row: sqlite3.Row) -> WorldEvent:
+    return WorldEvent.from_row(**dict(row))
 
 
-def open_store_for_scene(scene: SceneConfig, *, root: Optional[Path] = None) -> WorldStore:
+def scene_meta_key(key: str) -> str:
+    return f"scene_fired:{key}"
+
+
+def open_store_for_scene(
+    scene: SceneConfig,
+    *,
+    root: Optional[Path] = None,
+    clock: Optional[Clock] = None,
+) -> WorldStore:
     data_dir = world_data_dir(scene.world_id, root=root)
-    store = WorldStore(data_dir / "world.sqlite3", world_id=scene.world_id)
+    store = WorldStore(data_dir / "world.sqlite3", world_id=scene.world_id, clock=clock)
     store.bootstrap_rooms(scene.rooms)
-    # Ensure world actor exists as a member name for display clarity (optional).
     store.upsert_member(WORLD_ACTOR_ID, "world")
+    store.ensure_world_epoch()
     return store

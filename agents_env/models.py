@@ -14,6 +14,14 @@ class EventKind(str, Enum):
     LEAVE = "leave"
     SCENE = "scene"
 
+    @classmethod
+    def parse(cls, value: str) -> "EventKind | str":
+        """Parse a kind; unknown values pass through so old clients survive new logs."""
+        try:
+            return cls(value)
+        except ValueError:
+            return str(value or "")
+
 
 @dataclass(frozen=True)
 class Room:
@@ -33,17 +41,20 @@ class WorldEvent:
     seq: int
     ts: float
     room_id: str
-    kind: EventKind
+    kind: EventKind | str
     actor_id: str
     text: str
     mentions: tuple[str, ...] = ()
+    room_seq: int = 0
 
     def to_dict(self) -> dict[str, Any]:
+        kind = self.kind.value if isinstance(self.kind, EventKind) else str(self.kind)
         return {
             "seq": self.seq,
+            "room_seq": self.room_seq,
             "ts": self.ts,
             "room_id": self.room_id,
-            "kind": self.kind.value,
+            "kind": kind,
             "actor_id": self.actor_id,
             "text": self.text,
             "mentions": list(self.mentions),
@@ -60,6 +71,8 @@ class WorldEvent:
         actor_id: str,
         text: str,
         mentions_json: str,
+        room_seq: int = 0,
+        **_extra: Any,
     ) -> "WorldEvent":
         mentions_raw = json.loads(mentions_json or "[]")
         mentions = tuple(str(item) for item in mentions_raw)
@@ -67,10 +80,11 @@ class WorldEvent:
             seq=seq,
             ts=ts,
             room_id=room_id,
-            kind=EventKind(kind),
+            kind=EventKind.parse(kind),
             actor_id=actor_id,
             text=text,
             mentions=mentions,
+            room_seq=int(room_seq or 0),
         )
 
 
@@ -102,6 +116,10 @@ class ClientMessage:
 def encode_server_message(msg_type: str, **payload: Any) -> str:
     body = {"type": msg_type, **payload}
     return json.dumps(body, ensure_ascii=False, separators=(",", ":"))
+
+
+def encode_error(code: str, message: str, **extra: Any) -> str:
+    return encode_server_message("error", code=code, message=message, **extra)
 
 
 def room_to_dict(room: Room) -> dict[str, Any]:
