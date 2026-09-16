@@ -18,6 +18,7 @@ from ...core.runtime import (
     AsyncTaskScheduler,
     ScheduledDeliveryContext,
     SubconsciousDelivery,
+    record_scheduled_delivery_failure,
     resolve_contacts_path,
     scheduled_delivery_context,
     upsert_contact,
@@ -170,6 +171,7 @@ class WeixinAdapter:
             can_handle=self._can_handle_scheduled_task,
             dispatch=self._dispatch_scheduled_task,
             logger_=self.logger,
+            on_terminal_failure=self._on_scheduled_terminal_failure,
         )
         self._task_scheduler = task_scheduler
         await task_scheduler.start()
@@ -665,6 +667,9 @@ class WeixinAdapter:
     def _can_handle_scheduled_task(self, task) -> bool:
         return task.kind == "task" and task.delivery_channel == "weixin" and self.client is not None
 
+    async def _on_scheduled_terminal_failure(self, task, error: Exception) -> None:
+        await record_scheduled_delivery_failure(self.agent, task, error)
+
     async def _dispatch_scheduled_task(self, task) -> None:
         user_id = str(task.target.get("user_id") or task.delivery_user_id or "").strip()
         if not user_id:
@@ -680,7 +685,7 @@ class WeixinAdapter:
             context_token=context_token,
             content=result.content,
             attachments=result.attachments,
-            stable_key=f"scheduled:{task.task_id}:{task.run_at.isoformat(sep=' ')}",
+            stable_key=task.delivery_stable_key(),
         )
 
     async def deliver_subconscious_message(self, delivery: SubconsciousDelivery) -> None:
