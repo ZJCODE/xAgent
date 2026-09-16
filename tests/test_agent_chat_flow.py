@@ -1383,6 +1383,66 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIs(captured["message_storage"], agent.message_storage)
 
+    def _relationship_capturing_agent(self):
+        captured = {}
+
+        class RecordingMemoryHandler(FakeMemoryHandler):
+            async def get_relationship_context(self, **kwargs):
+                captured.update(kwargs)
+                return ""
+
+        agent = self._build_agent(
+            storage=InMemoryMessageStorage(),
+            model_client=CapturingModelClient(responses=[]),
+            memory_handler=RecordingMemoryHandler(),
+        )
+        return agent, captured
+
+    @staticmethod
+    def _placed_message(text, sender_id, channel, room_name=None):
+        message = Message.create(text, role=RoleType.USER, sender_id=sender_id)
+        message.channel = channel
+        if room_name:
+            message.room_name = room_name
+        return message
+
+    async def test_private_turn_injects_only_the_speaker_relationship_card(self):
+        agent, captured = self._relationship_capturing_agent()
+        recent = [
+            self._placed_message("group chatter", "carol", "feishu", room_name="team"),
+            self._placed_message("world hello", "dave", "world", room_name="plaza"),
+            self._placed_message("hi", "joy", "api"),
+        ]
+        current = recent[-1]
+
+        await agent._relationship_context_for_turn(
+            user_msg=current,
+            user_id="joy",
+            recent_messages=recent,
+        )
+
+        self.assertEqual(captured["speaker_keys"], ["api:joy"])
+        self.assertEqual(captured["participant_keys"], [])
+
+    async def test_room_turn_injects_only_same_place_peers(self):
+        agent, captured = self._relationship_capturing_agent()
+        recent = [
+            self._placed_message("other room", "erin", "feishu", room_name="ops"),
+            self._placed_message("other channel", "dave", "world", room_name="team"),
+            self._placed_message("same room", "carol", "feishu", room_name="team"),
+            self._placed_message("ping", "joy", "feishu", room_name="team"),
+        ]
+        current = recent[-1]
+
+        await agent._relationship_context_for_turn(
+            user_msg=current,
+            user_id="joy",
+            recent_messages=recent,
+        )
+
+        self.assertEqual(captured["speaker_keys"], ["feishu:joy"])
+        self.assertEqual(captured["participant_keys"], ["feishu:carol"])
+
     async def test_agent_turn_uses_nonblocking_working_context_snapshot(self):
         class SnapshotCompactor:
             def __init__(self):

@@ -405,36 +405,46 @@ class Agent:
         user_id: str,
         recent_messages: List[Message],
     ) -> str:
-        """Assemble relationship cards for the current speaker and room peers."""
+        """Assemble relationship cards for the current speaker and room peers.
+
+        Peers are only the other people who recently spoke in the same
+        channel and room as the current message. A 1:1 turn injects the
+        speaker's card alone, so people from unrelated channels are never
+        placed in front of the model for a private reply.
+        """
         memory_handler = getattr(self, "memory_handler", None)
         if memory_handler is None or not callable(
             getattr(memory_handler, "get_relationship_context", None)
         ):
             return ""
 
-        channel = getattr(user_msg, "channel", None) or ""
+        channel = str(getattr(user_msg, "channel", None) or "").strip()
+        room_name = str(getattr(user_msg, "room_name", None) or "").strip()
         speaker_key = RelationshipStore.make_key(channel, user_id)
 
         participant_keys: list[str] = []
-        seen = {speaker_key}
-        max_peers = max(0, AgentConfig.RELATIONSHIP_MAX_CARDS_PER_TURN - 1)
-        for message in reversed(recent_messages):
-            if len(participant_keys) >= max_peers:
-                break
-            if message.type != MessageType.MESSAGE or message.role != RoleType.USER:
-                continue
-            peer_id = (message.sender_id or "").strip()
-            if not peer_id:
-                continue
-            if is_scheduled_work(getattr(message, "metadata", None)):
-                continue
-            peer_key = RelationshipStore.make_key(
-                (message.channel or "").strip(), peer_id
-            )
-            if peer_key in seen:
-                continue
-            seen.add(peer_key)
-            participant_keys.append(peer_key)
+        if room_name:
+            seen = {speaker_key}
+            max_peers = max(0, AgentConfig.RELATIONSHIP_MAX_CARDS_PER_TURN - 1)
+            for message in reversed(recent_messages):
+                if len(participant_keys) >= max_peers:
+                    break
+                if message.type != MessageType.MESSAGE or message.role != RoleType.USER:
+                    continue
+                if str(message.channel or "").strip() != channel:
+                    continue
+                if str(message.room_name or "").strip() != room_name:
+                    continue
+                peer_id = (message.sender_id or "").strip()
+                if not peer_id:
+                    continue
+                if is_scheduled_work(getattr(message, "metadata", None)):
+                    continue
+                peer_key = RelationshipStore.make_key(channel, peer_id)
+                if peer_key in seen:
+                    continue
+                seen.add(peer_key)
+                participant_keys.append(peer_key)
 
         return await memory_handler.get_relationship_context(
             speaker_keys=[speaker_key],
