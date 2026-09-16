@@ -403,11 +403,19 @@ class WorldInhabitant:
         mentions = event.get("mentions") or []
         if self.member_id in {str(item) for item in mentions}:
             return True
-        text = str(event.get("text") or "").lower()
+        text = str(event.get("text") or "")
         if not text.strip():
             return False
-        tokens = [self.member_id, self.display_name]
-        return any(token.lower() in text for token in tokens if token)
+        # Same rule as the inhabitant page: only explicit @token counts, not a bare name.
+        tokens = {token for token in (self.member_id, self.display_name) if token}
+        for token in tokens:
+            pattern = re.compile(
+                rf"(?:^|\s)@{re.escape(token)}(?=$|\s|[.,!?，。！？])",
+                re.IGNORECASE,
+            )
+            if pattern.search(text):
+                return True
+        return False
 
     def _recently_spoke(self, event: dict[str, Any]) -> bool:
         current_seq = event.get("seq")

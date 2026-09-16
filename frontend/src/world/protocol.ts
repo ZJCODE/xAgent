@@ -148,17 +148,74 @@ export function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-export function extractMentions(
-  text: string,
-  people: Array<{ member_id: string; display_name?: string }>,
-): string[] {
+export type MentionPerson = {
+  member_id: string;
+  display_name?: string;
+  /** False when listed from local agents but not currently in the world. */
+  here?: boolean;
+};
+
+export function mentionLabel(person: MentionPerson): string {
+  return String(person.display_name || person.member_id).trim() || person.member_id;
+}
+
+export function mentionToken(person: MentionPerson): string {
+  const label = mentionLabel(person);
+  if (/^[A-Za-z0-9._-]+$/.test(label)) return label;
+  return person.member_id;
+}
+
+export function extractMentions(text: string, people: MentionPerson[]): string[] {
   const found = new Set<string>();
   for (const person of people) {
-    const tokens = [person.member_id, person.display_name].filter(Boolean) as string[];
+    const tokens = [...new Set([person.member_id, person.display_name].filter(Boolean) as string[])];
     for (const token of tokens) {
       const pattern = new RegExp(`(?:^|\\s)@${escapeRegExp(token)}(?=$|\\s|[.,!?，。！？])`, "i");
       if (pattern.test(text)) found.add(person.member_id);
     }
   }
   return [...found];
+}
+
+export function findMentionQuery(
+  text: string,
+  cursor: number,
+): { start: number; query: string } | null {
+  const before = text.slice(0, Math.max(0, cursor));
+  const match = /(?:^|[\s([{])@([A-Za-z0-9._-]*)$/.exec(before);
+  if (!match) return null;
+  return { start: before.lastIndexOf("@"), query: match[1] };
+}
+
+export function insertMention(
+  text: string,
+  cursor: number,
+  person: MentionPerson,
+): { text: string; cursor: number } {
+  const active = findMentionQuery(text, cursor);
+  const token = `@${mentionToken(person)} `;
+  if (!active) {
+    const next = `${text.slice(0, cursor)}${token}${text.slice(cursor)}`;
+    return { text: next, cursor: cursor + token.length };
+  }
+  const next = `${text.slice(0, active.start)}${token}${text.slice(cursor)}`;
+  return { text: next, cursor: active.start + token.length };
+}
+
+export function filterMentionPeople(people: MentionPerson[], query: string): MentionPerson[] {
+  const needle = query.trim().toLowerCase();
+  const seen = new Set<string>();
+  const here: MentionPerson[] = [];
+  const away: MentionPerson[] = [];
+  for (const person of people) {
+    if (!person.member_id || seen.has(person.member_id)) continue;
+    seen.add(person.member_id);
+    if (needle) {
+      const hay = `${person.member_id} ${person.display_name || ""}`.toLowerCase();
+      if (!hay.includes(needle)) continue;
+    }
+    if (person.here === false) away.push(person);
+    else here.push(person);
+  }
+  return [...here, ...away];
 }

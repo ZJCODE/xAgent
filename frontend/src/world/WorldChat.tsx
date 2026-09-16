@@ -1,17 +1,74 @@
-import { DragEvent, FormEvent, useEffect, useRef, useState } from "react";
+import { DragEvent, FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import { FileIcon, MessageSquareText, Paperclip, Send, X } from "lucide-react";
 import { Markdown } from "../components/Markdown";
 import { Button, EmptyState } from "../components/ui";
 import { classNames, formatBytes } from "../lib/format";
 import {
+  escapeRegExp,
+  filterMentionPeople,
+  findMentionQuery,
+  insertMention,
   isImageMime,
+  mentionLabel,
   worldFileUrl,
+  type MentionPerson,
   type WorldAttachment,
   type WorldEvent,
 } from "./protocol";
 import { useWorld } from "./WorldContext";
 
-function EventView({ event, memberId, displayOf }: { event: WorldEvent; memberId: string; displayOf: (id: string) => string }) {
+function UtteranceText({
+  text,
+  tokens,
+}: {
+  text: string;
+  tokens: string[];
+}) {
+  const unique = [...new Set(tokens.filter(Boolean))].sort((a, b) => b.length - a.length);
+  if (!unique.length) return <Markdown content={text} />;
+  const pattern = new RegExp(
+    `(^|\\s)(@(?:${unique.map(escapeRegExp).join("|")}))(?=$|\\s|[.,!?，。！？])`,
+    "gi",
+  );
+  const nodes: Array<{ kind: "text" | "mention"; value: string }> = [];
+  let last = 0;
+  for (const match of text.matchAll(pattern)) {
+    const index = match.index ?? 0;
+    const lead = match[1] || "";
+    const token = match[2] || "";
+    const start = index + lead.length;
+    if (start > last) nodes.push({ kind: "text", value: text.slice(last, start) });
+    nodes.push({ kind: "mention", value: token });
+    last = start + token.length;
+  }
+  if (last < text.length) nodes.push({ kind: "text", value: text.slice(last) });
+  if (!nodes.some((node) => node.kind === "mention")) return <Markdown content={text} />;
+  return (
+    <p className="world-utterance">
+      {nodes.map((node, index) =>
+        node.kind === "mention" ? (
+          <span key={`${node.value}-${index}`} className="world-mention">
+            {node.value}
+          </span>
+        ) : (
+          <span key={`t-${index}`}>{node.value}</span>
+        ),
+      )}
+    </p>
+  );
+}
+
+function EventView({
+  event,
+  memberId,
+  displayOf,
+  people,
+}: {
+  event: WorldEvent;
+  memberId: string;
+  displayOf: (id: string) => string;
+  people: MentionPerson[];
+}) {
   const kind = event.kind || "";
   const actor = event.actor_id || "";
   const name = displayOf(actor);
@@ -19,6 +76,11 @@ function EventView({ event, memberId, displayOf }: { event: WorldEvent; memberId
   const attachments = event.attachments || [];
   const images = attachments.filter((item) => isImageMime(item.mime, item.name));
   const text = event.text || "";
+  const mentioned = event.mentions || [];
+  const tokens = [
+    ...mentioned.flatMap((id) => [id, displayOf(id)]),
+    ...people.flatMap((person) => [person.member_id, mentionLabel(person)]),
+  ];
 
   if (kind === "utterance") {
     return (
@@ -26,7 +88,7 @@ function EventView({ event, memberId, displayOf }: { event: WorldEvent; memberId
         {text ? (
           <div className={classNames("message-bubble", mine ? "user-bubble" : "assistant-bubble")}>
             <div className="message-label">{mine ? "you" : name}</div>
-            <Markdown content={text} />
+            <UtteranceText text={text} tokens={tokens} />
           </div>
         ) : attachments.length ? (
           <div className="world-file-meta">{mine ? "you" : name} shared a file</div>
@@ -88,29 +150,101 @@ export function WorldChat() {
     addFiles,
     removeFile,
     sending,
+    present,
+    neighbors,
   } = useWorld();
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const areaRef = useRef<HTMLTextAreaElement | null>(null);
   const [dropping, setDropping] = useState(false);
+  const [cursor, setCursor] = useState(0);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const [dismissedStart, setDismissedStart] = useState<number | null>(null);
+
+  const people = useMemo<MentionPerson[]>(() => {
+    const presentIds = new Set(present.map((item) => item.member_id));
+    const list: MentionPerson[] = present.map((item) => ({
+      member_id: item.member_id,
+      display_name: item.display_name || item.member_id,
+      here: true,
+    }));
+    for (const agent of neighbors) {
+      if (presentIds.has(agent.name)) continue;
+      list.push({
+        member_id: agent.name,
+        display_name: agent.title || agent.name,
+        here: false,
+      });
+    }
+    return list;
+  }, [neighbors, present]);
+
+  const mentionQuery = joined ? findMentionQuery(speakText, cursor) : null;
+  const mentionMatches = mentionQuery ? filterMentionPeople(people, mentionQuery.query) : [];
+  const mentionOpen = Boolean(mentionQuery) && mentionMatches.length > 0 && mentionQuery?.start !== dismissedStart;
+
+  useEffect(() => {
+    if (!mentionQuery) setDismissedStart(null);
+  }, [mentionQuery]);
+
+  useEffect(() => {
+    setActiveIndex(0);
+  }, [mentionQuery?.query, mentionQuery?.start, mentionMatches.length]);
 
   useEffect(() => {
     const node = scrollRef.current;
     if (node) node.scrollTop = node.scrollHeight;
   }, [events.length, events[events.length - 1]?.text, events[events.length - 1]?.attachments?.length]);
 
-  useEffect(() => {
-    const node = areaRef.current;
-    if (!node) return;
-    node.style.height = "auto";
-    node.style.height = `${Math.min(node.scrollHeight, 140)}px`;
-  }, [speakText]);
-
   const canSend = joined && !sending && Boolean(speakText.trim() || pendingFiles.length);
+
+  const applyMention = (person: MentionPerson) => {
+    const next = insertMention(speakText, cursor, person);
+    setSpeakText(next.text);
+    setCursor(next.cursor);
+    setDismissedStart(null);
+    requestAnimationFrame(() => {
+      const node = areaRef.current;
+      if (!node) return;
+      node.focus();
+      node.setSelectionRange(next.cursor, next.cursor);
+    });
+  };
 
   const submit = (event?: FormEvent) => {
     event?.preventDefault();
     if (!canSend) return;
     void speak().then(() => areaRef.current?.focus());
+  };
+
+  const onComposerKey = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    setCursor(event.currentTarget.selectionStart);
+    if (mentionOpen) {
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        setActiveIndex((index) => (index + 1) % mentionMatches.length);
+        return;
+      }
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        setActiveIndex((index) => (index - 1 + mentionMatches.length) % mentionMatches.length);
+        return;
+      }
+      if (event.key === "Tab" || event.key === "Enter") {
+        event.preventDefault();
+        const person = mentionMatches[activeIndex] || mentionMatches[0];
+        if (person) applyMention(person);
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setDismissedStart(mentionQuery?.start ?? null);
+        return;
+      }
+    }
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      submit(event);
+    }
   };
 
   const onDrop = (event: DragEvent) => {
@@ -153,6 +287,7 @@ export function WorldChat() {
               event={event}
               memberId={memberId}
               displayOf={displayOf}
+              people={people}
             />
           ))
         ) : (
@@ -187,22 +322,43 @@ export function WorldChat() {
 
       <form
         onSubmit={submit}
-        className={classNames("composer-row", (!joined || sending) && "is-disabled")}
+        className={classNames("composer-row", "world-composer", (!joined || sending) && "is-disabled")}
       >
-        <textarea
-          ref={areaRef}
-          rows={1}
-          placeholder={joined ? "Say something or attach a file. Enter to send, Shift+Enter for a new line. Use @name to mention." : "Join a world to speak"}
-          value={speakText}
-          disabled={!joined || sending}
-          onChange={(event) => setSpeakText(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && !event.shiftKey) {
-              event.preventDefault();
-              submit(event);
-            }
-          }}
-        />
+        <div className="world-composer-field">
+          {mentionOpen ? (
+            <ul className="world-mention-menu" role="listbox">
+              {mentionMatches.map((person, index) => (
+                <li key={person.member_id}>
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={index === activeIndex}
+                    className={classNames("world-mention-option", index === activeIndex && "is-active")}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => applyMention(person)}
+                  >
+                    <span className="world-mention">@{mentionLabel(person)}</span>
+                    {person.here === false ? <span className="world-mention-away">not here</span> : null}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          <textarea
+            ref={areaRef}
+            rows={1}
+            placeholder={joined ? "Say something. Type @ to mention someone." : "Join a world to speak"}
+            value={speakText}
+            disabled={!joined || sending}
+            onChange={(event) => {
+              setSpeakText(event.target.value);
+              setCursor(event.target.selectionStart);
+            }}
+            onClick={(event) => setCursor(event.currentTarget.selectionStart)}
+            onKeyUp={(event) => setCursor(event.currentTarget.selectionStart)}
+            onKeyDown={onComposerKey}
+          />
+        </div>
         <div className="composer-actions">
           <label
             className={classNames(

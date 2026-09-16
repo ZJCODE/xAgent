@@ -253,10 +253,12 @@ class WorldAddressTests(unittest.TestCase):
     def setUp(self):
         self.inhabitant = WorldInhabitant(StubAgent(), member_id="aaac", display_name="Aaac")
 
-    def test_only_mentions_and_names_count_as_self(self):
-        self.assertTrue(self.inhabitant._addressed_to_self({"text": "aaac are you there"}))
-        self.assertTrue(self.inhabitant._addressed_to_self({"text": "hey Aaac"}))
+    def test_only_mentions_and_at_names_count_as_self(self):
+        self.assertTrue(self.inhabitant._addressed_to_self({"text": "@aaac are you there"}))
+        self.assertTrue(self.inhabitant._addressed_to_self({"text": "hey @Aaac"}))
         self.assertTrue(self.inhabitant._addressed_to_self({"text": "hi", "mentions": ["aaac"]}))
+        self.assertFalse(self.inhabitant._addressed_to_self({"text": "aaac are you there"}))
+        self.assertFalse(self.inhabitant._addressed_to_self({"text": "hey Aaac"}))
         self.assertFalse(self.inhabitant._addressed_to_self({"text": "anyone here ?"}))
         self.assertFalse(self.inhabitant._addressed_to_self({"text": "hey"}))
         self.assertFalse(self.inhabitant._addressed_to_self({"text": "有人吗"}))
