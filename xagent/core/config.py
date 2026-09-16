@@ -133,7 +133,14 @@ class AgentConfig:
     # These exist to prevent runaway resource consumption.
     # ============================================================
     MAX_COMMAND_TIMEOUT = 300  # hard upper bound for timeout parameter (seconds)
-    MAX_COMMAND_OUTPUT_SIZE = 51200  # 50 KB per stream
+    MAX_COMMAND_OUTPUT_SIZE = 51200  # 50 KB per stream, raw capture cap in the shell tool
+    # Context-side cap for one tool result as the model sees it. Distinct from
+    # MAX_COMMAND_OUTPUT_SIZE: a run_command result carries stdout and stderr
+    # together, and nothing else bounded what a single tool call could push
+    # into the turn. Head and tail are kept so both the start of the output
+    # and any final status/error stay visible.
+    MAX_TOOL_RESULT_CHARS = 16000
+    TOOL_RESULT_TAIL_CHARS = 3000
     MAX_SYSTEM_PROMPT_LENGTH = 16000  # soft limit for assembled instructions (chars)
     MAX_SKILLS_CATALOG_CHARS = 8000  # max characters for injected skill catalog
 

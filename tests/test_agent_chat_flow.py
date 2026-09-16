@@ -2502,6 +2502,43 @@ class ToolExecutorTransientTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(display_result)
         self.assertEqual(storage.messages, [])
 
+    async def test_execute_single_budgets_oversized_tool_output(self):
+        head_marker = "HEAD-START "
+        tail_marker = " TAIL-END exit=1"
+        payload = head_marker + ("x" * (AgentConfig.MAX_TOOL_RESULT_CHARS * 3)) + tail_marker
+
+        async def dump() -> str:
+            return payload
+
+        executor = ToolExecutor(
+            tool_manager=FakeToolManager(tools={"dump": dump}),
+            message_storage=InMemoryMessageStorage(),
+            client=None,
+        )
+
+        tool_message, display_result = await executor.execute_single(FakeToolCall(name="dump"))
+
+        content = tool_message["content"]
+        self.assertIsNone(display_result)
+        self.assertLess(len(content), AgentConfig.MAX_TOOL_RESULT_CHARS + 200)
+        self.assertTrue(content.startswith(head_marker))
+        self.assertTrue(content.endswith(tail_marker))
+        self.assertIn("chars omitted from tool output", content)
+
+    async def test_execute_single_keeps_small_tool_output_intact(self):
+        async def small() -> str:
+            return "short result"
+
+        executor = ToolExecutor(
+            tool_manager=FakeToolManager(tools={"small": small}),
+            message_storage=InMemoryMessageStorage(),
+            client=None,
+        )
+
+        tool_message, _ = await executor.execute_single(FakeToolCall(name="small"))
+
+        self.assertEqual(tool_message["content"], "short result")
+
     async def test_execute_single_records_tool_observation(self):
         async def lookup(value: str) -> dict:
             return {"value": value}
