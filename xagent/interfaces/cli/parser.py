@@ -359,7 +359,7 @@ def _add_world_lifecycle_subparsers(parent_parser: argparse.ArgumentParser) -> N
     restart_parser.set_defaults(handler=world_hub.handle_world_restart)
 
     status_parser = sub.add_parser("status", help="Show world hub status")
-    _add_world_hub_arguments(status_parser)
+    _add_world_bind_arguments(status_parser)
     status_parser.add_argument("--json", action="store_true", dest="json_output", help="Print machine-readable JSON")
     status_parser.set_defaults(handler=world_hub.handle_world_status)
 

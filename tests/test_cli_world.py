@@ -64,6 +64,17 @@ class WorldCliTests(unittest.TestCase):
         chat = parser.parse_args(["world", "chat", "plaza"])
         self.assertEqual(chat.world, "plaza")
         self.assertEqual(chat.member_id, "human")
+        start_open = parser.parse_args(["world", "start", "--open"])
+        self.assertTrue(start_open.open_browser)
+        for command in (
+            ["world", "status", "--open"],
+            ["world", "list", "--open"],
+            ["world", "create", "plaza", "--open"],
+            ["world", "join", "plaza", "--open"],
+            ["world", "chat", "plaza", "--open"],
+        ):
+            with self.assertRaises(SystemExit):
+                parser.parse_args(command)
 
     def test_root_help_mentions_world(self):
         help_text = build_parser().format_help()
