@@ -537,6 +537,131 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         self.assertIn("separately said hi", experience)
         self.assertIn("[channel=api]", experience)
 
+    @staticmethod
+    def _room_message(text, sender_id, at: datetime, *, channel="world", room_name="plaza"):
+        message = Message.create(text, role=RoleType.USER, sender_id=sender_id)
+        message.timestamp = at.timestamp()
+        message.channel = channel
+        message.room_name = room_name
+        return message
+
+    def test_room_context_span_keeps_older_same_place_rows(self):
+        base = datetime(2026, 5, 14, 9, 0)
+        older = self._room_message("morning plan", "alice", base)
+        inside = self._room_message("still on?", "bob", base.replace(minute=25))
+        current = self._room_message("有人吗", "alice", base.replace(minute=30))
+        room_block = (
+            "[room context]\n"
+            "room_id: plaza\n"
+            "covers: 2026-05-14 09:25..2026-05-14 09:30\n\n"
+            "bob 2026-05-14 09:25: still on?\n"
+            "alice 2026-05-14 09:30: 有人吗\n"
+            "[/room context]"
+        )
+
+        context_messages = MessageHandler.build_turn_context_messages(
+            [older, inside, current],
+            current_user_id="alice",
+            current_time="2026-05-14 09:30",
+            current_message=current,
+            room_context=room_block,
+        )
+
+        by_name = {message["name"]: message["content"] for message in context_messages}
+        experience = by_name[AgentConfig.RECENT_EXPERIENCE_NAME]
+        self.assertIn("morning plan", experience)
+        self.assertNotIn("still on?", experience)
+        self.assertNotIn("有人吗", experience)
+        self.assertIn("有人吗", by_name[AgentConfig.ROOM_CONTEXT_NAME])
+
+    def test_room_context_with_only_current_line_keeps_stored_history(self):
+        # Mirrors a failed/short history pull: the adapter still emits a block
+        # containing just the triggering line.
+        base = datetime(2026, 5, 14, 9, 0)
+        history = self._room_message("earlier in the room", "bob", base)
+        own_reply = Message.create("I said this earlier", role=RoleType.ASSISTANT, sender_id="agent")
+        own_reply.timestamp = base.replace(minute=5).timestamp()
+        own_reply.channel = "world"
+        own_reply.room_name = "plaza"
+        current = self._room_message("anyone?", "alice", base.replace(minute=30))
+        room_block = (
+            "[room context]\n"
+            "room_id: plaza\n"
+            "covers: 2026-05-14 09:30..2026-05-14 09:30\n\n"
+            "alice 2026-05-14 09:30: anyone?\n"
+            "[/room context]"
+        )
+
+        context_messages = MessageHandler.build_turn_context_messages(
+            [history, own_reply, current],
+            current_user_id="alice",
+            current_time="2026-05-14 09:30",
+            current_message=current,
+            room_context=room_block,
+        )
+
+        experience = next(
+            message["content"]
+            for message in context_messages
+            if message["name"] == AgentConfig.RECENT_EXPERIENCE_NAME
+        )
+        self.assertIn("earlier in the room", experience)
+        self.assertIn("I said this earlier", experience)
+        self.assertNotIn("anyone?", experience)
+
+    def test_room_context_span_tolerates_minute_rounding(self):
+        base = datetime(2026, 5, 14, 9, 30, 45)
+        current = self._room_message("anyone?", "alice", base)
+        room_block = (
+            "[room context]\n"
+            "room_id: plaza\n"
+            "covers: 2026-05-14 09:30..2026-05-14 09:30\n\n"
+            "alice 2026-05-14 09:30: anyone?\n"
+            "[/room context]"
+        )
+
+        context_messages = MessageHandler.build_turn_context_messages(
+            [current],
+            current_user_id="alice",
+            current_time="2026-05-14 09:30",
+            current_message=current,
+            room_context=room_block,
+        )
+
+        experience = next(
+            message["content"]
+            for message in context_messages
+            if message["name"] == AgentConfig.RECENT_EXPERIENCE_NAME
+        )
+        self.assertNotIn("anyone?", experience)
+
+    def test_room_context_without_span_falls_back_to_place_exclusion(self):
+        base = datetime(2026, 5, 14, 9, 0)
+        older = self._room_message("morning plan", "alice", base)
+        current = self._room_message("有人吗", "alice", base.replace(minute=30))
+        legacy_block = (
+            "[room context]\n"
+            "room_id: plaza\n\n"
+            "alice 2026-05-14 09:30: 有人吗\n"
+            "[/room context]"
+        )
+
+        context_messages = MessageHandler.build_turn_context_messages(
+            [older, current],
+            current_user_id="alice",
+            current_time="2026-05-14 09:30",
+            current_message=current,
+            room_context=legacy_block,
+        )
+
+        experience = next(
+            message["content"]
+            for message in context_messages
+            if message["name"] == AgentConfig.RECENT_EXPERIENCE_NAME
+        )
+        self.assertNotIn("morning plan", experience)
+        self.assertNotIn("有人吗", experience)
+
     def test_scheduled_turn_is_not_formatted_as_human_speech(self):
         due = Message.create(
             "This scheduled task is now due. Execute it and return the message to deliver.\n\nTask: ping",

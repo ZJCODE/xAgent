@@ -18,6 +18,7 @@ class JournalLLMServicePromptTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("[speaker=ME]", prompt)
         self.assertIn("[scheduled task][for=Name][timestamp=Time]", prompt)
         self.assertIn("[ambient context][timestamp=Time]", prompt)
+        self.assertIn("optional `covers:` and `present:` headers", prompt)
         self.assertNotIn("[internal_monologue]", prompt)
         self.assertIn("write in the language used by the users in the transcript", prompt)
         self.assertIn("dominant or most relevant user's language", prompt)

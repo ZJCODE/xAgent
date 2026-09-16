@@ -60,6 +60,10 @@ class AgentConfig:
     # answers, so the model never has to infer which row is "current" when
     # other processes interleave rows into the shared stream.
     CURRENT_MESSAGE_MARKER = "[current]"
+    # Room-context blocks declare a `covers: from..to` span at minute
+    # precision; stored rows inside the span (± this tolerance) are treated
+    # as already replayed by the block and left out of recent_experience.
+    ROOM_CONTEXT_COVERS_TOLERANCE_SECONDS = 60
 
     # ============================================================
     # 3. Model & Agent Defaults
@@ -488,7 +492,7 @@ class AgentConfig:
         "- A trailing `[current]` marks the one message this turn answers. Rows after it arrived while you were being woken; they are context, not the request.\n"
         "- `[ambient context][timestamp=Time][channel=Channel]` — something observed or received via Channel, not a direct message.\n"
         "- `[ambient context][timestamp=Time][channel=Channel][room=RoomName]` — something observed or received in RoomName via Channel.\n"
-        "- `[room context]` ... `[/room context]` blocks: `room_name:`, `room_id:`, optional `present:` (who is here now), lines like `Name YYYY-MM-DD HH:mm: text`; `ME ...` inside means you.\n"
+        "- `[room context]` ... `[/room context]` blocks: `room_name:`, `room_id:`, optional `covers:` (the time span this block replays), optional `present:` (who is here now), lines like `Name YYYY-MM-DD HH:mm: text`; `ME ...` inside means you.\n"
         "- Keep people, rooms, preferences, commitments, and experiences separate. Do not carry one person's private topic into another person's reply unless they clearly joined or referred to it.\n"
         "\n"
     )

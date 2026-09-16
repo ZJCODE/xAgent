@@ -1,7 +1,11 @@
 import unittest
 from datetime import datetime
 
-from xagent.core.formatters import RoomContextEntry, format_room_context
+from xagent.core.formatters import (
+    RoomContextEntry,
+    format_room_context,
+    parse_room_context_covers,
+)
 
 
 class RoomContextFormatterTests(unittest.TestCase):
@@ -28,7 +32,8 @@ class RoomContextFormatterTests(unittest.TestCase):
             text,
             "[room context]\n"
             "room_name: Team Sync\n"
-            "room_id: room-1\n\n"
+            "room_id: room-1\n"
+            "covers: 2024-01-02 09:30..2024-01-02 09:31\n\n"
             "Alice 2024-01-02 09:30: Can you review this?\n"
             "ME 2024-01-02 09:31: I can help with that\n"
             "[/room context]",
@@ -51,7 +56,8 @@ class RoomContextFormatterTests(unittest.TestCase):
             text,
             "[room context]\n"
             "room_name: Project Alpha\n"
-            "room_id: room 42\n\n"
+            "room_id: room 42\n"
+            "covers: 2024-03-04 05:06..2024-03-04 05:06\n\n"
             "Bob 2024-03-04 05:06: hello there\n"
             "[/room context]",
         )
@@ -110,6 +116,7 @@ class RoomContextFormatterTests(unittest.TestCase):
             "[room context]\n"
             "room_name: 大厅\n"
             "room_id: plaza\n"
+            "covers: 2024-01-02 09:30..2024-01-02 09:30\n"
             "present: 爱丽丝(alice), 一号(agent1)\n\n"
             "爱丽丝(alice) 2024-01-02 09:30: 有人吗\n"
             "[/room context]",
@@ -132,10 +139,51 @@ class RoomContextFormatterTests(unittest.TestCase):
         self.assertEqual(
             text,
             "[room context]\n"
-            "room_id: room-1\n\n"
+            "room_id: room-1\n"
+            "covers: 2024-01-02 09:30..2024-01-02 09:30\n\n"
             "Alice 2024-01-02 09:30: hi\n"
             "[/room context]",
         )
+
+    def test_covers_span_ignores_blank_entries_and_round_trips(self):
+        text = format_room_context(
+            "room-1",
+            [
+                RoomContextEntry(
+                    speaker_label="Alice",
+                    occurred_at=datetime(2024, 1, 2, 8, 0),
+                    text="   ",
+                ),
+                RoomContextEntry(
+                    speaker_label="Bob",
+                    occurred_at=datetime(2024, 1, 2, 9, 31),
+                    text="ready",
+                ),
+                RoomContextEntry(
+                    speaker_label="Alice",
+                    occurred_at=datetime(2024, 1, 2, 9, 10),
+                    text="hello",
+                ),
+            ],
+        )
+
+        self.assertIn("covers: 2024-01-02 09:10..2024-01-02 09:31", text)
+        self.assertEqual(
+            parse_room_context_covers(text),
+            (datetime(2024, 1, 2, 9, 10), datetime(2024, 1, 2, 9, 31)),
+        )
+
+    def test_parse_covers_returns_none_for_blocks_without_span(self):
+        legacy = (
+            "[room context]\n"
+            "room_id: room-1\n\n"
+            "Alice 2024-01-02 09:30: hi\n"
+            "[/room context]"
+        )
+
+        self.assertIsNone(parse_room_context_covers(legacy))
+        self.assertIsNone(parse_room_context_covers(""))
+        self.assertIsNone(parse_room_context_covers("covers: garbage..nope"))
 
 
 if __name__ == "__main__":

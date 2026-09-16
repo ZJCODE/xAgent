@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from ..config import AgentConfig
+from ..formatters.context import parse_room_context_covers
 from ..inbox import INBOX_KIND_METADATA_KEY, is_scheduled_work
 from ...components import MessageStorage
 from ...schemas import Message, RoleType, MessageType
@@ -336,11 +337,13 @@ class MessageHandler:
             budgeted_observations,
         )
         if (room_context or "").strip():
-            # Live room situation already covers this place; do not replay the
-            # same channel/room timeline inside recent_experience.
+            # The live room block replays a slice of this place's timeline;
+            # drop only the stored rows that fall inside that slice so a
+            # short or failed history pull never erases what storage knows.
             experience_entries = MessageHandler._exclude_room_covered_experience(
                 experience_entries,
                 current_message=current_message,
+                covers=parse_room_context_covers(room_context),
             )
 
         recent_experience = MessageHandler._build_recent_experience_context(
@@ -540,23 +543,36 @@ class MessageHandler:
         experience_entries: List[tuple[str, Message, str]],
         *,
         current_message: Optional[Message],
+        covers: Optional[tuple[datetime, datetime]] = None,
     ) -> List[tuple[str, Message, str]]:
-        """Drop same-place rows when a live ``room_context`` block is supplied."""
+        """Drop same-place rows that the live ``room_context`` block already replays.
+
+        With a ``covers`` span, only rows whose timestamp falls inside it (plus
+        a one-minute tolerance, since the block renders minutes) are dropped;
+        older same-place rows stay in ``recent_experience``. Without a span
+        (hand-written or legacy blocks) the whole place is treated as covered.
+        """
         if current_message is None:
             return experience_entries
         channel = str(current_message.channel or "").strip()
         room_name = str(current_message.room_name or "").strip()
         if not channel or not room_name:
             return experience_entries
-        return [
-            entry
-            for entry in experience_entries
-            if not MessageHandler._message_in_room(
-                entry[1],
-                channel=channel,
-                room_name=room_name,
-            )
-        ]
+
+        window: Optional[tuple[float, float]] = None
+        if covers is not None:
+            start, end = covers
+            tolerance = AgentConfig.ROOM_CONTEXT_COVERS_TOLERANCE_SECONDS
+            window = (start.timestamp() - tolerance, end.timestamp() + tolerance)
+
+        def covered(message: Message) -> bool:
+            if not MessageHandler._message_in_room(message, channel=channel, room_name=room_name):
+                return False
+            if window is None:
+                return True
+            return window[0] <= float(message.timestamp) <= window[1]
+
+        return [entry for entry in experience_entries if not covered(entry[1])]
 
     @staticmethod
     def _message_in_room(

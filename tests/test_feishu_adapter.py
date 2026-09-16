@@ -2060,9 +2060,10 @@ class FeishuHistoryFetcherTests(unittest.TestCase):
             room_name="Agent Test",
         )
 
+        stamp = format_feishu_timestamp(1)
         self.assertEqual(
             text,
-            f"[room context]\nroom_name: Agent Test\nroom_id: oc_group\n\nAlice(ou_alice) {format_feishu_timestamp(1)}: hi\n[/room context]",
+            f"[room context]\nroom_name: Agent Test\nroom_id: oc_group\ncovers: {stamp}..{stamp}\n\nAlice(ou_alice) {stamp}: hi\n[/room context]",
         )
 
     def test_format_room_context_omits_room_name_when_missing(self):
@@ -2073,9 +2074,10 @@ class FeishuHistoryFetcherTests(unittest.TestCase):
             [FeishuMessageRecord("om_1", "ou_alice", "Alice", "hi", 1)],
         )
 
+        stamp = format_feishu_timestamp(1)
         self.assertEqual(
             text,
-            f"[room context]\nroom_id: oc_group\n\nAlice(ou_alice) {format_feishu_timestamp(1)}: hi\n[/room context]",
+            f"[room context]\nroom_id: oc_group\ncovers: {stamp}..{stamp}\n\nAlice(ou_alice) {stamp}: hi\n[/room context]",
         )
 
     def test_format_room_context_includes_sender_ids(self):
@@ -2086,9 +2088,10 @@ class FeishuHistoryFetcherTests(unittest.TestCase):
             [FeishuMessageRecord("om_1", "ou_alice", "Alice", "hi", 1)],
         )
 
+        stamp = format_feishu_timestamp(1)
         self.assertEqual(
             text,
-            f"[room context]\nroom_id: oc_group\n\nAlice(ou_alice) {format_feishu_timestamp(1)}: hi\n[/room context]",
+            f"[room context]\nroom_id: oc_group\ncovers: {stamp}..{stamp}\n\nAlice(ou_alice) {stamp}: hi\n[/room context]",
         )
 
     def test_format_group_history_marks_bot_app_id_as_you(self):
