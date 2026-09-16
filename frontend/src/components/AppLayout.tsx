@@ -4,6 +4,7 @@ import {
   CircleHelp,
   Database,
   Files,
+  Globe,
   ListTodo,
   MessageSquareText,
   Moon,
@@ -17,6 +18,7 @@ import { useAgentSession } from "../context/AgentSessionContext";
 import { useConnectivity } from "../context/ConnectivityContext";
 import { useTheme } from "../context/ThemeContext";
 import { classNames } from "../lib/format";
+import { DEFAULT_WORLD_HUB_URL } from "../lib/ports";
 import type { RoutePath } from "../types";
 import { AgentSwitcher } from "./AgentSwitcher";
 import { HelpDialog } from "./HelpDialog";
@@ -68,6 +70,16 @@ export function AppLayout({ route, onNavigate, children }: AppLayoutProps) {
           ))}
         </nav>
         <div className="sidebar-footer">
+          <a
+            className="ui-button ui-button-ghost ui-icon-button"
+            href={DEFAULT_WORLD_HUB_URL}
+            target="_blank"
+            rel="noreferrer"
+            title="Open world"
+            aria-label="Open world"
+          >
+            <Globe size={16} />
+          </a>
           <IconButton type="button" onClick={() => setHelpOpen(true)} title="API Help" aria-label="Open API Help">
             <CircleHelp size={16} />
           </IconButton>

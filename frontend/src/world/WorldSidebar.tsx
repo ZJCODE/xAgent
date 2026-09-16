@@ -1,4 +1,6 @@
+import { Bot } from "lucide-react";
 import { classNames } from "../lib/format";
+import { DEFAULT_AGENT_WEB_URL } from "../lib/ports";
 import { initialOf } from "./protocol";
 import { useWorld } from "./WorldContext";
 import { WorldSwitcher } from "./WorldSwitcher";
@@ -94,6 +96,19 @@ export function WorldSidebar() {
           )}
           {agentError ? <p className="world-error">{agentError}</p> : null}
         </section>
+      </div>
+
+      <div className="sidebar-footer">
+        <a
+          className="ui-button ui-button-ghost ui-icon-button"
+          href={DEFAULT_AGENT_WEB_URL}
+          target="_blank"
+          rel="noreferrer"
+          title="Open agent web"
+          aria-label="Open agent web"
+        >
+          <Bot size={16} />
+        </a>
       </div>
     </aside>
   );

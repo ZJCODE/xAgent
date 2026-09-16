@@ -40,6 +40,11 @@
   padding: 0;
 }
 
+.world-sidebar .sidebar-footer {
+  flex: 0 0 auto;
+  padding: 12px 14px 14px;
+}
+
 .world-sidebar-top {
   position: relative;
   z-index: 20;

@@ -3,7 +3,7 @@ export const MAX_FILE_BYTES = 8 * 1024 * 1024;
 export const WORLD_NAME_RE = /^[a-z][a-z0-9_-]{0,63}$/;
 export const WORLD_NAME_RULE =
   "Name must start with a lowercase letter and use only lowercase letters, digits, hyphens, or underscores.";
-
+export { DEFAULT_AGENT_WEB_URL } from "../lib/ports";
 
 export type EventKind = "utterance" | "join" | "leave" | string;
 

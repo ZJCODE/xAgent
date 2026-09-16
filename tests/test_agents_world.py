@@ -519,6 +519,8 @@ class WorldHubTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Attach file", blob)
         self.assertIn("Type @ to mention someone", blob)
         self.assertIn("world-mention-menu", blob)
+        self.assertIn("Open agent web", blob)
+        self.assertIn("127.0.0.1:1415", blob)
 
     async def test_http_serves_spoken_file(self):
         await _http_get(self.port, "/worlds/create?name=hall")

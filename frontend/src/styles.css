@@ -859,6 +859,7 @@ input {
   padding: 0 12px;
   font-size: 13px;
   font-weight: 640;
+  text-decoration: none;
   transition: background 160ms ease, border-color 160ms ease, color 160ms ease, opacity 160ms ease;
 }
 
