@@ -369,6 +369,50 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         self.assertIn("Keep simple replies short", context_messages[2]["content"])
         self.assertIn("Never rely on Markdown image embeds", context_messages[2]["content"])
 
+    def test_current_message_header_carries_current_marker(self):
+        earlier = Message.create("earlier", role=RoleType.USER, sender_id="Joy")
+        earlier.timestamp -= 10
+        current = Message.create("answer this", role=RoleType.USER, sender_id="Joy")
+        late_event = Message.create_context_event(
+            content="someone joined plaza",
+            source="world",
+            event_type="join",
+        )
+        late_event.timestamp = current.timestamp + 1
+
+        context_messages = MessageHandler.build_turn_context_messages(
+            [earlier, current, late_event],
+            current_user_id="Joy",
+            current_time="2026-05-14 09:30",
+            current_message=current,
+        )
+
+        experience = next(
+            message["content"]
+            for message in context_messages
+            if message["name"] == AgentConfig.RECENT_EXPERIENCE_NAME
+        )
+        lines = experience.splitlines()
+        marked = [line for line in lines if line.endswith(AgentConfig.CURRENT_MESSAGE_MARKER)]
+        self.assertEqual(len(marked), 1)
+        self.assertTrue(marked[0].startswith("[speaker=Joy]"))
+        marked_index = lines.index(marked[0])
+        self.assertEqual(lines[marked_index + 1], "answer this")
+        self.assertLess(marked_index, lines.index("someone joined plaza"))
+        self.assertNotIn(
+            AgentConfig.CURRENT_MESSAGE_MARKER,
+            lines[lines.index("earlier") - 1],
+        )
+
+    def test_no_current_marker_without_current_message(self):
+        context_messages = MessageHandler.build_turn_context_messages(
+            [Message.create("hello", role=RoleType.USER, sender_id="Joy")],
+            current_user_id="Joy",
+            current_time="2026-05-14 09:30",
+        )
+        experience = context_messages[0]["content"]
+        self.assertNotIn(AgentConfig.CURRENT_MESSAGE_MARKER, experience)
+
     def test_turn_layers_are_ordered_by_volatility(self):
         messages = [
             Message.create("Hello", role=RoleType.USER, sender_id="Joy"),

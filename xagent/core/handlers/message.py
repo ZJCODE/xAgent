@@ -348,6 +348,7 @@ class MessageHandler:
             omitted_messages=omitted_count,
             omitted_observations=omitted_observation_count,
             working_summary=working_summary,
+            current_message=current_message,
         )
         resolved_current_time = (
             current_time
@@ -477,6 +478,7 @@ class MessageHandler:
         omitted_messages: int,
         omitted_observations: int,
         working_summary: str = "",
+        current_message: Optional[Message] = None,
     ) -> str:
         lines: list[str] = []
         summary = (working_summary or "").strip()
@@ -494,7 +496,14 @@ class MessageHandler:
             lines.append("")
 
         for entry_type, msg, content in experience_entries:
-            lines.extend(MessageHandler._format_experience_entry(entry_type, msg, content))
+            lines.extend(
+                MessageHandler._format_experience_entry(
+                    entry_type,
+                    msg,
+                    content,
+                    is_current=MessageHandler._is_same_message(msg, current_message),
+                )
+            )
             lines.append("")
 
         experience_text = "\n".join(lines).strip() or "[No recent experience]"
@@ -576,18 +585,35 @@ class MessageHandler:
         return "[Earlier experience omitted: " + ", ".join(parts) + "]"
 
     @staticmethod
+    def _is_same_message(message: Message, other: Optional[Message]) -> bool:
+        """Identity check that works for the freshly stored copy and the reloaded row.
+
+        The message returned by ``store_user_message`` carries no storage
+        cursor, so compare the immutable fields instead.
+        """
+        if other is None:
+            return False
+        return (
+            message.timestamp == other.timestamp
+            and (message.sender_id or "") == (other.sender_id or "")
+            and message.role == other.role
+        )
+
+    @staticmethod
     def _format_experience_entry(
         entry_type: str,
         message: Message,
         content: str,
+        *,
+        is_current: bool = False,
     ) -> List[str]:
         if entry_type == "observation":
             return [MessageHandler._format_context_event_header(message), content]
 
-        lines = [
-            MessageHandler._format_transcript_message_header(message),
-            content,
-        ]
+        header = MessageHandler._format_transcript_message_header(message)
+        if is_current:
+            header += AgentConfig.CURRENT_MESSAGE_MARKER
+        lines = [header, content]
         image_count = MessageHandler._count_message_images(message)
         if image_count:
             noun = "image" if image_count == 1 else "images"
