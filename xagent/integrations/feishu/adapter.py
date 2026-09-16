@@ -581,7 +581,15 @@ class FeishuAdapter:
             )
 
             decision = None
+            history_records: Optional[list[FeishuMessageRecord]] = None
             if not self.config.group_reply_only_when_mentioned:
+                # Fetch once here; the reply path reuses the same records
+                # instead of hitting the Feishu history API a second time.
+                history_records = await self._fetch_group_history(
+                    chat_id=chat_id,
+                    current_message_id=message_id,
+                    raw_msg=msg,
+                )
                 decision_context = await self._group_decision_context(
                     chat_id=chat_id,
                     current_message_id=message_id,
@@ -589,6 +597,7 @@ class FeishuAdapter:
                     sender_id=sender_id,
                     sender_name=sender_name,
                     text=ambient_text,
+                    records=history_records,
                 )
                 decision = await self._decide_group_participation(
                     context=decision_context,
@@ -613,6 +622,7 @@ class FeishuAdapter:
                         mentioned=False,
                         route_reason="agent_decision",
                         decision=decision,
+                        history_records=history_records,
                     )
                     return
 
@@ -655,6 +665,7 @@ class FeishuAdapter:
         mentioned: bool,
         route_reason: str,
         decision: Any = None,
+        history_records: Optional[list[FeishuMessageRecord]] = None,
     ) -> None:
         attachment_download = await self._download_message_attachment_assets_with_failures(msg, message_id=message_id)
         if attachment_download.failed_resources:
@@ -709,6 +720,7 @@ class FeishuAdapter:
             raw_msg=msg,
             image_assets=image_assets,
             attachments=self._attachments_from_attachment_assets(attachment_assets),
+            history_records=history_records,
         )
 
     async def _handle_group_observation(
@@ -842,13 +854,15 @@ class FeishuAdapter:
         sender_id: str,
         sender_name: str,
         text: str,
+        records: Optional[list[FeishuMessageRecord]] = None,
     ) -> str:
         """Build a full room-context block with recent history for participation decision."""
-        records = await self._fetch_group_history(
-            chat_id=chat_id,
-            current_message_id=current_message_id,
-            raw_msg=raw_msg,
-        )
+        if records is None:
+            records = await self._fetch_group_history(
+                chat_id=chat_id,
+                current_message_id=current_message_id,
+                raw_msg=raw_msg,
+            )
         room_name = await self._resolve_room_name(chat_id, raw_msg)
         current_record = FeishuMessageRecord(
             current_message_id or "",
@@ -1783,12 +1797,14 @@ class FeishuAdapter:
         sender_id: str,
         sender_name: str,
         text: str,
+        records: Optional[list[FeishuMessageRecord]] = None,
     ) -> str:
-        records = await self._fetch_group_history(
-            chat_id=chat_id,
-            current_message_id=current_message_id,
-            raw_msg=raw_msg,
-        )
+        if records is None:
+            records = await self._fetch_group_history(
+                chat_id=chat_id,
+                current_message_id=current_message_id,
+                raw_msg=raw_msg,
+            )
         room_name = await self._resolve_room_name(chat_id, raw_msg)
         current_record = FeishuMessageRecord(
             current_message_id or "",
@@ -1925,6 +1941,7 @@ class FeishuAdapter:
         image_assets: Optional[list[_FeishuInboundImageAsset]] = None,
         attachments: Optional[list[dict[str, Any]]] = None,
         room_name: Optional[str] = None,
+        history_records: Optional[list[FeishuMessageRecord]] = None,
     ) -> None:
         image_assets = image_assets or []
         supports_vision = bool(getattr(self.agent, "supports_vision", True))
@@ -1942,6 +1959,7 @@ class FeishuAdapter:
                 sender_id=sender_id,
                 sender_name=sender_name,
                 text=chat_text,
+                records=history_records,
             )
 
         # Resolve room name so agent replies carry room / recipient context.

@@ -1525,6 +1525,48 @@ class FeishuGroupHistoryTests(unittest.TestCase):
         self.assertIsNone(captured["kwargs"]["thread_id"])
         self.assertEqual(captured["kwargs"]["fetch_limit"], 10)
 
+    def test_agent_decided_group_reply_fetches_history_once(self):
+        from xagent.integrations.feishu.history import FeishuHistoryFetcher, FeishuMessageRecord
+
+        calls: list[dict] = []
+        original = FeishuHistoryFetcher.fetch_recent_messages
+
+        async def patched(self_fetcher, **kwargs):  # noqa: ARG001
+            calls.append(kwargs)
+            return [
+                FeishuMessageRecord("om_old1", "ou_alice", "Alice", "hi all", 1700000000000, source="chat"),
+            ]
+
+        FeishuHistoryFetcher.fetch_recent_messages = patched
+        self.addCleanup(setattr, FeishuHistoryFetcher, "fetch_recent_messages", original)
+
+        agent = _DecidingFakeAgent(should_reply=True, reason="can help")
+        adapter = FeishuAdapter(agent=agent, config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret"))
+        adapter._channel = _FakeChannel(bot_open_id="ou_bot")
+        msg = SimpleNamespace(
+            chat_type="group",
+            chat_id="oc_group",
+            message_id="om_ambient",
+            sender_id="ou_user",
+            sender_name="Carol",
+            content_text="anyone know the deploy status?",
+            create_time="1700000002000",
+            mentioned_bot=False,
+            mentions=[],
+            conversation=SimpleNamespace(thread_id=None),
+        )
+
+        asyncio.run(adapter._dispatch(msg))
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(len(agent.decide_calls), 1)
+        self.assertEqual(len(agent.chat_calls), 1)
+        decision_context = agent.decide_calls[0]["context"]
+        room_context = agent.chat_calls[0].get("room_context") or ""
+        self.assertIn("Alice(ou_alice)", decision_context)
+        self.assertIn("Alice(ou_alice)", room_context)
+        self.assertIn("anyone know the deploy status?", room_context)
+
     def test_group_mention_includes_sender_ids(self):
         from xagent.integrations.feishu.history import format_feishu_timestamp
 
