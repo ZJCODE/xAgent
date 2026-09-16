@@ -1,33 +1,24 @@
-import { Button } from "../components/ui";
 import { classNames } from "../lib/format";
 import { initialOf } from "./protocol";
 import { useWorld } from "./WorldContext";
+import { WorldSwitcher } from "./WorldSwitcher";
 import type { NeighborAgent } from "./protocol";
 
 function agentStatus(agent: NeighborAgent, here: boolean): { label: string; tone: string } {
-  if (here) return { label: "在场", tone: "is-here" };
-  if (agent.world_ready) return { label: "可进大厅", tone: "is-ready" };
-  if (agent.running) return { label: "需重启 API", tone: "is-stale" };
-  return { label: "未运行", tone: "" };
+  if (here) return { label: "Present", tone: "is-here" };
+  if (agent.world_ready) return { label: "Ready", tone: "is-ready" };
+  if (agent.running) return { label: "Restart API", tone: "is-stale" };
+  return { label: "Offline", tone: "" };
 }
 
 export function WorldSidebar() {
   const {
-    draftName,
-    setDraftName,
-    connected,
     gateError,
     agentError,
-    worldLabel,
-    roomTitle,
-    roomId,
-    setting,
     present,
     neighbors,
     memberId,
     sidebarOpen,
-    enterHall,
-    leaveHall,
     knockAgent,
   } = useWorld();
 
@@ -45,43 +36,13 @@ export function WorldSidebar() {
   return (
     <aside className={classNames("app-sidebar world-sidebar", sidebarOpen && "open")}>
       <div className="world-sidebar-top">
-        <div className="agent-switcher">
-          <div className="agent-switcher-label">World</div>
-          <div className="agent-switcher-current">
-            <strong>world</strong>
-            <span>{worldLabel}</span>
-          </div>
-        </div>
-        <label className="world-field">
-          <span>你的名字</span>
-          <input
-            className="world-input"
-            value={draftName}
-            disabled={connected}
-            autoComplete="off"
-            spellCheck={false}
-            onChange={(event) => setDraftName(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") void enterHall();
-            }}
-          />
-        </label>
+        <WorldSwitcher />
         {gateError ? <p className="world-error">{gateError}</p> : null}
       </div>
 
       <div className="world-sidebar-scroll">
         <section className="world-section">
-          <h2>房间</h2>
-          <div className="world-room-card">
-            <strong>
-              {roomTitle} · {roomId}
-            </strong>
-            <p>{setting || "进入后会看到房间设定"}</p>
-          </div>
-        </section>
-
-        <section className="world-section">
-          <h2>在场</h2>
+          <h2>Present</h2>
           {present.length ? (
             <ul className="world-roster">
               {present.map((person) => {
@@ -90,20 +51,19 @@ export function WorldSidebar() {
                   <li key={person.member_id} className="world-roster-item">
                     <span className="world-avatar">{initialOf(name)}</span>
                     <span className="world-roster-name">
-                      {name}
-                      {person.member_id === memberId ? " · 你" : ""}
+                      {person.member_id === memberId ? "you" : name}
                     </span>
                   </li>
                 );
               })}
             </ul>
           ) : (
-            <p className="world-hint">（空）</p>
+            <p className="world-hint">(empty)</p>
           )}
         </section>
 
         <section className="world-section">
-          <h2>本地 agent</h2>
+          <h2>Local agents</h2>
           {sorted.length ? (
             <ul className="world-agents">
               {sorted.map((agent) => {
@@ -114,15 +74,15 @@ export function WorldSidebar() {
                     <span className="world-agent-avatar">{initialOf(agent.title || agent.name)}</span>
                     <div className="world-agent-copy">
                       <strong>{agent.title || agent.name}</strong>
-                      {status.label !== "未运行" ? <span>{status.label}</span> : null}
+                      {status.label !== "Offline" ? <span>{status.label}</span> : null}
                     </div>
                     {here ? (
                       <button type="button" className="world-agent-action" onClick={() => void knockAgent(agent, "leave")}>
-                        请回
+                        Dismiss
                       </button>
                     ) : agent.world_ready ? (
                       <button type="button" className="world-agent-action is-primary" onClick={() => void knockAgent(agent, "join")}>
-                        请来
+                        Invite
                       </button>
                     ) : null}
                   </li>
@@ -130,22 +90,10 @@ export function WorldSidebar() {
               })}
             </ul>
           ) : (
-            <p className="world-hint">没有在 ~/.xagent 里找到 agent</p>
+            <p className="world-hint">No agents found in ~/.xagent</p>
           )}
           {agentError ? <p className="world-error">{agentError}</p> : null}
         </section>
-      </div>
-
-      <div className="sidebar-footer">
-        {connected ? (
-          <Button type="button" variant="secondary" onClick={leaveHall}>
-            离开
-          </Button>
-        ) : (
-          <Button type="button" variant="primary" onClick={() => void enterHall()}>
-            进入大厅
-          </Button>
-        )}
       </div>
     </aside>
   );

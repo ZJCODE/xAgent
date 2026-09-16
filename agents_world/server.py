@@ -1,67 +1,110 @@
-"""Localhost WebSocket server for one world process."""
+"""Localhost hub: many worlds on one port; HTTP catalog + /ws/{world_id}."""
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
-from typing import Optional
+from pathlib import Path
+from typing import Any, Optional
+from urllib.parse import unquote, urlparse
 
 from websockets.asyncio.server import Server, ServerConnection, serve
 from websockets.exceptions import ConnectionClosed
 
 from . import HELLO_TIMEOUT_SECONDS, MAX_MESSAGE_BYTES
-from .clock import Clock
+from .clock import Clock, default_clock
+from .config import WorldConfig
 from .http import process_http_request
 from .models import ClientMessage, encode_error
-from .scene import SceneConfig, load_scene_file
-from .store import open_store_for_scene
+from .paths import allocate_world_id, list_world_ids, resolve_data_root, validate_world_id, world_data_dir
+from .store import WorldStore, open_store_for_world
 from .world import World
 
 logger = logging.getLogger(__name__)
 
 
-class WorldServer:
-    def __init__(self, world: World, *, host: str, port: int):
-        self.world = world
+class WorldHub:
+    """One OS process hosting many World instances."""
+
+    def __init__(
+        self,
+        *,
+        host: str,
+        port: int,
+        data_root: Optional[Path | str] = None,
+        clock: Optional[Clock] = None,
+    ):
         self.host = host
         self.port = port
+        self.data_root = resolve_data_root(data_root)
+        self.clock = default_clock(clock)
+        self._worlds: dict[str, World] = {}
         self._server: Optional[Server] = None
-        self._world_closed = False
+        self._closed = False
 
     @classmethod
-    def from_scene_path(
+    def create(
         cls,
-        scene_path: str,
         *,
         host: str,
         port: int,
         data_root: Optional[str] = None,
         clock: Optional[Clock] = None,
-    ) -> "WorldServer":
-        scene = load_scene_file(scene_path)
-        return cls.from_scene(scene, host=host, port=port, data_root=data_root, clock=clock)
+    ) -> "WorldHub":
+        return cls(host=host, port=port, data_root=data_root, clock=clock)
 
-    @classmethod
-    def from_scene(
-        cls,
-        scene: SceneConfig,
-        *,
-        host: str,
-        port: int,
-        data_root: Optional[str] = None,
-        clock: Optional[Clock] = None,
-    ) -> "WorldServer":
-        from pathlib import Path
+    def get(self, world_id: str) -> Optional[World]:
+        return self._worlds.get(world_id)
 
-        root = Path(data_root).expanduser() if data_root else None
-        store = open_store_for_scene(scene, root=root, clock=clock)
-        world = World(store, scene, clock=clock)
-        return cls(world, host=host, port=port)
+    def list_summaries(self) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        for world_id in sorted(self._worlds):
+            world = self._worlds[world_id]
+            out.append(
+                {
+                    "id": world.world_id,
+                    "name": world.store.name,
+                    "latest_seq": world.store.max_seq(),
+                    "present_count": len(world.store.list_present()),
+                }
+            )
+        return out
+
+    def create_world(self, *, name: str, world_id: str = "") -> World:
+        label = str(name or "").strip()
+        if not label:
+            raise ValueError("name is required")
+        if world_id:
+            wid = validate_world_id(world_id)
+            if wid in self._worlds or (world_data_dir(wid, root=self.data_root) / "world.sqlite3").is_file():
+                raise FileExistsError(f"world already exists: {wid}")
+        else:
+            taken = set(self._worlds) | set(list_world_ids(root=self.data_root))
+            wid = allocate_world_id(label, taken=taken)
+        config = WorldConfig.create(world_id=wid, name=label)
+        store = open_store_for_world(config, root=self.data_root, clock=self.clock)
+        world = World(store, config, clock=self.clock)
+        self._worlds[wid] = world
+        return world
+
+    def _load_existing(self) -> None:
+        for world_id in list_world_ids(root=self.data_root):
+            if world_id in self._worlds:
+                continue
+            db = world_data_dir(world_id, root=self.data_root) / "world.sqlite3"
+            store = WorldStore(db, world_id=world_id, clock=self.clock)
+            config = WorldConfig(world_id=world_id, name=store.name)
+            self._worlds[world_id] = World(store, config, clock=self.clock)
 
     async def start(self) -> int:
         if self._server is not None:
             return self.port
-        await self.world.start()
+        self.data_root.mkdir(parents=True, exist_ok=True)
+        (self.data_root / "worlds").mkdir(parents=True, exist_ok=True)
+        self._load_existing()
+        for world in self._worlds.values():
+            await world.start()
         self._server = await serve(
             self._handler,
             self.host,
@@ -71,13 +114,13 @@ class WorldServer:
         )
         socks = self._server.sockets
         if not socks:
-            raise RuntimeError("world server failed to bind")
+            raise RuntimeError("world hub failed to bind")
         self.port = int(socks[0].getsockname()[1])
         logger.info(
-            "agents-world world=%s listening on http://%s:%s (websocket on the same port)",
-            self.world.world_id,
+            "agents-world hub listening on http://%s:%s (%d worlds)",
             self.host,
             self.port,
+            len(self._worlds),
         )
         return self.port
 
@@ -86,9 +129,12 @@ class WorldServer:
             self._server.close()
             await self._server.wait_closed()
             self._server = None
-        if not self._world_closed:
-            await self.world.close()
-            self._world_closed = True
+        if self._closed:
+            return
+        self._closed = True
+        for world in list(self._worlds.values()):
+            await world.close()
+        self._worlds.clear()
 
     async def run(self) -> None:
         await self.start()
@@ -99,11 +145,42 @@ class WorldServer:
         finally:
             await self.stop()
 
-    def _process_request(self, connection: ServerConnection, request):
-        # Page sidecar only. World protocol is the WebSocket upgrade path.
-        return process_http_request(connection, request, store=self.world.store)
+    async def _process_request(self, connection: ServerConnection, request):
+        return await process_http_request(connection, request, hub=self)
+
+    def _world_id_from_path(self, path: str) -> Optional[str]:
+        parts = [p for p in (path or "").split("/") if p]
+        if len(parts) != 2 or parts[0] != "ws":
+            return None
+        try:
+            return validate_world_id(unquote(parts[1]))
+        except ValueError:
+            return None
 
     async def _handler(self, websocket: ServerConnection) -> None:
+        path = ""
+        request = getattr(websocket, "request", None)
+        if request is not None:
+            path = urlparse(getattr(request, "path", "") or "").path or ""
+        world_id = self._world_id_from_path(path)
+        if world_id is None:
+            try:
+                await websocket.send(encode_error("bad_payload", "connect to /ws/{world_id}"))
+            except Exception:
+                pass
+            await websocket.close(1008, "world required")
+            return
+        world = self._worlds.get(world_id)
+        if world is None:
+            try:
+                await websocket.send(encode_error("unknown_world", f"unknown world: {world_id}"))
+            except Exception:
+                pass
+            await websocket.close(1008, "unknown world")
+            return
+        await self._serve_world(websocket, world)
+
+    async def _serve_world(self, websocket: ServerConnection, world: World) -> None:
         session = None
         try:
             try:
@@ -129,7 +206,7 @@ class WorldServer:
             member_id = str(hello.payload.get("member_id") or "").strip()
             display_name = str(hello.payload.get("display_name") or member_id).strip()
             try:
-                session = await self.world.attach(
+                session = await world.attach(
                     member_id=member_id,
                     display_name=display_name,
                     send=websocket.send,
@@ -137,9 +214,9 @@ class WorldServer:
             except ValueError as exc:
                 await websocket.send(encode_error("bad_payload", str(exc)))
                 return
-            await self.world.welcome(session)
+            await world.welcome(session)
 
-            recv_task = asyncio.create_task(self._recv_loop(websocket, session))
+            recv_task = asyncio.create_task(self._recv_loop(websocket, world, session))
             replaced_task = asyncio.create_task(session.replaced.wait())
             done, pending = await asyncio.wait(
                 {recv_task, replaced_task},
@@ -171,9 +248,9 @@ class WorldServer:
         finally:
             if session is not None:
                 session.replaced.set()
-                await self.world.detach(session)
+                await world.detach(session)
 
-    async def _recv_loop(self, websocket: ServerConnection, session) -> None:
+    async def _recv_loop(self, websocket: ServerConnection, world: World, session) -> None:
         try:
             async for message in websocket:
                 if not isinstance(message, str):
@@ -181,11 +258,11 @@ class WorldServer:
                 try:
                     parsed = ClientMessage.from_json(message)
                 except Exception as exc:
-                    self.world.push_error(session, "bad_payload", str(exc))
+                    world.push_error(session, "bad_payload", str(exc))
                     continue
                 if parsed.type == "hello":
-                    self.world.push_error(session, "bad_payload", "already greeted")
+                    world.push_error(session, "bad_payload", "already greeted")
                     continue
-                await self.world.handle(session, parsed.type, parsed.payload)
+                await world.handle(session, parsed.type, parsed.payload)
         except ConnectionClosed:
             return

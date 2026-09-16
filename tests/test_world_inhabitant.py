@@ -1,4 +1,4 @@
-"""xAgent world inhabitant: a mind enters the hall as its own body."""
+"""xAgent world inhabitant: a mind enters the world as its own body."""
 
 from __future__ import annotations
 
@@ -13,8 +13,7 @@ from types import SimpleNamespace
 from fastapi.testclient import TestClient
 
 from agents_world.client import WorldClient
-from agents_world.scene import parse_scene_config
-from agents_world.server import WorldServer
+from agents_world.server import WorldHub
 from xagent.core.runtime import current_delivery_context, scheduled_delivery_context
 from xagent.integrations.world import WorldInhabitant
 from xagent.interfaces.server import AgentHTTPServer
@@ -65,45 +64,39 @@ class StubAgent:
 class WorldInhabitantTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self._tmpdir = tempfile.TemporaryDirectory()
-        scene = parse_scene_config(
-            {
-                "world": "mind-venue",
-                "rooms": [{"id": "hall", "name": "大厅", "setting": "test"}],
-                "scenes": [],
-            }
-        )
-        self.server = WorldServer.from_scene(
-            scene,
+        self.hub = WorldHub.create(
             host="127.0.0.1",
             port=0,
             data_root=self._tmpdir.name,
         )
-        self.port = await self.server.start()
-        self.url = f"ws://127.0.0.1:{self.port}"
+        self.hub.create_world(world_id="mind-venue", name="大厅")
+        self.port = await self.hub.start()
+        self.url = f"ws://127.0.0.1:{self.port}/ws/mind-venue"
         self.workspace = Path(self._tmpdir.name) / "agent-ws"
         self.workspace.mkdir()
         self.agent = StubAgent(workspace_dir=self.workspace)
 
     async def asyncTearDown(self):
-        await self.server.stop()
+        await self.hub.stop()
         self._tmpdir.cleanup()
 
     async def _wait_present(self, member_id="agent1"):
+        world = self.hub.get("mind-venue")
         for _ in range(50):
-            session = self.server.world._sessions.get(member_id)
-            if session is not None and "hall" in session.rooms:
+            session = world._sessions.get(member_id) if world else None
+            if session is not None and session.present:
                 return
             await asyncio.sleep(0.05)
 
     async def test_hears_utterance_and_speaks(self):
         inhabitant = WorldInhabitant(self.agent, member_id="agent1", display_name="一号")
-        await inhabitant.join(world_url=self.url, room_id="hall")
+        await inhabitant.join(world_url=self.url)
         try:
             await self._wait_present()
             async with WorldClient(self.url, member_id="alice") as alice:
-                await alice.join("hall")
+                await alice.join()
                 await alice.wait_for(lambda m: m.get("type") == "snapshot")
-                await alice.speak("hall", "hello hall")
+                await alice.speak( "hello hall")
                 heard = await alice.wait_for(
                     lambda m: m.get("type") == "event"
                     and m.get("kind") == "utterance"
@@ -117,20 +110,20 @@ class WorldInhabitantTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.agent.chats[0]["user_message"], "hello hall")
         self.assertEqual(self.agent.chats[0]["user_id"], "alice")
         self.assertEqual(self.agent.chats[0]["sender_name"], "alice")
-        self.assertIn("shared room", self.agent.chats[0]["channel_instructions"])
+        self.assertIn("shared world", self.agent.chats[0]["channel_instructions"])
         self.assertEqual(self.agent.decisions[0]["metadata"]["addressed_to_agent"], False)
         self.assertEqual(self.agent.decisions[0]["metadata"]["recently_spoke"], False)
         self.assertFalse(any("hello hall" in str(item.get("context") or "") for item in self.agent.observed))
 
-    async def test_join_same_room_is_idempotent(self):
+    async def test_join_same_world_is_idempotent(self):
         inhabitant = WorldInhabitant(self.agent, member_id="agent1", display_name="一号")
-        await inhabitant.join(world_url=self.url, room_id="hall")
+        await inhabitant.join(world_url=self.url)
         try:
             await self._wait_present()
             async with WorldClient(self.url, member_id="alice") as alice:
-                await alice.join("hall")
+                await alice.join()
                 await alice.wait_for(lambda m: m.get("type") == "snapshot")
-                await inhabitant.join(world_url=self.url, room_id="hall")
+                await inhabitant.join(world_url=self.url)
                 with self.assertRaises(TimeoutError):
                     await alice.wait_for(
                         lambda m: m.get("type") == "event"
@@ -144,13 +137,13 @@ class WorldInhabitantTests(unittest.IsolatedAsyncioTestCase):
     async def test_silence_stores_utterance_as_user_message(self):
         self.agent.should_reply = False
         inhabitant = WorldInhabitant(self.agent, member_id="agent1", display_name="一号")
-        await inhabitant.join(world_url=self.url, room_id="hall")
+        await inhabitant.join(world_url=self.url)
         try:
             await self._wait_present()
             async with WorldClient(self.url, member_id="alice") as alice:
-                await alice.join("hall")
+                await alice.join()
                 await alice.wait_for(lambda m: m.get("type") == "snapshot")
-                await alice.speak("hall", "the coffee is hot")
+                await alice.speak( "the coffee is hot")
                 for _ in range(40):
                     if self.agent.message_handler.users:
                         break
@@ -163,21 +156,20 @@ class WorldInhabitantTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(heard["user_message"], "the coffee is hot")
         self.assertEqual(heard["user_id"], "alice")
         self.assertEqual(heard["channel"], "world")
-        self.assertEqual(heard["room_name"], "hall")
+        self.assertEqual(heard["room_name"], "mind-venue")
         self.assertEqual(heard["metadata"]["sender_name"], "alice")
         self.assertEqual(self.agent.decisions[0]["metadata"]["addressed_to_agent"], False)
         self.assertEqual(self.agent.decisions[0]["metadata"]["recently_spoke"], False)
 
     async def test_hears_file_and_passes_attachments_to_chat(self):
         inhabitant = WorldInhabitant(self.agent, member_id="agent1", display_name="一号")
-        await inhabitant.join(world_url=self.url, room_id="hall")
+        await inhabitant.join(world_url=self.url)
         try:
             await self._wait_present()
             async with WorldClient(self.url, member_id="alice") as alice:
-                await alice.join("hall")
+                await alice.join()
                 await alice.wait_for(lambda m: m.get("type") == "snapshot")
                 await alice.speak(
-                    "hall",
                     "see this",
                     attachments=[{"name": "note.txt", "mime": "text/plain", "data": b"hello-file"}],
                 )
@@ -208,13 +200,13 @@ class WorldInhabitantTests(unittest.IsolatedAsyncioTestCase):
 
         self.agent.chat = chat
         inhabitant = WorldInhabitant(self.agent, member_id="agent1", display_name="一号")
-        await inhabitant.join(world_url=self.url, room_id="hall")
+        await inhabitant.join(world_url=self.url)
         try:
             await self._wait_present()
             async with WorldClient(self.url, member_id="alice") as alice:
-                await alice.join("hall")
+                await alice.join()
                 await alice.wait_for(lambda m: m.get("type") == "snapshot")
-                await alice.speak("hall", "send the file")
+                await alice.speak( "send the file")
                 heard = await alice.wait_for(
                     lambda m: m.get("type") == "event"
                     and m.get("kind") == "utterance"
@@ -231,14 +223,13 @@ class WorldInhabitantTests(unittest.IsolatedAsyncioTestCase):
     async def test_silence_stores_file_attachment(self):
         self.agent.should_reply = False
         inhabitant = WorldInhabitant(self.agent, member_id="agent1", display_name="一号")
-        await inhabitant.join(world_url=self.url, room_id="hall")
+        await inhabitant.join(world_url=self.url)
         try:
             await self._wait_present()
             async with WorldClient(self.url, member_id="alice") as alice:
-                await alice.join("hall")
+                await alice.join()
                 await alice.wait_for(lambda m: m.get("type") == "snapshot")
                 await alice.speak(
-                    "hall",
                     "",
                     attachments=[{"name": "photo.png", "mime": "image/png", "data": b"\x89PNG"}],
                 )
@@ -288,8 +279,8 @@ class WorldAddressTests(unittest.TestCase):
         self.assertEqual(self.inhabitant._speaker_label("player1"), "player1")
 
 
-def _world_task(*, content: str, room_id: str = "hall", world_url: str = "", user_id: str = "Jun"):
-    target = {"world_url": world_url, "room_id": room_id, "user_id": user_id}
+def _world_task(*, content: str, world_url: str = "", user_id: str = "Jun"):
+    target = {"world_url": world_url, "user_id": user_id}
     return SimpleNamespace(
         kind="task",
         delivery_channel="world",
@@ -307,33 +298,27 @@ def _world_task(*, content: str, room_id: str = "hall", world_url: str = "", use
 class WorldReminderTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self._tmpdir = tempfile.TemporaryDirectory()
-        scene = parse_scene_config(
-            {
-                "world": "mind-venue",
-                "rooms": [{"id": "hall", "name": "大厅", "setting": "test"}],
-                "scenes": [],
-            }
-        )
-        self.server = WorldServer.from_scene(
-            scene,
+        self.hub = WorldHub.create(
             host="127.0.0.1",
             port=0,
             data_root=self._tmpdir.name,
         )
-        self.port = await self.server.start()
-        self.url = f"ws://127.0.0.1:{self.port}"
+        self.hub.create_world(world_id="mind-venue", name="大厅")
+        self.port = await self.hub.start()
+        self.url = f"ws://127.0.0.1:{self.port}/ws/mind-venue"
         self.agent = StubAgent()
 
     async def asyncTearDown(self):
-        await self.server.stop()
+        await self.hub.stop()
         self._tmpdir.cleanup()
 
     async def _join(self) -> WorldInhabitant:
         inhabitant = WorldInhabitant(self.agent, member_id="agent1", display_name="一号")
-        await inhabitant.join(world_url=self.url, room_id="hall")
+        await inhabitant.join(world_url=self.url)
+        world = self.hub.get("mind-venue")
         for _ in range(50):
-            session = self.server.world._sessions.get("agent1")
-            if session is not None and "hall" in session.rooms:
+            session = world._sessions.get("agent1") if world else None
+            if session is not None and session.present:
                 return inhabitant
             await asyncio.sleep(0.05)
         return inhabitant
@@ -344,7 +329,7 @@ class WorldReminderTests(unittest.IsolatedAsyncioTestCase):
         async def chat(user_message, user_id="", **kwargs):
             ctx = current_delivery_context()
             captured["channel"] = None if ctx is None else ctx.channel
-            captured["room_id"] = None if ctx is None else ctx.target.get("room_id")
+            captured["world_id"] = None if ctx is None else ctx.target.get("world_id")
             captured["world_url"] = None if ctx is None else ctx.target.get("world_url")
             self.agent.chats.append({"user_message": user_message, "user_id": user_id, **kwargs})
             return "I heard that"
@@ -353,9 +338,9 @@ class WorldReminderTests(unittest.IsolatedAsyncioTestCase):
         inhabitant = await self._join()
         try:
             async with WorldClient(self.url, member_id="alice") as alice:
-                await alice.join("hall")
+                await alice.join()
                 await alice.wait_for(lambda m: m.get("type") == "snapshot")
-                await alice.speak("hall", "hello hall")
+                await alice.speak( "hello hall")
                 await alice.wait_for(
                     lambda m: m.get("type") == "event"
                     and m.get("kind") == "utterance"
@@ -365,7 +350,7 @@ class WorldReminderTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await inhabitant.leave()
         self.assertEqual(captured.get("channel"), "world")
-        self.assertEqual(captured.get("room_id"), "hall")
+        self.assertEqual(captured.get("world_id"), "mind-venue")
         self.assertEqual(captured.get("world_url"), self.url)
 
     async def test_due_reminder_speaks_only_when_present(self):
@@ -377,7 +362,7 @@ class WorldReminderTests(unittest.IsolatedAsyncioTestCase):
                 )
             )
             async with WorldClient(self.url, member_id="alice") as alice:
-                await alice.join("hall")
+                await alice.join()
                 await alice.wait_for(lambda m: m.get("type") == "snapshot")
                 await inhabitant.dispatch_scheduled_task(
                     _world_task(content="Jun, 喝水", world_url=self.url)
@@ -404,7 +389,7 @@ class WorldReminderToolTests(unittest.IsolatedAsyncioTestCase):
             tool = create_schedule_task_tool(tasks_dir=tmpdir)
             inhabitant = WorldInhabitant(StubAgent(), member_id="player1")
             inhabitant.world_url = "ws://127.0.0.1:7182"
-            inhabitant.room_id = "hall"
+            inhabitant.world_id = "plaza"
             with scheduled_delivery_context(inhabitant.delivery_context(user_id="Jun")):
                 created = await tool(
                     action="create",
@@ -414,7 +399,8 @@ class WorldReminderToolTests(unittest.IsolatedAsyncioTestCase):
                 )
             self.assertTrue(created["ok"])
             self.assertEqual(created["task"]["channel"], "world")
-            self.assertEqual(created["task"]["target"]["room_id"], "hall")
+            self.assertEqual(created["task"]["target"]["world_id"], "plaza")
+            self.assertNotIn("room_id", created["task"]["target"])
             self.assertEqual(created["task"]["user_id"], "Jun")
 
 
@@ -425,18 +411,19 @@ class WorldJoinRouteTests(unittest.TestCase):
             (config_dir / "config.yaml").write_text("{}\n", encoding="utf-8")
             server = AgentHTTPServer(config_dir=str(config_dir), agent=StubAgent())
             with TestClient(server.app) as client:
-                missing = client.post("/world/join", json={"room_id": "hall"})
+                missing = client.post("/world/join", json={})
                 self.assertEqual(missing.status_code, 422)
                 joined = client.post(
                     "/world/join",
-                    json={"world_url": "ws://127.0.0.1:9", "room_id": "hall", "member_id": "agent1"},
+                    json={"world_url": "ws://127.0.0.1:9", "member_id": "agent1"},
                 )
                 self.assertEqual(joined.status_code, 200)
                 body = joined.json()
                 self.assertEqual(body["member_id"], "agent1")
                 self.assertTrue(body["connected"])
                 status = client.get("/world/status").json()
-                self.assertEqual(status["room_id"], "hall")
+                self.assertEqual(status["world_url"], "ws://127.0.0.1:9")
+                self.assertNotIn("room_id", status)
                 left = client.post("/world/leave").json()
                 self.assertFalse(left["connected"])
 

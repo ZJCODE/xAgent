@@ -8,22 +8,11 @@ import { WorldSidebar } from "./WorldSidebar";
 
 function WorldLayout() {
   const { dark, toggleTheme } = useTheme();
-  const {
-    roomTitle,
-    setting,
-    present,
-    presentInRoom,
-    status,
-    statusKind,
-    sidebarOpen,
-    setSidebarOpen,
-  } = useWorld();
+  const { worldName, present, joined, status, statusKind, sidebarOpen, setSidebarOpen } = useWorld();
   const count = present.length;
-  const subtitle = presentInRoom
-    ? setting
-      ? `${count} 人在场 · ${setting}`
-      : `${count} 人在场`
-    : "从左侧进入后即可说话";
+  const subtitle = joined
+    ? `${count} present`
+    : "Select or create a world";
   const tone = statusKind === "ok" ? "good" : statusKind === "bad" ? "danger" : statusKind === "info" ? "info" : "muted";
 
   return (
@@ -31,7 +20,7 @@ function WorldLayout() {
       <button
         type="button"
         className={classNames("world-backdrop", sidebarOpen && "open")}
-        aria-label="关闭侧栏"
+        aria-label="Close sidebar"
         onClick={() => setSidebarOpen(false)}
       />
       <WorldSidebar />
@@ -41,23 +30,23 @@ function WorldLayout() {
             <IconButton
               type="button"
               className="world-menu-button"
-              title="打开侧栏"
-              aria-label="打开侧栏"
+              title="Open sidebar"
+              aria-label="Open sidebar"
               onClick={() => setSidebarOpen(true)}
             >
               <Menu size={16} />
             </IconButton>
             <div className="page-title-block">
-              <h2>{roomTitle}</h2>
+              <h2>{worldName}</h2>
               <p>{subtitle}</p>
             </div>
           </div>
           <div className="chat-status-cluster">
-            <StatusBadge tone={tone} className="chat-status-badge">
+            <StatusBadge tone={tone} className="chat-status-badge" title={status}>
               {statusKind === "ok" || statusKind === "info" ? <Wifi size={14} /> : <WifiOff size={14} />}
-              <span className="status-badge-label">{status}</span>
+              <span className="status-badge-label">{joined ? "Present" : status}</span>
             </StatusBadge>
-            <IconButton type="button" onClick={toggleTheme} title="切换主题" aria-label="切换主题">
+            <IconButton type="button" onClick={toggleTheme} title="Toggle theme" aria-label="Toggle theme">
               {dark ? <Sun size={16} /> : <Moon size={16} />}
             </IconButton>
           </div>

@@ -18,7 +18,6 @@ class WorldJoinInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     world_url: str
-    room_id: str = "hall"
     member_id: Optional[str] = None
     display_name: Optional[str] = None
 
@@ -34,11 +33,8 @@ def register_world_routes(app: FastAPI, server: "AgentHTTPServer") -> None:
     @app.post("/world/join")
     async def world_join(input_data: WorldJoinInput):
         world_url = str(input_data.world_url or "").strip()
-        room_id = str(input_data.room_id or "").strip()
         if not world_url:
             raise HTTPException(status_code=400, detail="world_url is required")
-        if not room_id:
-            raise HTTPException(status_code=400, detail="room_id is required")
         member_id = str(input_data.member_id or "").strip() or Path(server.config_dir).name
         display_name = str(input_data.display_name or "").strip() or member_id
         inhabitant = getattr(server, "world_inhabitant", None)
@@ -52,7 +48,7 @@ def register_world_routes(app: FastAPI, server: "AgentHTTPServer") -> None:
             server.world_inhabitant = inhabitant
         else:
             inhabitant.display_name = display_name
-        return await inhabitant.join(world_url=world_url, room_id=room_id)
+        return await inhabitant.join(world_url=world_url)
 
     @app.post("/world/leave")
     async def world_leave():

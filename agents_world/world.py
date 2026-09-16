@@ -1,4 +1,4 @@
-"""In-process world: serialize actions, fan out perceptions, run scene clock."""
+"""In-process world: serialize actions and fan out perceptions."""
 
 from __future__ import annotations
 
@@ -23,18 +23,16 @@ from . import (
     WORLD_ACTOR_ID,
 )
 from .clock import Clock, default_clock
+from .config import WorldConfig
 from .models import (
     Attachment,
     EventKind,
-    Room,
     WorldEvent,
     encode_error,
     encode_server_message,
     member_to_dict,
-    room_to_dict,
 )
-from .paths import validate_member_id, validate_room_id
-from .scene import SceneConfig, ScheduledScene
+from .paths import validate_member_id
 from .store import WorldStore
 
 logger = logging.getLogger(__name__)
@@ -48,43 +46,34 @@ class Session:
     display_name: str
     connection_id: int
     send: SendFn
-    rooms: set[str] = field(default_factory=set)
-    outbound: asyncio.Queue[Optional[str]] = field(default_factory=lambda: asyncio.Queue(maxsize=OUTBOUND_QUEUE_SIZE))
+    present: bool = False
+    outbound: asyncio.Queue[Optional[str]] = field(
+        default_factory=lambda: asyncio.Queue(maxsize=OUTBOUND_QUEUE_SIZE)
+    )
     replaced: asyncio.Event = field(default_factory=asyncio.Event)
-    lagged_rooms: set[str] = field(default_factory=set)
+    lagged: bool = False
     pump_task: Optional[asyncio.Task[None]] = None
 
 
 class World:
     """Single serialization point for one venue."""
 
-    def __init__(self, store: WorldStore, scene: SceneConfig, *, clock: Optional[Clock] = None):
+    def __init__(self, store: WorldStore, config: WorldConfig, *, clock: Optional[Clock] = None):
         self.store = store
-        self.scene = scene
+        self.config = config
         self.clock = default_clock(clock)
         self._sessions: dict[str, Session] = {}
         self._lock = asyncio.Lock()
         self._connection_seq = 0
-        self._scene_tasks: list[asyncio.Task[None]] = []
         self._closed = False
         self._speak_times: dict[str, list[float]] = {}
 
     @property
     def world_id(self) -> str:
-        return self.scene.world_id
-
-    def list_rooms(self) -> list[Room]:
-        return self.store.list_rooms()
+        return self.config.world_id
 
     async def start(self) -> None:
-        epoch = self.store.ensure_world_epoch()
-        now = self.clock.now()
-        for scheduled in self.scene.scenes:
-            task = asyncio.create_task(
-                self._run_scheduled_scene(scheduled, epoch=epoch, now=now),
-                name=f"scene-{scheduled.fire_key()}",
-            )
-            self._scene_tasks.append(task)
+        self.store.ensure_world_epoch()
 
     async def close(self) -> None:
         if self._closed:
@@ -94,15 +83,11 @@ class World:
                 pass
             return
         self._closed = True
-        for task in self._scene_tasks:
-            task.cancel()
         pumps = [s.pump_task for s in list(self._sessions.values()) if s.pump_task is not None]
         for task in pumps:
             task.cancel()
-        pending = [t for t in (*self._scene_tasks, *pumps) if t is not None]
-        if pending:
-            await asyncio.gather(*pending, return_exceptions=True)
-        self._scene_tasks.clear()
+        if pumps:
+            await asyncio.gather(*pumps, return_exceptions=True)
         self._sessions.clear()
         try:
             self.store.close()
@@ -116,51 +101,6 @@ class World:
             await asyncio.sleep(0)
             return
         await asyncio.gather(*(session.outbound.join() for session in targets))
-
-    async def _run_scheduled_scene(
-        self,
-        scheduled: ScheduledScene,
-        *,
-        epoch: float,
-        now: float,
-    ) -> None:
-        key = scheduled.fire_key()
-        try:
-            if self.store.scene_already_fired(key):
-                return
-            fire_at = epoch + scheduled.delay_seconds
-            remaining = fire_at - now
-            if remaining > 0:
-                await self.clock.sleep(remaining)
-            if self._closed:
-                return
-            async with self._lock:
-                if self.store.scene_already_fired(key):
-                    return
-                event = self.store.append_event(
-                    room_id=scheduled.room_id,
-                    kind=EventKind.SCENE,
-                    actor_id=WORLD_ACTOR_ID,
-                    text=scheduled.text,
-                )
-                self.store.mark_scene_fired(key, seq=event.seq)
-                self._fanout(event)
-        except asyncio.CancelledError:
-            return
-        except Exception:
-            logger.exception("scheduled scene %s failed", key)
-
-    async def emit_scene(self, room_id: str, text: str) -> WorldEvent:
-        """Test/helper hook to emit a scene event immediately."""
-        async with self._lock:
-            event = self.store.append_event(
-                room_id=room_id,
-                kind=EventKind.SCENE,
-                actor_id=WORLD_ACTOR_ID,
-                text=text,
-            )
-            self._fanout(event)
-            return event
 
     def _next_connection_id(self) -> int:
         self._connection_seq += 1
@@ -203,17 +143,12 @@ class World:
                 self._stop_pump(previous)
 
             member = self.store.upsert_member(member_id, display_name)
-            restored_rooms = {
-                room.id
-                for room in self.store.list_rooms()
-                if self.store.is_present(member_id, room.id)
-            }
             session = Session(
                 member_id=member.id,
                 display_name=member.display_name,
                 connection_id=connection_id,
                 send=send,
-                rooms=restored_rooms,
+                present=self.store.is_present(member_id),
             )
             session.pump_task = asyncio.create_task(
                 self._pump(session),
@@ -237,23 +172,21 @@ class World:
         current = self._sessions.get(session.member_id)
         if current is None or current.connection_id != session.connection_id:
             return
-        rooms = list(session.rooms)
+        present = session.present
         del self._sessions[session.member_id]
         session.replaced.set()
         if session.pump_task is not asyncio.current_task():
             self._stop_pump(session)
-        for room_id in rooms:
-            if not self.store.is_present(session.member_id, room_id):
-                continue
-            with self.store.transaction():
-                self.store.set_presence(session.member_id, room_id, False)
-                event = self.store.append_event(
-                    room_id=room_id,
-                    kind=EventKind.LEAVE,
-                    actor_id=session.member_id,
-                    text="",
-                )
-            self._fanout(event)
+        if not present or not self.store.is_present(session.member_id):
+            return
+        with self.store.transaction():
+            self.store.set_presence(session.member_id, False)
+            event = self.store.append_event(
+                kind=EventKind.LEAVE,
+                actor_id=session.member_id,
+                text="",
+            )
+        self._fanout(event)
 
     def _stop_pump(self, session: Session) -> None:
         # Sentinel lets the pump flush pending frames (e.g. "replaced") then exit.
@@ -296,15 +229,14 @@ class World:
             return False
 
     def _enqueue_or_lag(self, session: Session, message: str, event: WorldEvent) -> None:
-        if event.room_id in session.lagged_rooms:
+        if session.lagged:
             return
         if self._enqueue(session, message):
             return
-        session.lagged_rooms.add(event.room_id)
+        session.lagged = True
         self._drain_queue(session)
         lagged = encode_server_message(
             "lagged",
-            room_id=event.room_id,
             after_seq=max(0, event.seq - 1),
         )
         self._enqueue(session, lagged)
@@ -317,9 +249,9 @@ class World:
                 return
 
             if msg_type == "join":
-                self._join(session, payload)
+                self._join(session)
             elif msg_type == "leave":
-                self._leave(session, payload)
+                self._leave(session)
             elif msg_type == "speak":
                 self._speak(session, payload)
             elif msg_type == "sync":
@@ -328,107 +260,66 @@ class World:
                 self._enqueue(session, encode_error("unknown_type", f"unknown type: {msg_type}"))
 
     async def welcome(self, session: Session) -> None:
-        heads = self.store.room_heads()
-        rooms = []
-        for room in self.list_rooms():
-            body = room_to_dict(room)
-            body.update(heads.get(room.id, {"latest_seq": 0, "latest_room_seq": 0}))
-            rooms.append(body)
         self._enqueue(
             session,
             encode_server_message(
                 "welcome",
                 protocol_version=PROTOCOL_VERSION,
                 world_id=self.world_id,
-                rooms=rooms,
+                name=self.store.name,
+                latest_seq=self.store.max_seq(),
                 member_id=session.member_id,
                 display_name=session.display_name,
-                present_rooms=sorted(session.rooms),
+                present=session.present,
             ),
         )
 
-    def _parse_room_id(self, payload: dict[str, Any]) -> tuple[Optional[str], Optional[str]]:
-        raw = str(payload.get("room_id") or "").strip()
-        if not raw:
-            return None, encode_error("bad_payload", "room_id is required")
-        try:
-            return validate_room_id(raw), None
-        except ValueError as exc:
-            return None, encode_error("bad_payload", str(exc))
-
-    def _join(self, session: Session, payload: dict[str, Any]) -> None:
-        room_id, err = self._parse_room_id(payload)
-        if err:
-            self._enqueue(session, err)
-            return
-        assert room_id is not None
-        room = self.store.get_room(room_id)
-        if room is None:
-            self._enqueue(session, encode_error("unknown_room", f"unknown room: {room_id}"))
-            return
-
-        already = self.store.is_present(session.member_id, room_id)
+    def _join(self, session: Session) -> None:
+        already = self.store.is_present(session.member_id)
         with self.store.transaction():
-            self.store.set_presence(session.member_id, room_id, True)
+            self.store.set_presence(session.member_id, True)
             event = None
             if not already:
                 event = self.store.append_event(
-                    room_id=room_id,
                     kind=EventKind.JOIN,
                     actor_id=session.member_id,
                     text="",
                 )
-        session.rooms.add(room_id)
-        session.lagged_rooms.discard(room_id)
+        session.present = True
+        session.lagged = False
         if event is not None:
             self._fanout(event, exclude={session.member_id})
 
-        present = [member_to_dict_from_presence(p) for p in self.store.list_present(room_id)]
-        history = [e.to_dict() for e in self.store.recent_events(room_id, limit=SNAPSHOT_HISTORY_LIMIT)]
+        present = [member_to_dict_from_presence(p) for p in self.store.list_present()]
+        history = [e.to_dict(world_id=self.world_id) for e in self.store.recent_events(limit=SNAPSHOT_HISTORY_LIMIT)]
         self._enqueue(
             session,
             encode_server_message(
                 "snapshot",
-                room_id=room.id,
-                name=room.name,
-                setting=room.setting,
+                name=self.store.name,
                 present=present,
                 events=history,
             ),
         )
 
-    def _leave(self, session: Session, payload: dict[str, Any]) -> None:
-        room_id, err = self._parse_room_id(payload)
-        if err:
-            self._enqueue(session, err)
-            return
-        assert room_id is not None
-        if not self.store.get_room(room_id):
-            self._enqueue(session, encode_error("unknown_room", f"unknown room: {room_id}"))
-            return
-        if not self.store.is_present(session.member_id, room_id):
-            session.rooms.discard(room_id)
-            self._enqueue(session, encode_error("not_present", f"not present in room: {room_id}"))
+    def _leave(self, session: Session) -> None:
+        if not self.store.is_present(session.member_id):
+            session.present = False
+            self._enqueue(session, encode_error("not_present", "not present in this world"))
             return
 
         with self.store.transaction():
-            self.store.set_presence(session.member_id, room_id, False)
+            self.store.set_presence(session.member_id, False)
             event = self.store.append_event(
-                room_id=room_id,
                 kind=EventKind.LEAVE,
                 actor_id=session.member_id,
                 text="",
             )
-        session.rooms.discard(room_id)
+        session.present = False
         self._fanout(event)
-        self._enqueue(session, encode_server_message("event", **event.to_dict()))
+        self._enqueue(session, encode_server_message("event", **event.to_dict(world_id=self.world_id)))
 
     def _speak(self, session: Session, payload: dict[str, Any]) -> None:
-        room_id, err = self._parse_room_id(payload)
-        if err:
-            self._enqueue(session, err)
-            return
-        assert room_id is not None
         text = str(payload.get("text") or "")
         attachments, attach_err = self._ingest_attachments(payload.get("attachments"))
         if attach_err:
@@ -458,18 +349,14 @@ class World:
             )
             return
 
-        if not self.store.get_room(room_id):
-            self._enqueue(session, encode_error("unknown_room", f"unknown room: {room_id}"))
-            return
-        if not self.store.is_present(session.member_id, room_id):
-            self._enqueue(session, encode_error("not_present", f"not present in room: {room_id}"))
+        if not self.store.is_present(session.member_id):
+            self._enqueue(session, encode_error("not_present", "not present in this world"))
             return
         if not self._allow_speak(session.member_id):
             self._enqueue(session, encode_error("rate_limited", "speak rate exceeded"))
             return
 
         event = self.store.append_event(
-            room_id=room_id,
             kind=EventKind.UTTERANCE,
             actor_id=session.member_id,
             text=text.strip(),
@@ -546,11 +433,6 @@ class World:
         return True
 
     def _sync(self, session: Session, payload: dict[str, Any]) -> None:
-        room_id, err = self._parse_room_id(payload)
-        if err:
-            self._enqueue(session, err)
-            return
-        assert room_id is not None
         raw_seq = payload.get("after_seq") if "after_seq" in payload else 0
         try:
             after_seq = int(raw_seq or 0)
@@ -560,22 +442,18 @@ class World:
         if after_seq < 0:
             self._enqueue(session, encode_error("bad_payload", "after_seq must be >= 0"))
             return
-        if not self.store.get_room(room_id):
-            self._enqueue(session, encode_error("unknown_room", f"unknown room: {room_id}"))
-            return
 
         page_limit = SYNC_PAGE_SIZE
-        fetched = self.store.events_after(room_id, after_seq, limit=page_limit + 1)
+        fetched = self.store.events_after(after_seq, limit=page_limit + 1)
         has_more = len(fetched) > page_limit
         events = fetched[:page_limit]
         next_after_seq = events[-1].seq if events else after_seq
-        session.lagged_rooms.discard(room_id)
+        session.lagged = False
         self._enqueue(
             session,
             encode_server_message(
                 "snapshot",
-                room_id=room_id,
-                events=[e.to_dict() for e in events],
+                events=[e.to_dict(world_id=self.world_id) for e in events],
                 sync=True,
                 after_seq=after_seq,
                 has_more=has_more,
@@ -584,7 +462,7 @@ class World:
         )
 
     def _fanout(self, event: WorldEvent, *, exclude: Optional[set[str]] = None) -> None:
-        present_ids = {p.member_id for p in self.store.list_present(event.room_id)}
+        present_ids = {p.member_id for p in self.store.list_present()}
         message = encode_server_message("event", **self._perception_dict(event))
         skip = exclude or set()
         for member_id, session in list(self._sessions.items()):
@@ -592,17 +470,17 @@ class World:
                 continue
             if member_id not in present_ids:
                 continue
-            if event.room_id not in session.rooms:
+            if not session.present:
                 continue
             self._enqueue_or_lag(session, message, event)
 
     def _perception_dict(self, event: WorldEvent) -> dict[str, Any]:
-        body = event.to_dict()
+        body = event.to_dict(world_id=self.world_id)
         if not event.attachments:
             return body
         packed: list[dict[str, Any]] = []
         for item in event.attachments:
-            entry = item.to_dict()
+            entry = item.to_dict(world_id=self.world_id)
             found = self.store.get_file(item.id)
             if found is not None:
                 _attachment, blob_path = found

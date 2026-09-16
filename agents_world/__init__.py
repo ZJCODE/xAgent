@@ -10,7 +10,7 @@ __version__ = "0.2.0"
 WORLD_ACTOR_ID = "world"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 7182
-DEFAULT_DATA_ROOT = "~/.agents-world"
+DEFAULT_DATA_ROOT = "~/.xagent"
 
 # Wire protocol. Bump when adding required client-visible fields.
 PROTOCOL_VERSION = 1

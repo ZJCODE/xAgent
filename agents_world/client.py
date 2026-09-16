@@ -34,7 +34,7 @@ class WorldClient:
         self.display_name = display_name or member_id
         self.inbox: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self.welcome: Optional[dict[str, Any]] = None
-        self.last_seq: dict[str, int] = {}
+        self.last_seq: int = 0
         self._ws: Optional[ClientConnection] = None
         self._reader: Optional[asyncio.Task[None]] = None
 
@@ -76,28 +76,27 @@ class WorldClient:
     async def __aexit__(self, *exc: Any) -> None:
         await self.close()
 
-    async def join(self, room_id: str) -> None:
-        await self._send({"type": "join", "room_id": room_id})
+    async def join(self) -> None:
+        await self._send({"type": "join"})
 
-    async def leave(self, room_id: str) -> None:
-        await self._send({"type": "leave", "room_id": room_id})
+    async def leave(self) -> None:
+        await self._send({"type": "leave"})
 
     async def speak(
         self,
-        room_id: str,
         text: str,
         mentions: Optional[list[str]] = None,
         attachments: Optional[list[dict[str, Any]]] = None,
     ) -> None:
-        body: dict[str, Any] = {"type": "speak", "room_id": room_id, "text": text}
+        body: dict[str, Any] = {"type": "speak", "text": text}
         if mentions:
             body["mentions"] = mentions
         if attachments:
             body["attachments"] = [_encode_attachment(item) for item in attachments]
         await self._send(body)
 
-    async def sync(self, room_id: str, after_seq: int = 0) -> None:
-        await self._send({"type": "sync", "room_id": room_id, "after_seq": after_seq})
+    async def sync(self, after_seq: int = 0) -> None:
+        await self._send({"type": "sync", "after_seq": after_seq})
 
     async def recv(self, timeout: Optional[float] = None) -> dict[str, Any]:
         if timeout is None:
@@ -133,10 +132,9 @@ class WorldClient:
                 if not isinstance(raw, str):
                     raw = raw.decode("utf-8")
                 msg = json.loads(raw)
-                if msg.get("type") == "event" and "seq" in msg and msg.get("room_id"):
+                if msg.get("type") == "event" and "seq" in msg:
                     seq = int(msg["seq"])
-                    room_id = str(msg["room_id"])
-                    self.last_seq[room_id] = max(self.last_seq.get(room_id, 0), seq)
+                    self.last_seq = max(self.last_seq, seq)
                 await self.inbox.put(msg)
         except asyncio.CancelledError:
             raise

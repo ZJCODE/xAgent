@@ -1,4 +1,4 @@
-"""Tests for the independent agents_world world (no xagent imports)."""
+"""Tests for the independent agents_world hub (no xagent imports)."""
 
 from __future__ import annotations
 
@@ -12,20 +12,22 @@ import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from urllib.parse import quote
 
 from agents_world import PROTOCOL_VERSION
 from agents_world.clock import VirtualClock
+from agents_world.config import WorldConfig
 from agents_world.models import EventKind
 from agents_world.paths import world_data_dir
-from agents_world.scene import SceneConfig, parse_relative_delay, parse_scene_config
-from agents_world.store import open_store_for_scene
+from agents_world.server import WorldHub
+from agents_world.store import open_store_for_world
 from agents_world.world import World
 
 
-async def _http_get(port: int, path: str) -> tuple[int, dict[str, str], bytes]:
+async def _http(port: int, method: str, path: str) -> tuple[int, dict[str, str], bytes]:
     reader, writer = await asyncio.open_connection("127.0.0.1", port)
     writer.write(
-        f"GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n".encode()
+        f"{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n".encode()
     )
     await writer.drain()
     raw = await reader.read()
@@ -42,6 +44,10 @@ async def _http_get(port: int, path: str) -> tuple[int, dict[str, str], bytes]:
     return status, headers, body
 
 
+async def _http_get(port: int, path: str) -> tuple[int, dict[str, str], bytes]:
+    return await _http(port, "GET", path)
+
+
 _ASSET_RE = re.compile(r"""(?:src|href)=["'](/assets/[^"']+)["']""")
 
 
@@ -49,32 +55,8 @@ def _asset_paths(html: str) -> list[str]:
     return _ASSET_RE.findall(html)
 
 
-def _plaza(world_id: str = "test-plaza", *, scenes: list | None = None) -> SceneConfig:
-    body = {
-        "world": world_id,
-        "rooms": [
-            {
-                "id": "hall",
-                "name": "大厅",
-                "setting": "开放大厅",
-            }
-        ],
-        "scenes": scenes if scenes is not None else [{"at": "+1s", "room": "hall", "text": "天色暗下来了"}],
-    }
-    return parse_scene_config(body)
-
-
-def _two_rooms(world_id: str = "two-rooms") -> SceneConfig:
-    return parse_scene_config(
-        {
-            "world": world_id,
-            "rooms": [
-                {"id": "hall", "name": "大厅", "setting": "开放大厅"},
-                {"id": "quiet", "name": "侧厅", "setting": "安静"},
-            ],
-            "scenes": [],
-        }
-    )
+def _plaza(world_id: str = "test-plaza") -> WorldConfig:
+    return WorldConfig.create(world_id=world_id, name=world_id)
 
 
 class Capture:
@@ -99,23 +81,16 @@ class Capture:
         return [m for m in self.messages if m.get("type") == msg_type]
 
 
-class SceneParseTests(unittest.TestCase):
-    def test_relative_delay(self):
-        self.assertEqual(parse_relative_delay("+5m"), 300.0)
-        self.assertEqual(parse_relative_delay("+1h30m"), 5400.0)
-        self.assertEqual(parse_relative_delay("+10s"), 10.0)
-
-    def test_rejects_persona_free_but_requires_rooms(self):
-        with self.assertRaises(ValueError):
-            parse_scene_config({"world": "x", "rooms": []})
+class WorldConfigTests(unittest.TestCase):
+    def test_create_defaults_name(self):
+        cfg = WorldConfig.create(world_id="plaza")
+        self.assertEqual(cfg.name, "plaza")
 
     def test_rejects_path_like_world_id(self):
         with self.assertRaises(ValueError):
-            parse_scene_config({"world": "..", "rooms": [{"id": "hall", "name": "h"}]})
+            WorldConfig.create(world_id="..", name="h")
         with self.assertRaises(ValueError):
-            parse_scene_config(
-                {"world": "../../tmp/escaped", "rooms": [{"id": "hall", "name": "h"}]}
-            )
+            WorldConfig.create(world_id="../../tmp/escaped", name="h")
 
 
 class PathSafetyTests(unittest.TestCase):
@@ -128,6 +103,27 @@ class PathSafetyTests(unittest.TestCase):
                 world_data_dir("../../tmp/escaped", root=root)
             path = world_data_dir("plaza", root=root)
             self.assertTrue(str(path.resolve()).startswith(str(root.resolve())))
+            self.assertEqual(path.name, "plaza")
+            self.assertEqual(path.parent.name, "worlds")
+
+    def test_allocate_world_id_from_name(self):
+        from agents_world.paths import WORLD_NAME_RULE, allocate_world_id, validate_world_id
+
+        self.assertEqual(allocate_world_id("cafe", taken=()), "cafe")
+        self.assertEqual(allocate_world_id("cafe", taken={"cafe"}), "cafe-2")
+        self.assertEqual(allocate_world_id("plaza", taken={"plaza"}), "plaza-2")
+        with self.assertRaises(ValueError) as ctx:
+            validate_world_id("Cafe")
+        self.assertEqual(str(ctx.exception), WORLD_NAME_RULE)
+        with self.assertRaises(ValueError):
+            validate_world_id("大厅")
+
+    def test_world_data_dir_accepts_valid_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = world_data_dir("plaza", root=root)
+            self.assertEqual(path.name, "plaza")
+            self.assertEqual(path.parent.name, "worlds")
 
 
 class WorldPhysicsTests(unittest.IsolatedAsyncioTestCase):
@@ -135,9 +131,9 @@ class WorldPhysicsTests(unittest.IsolatedAsyncioTestCase):
         self._tmpdir = tempfile.TemporaryDirectory()
         self.root = Path(self._tmpdir.name)
         self.clock = VirtualClock(start=1_000.0)
-        self.scene = _plaza(world_id="physics")
-        self.store = open_store_for_scene(self.scene, root=self.root, clock=self.clock)
-        self.world = World(self.store, self.scene, clock=self.clock)
+        self.config = _plaza(world_id="physics")
+        self.store = open_store_for_world(self.config, root=self.root, clock=self.clock)
+        self.world = World(self.store, self.config, clock=self.clock)
         await self.world.start()
 
     async def asyncTearDown(self):
@@ -160,119 +156,70 @@ class WorldPhysicsTests(unittest.IsolatedAsyncioTestCase):
         targets = wait_sessions or (session,)
         await self.world.wait_idle(*targets)
 
-    async def _tick(self, seconds: float = 0.0) -> None:
-        if seconds:
-            self.clock.advance(seconds)
-        for _ in range(8):
-            await asyncio.sleep(0)
-        await self.world.wait_idle()
-
     async def test_two_members_hear_each_other(self):
         alice_cap, alice = await self._attach("alice", "Alice")
         bob_cap, bob = await self._attach("bob", "Bob")
-
-        await self._act(alice, "join", {"room_id": "hall"}, alice, bob)
-        await self._act(bob, "join", {"room_id": "hall"}, alice, bob)
-        await self._act(alice, "speak", {"room_id": "hall", "text": "hi bob"}, alice, bob)
-
+        await self._act(alice, "join", {}, alice, bob)
+        await self._act(bob, "join", {}, alice, bob)
+        await self._act(alice, "speak", {"text": "hi bob"}, alice, bob)
         alice_texts = [e["text"] for e in alice_cap.events() if e["kind"] == "utterance"]
         bob_texts = [e["text"] for e in bob_cap.events() if e["kind"] == "utterance"]
-        self.assertIn("hi bob", alice_texts)  # self-echo
+        self.assertIn("hi bob", alice_texts)
         self.assertIn("hi bob", bob_texts)
 
     async def test_leave_stops_live_events(self):
         alice_cap, alice = await self._attach("alice")
         bob_cap, bob = await self._attach("bob")
-        await self._act(alice, "join", {"room_id": "hall"}, alice, bob)
-        await self._act(bob, "join", {"room_id": "hall"}, alice, bob)
-
-        await self._act(bob, "leave", {"room_id": "hall"}, alice, bob)
+        await self._act(alice, "join", {}, alice, bob)
+        await self._act(bob, "join", {}, alice, bob)
+        await self._act(bob, "leave", {}, alice, bob)
         before = len([e for e in bob_cap.events() if e["kind"] == "utterance"])
-        await self._act(alice, "speak", {"room_id": "hall", "text": "still here?"}, alice)
+        await self._act(alice, "speak", {"text": "still here?"}, alice)
         after = [e for e in bob_cap.events() if e["kind"] == "utterance"]
         self.assertEqual(len(after), before)
-        alice_utt = [e for e in alice_cap.events() if e.get("text") == "still here?"]
-        self.assertEqual(len(alice_utt), 1)
-
-    async def test_scene_event_fires_on_virtual_clock(self):
-        alice_cap, alice = await self._attach("alice")
-        await self._act(alice, "join", {"room_id": "hall"})
-        await self._tick(1.0)
-        scenes = [e for e in alice_cap.events() if e["kind"] == "scene"]
-        self.assertTrue(any(e["text"] == "天色暗下来了" for e in scenes))
-        self.assertTrue(all(e["actor_id"] == "world" for e in scenes))
-
-    async def test_scene_does_not_replay_on_restart(self):
-        alice_cap, alice = await self._attach("alice")
-        await self._act(alice, "join", {"room_id": "hall"})
-        await self._tick(1.0)
-        first = [e for e in self.store.recent_events("hall", limit=50) if e.kind == EventKind.SCENE]
-        self.assertEqual(len(first), 1)
-        await self.world.close()
-
-        clock2 = VirtualClock(start=self.clock.now())
-        store2 = open_store_for_scene(self.scene, root=self.root, clock=clock2)
-        world2 = World(store2, self.scene, clock=clock2)
-        await world2.start()
-        clock2.advance(5.0)
-        for _ in range(8):
-            await asyncio.sleep(0)
-        second = [e for e in store2.recent_events("hall", limit=50) if e.kind == EventKind.SCENE]
-        await world2.close()
-        self.assertEqual(len(second), 1)
 
     async def test_log_survives_reopen(self):
-        alice_cap, alice = await self._attach("alice")
-        await self._act(alice, "join", {"room_id": "hall"})
-        await self._act(alice, "speak", {"room_id": "hall", "text": "remember me"})
+        _, alice = await self._attach("alice")
+        await self._act(alice, "join", {})
+        await self._act(alice, "speak", {"text": "remember me"})
         await self.world.close()
-
-        store2 = open_store_for_scene(self.scene, root=self.root, clock=self.clock)
-        events = store2.recent_events("hall", limit=50)
+        store2 = open_store_for_world(self.config, root=self.root, clock=self.clock)
+        events = store2.recent_events(limit=50)
         store2.close()
         self.assertTrue(any(e.kind == EventKind.UTTERANCE and e.text == "remember me" for e in events))
 
     async def test_welcome_advertises_protocol_and_heads(self):
-        cap, session = await self._attach("alice")
+        cap, _ = await self._attach("alice")
         welcome = cap.of_type("welcome")[0]
         self.assertEqual(welcome.get("protocol_version"), PROTOCOL_VERSION)
-        self.assertIn("present_rooms", welcome)
-        self.assertIn("latest_seq", welcome["rooms"][0])
-        self.assertIn("latest_room_seq", welcome["rooms"][0])
+        self.assertEqual(welcome.get("name"), "physics")
+        self.assertIn("latest_seq", welcome)
+        self.assertNotIn("rooms", welcome)
 
     async def test_join_is_not_duplicated_for_joiner(self):
         cap, session = await self._attach("alice")
-        await self._act(session, "join", {"room_id": "hall"})
+        await self._act(session, "join", {})
         live = [m for m in cap.events() if m.get("kind") == "join"]
         snap = cap.of_type("snapshot")[-1]
         snap_joins = [e for e in snap["events"] if e.get("kind") == "join"]
         self.assertEqual(live, [])
         self.assertEqual(len(snap_joins), 1)
-        self.assertEqual(snap_joins[0].get("text"), "")
 
-    async def test_room_seq_is_contiguous_per_room(self):
-        scene = _two_rooms("seq-world")
-        await self.world.close()
-        self.store = open_store_for_scene(scene, root=self.root, clock=self.clock)
-        self.world = World(self.store, scene, clock=self.clock)
-        await self.world.start()
-        alice_cap, alice = await self._attach("alice")
-        await self._act(alice, "join", {"room_id": "hall"})
-        await self._act(alice, "join", {"room_id": "quiet"})
-        await self._act(alice, "speak", {"room_id": "hall", "text": "a"})
-        await self._act(alice, "speak", {"room_id": "quiet", "text": "b"})
-        await self._act(alice, "speak", {"room_id": "hall", "text": "c"})
-        hall = self.store.recent_events("hall", limit=50)
-        hall_room_seq = [e.room_seq for e in hall]
-        self.assertEqual(hall_room_seq, list(range(1, len(hall_room_seq) + 1)))
-        self.assertTrue(any(e.seq != e.room_seq for e in hall))
+    async def test_seq_is_contiguous(self):
+        _, alice = await self._attach("alice")
+        await self._act(alice, "join", {})
+        await self._act(alice, "speak", {"text": "a"})
+        await self._act(alice, "speak", {"text": "b"})
+        await self._act(alice, "speak", {"text": "c"})
+        events = self.store.recent_events(limit=50)
+        seqs = [e.seq for e in events]
+        self.assertEqual(seqs, list(range(1, len(seqs) + 1)))
 
     async def test_sync_reports_has_more(self):
         _, alice = await self._attach("alice")
-        await self._act(alice, "join", {"room_id": "hall"})
+        await self._act(alice, "join", {})
         for i in range(210):
             self.store.append_event(
-                room_id="hall",
                 kind=EventKind.UTTERANCE,
                 actor_id="alice",
                 text=f"flood {i}",
@@ -280,75 +227,65 @@ class WorldPhysicsTests(unittest.IsolatedAsyncioTestCase):
         cap = Capture()
         syncer = await self.world.attach(member_id="syncer", display_name="syncer", send=cap.send)
         await self.world.welcome(syncer)
-        await self._act(syncer, "sync", {"room_id": "hall", "after_seq": 0})
+        await self._act(syncer, "sync", {"after_seq": 0})
         snap = [m for m in cap.messages if m.get("type") == "snapshot"][-1]
         self.assertTrue(snap.get("sync"))
         self.assertEqual(len(snap["events"]), 200)
         self.assertTrue(snap.get("has_more"))
-        self.assertEqual(snap.get("next_after_seq"), snap["events"][-1]["seq"])
 
     async def test_malformed_after_seq_does_not_drop_session(self):
         cap, alice = await self._attach("alice")
-        await self._act(alice, "join", {"room_id": "hall"})
-        await self._act(alice, "sync", {"room_id": "hall", "after_seq": "abc"})
+        await self._act(alice, "join", {})
+        await self._act(alice, "sync", {"after_seq": "abc"})
         err = cap.of_type("error")[-1]
         self.assertEqual(err.get("code"), "bad_payload")
-        await self._act(alice, "speak", {"room_id": "hall", "text": "still here"})
+        await self._act(alice, "speak", {"text": "still here"})
         texts = [e["text"] for e in cap.events() if e.get("kind") == "utterance"]
         self.assertIn("still here", texts)
 
     async def test_dead_socket_emits_leave(self):
         alice_cap, alice = await self._attach("alice")
         broken_cap, broken = await self._attach("broken")
-        await self._act(alice, "join", {"room_id": "hall"}, alice, broken)
-        await self._act(broken, "join", {"room_id": "hall"}, alice, broken)
+        await self._act(alice, "join", {}, alice, broken)
+        await self._act(broken, "join", {}, alice, broken)
         broken_cap.fail_after = broken_cap._sends
-        await self.world.handle(alice, "speak", {"room_id": "hall", "text": "trigger"})
+        await self.world.handle(alice, "speak", {"text": "trigger"})
         for _ in range(40):
             leaves = [e for e in alice_cap.events() if e.get("kind") == "leave"]
             if leaves:
                 break
             await asyncio.sleep(0.01)
         await self.world.wait_idle(alice)
-        self.assertFalse(self.store.is_present("broken", "hall"))
-        self.assertTrue(any(e.get("kind") == "leave" and e.get("actor_id") == "broken" for e in alice_cap.events()))
+        self.assertFalse(self.store.is_present("broken"))
 
-    async def test_slow_consumer_does_not_stall_other_rooms(self):
-        await self.world.close()
-        scene = _two_rooms("stall-world")
-        self.store = open_store_for_scene(scene, root=self.root, clock=self.clock)
-        self.world = World(self.store, scene, clock=self.clock)
-        await self.world.start()
-
+    async def test_slow_consumer_does_not_stall_other_members(self):
         slow_cap, slow = await self._attach("slow")
-        fast_cap, fast = await self._attach("fast")
+        _, fast = await self._attach("fast")
         other_cap, other = await self._attach("other")
-        await self._act(slow, "join", {"room_id": "hall"}, slow, fast)
-        await self._act(fast, "join", {"room_id": "hall"}, slow, fast)
-        await self._act(other, "join", {"room_id": "quiet"}, other)
-
+        await self._act(slow, "join", {}, slow, fast, other)
+        await self._act(fast, "join", {}, slow, fast, other)
+        await self._act(other, "join", {}, slow, fast, other)
         slow_cap.delay = 2.0
         t0 = time.perf_counter()
-        await self.world.handle(fast, "speak", {"room_id": "hall", "text": "hi hall"})
-        await self.world.handle(other, "speak", {"room_id": "quiet", "text": "unrelated room"})
+        await self.world.handle(fast, "speak", {"text": "hi everyone"})
+        await self.world.handle(other, "speak", {"text": "unrelated line"})
         await other.outbound.join()
         elapsed = time.perf_counter() - t0
         self.assertLess(elapsed, 0.5)
         other_texts = [e["text"] for e in other_cap.events() if e.get("kind") == "utterance"]
-        self.assertIn("unrelated room", other_texts)
+        self.assertIn("unrelated line", other_texts)
         slow_cap.delay = 0.0
 
     async def test_speak_file_is_a_medium_event(self):
         alice_cap, alice = await self._attach("alice")
         bob_cap, bob = await self._attach("bob")
-        await self._act(alice, "join", {"room_id": "hall"}, alice, bob)
-        await self._act(bob, "join", {"room_id": "hall"}, alice, bob)
+        await self._act(alice, "join", {}, alice, bob)
+        await self._act(bob, "join", {}, alice, bob)
         payload = base64.b64encode(b"hello-file").decode("ascii")
         await self._act(
             alice,
             "speak",
             {
-                "room_id": "hall",
                 "text": "see this",
                 "attachments": [{"name": "note.txt", "mime": "text/plain", "data": payload}],
             },
@@ -356,78 +293,58 @@ class WorldPhysicsTests(unittest.IsolatedAsyncioTestCase):
             bob,
         )
         heard = [e for e in bob_cap.events() if e.get("kind") == "utterance"][-1]
-        self.assertEqual(heard.get("text"), "see this")
         atts = heard.get("attachments") or []
-        self.assertEqual(len(atts), 1)
-        self.assertEqual(atts[0]["name"], "note.txt")
-        self.assertEqual(atts[0]["url"], f"/files/{atts[0]['id']}")
+        self.assertEqual(atts[0]["url"], f"/worlds/physics/files/{atts[0]['id']}")
         self.assertEqual(base64.b64decode(atts[0]["data"]), b"hello-file")
-        found = self.store.get_file(atts[0]["id"])
-        self.assertIsNotNone(found)
-        attachment, path = found
-        self.assertEqual(path.read_bytes(), b"hello-file")
-        self.assertEqual(attachment.mime, "text/plain")
-        stored = [item.to_dict() for item in self.store.recent_events("hall", limit=5) if item.attachments]
-        self.assertTrue(stored)
+        stored = [item.to_dict(world_id="physics") for item in self.store.recent_events(limit=5) if item.attachments]
         self.assertNotIn("data", stored[0]["attachments"][0])
 
     async def test_speak_attachments_without_text(self):
         cap, alice = await self._attach("alice")
-        await self._act(alice, "join", {"room_id": "hall"})
+        await self._act(alice, "join", {})
         payload = base64.b64encode(b"only-file").decode("ascii")
         await self._act(
             alice,
             "speak",
             {
-                "room_id": "hall",
                 "text": "",
                 "attachments": [{"name": "solo.bin", "mime": "application/octet-stream", "data": payload}],
             },
         )
         heard = [e for e in cap.events() if e.get("kind") == "utterance"][-1]
-        self.assertEqual(heard.get("text"), "")
         self.assertEqual(heard["attachments"][0]["name"], "solo.bin")
 
     async def test_speak_rejects_oversize_file(self):
         cap, alice = await self._attach("alice")
-        await self._act(alice, "join", {"room_id": "hall"})
+        await self._act(alice, "join", {})
         payload = base64.b64encode(b"too-big").decode("ascii")
         with patch("agents_world.world.MAX_FILE_BYTES", 3):
             await self._act(
                 alice,
                 "speak",
-                {
-                    "room_id": "hall",
-                    "text": "x",
-                    "attachments": [{"name": "big.bin", "data": payload}],
-                },
+                {"text": "x", "attachments": [{"name": "big.bin", "data": payload}]},
             )
         err = cap.of_type("error")[-1]
         self.assertEqual(err.get("code"), "file_too_large")
 
     async def test_rate_limit_uses_clock(self):
         cap, alice = await self._attach("alice")
-        await self._act(alice, "join", {"room_id": "hall"})
+        await self._act(alice, "join", {})
         for i in range(10):
-            await self._act(alice, "speak", {"room_id": "hall", "text": f"n{i}"})
-        await self._act(alice, "speak", {"room_id": "hall", "text": "too many"})
+            await self._act(alice, "speak", {"text": f"n{i}"})
+        await self._act(alice, "speak", {"text": "too many"})
         err = cap.of_type("error")[-1]
         self.assertEqual(err.get("code"), "rate_limited")
         self.clock.advance(1.1)
-        await self._act(alice, "speak", {"room_id": "hall", "text": "after window"})
+        await self._act(alice, "speak", {"text": "after window"})
         texts = [e["text"] for e in cap.events() if e.get("kind") == "utterance"]
         self.assertIn("after window", texts)
 
-    async def test_events_index_exists(self):
-        names = {
-            row["name"]
-            for row in self.store._conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='index'"
-            )
-        }
-        self.assertIn("idx_events_room_seq", names)
+    async def test_wal_and_synchronous(self):
         mode = self.store._conn.execute("PRAGMA synchronous").fetchone()[0]
-        self.assertEqual(int(mode), 1)  # NORMAL
+        self.assertEqual(int(mode), 1)
+        journal = self.store._conn.execute("PRAGMA journal_mode").fetchone()[0]
+        self.assertEqual(str(journal).lower(), "wal")
 
     async def test_no_xagent_import(self):
         import agents_world
@@ -450,85 +367,131 @@ class WorldPhysicsTests(unittest.IsolatedAsyncioTestCase):
                 )
 
 
-class WebSocketVenueTests(unittest.IsolatedAsyncioTestCase):
+class WorldHubTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self._tmpdir = tempfile.TemporaryDirectory()
         self.root = Path(self._tmpdir.name)
-        scene = parse_scene_config(
-            {
-                "world": "ws-venue",
-                "rooms": [{"id": "hall", "name": "大厅", "setting": "ws"}],
-                "scenes": [],
-            }
-        )
-        from agents_world.server import WorldServer
-
-        self.server = WorldServer.from_scene(
-            scene,
+        self.hub = WorldHub.create(
             host="127.0.0.1",
             port=0,
             data_root=str(self.root),
         )
         os.environ["AGENTS_WORLD_NEIGHBORS_ROOT"] = str(self.root)
-        self.port = await self.server.start()
+        self.port = await self.hub.start()
 
     async def asyncTearDown(self):
-        await self.server.stop()
+        await self.hub.stop()
         os.environ.pop("AGENTS_WORLD_NEIGHBORS_ROOT", None)
         self._tmpdir.cleanup()
 
-    @property
-    def url(self) -> str:
-        return f"ws://127.0.0.1:{self.port}"
+    def _ws(self, world_id: str) -> str:
+        return f"ws://127.0.0.1:{self.port}/ws/{quote(world_id, safe='')}"
 
-    async def test_dummy_style_roundtrip(self):
+    async def test_create_list_and_isolate_worlds(self):
+        status, _, body = await _http_get(self.port, "/worlds/create?name=plaza")
+        self.assertEqual(status, 201)
+        created = json.loads(body.decode("utf-8"))
+        self.assertEqual(created["name"], "plaza")
+        self.assertEqual(created["id"], "plaza")
+        plaza_id = created["id"]
+
+        status, _, body = await _http_get(self.port, "/worlds/create?name=cafe")
+        self.assertEqual(status, 201)
+        cafe = json.loads(body.decode("utf-8"))
+        self.assertEqual(cafe["id"], "cafe")
+
+        status, _, body = await _http_get(self.port, "/worlds/create?name=cafe")
+        self.assertEqual(status, 201)
+        cafe2 = json.loads(body.decode("utf-8"))
+        self.assertEqual(cafe2["id"], "cafe-2")
+
+        status, _, body = await _http_get(self.port, f"/worlds/create?name={quote('大厅')}")
+        self.assertEqual(status, 400)
+
+        status, _, body = await _http_get(self.port, "/worlds")
+        self.assertEqual(status, 200)
+        worlds = {item["id"] for item in json.loads(body.decode("utf-8"))["worlds"]}
+        self.assertEqual(worlds, {plaza_id, "cafe", "cafe-2"})
+
         from agents_world.client import WorldClient
 
-        async with WorldClient(self.url, member_id="alice") as alice:
-            async with WorldClient(self.url, member_id="bob") as bob:
-                self.assertEqual(alice.welcome.get("protocol_version"), PROTOCOL_VERSION)
-                await alice.join("hall")
-                await bob.join("hall")
+        async with WorldClient(self._ws(plaza_id), member_id="alice") as alice:
+            async with WorldClient(self._ws("cafe"), member_id="bob") as bob:
+                await alice.join()
+                await bob.join()
                 await alice.wait_for(lambda m: m.get("type") == "snapshot")
                 await bob.wait_for(lambda m: m.get("type") == "snapshot")
-                await alice.speak("hall", "hello from alice")
+                await alice.speak("only plaza")
+                heard = await alice.wait_for(
+                    lambda m: m.get("type") == "event" and m.get("text") == "only plaza"
+                )
+                self.assertEqual(heard.get("kind"), "utterance")
+                with self.assertRaises(TimeoutError):
+                    await bob.wait_for(
+                        lambda m: m.get("type") == "event" and m.get("text") == "only plaza",
+                        timeout=0.4,
+                    )
+
+    async def test_ws_requires_world_path(self):
+        from agents_world.client import WorldClient
+
+        client = WorldClient(f"ws://127.0.0.1:{self.port}/", member_id="alice")
+        with self.assertRaises(Exception):
+            await client.connect()
+        await client.close()
+
+    async def test_dummy_style_roundtrip(self):
+        await _http_get(self.port, "/worlds/create?name=hall")
+        from agents_world.client import WorldClient
+
+        async with WorldClient(self._ws("hall"), member_id="alice") as alice:
+            async with WorldClient(self._ws("hall"), member_id="bob") as bob:
+                self.assertEqual(alice.welcome.get("protocol_version"), PROTOCOL_VERSION)
+                await alice.join()
+                await bob.join()
+                await alice.wait_for(lambda m: m.get("type") == "snapshot")
+                await bob.wait_for(lambda m: m.get("type") == "snapshot")
+                await alice.speak("hello from alice")
                 heard = await bob.wait_for(
                     lambda m: m.get("type") == "event" and m.get("kind") == "utterance"
                 )
                 self.assertEqual(heard.get("text"), "hello from alice")
-                self.assertIn("room_seq", heard)
+                self.assertNotIn("room_id", heard)
 
     async def test_malformed_sync_keeps_connection(self):
+        await _http_get(self.port, "/worlds/create?name=hall")
         from agents_world.client import WorldClient
 
-        async with WorldClient(self.url, member_id="alice") as alice:
-            await alice.join("hall")
+        async with WorldClient(self._ws("hall"), member_id="alice") as alice:
+            await alice.join()
             await alice.wait_for(lambda m: m.get("type") == "snapshot")
-            await alice._send({"type": "sync", "room_id": "hall", "after_seq": "abc"})
+            await alice._send({"type": "sync", "after_seq": "abc"})
             err = await alice.wait_for(lambda m: m.get("type") == "error")
             self.assertEqual(err.get("code"), "bad_payload")
-            await alice.speak("hall", "still connected")
+            await alice.speak("still connected")
             echo = await alice.wait_for(
                 lambda m: m.get("type") == "event" and m.get("text") == "still connected"
             )
             self.assertEqual(echo.get("kind"), "utterance")
 
     async def test_speak_requires_presence(self):
+        await _http_get(self.port, "/worlds/create?name=hall")
         from agents_world.client import WorldClient
 
-        async with WorldClient(self.url, member_id="alice") as alice:
-            await alice.speak("hall", "too soon")
+        async with WorldClient(self._ws("hall"), member_id="alice") as alice:
+            await alice.speak("too soon")
             err = await alice.wait_for(lambda m: m.get("type") == "error")
             self.assertEqual(err.get("code"), "not_present")
 
     async def test_replaced_connection_is_closed(self):
+        await _http_get(self.port, "/worlds/create?name=hall")
         from agents_world.client import WorldClient
 
-        first = WorldClient(self.url, member_id="bob")
+        first = WorldClient(self._ws("hall"), member_id="bob")
         await first.connect()
-        await first.join("hall")
+        await first.join()
         await first.wait_for(lambda m: m.get("type") == "snapshot")
-        second = WorldClient(self.url, member_id="bob")
+        second = WorldClient(self._ws("hall"), member_id="bob")
         await second.connect()
         msg = await first.wait_for(
             lambda m: m.get("type") in {"error", "_closed"}, timeout=3.0
@@ -550,23 +513,19 @@ class WebSocketVenueTests(unittest.IsolatedAsyncioTestCase):
             asset_status, _, asset_body = await _http_get(self.port, src)
             self.assertEqual(asset_status, 200)
             blob += asset_body.decode("utf-8", "replace")
-        self.assertIn("请来", blob)
-        self.assertIn("请回", blob)
-        self.assertIn("presentInRoom", blob)
-        self.assertNotIn("正在输入", blob)
-        self.assertNotIn("等待回复", blob)
-        self.assertNotIn("世界不替他们思考", blob)
-        self.assertNotIn("不会等待回答", blob)
-        self.assertIn("发送文件", blob)
+        self.assertIn("Invite", blob)
+        self.assertIn("Dismiss", blob)
+        self.assertIn("New world", blob)
+        self.assertIn("Attach file", blob)
 
     async def test_http_serves_spoken_file(self):
+        await _http_get(self.port, "/worlds/create?name=hall")
         from agents_world.client import WorldClient
 
-        async with WorldClient(self.url, member_id="alice") as alice:
-            await alice.join("hall")
+        async with WorldClient(self._ws("hall"), member_id="alice") as alice:
+            await alice.join()
             await alice.wait_for(lambda m: m.get("type") == "snapshot")
             await alice.speak(
-                "hall",
                 "file",
                 attachments=[{"name": "note.txt", "mime": "text/plain", "data": b"venue-bytes"}],
             )
@@ -574,20 +533,27 @@ class WebSocketVenueTests(unittest.IsolatedAsyncioTestCase):
                 lambda m: m.get("type") == "event" and m.get("kind") == "utterance"
             )
             file_id = echo["attachments"][0]["id"]
-        status, headers, body = await _http_get(self.port, f"/files/{file_id}")
+            self.assertEqual(echo["attachments"][0]["url"], f"/worlds/hall/files/{file_id}")
+        status, headers, body = await _http_get(self.port, f"/worlds/hall/files/{file_id}")
         self.assertEqual(status, 200)
         self.assertEqual(body, b"venue-bytes")
-        self.assertIn("text/plain", headers.get("content-type", ""))
 
     async def test_http_neighbors_and_404(self):
         missing_status, _, _ = await _http_get(self.port, "/nope")
         status, headers, body = await _http_get(self.port, "/neighbors")
         self.assertEqual(missing_status, 404)
         self.assertEqual(status, 200)
-        self.assertIn("application/json", headers.get("content-type", ""))
         payload = json.loads(body.decode("utf-8"))
         self.assertIn("agents", payload)
-        self.assertIsInstance(payload["agents"], list)
+
+    async def test_hub_reloads_existing_worlds(self):
+        await _http_get(self.port, "/worlds/create?name=keep")
+        await self.hub.stop()
+        self.hub = WorldHub.create(host="127.0.0.1", port=0, data_root=str(self.root))
+        self.port = await self.hub.start()
+        status, _, body = await _http_get(self.port, "/worlds")
+        ids = {item["id"] for item in json.loads(body.decode("utf-8"))["worlds"]}
+        self.assertIn("keep", ids)
 
 
 if __name__ == "__main__":

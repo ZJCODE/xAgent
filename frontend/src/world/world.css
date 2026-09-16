@@ -41,8 +41,16 @@
 }
 
 .world-sidebar-top {
+  position: relative;
+  z-index: 20;
   flex: 0 0 auto;
+  overflow: visible;
   padding: 18px 14px 0;
+}
+
+.world-sidebar-top .agent-switcher {
+  padding-left: 0;
+  padding-right: 0;
 }
 
 .world-sidebar-scroll {
@@ -234,6 +242,11 @@
   gap: 8px;
 }
 
+.create-world-footer {
+  padding: 16px 0 0;
+  margin: 0;
+}
+
 .world-shell .chat-toolbar {
   justify-content: space-between;
 }
@@ -270,10 +283,6 @@
   font-weight: 500;
   letter-spacing: 0;
   text-transform: none;
-}
-
-.world-sidebar .sidebar-footer .ui-button {
-  flex: 1;
 }
 
 @media (max-width: 980px) {

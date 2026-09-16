@@ -14,6 +14,7 @@ import mimetypes
 import re
 from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import quote
 
 import httpx
 from agents_world import MAX_ATTACHMENTS, MAX_ATTACHMENTS_BYTES, MAX_FILE_BYTES
@@ -32,20 +33,20 @@ from ...utils.image_utils import workspace_blob_relative_path
 CHANNEL_WORLD = "world"
 _ROOM_CONTEXT_LIMIT = 20
 _CHANNEL_INSTRUCTIONS = (
-    "You are a body already in a shared room. Presence is continuous until you leave. "
+    "You are a body already in a shared world. Presence is continuous until you leave. "
     "Do not describe APIs, sockets, being 'connected', or only existing when messaged. "
-    "Speak to the room, not as a private assistant to the last speaker. "
+    "Speak to everyone present, not as a private assistant to the last speaker. "
     "If someone asks whether anyone is here, answer. "
     "If someone asks you to be shorter, continue, or stop, do that in the next line — "
     "do not go silent to be polite. "
     "Reminders are your own alarm, not the world's. If you promise to call someone later "
-    "and you are still in the room when it is due, speak. "
-    "Do not greet again if you already greeted. Do not treat the room log as your diary."
+    "and you are still here when it is due, speak. "
+    "Do not greet again if you already greeted. Do not treat the world log as your diary."
 )
 _MARKDOWN_REF_RE = re.compile(r"!?\[(?:[^\]]*)\]\(([^)]+)\)")
 _BACKTICK_FILE_RE = re.compile(r"`([^`]+)`")
 _DECISION_PREFACE = (
-    "You are already present in this room. "
+    "You are already present in this world. "
     "Hearing a line is not a private request."
 )
 
@@ -66,7 +67,7 @@ class WorldInhabitant:
         self.display_name = display_name or member_id
         self.logger = logger or logging.getLogger(self.__class__.__name__)
         self.world_url = ""
-        self.room_id = ""
+        self.world_id = ""
         self._client: Optional[WorldClient] = None
         self._task: Optional[asyncio.Task[None]] = None
         self._recent: list[dict[str, Any]] = []
@@ -83,18 +84,18 @@ class WorldInhabitant:
         return {
             "connected": self.connected,
             "world_url": self.world_url,
-            "room_id": self.room_id,
+            "world_id": self.world_id,
             "member_id": self.member_id,
             "display_name": self.display_name,
         }
 
-    async def join(self, *, world_url: str, room_id: str) -> dict[str, Any]:
+    async def join(self, *, world_url: str) -> dict[str, Any]:
         async with self._join_lock:
-            if self.connected and self.world_url == world_url and self.room_id == room_id:
+            if self.connected and self.world_url == world_url:
                 return self.status()
             await self.leave()
             self.world_url = world_url
-            self.room_id = room_id
+            self.world_id = ""
             self._recent = []
             self._names = {}
             self._task = asyncio.create_task(self._run(), name=f"world-{self.member_id}")
@@ -110,9 +111,9 @@ class WorldInhabitant:
         if speech:
             await asyncio.gather(*speech, return_exceptions=True)
         client = self._client
-        if client is not None and self.room_id:
+        if client is not None:
             try:
-                await client.leave(self.room_id)
+                await client.leave()
             except Exception:
                 pass
         if task is not None:
@@ -135,13 +136,13 @@ class WorldInhabitant:
     ) -> ScheduledDeliveryContext:
         extra = dict(metadata or {})
         extra.setdefault("source", CHANNEL_WORLD)
-        extra.setdefault("room_id", self.room_id)
+        extra.setdefault("world_id", self.world_id)
         return ScheduledDeliveryContext(
             channel=CHANNEL_WORLD,
             user_id=user_id,
             target={
                 "world_url": self.world_url,
-                "room_id": self.room_id,
+                "world_id": self.world_id,
                 "member_id": self.member_id,
             },
             metadata=extra,
@@ -155,24 +156,21 @@ class WorldInhabitant:
         if not self.connected or self._client is None:
             return False
         target = task.target if isinstance(getattr(task, "target", None), dict) else {}
-        room_id = str(target.get("room_id") or "").strip()
         world_url = str(target.get("world_url") or "").strip()
-        if room_id and room_id != self.room_id:
-            return False
         if world_url and world_url != self.world_url:
             return False
         return True
 
     async def dispatch_scheduled_task(self, task: Any) -> None:
         if not self.can_handle_scheduled_task(task):
-            raise RuntimeError("world inhabitant is not present in the target room")
+            raise RuntimeError("world inhabitant is not present")
         client = self._client
         if client is None:
             raise RuntimeError("world inhabitant is not connected")
         text = await self._scheduled_text(task)
         if not text:
             raise ValueError("scheduled world task produced no content")
-        await client.speak(self.room_id, text)
+        await client.speak(text)
         handler = getattr(self.agent, "message_handler", None)
         store_model_reply = getattr(handler, "store_model_reply", None)
         if callable(store_model_reply):
@@ -187,9 +185,9 @@ class WorldInhabitant:
                         "delivery": getattr(task, "delivery", {}),
                     }
                 },
-                room_name=self.room_id,
+                room_name=self.world_id,
                 channel=CHANNEL_WORLD,
-                recipient_id=self.room_id,
+                recipient_id=self.world_id,
             )
 
     async def _scheduled_text(self, task: Any) -> str:
@@ -220,7 +218,7 @@ class WorldInhabitant:
                 async for event in chat_events(
                     user_message=prompt,
                     user_id=user_id,
-                    room_name=self.room_id,
+                    room_name=self.world_id,
                     channel=CHANNEL_WORLD,
                     channel_instructions=_CHANNEL_INSTRUCTIONS,
                     inbox_kind="scheduled_turn",
@@ -231,7 +229,7 @@ class WorldInhabitant:
             reply = await self.agent.chat(
                 user_message=prompt,
                 user_id=user_id,
-                room_name=self.room_id,
+                room_name=self.world_id,
                 channel=CHANNEL_WORLD,
                 channel_instructions=_CHANNEL_INSTRUCTIONS,
             )
@@ -245,7 +243,8 @@ class WorldInhabitant:
                 display_name=self.display_name,
             ) as client:
                 self._client = client
-                await client.join(self.room_id)
+                self.world_id = str((client.welcome or {}).get("world_id") or "")
+                await client.join()
                 async for msg in client.events():
                     await self._handle(msg)
         except asyncio.CancelledError:
@@ -268,9 +267,6 @@ class WorldInhabitant:
             return
         if msg_type != "event":
             return
-        room_id = str(msg.get("room_id") or "")
-        if room_id and room_id != self.room_id:
-            return
         self._remember([msg])
         kind = str(msg.get("kind") or "")
         actor = str(msg.get("actor_id") or "")
@@ -278,9 +274,6 @@ class WorldInhabitant:
             return
         if kind in {"join", "leave"}:
             await self._observe(msg, event_type=kind)
-            return
-        if kind == "scene":
-            await self._observe(msg, event_type="scene")
             return
         if kind != "utterance":
             await self._observe(msg, event_type=kind or "observation")
@@ -335,8 +328,6 @@ class WorldInhabitant:
                 line = _utterance_line(speaker, text, event.get("attachments"))
                 if line:
                     lines.append(line)
-            elif kind == "scene" and text:
-                lines.append(f"[scene] {text}")
             elif kind in {"join", "leave"}:
                 lines.append(f"[{kind}] {speaker}")
         return "\n".join(lines)
@@ -360,7 +351,7 @@ class WorldInhabitant:
             await store(
                 said,
                 actor,
-                room_name=self.room_id,
+                room_name=self.world_id,
                 channel=CHANNEL_WORLD,
                 attachments=attachments or None,
                 image_source=attachment_image_sources(attachments) or None,
@@ -382,7 +373,7 @@ class WorldInhabitant:
         actor = str(event.get("actor_id") or "")
         speaker = self._speaker_label(actor)
         if event_type in {"join", "leave"}:
-            context = f"{speaker} {event_type}ed {self.room_id}"
+            context = f"{speaker} {event_type}ed"
         elif text:
             context = f"{speaker}: {text}"
         else:
@@ -394,14 +385,14 @@ class WorldInhabitant:
                 source=CHANNEL_WORLD,
                 event_type=event_type,
                 metadata={
-                    "room_id": self.room_id,
+                    "world_id": self.world_id,
                     "actor_id": actor,
                     "sender_id": actor,
                     "sender_name": sender_name,
                     "seq": event.get("seq"),
                     "kind": event.get("kind"),
                 },
-                room_name=self.room_id,
+                room_name=self.world_id,
                 channel=CHANNEL_WORLD,
                 user_id=actor or None,
             )
@@ -447,7 +438,7 @@ class WorldInhabitant:
                 source=CHANNEL_WORLD,
                 event_type="group_message",
                 metadata={
-                    "room_id": self.room_id,
+                    "world_id": self.world_id,
                     "addressed_to_agent": named,
                     "recently_spoke": recently_spoke,
                 },
@@ -482,7 +473,7 @@ class WorldInhabitant:
                         user_message=said,
                         user_id=actor,
                         sender_name=sender_name,
-                        room_name=self.room_id,
+                        room_name=self.world_id,
                         channel=CHANNEL_WORLD,
                         channel_instructions=_CHANNEL_INSTRUCTIONS,
                         attachments=attachments or None,
@@ -498,7 +489,7 @@ class WorldInhabitant:
                         user_message=said,
                         user_id=actor,
                         sender_name=sender_name,
-                        room_name=self.room_id,
+                        room_name=self.world_id,
                         channel=CHANNEL_WORLD,
                         channel_instructions=_CHANNEL_INSTRUCTIONS,
                         attachments=attachments or None,
@@ -512,7 +503,7 @@ class WorldInhabitant:
         if not text and not outbound:
             return False
         try:
-            await client.speak(self.room_id, text, attachments=outbound or None)
+            await client.speak(text, attachments=outbound or None)
         except Exception:
             self.logger.exception("world speak failed: member_id=%s", self.member_id)
         return True
@@ -546,7 +537,18 @@ class WorldInhabitant:
                     if not data and file_id and origin:
                         if http_client is None:
                             http_client = httpx.AsyncClient(timeout=30.0, trust_env=False)
-                        response = await http_client.get(f"{origin}/files/{file_id}")
+                        file_url = str(item.get("url") or "").strip()
+                        if file_url.startswith("/"):
+                            fetch_url = f"{origin}{file_url}"
+                        elif file_url.startswith("http://") or file_url.startswith("https://"):
+                            fetch_url = file_url
+                        else:
+                            world_id = str(self.world_id or "").strip()
+                            fetch_url = (
+                                f"{origin}/worlds/{quote(world_id, safe='')}"
+                                f"/files/{quote(file_id, safe='')}"
+                            )
+                        response = await http_client.get(fetch_url)
                         response.raise_for_status()
                         data = bytes(response.content or b"")
                         if not mime:
@@ -663,13 +665,18 @@ def _bytes_from_attachment(item: dict[str, Any]) -> bytes:
 
 
 def _world_http_origin(world_url: str) -> str:
+    from urllib.parse import urlparse
+
     raw = str(world_url or "").strip()
     if raw.startswith("wss://"):
-        origin = "https://" + raw[len("wss://"):]
+        origin = "https://" + raw[len("wss://") :]
     elif raw.startswith("ws://"):
-        origin = "http://" + raw[len("ws://"):]
+        origin = "http://" + raw[len("ws://") :]
     else:
         origin = raw
+    parsed = urlparse(origin)
+    if parsed.scheme and parsed.netloc:
+        return f"{parsed.scheme}://{parsed.netloc}"
     return origin.rstrip("/")
 
 

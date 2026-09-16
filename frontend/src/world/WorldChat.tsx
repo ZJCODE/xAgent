@@ -4,7 +4,6 @@ import { Markdown } from "../components/Markdown";
 import { Button, EmptyState } from "../components/ui";
 import { classNames, formatBytes } from "../lib/format";
 import {
-  formatEventTime,
   isImageMime,
   worldFileUrl,
   type WorldAttachment,
@@ -17,7 +16,6 @@ function EventView({ event, memberId, displayOf }: { event: WorldEvent; memberId
   const actor = event.actor_id || "";
   const name = displayOf(actor);
   const mine = actor === memberId;
-  const time = formatEventTime(event.ts);
   const attachments = event.attachments || [];
   const images = attachments.filter((item) => isImageMime(item.mime, item.name));
   const text = event.text || "";
@@ -27,17 +25,11 @@ function EventView({ event, memberId, displayOf }: { event: WorldEvent; memberId
       <div className={classNames("chat-message-group", mine && "from-user")}>
         {text ? (
           <div className={classNames("message-bubble", mine ? "user-bubble" : "assistant-bubble")}>
-            <div className="message-label">
-              {mine ? "You" : name}
-              {time ? <span className="world-event-time">{time}</span> : null}
-            </div>
+            <div className="message-label">{mine ? "you" : name}</div>
             <Markdown content={text} />
           </div>
         ) : attachments.length ? (
-          <div className="world-file-meta">
-            {mine ? "你" : name} 发了文件
-            {time ? <span className="world-event-time">{time}</span> : null}
-          </div>
+          <div className="world-file-meta">{mine ? "you" : name} shared a file</div>
         ) : null}
         {images.map((attachment) => (
           <a
@@ -58,22 +50,12 @@ function EventView({ event, memberId, displayOf }: { event: WorldEvent; memberId
   }
 
   if (kind === "join") {
-    return <div className="world-system">{name} 进来了</div>;
+    return <div className="world-system">{mine ? "you" : name} joined</div>;
   }
   if (kind === "leave") {
-    return <div className="world-system">{name} 离开了</div>;
+    return <div className="world-system">{mine ? "you" : name} left</div>;
   }
-  if (kind === "scene") {
-    return (
-      <div className="chat-message-group">
-        <div className="message-bubble observation-bubble">
-          <div className="message-label">Scene{time ? <span className="world-event-time">{time}</span> : null}</div>
-          <Markdown content={event.text || ""} />
-        </div>
-      </div>
-    );
-  }
-  return <div className="world-system">[{kind}] {name}{event.text ? `: ${event.text}` : ""}</div>;
+  return <div className="world-system">[{kind}] {mine ? "you" : name}{event.text ? `: ${event.text}` : ""}</div>;
 }
 
 function FileBubble({ attachment }: { attachment: WorldAttachment }) {
@@ -95,7 +77,7 @@ function FileBubble({ attachment }: { attachment: WorldAttachment }) {
 export function WorldChat() {
   const {
     events,
-    presentInRoom,
+    joined,
     memberId,
     displayOf,
     speakText,
@@ -123,7 +105,7 @@ export function WorldChat() {
     node.style.height = `${Math.min(node.scrollHeight, 140)}px`;
   }, [speakText]);
 
-  const canSend = presentInRoom && !sending && Boolean(speakText.trim() || pendingFiles.length);
+  const canSend = joined && !sending && Boolean(speakText.trim() || pendingFiles.length);
 
   const submit = (event?: FormEvent) => {
     event?.preventDefault();
@@ -134,7 +116,7 @@ export function WorldChat() {
   const onDrop = (event: DragEvent) => {
     event.preventDefault();
     setDropping(false);
-    if (!presentInRoom) return;
+    if (!joined) return;
     if (event.dataTransfer.files?.length) addFiles(event.dataTransfer.files);
   };
 
@@ -147,7 +129,7 @@ export function WorldChat() {
       className={classNames("chat-panel", dropping && "world-chat-drop")}
       onDragEnter={(event) => {
         event.preventDefault();
-        if (presentInRoom) setDropping(true);
+        if (joined) setDropping(true);
       }}
       onDragOver={(event) => event.preventDefault()}
       onDragLeave={(event) => {
@@ -174,8 +156,10 @@ export function WorldChat() {
             />
           ))
         ) : (
-          <EmptyState icon={<MessageSquareText size={24} />} title={presentInRoom ? "还没有人说话" : "进入大厅"}>
-            {presentInRoom ? "你说的话和文件会留在房间时间线上。" : "从左侧填好名字并进入。"}
+          <EmptyState icon={<MessageSquareText size={24} />} title={joined ? "No messages yet" : "Not in a world"}>
+            {joined
+              ? "Speech and files stay on this world's timeline."
+              : "Select or create a world from the sidebar."}
           </EmptyState>
         )}
       </div>
@@ -192,7 +176,7 @@ export function WorldChat() {
                 </span>
               )}
               {!isImageMime(item.mime, item.name) ? <span>{item.name}</span> : null}
-              <button type="button" onClick={() => removeFile(item.id)} title="移除">
+              <button type="button" onClick={() => removeFile(item.id)} title="Remove">
                 <X size={14} />
               </button>
             </span>
@@ -203,14 +187,14 @@ export function WorldChat() {
 
       <form
         onSubmit={submit}
-        className={classNames("composer-row", (!presentInRoom || sending) && "is-disabled")}
+        className={classNames("composer-row", (!joined || sending) && "is-disabled")}
       >
         <textarea
           ref={areaRef}
           rows={1}
-          placeholder={presentInRoom ? "说话或发送文件。Enter 发送，Shift+Enter 换行。用 @名字 点名。" : "进入大厅后即可说话"}
+          placeholder={joined ? "Say something or attach a file. Enter to send, Shift+Enter for a new line. Use @name to mention." : "Join a world to speak"}
           value={speakText}
-          disabled={!presentInRoom || sending}
+          disabled={!joined || sending}
           onChange={(event) => setSpeakText(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === "Enter" && !event.shiftKey) {
@@ -223,15 +207,15 @@ export function WorldChat() {
           <label
             className={classNames(
               "ui-button ui-button-ghost ui-icon-button composer-upload-button",
-              (!presentInRoom || sending) && "is-disabled",
+              (!joined || sending) && "is-disabled",
             )}
-            title="发送文件"
+            title="Attach file"
           >
             <input
               type="file"
               className="world-file-input"
               multiple
-              disabled={!presentInRoom || sending}
+              disabled={!joined || sending}
               onChange={(event) => {
                 if (event.target.files) addFiles(event.target.files);
                 event.currentTarget.value = "";
@@ -241,7 +225,7 @@ export function WorldChat() {
           </label>
           <Button type="submit" variant="primary" className="send-button" disabled={!canSend}>
             <Send size={16} />
-            发送
+            Send
           </Button>
         </div>
       </form>

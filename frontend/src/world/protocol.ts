@@ -1,10 +1,11 @@
-export const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
-export const STORE_ID = "world.identity";
-export const WORLD_ACTOR_ID = "world";
 export const MAX_ATTACHMENTS = 4;
 export const MAX_FILE_BYTES = 8 * 1024 * 1024;
+export const WORLD_NAME_RE = /^[a-z][a-z0-9_-]{0,63}$/;
+export const WORLD_NAME_RULE =
+  "Name must start with a lowercase letter and use only lowercase letters, digits, hyphens, or underscores.";
 
-export type EventKind = "utterance" | "join" | "leave" | "scene" | string;
+
+export type EventKind = "utterance" | "join" | "leave" | string;
 
 export interface WorldAttachment {
   id: string;
@@ -23,20 +24,24 @@ export interface PendingFile {
   previewUrl: string;
 }
 
+export interface WorldSummary {
+  id: string;
+  name: string;
+  latest_seq?: number;
+  present_count?: number;
+}
+
 export interface WorldEvent {
   type?: string;
   seq?: number;
-  room_seq?: number;
   ts?: number;
-  room_id?: string;
   kind?: EventKind;
   actor_id?: string;
   text?: string;
   mentions?: string[];
   attachments?: WorldAttachment[];
   name?: string;
-  setting?: string;
-  present?: WorldMember[];
+  present?: WorldMember[] | boolean;
   events?: WorldEvent[];
   sync?: boolean;
   has_more?: boolean;
@@ -46,18 +51,9 @@ export interface WorldEvent {
   message?: string;
   protocol_version?: number;
   world_id?: string;
-  rooms?: WorldRoom[];
   member_id?: string;
   display_name?: string;
-  present_rooms?: string[];
-}
-
-export interface WorldRoom {
-  id: string;
-  name?: string;
-  setting?: string;
   latest_seq?: number;
-  latest_room_seq?: number;
 }
 
 export interface WorldMember {
@@ -73,13 +69,15 @@ export interface NeighborAgent {
   api_url: string;
 }
 
-export function worldFileUrl(attachment: WorldAttachment | string): string {
+export function worldFileUrl(attachment: WorldAttachment | string, worldId?: string): string {
   if (typeof attachment !== "string") {
     const explicit = String(attachment.url || "").trim();
     if (explicit) return explicit;
-    return `/files/${encodeURIComponent(attachment.id)}`;
+    if (worldId) return `/worlds/${encodeURIComponent(worldId)}/files/${encodeURIComponent(attachment.id)}`;
+    return "";
   }
-  return `/files/${encodeURIComponent(attachment)}`;
+  if (worldId) return `/worlds/${encodeURIComponent(worldId)}/files/${encodeURIComponent(attachment)}`;
+  return "";
 }
 
 export function isImageMime(mime?: string, name?: string): boolean {
@@ -98,28 +96,47 @@ export async function fileToBase64(file: File): Promise<string> {
   return comma >= 0 ? dataUrl.slice(comma + 1) : "";
 }
 
-export function worldWsUrl(): string {
+export function hubHttpOrigin(): string {
+  if (import.meta.env.DEV) return "http://127.0.0.1:7182";
+  return window.location.origin;
+}
+
+export function worldWsUrl(worldId: string): string {
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+  const id = encodeURIComponent(worldId);
   if (import.meta.env.DEV) {
-    return `${proto}//127.0.0.1:7182/`;
+    return `${proto}//127.0.0.1:7182/ws/${id}`;
   }
-  return `${proto}//${window.location.host}/`;
+  return `${proto}//${window.location.host}/ws/${id}`;
 }
 
-export function loadIdentity(): string {
-  try {
-    const saved = JSON.parse(localStorage.getItem(STORE_ID) || "{}") as {
-      member_id?: string;
-      display_name?: string;
-    };
-    return saved.member_id || saved.display_name || "";
-  } catch {
-    return "";
+/** Wire id for the human on this page. */
+export const HUMAN_MEMBER_ID = "human";
+export const HUMAN_DISPLAY_NAME = "human";
+
+export type HumanIdentity = {
+  member_id: string;
+  display_name: string;
+};
+
+/** `human`; `human-2`… only if a local agent already took the id. */
+export function resolveHumanIdentity(taken: Set<string>): HumanIdentity {
+  if (!taken.has(HUMAN_MEMBER_ID)) {
+    return { member_id: HUMAN_MEMBER_ID, display_name: HUMAN_DISPLAY_NAME };
   }
+  for (let n = 2; n < 100; n += 1) {
+    const member_id = `${HUMAN_MEMBER_ID}-${n}`;
+    if (!taken.has(member_id)) {
+      return { member_id, display_name: HUMAN_DISPLAY_NAME };
+    }
+  }
+  return { member_id: HUMAN_MEMBER_ID, display_name: HUMAN_DISPLAY_NAME };
 }
 
-export function saveIdentity(memberId: string): void {
-  localStorage.setItem(STORE_ID, JSON.stringify({ member_id: memberId }));
+export function validateWorldName(name: string): string {
+  const value = name.trim();
+  if (!WORLD_NAME_RE.test(value)) return WORLD_NAME_RULE;
+  return "";
 }
 
 export function initialOf(name: string): string {
@@ -144,23 +161,4 @@ export function extractMentions(
     }
   }
   return [...found];
-}
-
-export function formatEventTime(ts?: number): string {
-  if (!ts) return "";
-  const ms = ts > 1e12 ? ts : ts * 1000;
-  return new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-}
-
-export function validateMemberId(memberId: string, taken: Set<string>): string {
-  if (!ID_RE.test(memberId)) {
-    return "名字需为 1-64 位字母、数字、点、下划线或短横，且以字母或数字开头";
-  }
-  if (memberId === WORLD_ACTOR_ID) {
-    return "'world' 是世界自己，不能占用";
-  }
-  if (taken.has(memberId)) {
-    return "这个名字已被占用";
-  }
-  return "";
 }
