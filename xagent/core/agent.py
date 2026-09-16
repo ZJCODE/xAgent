@@ -497,6 +497,7 @@ class Agent:
         channel_instructions: str = "",
         room_name: Optional[str] = None,
         channel: Optional[str] = None,
+        sender_name: str = "",
     ) -> Union[str, AsyncGenerator[str, None]]:
         """Generate a reply from the agent given a user message.
 
@@ -519,6 +520,7 @@ class Agent:
                     channel_instructions=channel_instructions,
                     room_name=room_name,
                     channel=channel,
+                    sender_name=sender_name,
                 ):
                     event_type = event.get("type")
                     message_id = str(event.get("message_id") or "")
@@ -544,6 +546,7 @@ class Agent:
             channel_instructions=channel_instructions,
             room_name=room_name,
             channel=channel,
+            sender_name=sender_name,
         ):
             if event.get("type") == "message_done" and event.get("phase") == "final":
                 final_reply = str(event.get("content") or "")
@@ -1023,7 +1026,19 @@ class Agent:
         """
         try:
             message_handler = getattr(self, "message_handler", None)
-            if message_handler is not None and hasattr(message_handler, "build_decision_messages"):
+            if source == "world":
+                instructions = [{
+                    "role": "system",
+                    "name": AgentConfig.DECISION_RULES_NAME,
+                    "content": AgentConfig.WORLD_DECISION_SYSTEM_PROMPT,
+                }]
+                if self.system_prompt.strip():
+                    instructions.append({
+                        "role": "system",
+                        "name": AgentConfig.IDENTITY_CONTEXT_NAME,
+                        "content": AgentConfig.build_identity_context(self.system_prompt),
+                    })
+            elif message_handler is not None and hasattr(message_handler, "build_decision_messages"):
                 instructions = message_handler.build_decision_messages()
             else:
                 instructions = [{
@@ -1045,6 +1060,7 @@ class Agent:
                     context=context,
                     source=source,
                     event_type=event_type,
+                    metadata=metadata,
                 ),
             }]
 
@@ -1067,14 +1083,33 @@ class Agent:
         context: str,
         source: str,
         event_type: str,
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> str:
+        if source == "world":
+            named = bool((metadata or {}).get("addressed_to_agent"))
+            recently_spoke = bool((metadata or {}).get("recently_spoke"))
+            if named:
+                bias = "This line names you. Reply as a body in the room."
+            elif recently_spoke:
+                bias = (
+                    "You were just speaking in this room. "
+                    "Their line may be a follow-up; continue only if you still have something to say."
+                )
+            else:
+                bias = (
+                    "You heard this because you are present, not because it is a private prompt. "
+                    "Speak if the room is asking, greeting, or you have a distinct contribution. "
+                    "Stay silent if others are talking among themselves."
+                )
+        else:
+            bias = "Prefer joining when you have something to add."
         return (
             "<participation_decision>\n"
             f"Source: {source}\n"
             f"Event type: {event_type}\n\n"
             "Recent group conversation:\n"
             f"{context.strip()}\n\n"
-            "Decide whether to reply now. Prefer joining when you have something to add. "
+            f"Decide whether to reply now. {bias} "
             "Return JSON only:\n"
             '{"should_reply": true|false, "reason": "brief reason"}\n'
             "</participation_decision>"

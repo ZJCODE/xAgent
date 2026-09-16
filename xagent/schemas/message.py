@@ -147,11 +147,14 @@ class Message(BaseModel):
             text_content = self.content
             if self.sender_id and self.role == RoleType.USER:
                 name = str((self.metadata or {}).get("sender_name") or "").strip()
-                label = (
-                    f"{name}({self.sender_id})"
-                    if name and name != self.sender_id
-                    else self.sender_id
-                )
+                if self.channel == "world":
+                    label = name or self.sender_id
+                else:
+                    label = (
+                        f"{name}({self.sender_id})"
+                        if name and name != self.sender_id
+                        else self.sender_id
+                    )
                 text_content = f"[{label}] {text_content}"
 
             if self.images:

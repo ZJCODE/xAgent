@@ -1440,6 +1440,71 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("participation_decision", model_client.calls[0][0]["name"])
         self.assertIn("should we ship?", model_client.calls[0][0]["content"])
         self.assertIn("Return JSON only", model_client.calls[0][0]["content"])
+        self.assertIn("Prefer joining when you have something to add", model_client.calls[0][0]["content"])
+
+    async def test_decide_participation_world_presence_is_not_a_private_prompt(self):
+        storage = InMemoryMessageStorage()
+        model_client = CapturingModelClient([
+            (ReplyType.SIMPLE_REPLY, '{"should_reply": false, "reason": "others talking"}'),
+        ])
+        agent = self._build_agent(storage=storage, model_client=model_client)
+
+        decision = await Agent.decide_participation(
+            agent,
+            context="Jun: hello",
+            source="world",
+            event_type="group_message",
+            metadata={"room_id": "hall", "addressed_to_agent": False},
+        )
+
+        self.assertFalse(decision.should_reply)
+        self.assertEqual(decision.reason, "others talking")
+        content = model_client.calls[0][0]["content"]
+        self.assertIn("because you are present", content)
+        self.assertNotIn("Prefer joining when you have something to add", content)
+        instruction_text = "\n".join(
+            str(item.get("content", "")) if isinstance(item, dict) else str(item)
+            for item in (model_client.instructions_calls[0] or [])
+        )
+        self.assertIn("not a chatbot waiting on a prompt", instruction_text)
+
+    async def test_decide_participation_world_named_line_asks_to_reply(self):
+        storage = InMemoryMessageStorage()
+        model_client = CapturingModelClient([
+            (ReplyType.SIMPLE_REPLY, '{"should_reply": true, "reason": "named"}'),
+        ])
+        agent = self._build_agent(storage=storage, model_client=model_client)
+
+        decision = await Agent.decide_participation(
+            agent,
+            context="Jun: aaac are you there",
+            source="world",
+            event_type="group_message",
+            metadata={"room_id": "hall", "addressed_to_agent": True},
+        )
+
+        self.assertTrue(decision.should_reply)
+        content = model_client.calls[0][0]["content"]
+        self.assertIn("names you", content)
+
+    async def test_decide_participation_world_recent_speech_is_followup(self):
+        storage = InMemoryMessageStorage()
+        model_client = CapturingModelClient([
+            (ReplyType.SIMPLE_REPLY, '{"should_reply": true, "reason": "follow-up"}'),
+        ])
+        agent = self._build_agent(storage=storage, model_client=model_client)
+
+        decision = await Agent.decide_participation(
+            agent,
+            context="Jun: keep going",
+            source="world",
+            event_type="group_message",
+            metadata={"room_id": "hall", "addressed_to_agent": False, "recently_spoke": True},
+        )
+
+        self.assertTrue(decision.should_reply)
+        content = model_client.calls[0][0]["content"]
+        self.assertIn("just speaking", content)
 
     async def test_decide_participation_defaults_to_silence_on_invalid_model_output(self):
         storage = InMemoryMessageStorage()

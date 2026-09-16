@@ -42,6 +42,18 @@ The build writes directly to:
 
 Commit the generated `xagent/interfaces/static/index.html` and `xagent/interfaces/static/assets/*` files. End users who install the Python package do not need Node.js; they only need the prebuilt static assets included in the package.
 
+## World inhabitant page
+
+The world page at `http://127.0.0.1:7182` is a second Vite entry that reuses the same React UI primitives (theme, markdown, composer, bubbles).
+
+```bash
+cd frontend
+npm run dev:world    # http://127.0.0.1:5174  (needs `agents-world serve` on 7182)
+npm run build:world  # writes ../agents_world/static/
+```
+
+Commit the generated `agents_world/static/index.html` and `agents_world/static/assets/*` files.
+
 ## Packaging Check
 
 Before publishing, verify the Python wheel includes the latest static assets:

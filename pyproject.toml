@@ -57,7 +57,7 @@ dependencies = [
 
 [project.scripts]
 xagent = "xagent.interfaces.cli:main"
-agents-env = "agents_env.cli:main"
+agents-world = "agents_world.cli:main"
 
 [project.urls]
 Repository = "https://github.com/ZJCODE/xagent"
@@ -65,8 +65,8 @@ Issues = "https://github.com/ZJCODE/xagent/issues"
 Homepage = "https://github.com/ZJCODE/xagent#readme"
 
 [tool.setuptools]
-packages = {find = {include = ["xagent*", "agents_env*"], exclude = ["examples*", "tests*", "docs*"]}}
+packages = {find = {include = ["xagent*", "agents_world*"], exclude = ["examples*", "tests*", "docs*"]}}
 
 [tool.setuptools.package-data]
 xagent = ["interfaces/static/**", "components/skills/builtin/**"]
-agents_env = ["examples/**"]
+agents_world = ["examples/**", "static/**"]

@@ -1,4 +1,4 @@
-"""CLI for serving and joining an agents environment world."""
+"""CLI for serving and joining a world."""
 
 from __future__ import annotations
 
@@ -15,10 +15,10 @@ from .scene import DEFAULT_PLAZA_SCENE, parse_scene_config
 
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="agents-env",
-        description="Independent agents environment: a world process, not an agent runtime.",
+        prog="agents-world",
+        description="Independent world process, not an agent runtime.",
     )
-    parser.add_argument("--version", action="version", version=f"agents-env {__version__}")
+    parser.add_argument("--version", action="version", version=f"agents-world {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
 
     serve_p = sub.add_parser("serve", help="Start the world WebSocket process")
@@ -33,7 +33,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     serve_p.add_argument(
         "--data-root",
         default="",
-        help="Override data root (default: ~/.agents-env)",
+        help="Override data root (default: ~/.agents-world)",
     )
 
     join_p = sub.add_parser("join", help="Human client: join a room and chat")

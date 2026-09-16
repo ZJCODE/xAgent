@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
+    "dev:world": "vite --config vite.world.config.ts --host 127.0.0.1",
     "build": "tsc -p tsconfig.json && vite build",
+    "build:world": "tsc -p tsconfig.json && vite build --config vite.world.config.ts",
     "preview": "vite preview --host 127.0.0.1"
   },
   "dependencies": {

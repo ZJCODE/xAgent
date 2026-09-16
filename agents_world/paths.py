@@ -1,4 +1,4 @@
-"""Filesystem paths for agents_env data (independent of ~/.xagent/agents)."""
+"""Filesystem paths for agents_world data (independent of ~/.xagent/agents)."""
 
 from __future__ import annotations
 

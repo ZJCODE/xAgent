@@ -9,8 +9,9 @@ from typing import Optional
 from websockets.asyncio.server import Server, ServerConnection, serve
 from websockets.exceptions import ConnectionClosed
 
-from . import HELLO_TIMEOUT_SECONDS
+from . import HELLO_TIMEOUT_SECONDS, MAX_MESSAGE_BYTES
 from .clock import Clock
+from .http import process_http_request
 from .models import ClientMessage, encode_error
 from .scene import SceneConfig, load_scene_file
 from .store import open_store_for_scene
@@ -61,13 +62,19 @@ class WorldServer:
         if self._server is not None:
             return self.port
         await self.world.start()
-        self._server = await serve(self._handler, self.host, self.port)
+        self._server = await serve(
+            self._handler,
+            self.host,
+            self.port,
+            process_request=self._process_request,
+            max_size=MAX_MESSAGE_BYTES,
+        )
         socks = self._server.sockets
         if not socks:
             raise RuntimeError("world server failed to bind")
         self.port = int(socks[0].getsockname()[1])
         logger.info(
-            "agents-env world=%s listening on ws://%s:%s",
+            "agents-world world=%s listening on http://%s:%s (websocket on the same port)",
             self.world.world_id,
             self.host,
             self.port,
@@ -91,6 +98,10 @@ class WorldServer:
             await self._server.serve_forever()
         finally:
             await self.stop()
+
+    def _process_request(self, connection: ServerConnection, request):
+        # Page sidecar only. World protocol is the WebSocket upgrade path.
+        return process_http_request(connection, request, store=self.world.store)
 
     async def _handler(self, websocket: ServerConnection) -> None:
         session = None

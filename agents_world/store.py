@@ -10,8 +10,9 @@ from typing import Iterable, Iterator, Optional
 
 from . import WORLD_ACTOR_ID
 from .clock import Clock, default_clock
-from .models import EventKind, Member, PresenceRecord, Room, WorldEvent
-from .paths import world_data_dir
+from .files import new_file_id, normalize_mime, sanitize_file_name
+from .models import Attachment, EventKind, Member, PresenceRecord, Room, WorldEvent
+from .paths import validate_id, world_data_dir
 from .scene import SceneConfig
 
 
@@ -84,13 +85,24 @@ class WorldStore:
                 text TEXT NOT NULL,
                 mentions_json TEXT NOT NULL DEFAULT '[]',
                 room_seq INTEGER NOT NULL DEFAULT 0,
+                attachments_json TEXT NOT NULL DEFAULT '[]',
                 FOREIGN KEY (room_id) REFERENCES rooms(id)
             );
+            CREATE TABLE IF NOT EXISTS files (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                mime TEXT NOT NULL,
+                size INTEGER NOT NULL,
+                ts REAL NOT NULL
+            );
             CREATE INDEX IF NOT EXISTS idx_events_room_seq ON events(room_id, seq);
-            CREATE INDEX IF NOT EXISTS idx_events_room_room_seq ON events(room_id, room_seq);
             """
         )
         self._ensure_room_seq_column()
+        self._ensure_attachments_column()
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_events_room_room_seq ON events(room_id, room_seq)"
+        )
         self._conn.execute(
             "INSERT OR REPLACE INTO meta(key, value) VALUES ('world_id', ?)",
             (self.world_id,),
@@ -117,6 +129,13 @@ class WorldStore:
                 )
                 WHERE room_seq = 0
                 """
+            )
+
+    def _ensure_attachments_column(self) -> None:
+        cols = {str(row["name"]) for row in self._conn.execute("PRAGMA table_info(events)")}
+        if "attachments_json" not in cols:
+            self._conn.execute(
+                "ALTER TABLE events ADD COLUMN attachments_json TEXT NOT NULL DEFAULT '[]'"
             )
 
     def get_meta(self, key: str) -> Optional[str]:
@@ -233,6 +252,54 @@ class WorldStore:
         ).fetchone()
         return bool(row and row["present"])
 
+    def files_dir(self) -> Path:
+        path = self.db_path.parent / "files"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def save_file(self, *, name: str, mime: str, data: bytes) -> Attachment:
+        file_id = new_file_id()
+        filename = sanitize_file_name(name)
+        content_type = normalize_mime(mime)
+        blob_path = (self.files_dir() / file_id).resolve()
+        blob_path.relative_to(self.files_dir().resolve())
+        blob_path.write_bytes(data)
+        ts = float(self.clock.now())
+        self._conn.execute(
+            "INSERT INTO files(id, name, mime, size, ts) VALUES (?, ?, ?, ?, ?)",
+            (file_id, filename, content_type, len(data), ts),
+        )
+        self._commit()
+        return Attachment(id=file_id, name=filename, mime=content_type, size=len(data))
+
+    def get_file(self, file_id: str) -> Optional[tuple[Attachment, Path]]:
+        try:
+            file_id = validate_id(file_id, label="file_id")
+        except ValueError:
+            return None
+        row = self._conn.execute(
+            "SELECT id, name, mime, size FROM files WHERE id = ?",
+            (file_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        path = (self.files_dir() / file_id).resolve()
+        try:
+            path.relative_to(self.files_dir().resolve())
+        except ValueError:
+            return None
+        if not path.is_file():
+            return None
+        return (
+            Attachment(
+                id=str(row["id"]),
+                name=str(row["name"]),
+                mime=str(row["mime"]),
+                size=int(row["size"]),
+            ),
+            path,
+        )
+
     def append_event(
         self,
         *,
@@ -241,21 +308,28 @@ class WorldStore:
         actor_id: str,
         text: str,
         mentions: Optional[list[str] | tuple[str, ...]] = None,
+        attachments: Optional[list[Attachment] | tuple[Attachment, ...]] = None,
         ts: Optional[float] = None,
     ) -> WorldEvent:
         event_ts = float(ts if ts is not None else self.clock.now())
         mention_list = [str(m).strip() for m in (mentions or []) if str(m).strip()]
         mentions_json = json.dumps(mention_list, ensure_ascii=False)
+        attachment_items = tuple(attachments or ())
+        attachments_json = json.dumps(
+            [item.to_dict() for item in attachment_items],
+            ensure_ascii=False,
+        )
         kind_value = kind.value if isinstance(kind, EventKind) else str(kind)
         cur = self._conn.execute(
             """
-            INSERT INTO events(ts, room_id, kind, actor_id, text, mentions_json, room_seq)
+            INSERT INTO events(ts, room_id, kind, actor_id, text, mentions_json, room_seq, attachments_json)
             VALUES (
                 ?, ?, ?, ?, ?, ?,
-                (SELECT COALESCE(MAX(room_seq), 0) + 1 FROM events WHERE room_id = ?)
+                (SELECT COALESCE(MAX(room_seq), 0) + 1 FROM events WHERE room_id = ?),
+                ?
             )
             """,
-            (event_ts, room_id, kind_value, actor_id, text, mentions_json, room_id),
+            (event_ts, room_id, kind_value, actor_id, text, mentions_json, room_id, attachments_json),
         )
         self._commit()
         seq = int(cur.lastrowid)
@@ -272,6 +346,7 @@ class WorldStore:
             text=text,
             mentions=tuple(mention_list),
             room_seq=room_seq,
+            attachments=attachment_items,
         )
 
     def events_after(
@@ -283,7 +358,7 @@ class WorldStore:
     ) -> list[WorldEvent]:
         rows = self._conn.execute(
             """
-            SELECT seq, ts, room_id, kind, actor_id, text, mentions_json, room_seq
+            SELECT seq, ts, room_id, kind, actor_id, text, mentions_json, room_seq, attachments_json
             FROM events
             WHERE room_id = ? AND seq > ?
             ORDER BY seq ASC
@@ -296,7 +371,7 @@ class WorldStore:
     def recent_events(self, room_id: str, *, limit: int = 50) -> list[WorldEvent]:
         rows = self._conn.execute(
             """
-            SELECT seq, ts, room_id, kind, actor_id, text, mentions_json, room_seq
+            SELECT seq, ts, room_id, kind, actor_id, text, mentions_json, room_seq, attachments_json
             FROM events
             WHERE room_id = ?
             ORDER BY seq DESC

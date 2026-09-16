@@ -1,13 +1,16 @@
-"""Reference client for the agents-env WebSocket protocol."""
+"""Reference client for the agents-world WebSocket protocol."""
 
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 from typing import Any, AsyncIterator, Callable, Optional
 
 from websockets.asyncio.client import ClientConnection, connect
 from websockets.exceptions import ConnectionClosed
+
+from . import MAX_MESSAGE_BYTES
 
 Predicate = Callable[[dict[str, Any]], bool]
 
@@ -36,7 +39,7 @@ class WorldClient:
         self._reader: Optional[asyncio.Task[None]] = None
 
     async def connect(self) -> dict[str, Any]:
-        self._ws = await connect(self.url)
+        self._ws = await connect(self.url, max_size=MAX_MESSAGE_BYTES)
         await self._send(
             {
                 "type": "hello",
@@ -84,10 +87,13 @@ class WorldClient:
         room_id: str,
         text: str,
         mentions: Optional[list[str]] = None,
+        attachments: Optional[list[dict[str, Any]]] = None,
     ) -> None:
         body: dict[str, Any] = {"type": "speak", "room_id": room_id, "text": text}
         if mentions:
             body["mentions"] = mentions
+        if attachments:
+            body["attachments"] = [_encode_attachment(item) for item in attachments]
         await self._send(body)
 
     async def sync(self, room_id: str, after_seq: int = 0) -> None:
@@ -140,3 +146,22 @@ class WorldClient:
             pass
         finally:
             await self.inbox.put({"type": "_closed"})
+
+
+def _encode_attachment(item: dict[str, Any]) -> dict[str, Any]:
+    encoded: dict[str, Any] = {}
+    name = str(item.get("name") or "").strip()
+    mime = str(item.get("mime") or "").strip()
+    file_id = str(item.get("id") or "").strip()
+    if name:
+        encoded["name"] = name
+    if mime:
+        encoded["mime"] = mime
+    if file_id:
+        encoded["id"] = file_id
+    data = item.get("data")
+    if isinstance(data, bytes):
+        encoded["data"] = base64.b64encode(data).decode("ascii")
+    elif isinstance(data, str) and data:
+        encoded["data"] = data
+    return encoded

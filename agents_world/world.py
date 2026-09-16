@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Optional
 
 from . import (
+    MAX_ATTACHMENTS,
+    MAX_ATTACHMENTS_BYTES,
     MAX_DISPLAY_NAME_LENGTH,
+    MAX_FILE_BYTES,
     MAX_MENTIONS,
     MAX_TEXT_LENGTH,
     OUTBOUND_QUEUE_SIZE,
@@ -20,6 +24,7 @@ from . import (
 )
 from .clock import Clock, default_clock
 from .models import (
+    Attachment,
     EventKind,
     Room,
     WorldEvent,
@@ -425,8 +430,12 @@ class World:
             return
         assert room_id is not None
         text = str(payload.get("text") or "")
-        if not text.strip():
-            self._enqueue(session, encode_error("text_required", "text is required"))
+        attachments, attach_err = self._ingest_attachments(payload.get("attachments"))
+        if attach_err:
+            self._enqueue(session, attach_err)
+            return
+        if not text.strip() and not attachments:
+            self._enqueue(session, encode_error("text_required", "text or attachments required"))
             return
         if len(text) > MAX_TEXT_LENGTH:
             self._enqueue(
@@ -465,8 +474,67 @@ class World:
             actor_id=session.member_id,
             text=text.strip(),
             mentions=mentions,
+            attachments=attachments,
         )
         self._fanout(event)
+
+    def _ingest_attachments(self, raw: Any) -> tuple[list[Attachment], Optional[str]]:
+        if raw is None:
+            return [], None
+        if not isinstance(raw, list):
+            return [], encode_error("bad_payload", "attachments must be a list")
+        if len(raw) > MAX_ATTACHMENTS:
+            return [], encode_error(
+                "too_many_files",
+                f"attachments exceeds {MAX_ATTACHMENTS} entries",
+            )
+        out: list[Attachment] = []
+        total = 0
+        for item in raw:
+            if not isinstance(item, dict):
+                return [], encode_error("bad_file", "attachment must be an object")
+            data_b64 = item.get("data")
+            file_id = str(item.get("id") or "").strip()
+            if data_b64 is None and file_id:
+                found = self.store.get_file(file_id)
+                if found is None:
+                    return [], encode_error("bad_file", f"unknown file: {file_id}")
+                attachment, _path = found
+                total += attachment.size
+                if total > MAX_ATTACHMENTS_BYTES:
+                    return [], encode_error(
+                        "file_too_large",
+                        f"attachments exceed {MAX_ATTACHMENTS_BYTES} bytes",
+                    )
+                out.append(attachment)
+                continue
+            if not isinstance(data_b64, str) or not data_b64.strip():
+                return [], encode_error("bad_file", "attachment data is required")
+            try:
+                data = base64.b64decode(data_b64, validate=False)
+            except Exception:
+                return [], encode_error("bad_file", "attachment data is not base64")
+            if not data:
+                return [], encode_error("bad_file", "attachment data is empty")
+            if len(data) > MAX_FILE_BYTES:
+                return [], encode_error(
+                    "file_too_large",
+                    f"file exceeds {MAX_FILE_BYTES} bytes",
+                )
+            total += len(data)
+            if total > MAX_ATTACHMENTS_BYTES:
+                return [], encode_error(
+                    "file_too_large",
+                    f"attachments exceed {MAX_ATTACHMENTS_BYTES} bytes",
+                )
+            out.append(
+                self.store.save_file(
+                    name=str(item.get("name") or "file"),
+                    mime=str(item.get("mime") or ""),
+                    data=data,
+                )
+            )
+        return out, None
 
     def _allow_speak(self, member_id: str) -> bool:
         now = self.clock.now()
@@ -517,7 +585,7 @@ class World:
 
     def _fanout(self, event: WorldEvent, *, exclude: Optional[set[str]] = None) -> None:
         present_ids = {p.member_id for p in self.store.list_present(event.room_id)}
-        message = encode_server_message("event", **event.to_dict())
+        message = encode_server_message("event", **self._perception_dict(event))
         skip = exclude or set()
         for member_id, session in list(self._sessions.items()):
             if member_id in skip:
@@ -527,6 +595,26 @@ class World:
             if event.room_id not in session.rooms:
                 continue
             self._enqueue_or_lag(session, message, event)
+
+    def _perception_dict(self, event: WorldEvent) -> dict[str, Any]:
+        body = event.to_dict()
+        if not event.attachments:
+            return body
+        packed: list[dict[str, Any]] = []
+        for item in event.attachments:
+            entry = item.to_dict()
+            found = self.store.get_file(item.id)
+            if found is not None:
+                _attachment, blob_path = found
+                try:
+                    data = blob_path.read_bytes()
+                except OSError:
+                    data = b""
+                if data:
+                    entry["data"] = base64.b64encode(data).decode("ascii")
+            packed.append(entry)
+        body["attachments"] = packed
+        return body
 
 
 def member_to_dict_from_presence(record: Any) -> dict[str, Any]:

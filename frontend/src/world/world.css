@@ -1,0 +1,320 @@
+.world-composer-drop,
+.world-chat-drop {
+  outline: 2px dashed var(--accent);
+  outline-offset: -2px;
+}
+
+.world-file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.world-shell .composer-upload-button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.world-shell .composer-upload-button.is-disabled {
+  pointer-events: none;
+  opacity: 0.45;
+}
+
+@media (max-width: 980px) {
+  .world-shell .composer-actions {
+    width: 100%;
+    display: grid;
+    grid-template-columns: 42px minmax(0, 1fr);
+  }
+}
+
+.world-sidebar {
+  padding: 0;
+}
+
+.world-sidebar-top {
+  flex: 0 0 auto;
+  padding: 18px 14px 0;
+}
+
+.world-sidebar-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 14px 8px;
+}
+
+.world-field {
+  display: grid;
+  gap: 6px;
+  padding: 0 6px 14px;
+}
+
+.world-field span {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 560;
+}
+
+.world-input {
+  width: 100%;
+  min-height: 36px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-surface-subtle);
+  color: var(--text);
+  padding: 8px 10px;
+}
+
+.world-input:focus {
+  border-color: var(--border-strong);
+}
+
+.world-input:disabled {
+  opacity: 0.6;
+}
+
+.world-section {
+  padding: 0 6px 14px;
+}
+
+.world-section h2 {
+  margin: 0 0 8px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 640;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.world-room-card {
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-surface-muted);
+  padding: 10px 12px;
+}
+
+.world-room-card strong {
+  font-size: 13px;
+  font-weight: 640;
+}
+
+.world-room-card p,
+.world-hint {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.world-error {
+  min-height: 1.2em;
+  margin: 0 6px 8px;
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.world-roster,
+.world-agents {
+  display: grid;
+  gap: 1px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.world-roster-item,
+.world-agent {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  margin: 0 -6px;
+  border-radius: 8px;
+  padding: 6px 8px;
+}
+
+.world-agent:hover {
+  background: var(--bg-surface-muted);
+}
+
+.world-avatar,
+.world-agent-avatar {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--bg-surface-muted);
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 720;
+}
+
+.world-agent.is-here .world-agent-avatar {
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.world-agent.is-ready .world-agent-avatar {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.world-agent.is-stale .world-agent-avatar {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.world-roster-name,
+.world-agent-copy strong {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 620;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.world-agent-copy {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.world-agent-copy span {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.world-agent.is-here .world-agent-copy span {
+  color: var(--success);
+}
+
+.world-agent.is-stale .world-agent-copy span {
+  color: var(--danger);
+}
+
+.world-agent-action {
+  min-width: 44px;
+  min-height: 28px;
+  border-radius: 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 640;
+}
+
+.world-agent-action.is-primary {
+  color: var(--accent);
+}
+
+.world-agent-action:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.world-toolbar-start {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.world-shell .chat-toolbar {
+  justify-content: space-between;
+}
+
+.world-menu-button {
+  display: none;
+}
+
+.world-backdrop {
+  display: none;
+}
+
+.world-system {
+  align-self: center;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+  text-align: center;
+}
+
+.world-file-meta {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.chat-message-group.from-user .world-file-meta {
+  text-align: right;
+}
+
+.world-event-time {
+  margin-left: 8px;
+  color: var(--text-faint);
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.world-sidebar .sidebar-footer .ui-button {
+  flex: 1;
+}
+
+@media (max-width: 980px) {
+  .world-shell.app-shell {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  .world-menu-button {
+    display: inline-flex;
+  }
+
+  .world-sidebar.app-sidebar {
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: 40;
+    width: min(320px, 88vw);
+    height: 100%;
+    transform: translateX(-100%);
+    transition: transform 180ms ease;
+    border-right: 1px solid var(--border);
+    border-bottom: 0;
+    padding: 0;
+    box-shadow: var(--shadow-soft);
+  }
+
+  .world-sidebar.app-sidebar.open {
+    transform: translateX(0);
+  }
+
+  .world-backdrop {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 30;
+    border: 0;
+    border-radius: 0;
+    background: rgba(15, 18, 22, 0.48);
+  }
+
+  .world-backdrop.open {
+    display: block;
+  }
+}

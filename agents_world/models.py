@@ -1,4 +1,4 @@
-"""Protocol and domain objects for the agents environment."""
+"""Protocol and domain objects for the world."""
 
 from __future__ import annotations
 
@@ -37,6 +37,38 @@ class Member:
 
 
 @dataclass(frozen=True)
+class Attachment:
+    id: str
+    name: str
+    mime: str
+    size: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "mime": self.mime,
+            "size": self.size,
+            "url": f"/files/{self.id}",
+        }
+
+    @classmethod
+    def from_dict(cls, raw: Any) -> Optional["Attachment"]:
+        if not isinstance(raw, dict):
+            return None
+        file_id = str(raw.get("id") or "").strip()
+        name = str(raw.get("name") or "").strip() or "file"
+        mime = str(raw.get("mime") or "").strip() or "application/octet-stream"
+        try:
+            size = int(raw.get("size") or 0)
+        except (TypeError, ValueError):
+            size = 0
+        if not file_id:
+            return None
+        return cls(id=file_id, name=name, mime=mime, size=max(size, 0))
+
+
+@dataclass(frozen=True)
 class WorldEvent:
     seq: int
     ts: float
@@ -46,10 +78,11 @@ class WorldEvent:
     text: str
     mentions: tuple[str, ...] = ()
     room_seq: int = 0
+    attachments: tuple[Attachment, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         kind = self.kind.value if isinstance(self.kind, EventKind) else str(self.kind)
-        return {
+        body: dict[str, Any] = {
             "seq": self.seq,
             "room_seq": self.room_seq,
             "ts": self.ts,
@@ -59,6 +92,9 @@ class WorldEvent:
             "text": self.text,
             "mentions": list(self.mentions),
         }
+        if self.attachments:
+            body["attachments"] = [item.to_dict() for item in self.attachments]
+        return body
 
     @classmethod
     def from_row(
@@ -72,10 +108,17 @@ class WorldEvent:
         text: str,
         mentions_json: str,
         room_seq: int = 0,
+        attachments_json: str = "[]",
         **_extra: Any,
     ) -> "WorldEvent":
         mentions_raw = json.loads(mentions_json or "[]")
         mentions = tuple(str(item) for item in mentions_raw)
+        attachments_raw = json.loads(attachments_json or "[]")
+        attachments = tuple(
+            item
+            for item in (Attachment.from_dict(raw) for raw in attachments_raw)
+            if item is not None
+        )
         return cls(
             seq=seq,
             ts=ts,
@@ -85,6 +128,7 @@ class WorldEvent:
             text=text,
             mentions=mentions,
             room_seq=int(room_seq or 0),
+            attachments=attachments,
         )
 
 

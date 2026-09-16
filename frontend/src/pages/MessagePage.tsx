@@ -80,6 +80,20 @@ function messageMetaChips(message: MessageItem): {
     };
   }
 
+  if (message.channel === "world") {
+    if (message.role === "assistant") {
+      return {
+        channel: message.channel,
+        name: message.room_name ? `→ ${message.room_name}` : undefined,
+      };
+    }
+    return {
+      channel: message.channel,
+      name: named || identity,
+      group: message.room_name && message.room_name !== message.sender_id ? message.room_name : undefined,
+    };
+  }
+
   if (message.role === "user") {
     return {
       channel: message.channel,
@@ -105,7 +119,12 @@ function messageMetaChips(message: MessageItem): {
     };
   }
 
-  return {};
+  return {
+    channel: message.channel,
+    name: named,
+    identity,
+    group: message.room_name && message.room_name !== message.sender_id ? message.room_name : undefined,
+  };
 }
 
 function isSearchResult(message: MessageItem | MessageSearchResult): message is MessageSearchResult {

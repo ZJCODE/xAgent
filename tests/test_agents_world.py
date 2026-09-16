@@ -1,21 +1,52 @@
-"""Tests for the independent agents_env world (no xagent imports)."""
+"""Tests for the independent agents_world world (no xagent imports)."""
 
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
+import os
+import re
 import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from agents_env import PROTOCOL_VERSION
-from agents_env.clock import VirtualClock
-from agents_env.models import EventKind
-from agents_env.paths import world_data_dir
-from agents_env.scene import SceneConfig, parse_relative_delay, parse_scene_config
-from agents_env.store import open_store_for_scene
-from agents_env.world import World
+from agents_world import PROTOCOL_VERSION
+from agents_world.clock import VirtualClock
+from agents_world.models import EventKind
+from agents_world.paths import world_data_dir
+from agents_world.scene import SceneConfig, parse_relative_delay, parse_scene_config
+from agents_world.store import open_store_for_scene
+from agents_world.world import World
+
+
+async def _http_get(port: int, path: str) -> tuple[int, dict[str, str], bytes]:
+    reader, writer = await asyncio.open_connection("127.0.0.1", port)
+    writer.write(
+        f"GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n".encode()
+    )
+    await writer.drain()
+    raw = await reader.read()
+    writer.close()
+    await writer.wait_closed()
+    header_blob, _, body = raw.partition(b"\r\n\r\n")
+    lines = header_blob.decode("iso-8859-1").split("\r\n")
+    status = int(lines[0].split()[1])
+    headers = {}
+    for line in lines[1:]:
+        if ":" in line:
+            key, value = line.split(":", 1)
+            headers[key.strip().lower()] = value.strip()
+    return status, headers, body
+
+
+_ASSET_RE = re.compile(r"""(?:src|href)=["'](/assets/[^"']+)["']""")
+
+
+def _asset_paths(html: str) -> list[str]:
+    return _ASSET_RE.findall(html)
 
 
 def _plaza(world_id: str = "test-plaza", *, scenes: list | None = None) -> SceneConfig:
@@ -307,6 +338,73 @@ class WorldPhysicsTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("unrelated room", other_texts)
         slow_cap.delay = 0.0
 
+    async def test_speak_file_is_a_medium_event(self):
+        alice_cap, alice = await self._attach("alice")
+        bob_cap, bob = await self._attach("bob")
+        await self._act(alice, "join", {"room_id": "hall"}, alice, bob)
+        await self._act(bob, "join", {"room_id": "hall"}, alice, bob)
+        payload = base64.b64encode(b"hello-file").decode("ascii")
+        await self._act(
+            alice,
+            "speak",
+            {
+                "room_id": "hall",
+                "text": "see this",
+                "attachments": [{"name": "note.txt", "mime": "text/plain", "data": payload}],
+            },
+            alice,
+            bob,
+        )
+        heard = [e for e in bob_cap.events() if e.get("kind") == "utterance"][-1]
+        self.assertEqual(heard.get("text"), "see this")
+        atts = heard.get("attachments") or []
+        self.assertEqual(len(atts), 1)
+        self.assertEqual(atts[0]["name"], "note.txt")
+        self.assertEqual(atts[0]["url"], f"/files/{atts[0]['id']}")
+        self.assertEqual(base64.b64decode(atts[0]["data"]), b"hello-file")
+        found = self.store.get_file(atts[0]["id"])
+        self.assertIsNotNone(found)
+        attachment, path = found
+        self.assertEqual(path.read_bytes(), b"hello-file")
+        self.assertEqual(attachment.mime, "text/plain")
+        stored = [item.to_dict() for item in self.store.recent_events("hall", limit=5) if item.attachments]
+        self.assertTrue(stored)
+        self.assertNotIn("data", stored[0]["attachments"][0])
+
+    async def test_speak_attachments_without_text(self):
+        cap, alice = await self._attach("alice")
+        await self._act(alice, "join", {"room_id": "hall"})
+        payload = base64.b64encode(b"only-file").decode("ascii")
+        await self._act(
+            alice,
+            "speak",
+            {
+                "room_id": "hall",
+                "text": "",
+                "attachments": [{"name": "solo.bin", "mime": "application/octet-stream", "data": payload}],
+            },
+        )
+        heard = [e for e in cap.events() if e.get("kind") == "utterance"][-1]
+        self.assertEqual(heard.get("text"), "")
+        self.assertEqual(heard["attachments"][0]["name"], "solo.bin")
+
+    async def test_speak_rejects_oversize_file(self):
+        cap, alice = await self._attach("alice")
+        await self._act(alice, "join", {"room_id": "hall"})
+        payload = base64.b64encode(b"too-big").decode("ascii")
+        with patch("agents_world.world.MAX_FILE_BYTES", 3):
+            await self._act(
+                alice,
+                "speak",
+                {
+                    "room_id": "hall",
+                    "text": "x",
+                    "attachments": [{"name": "big.bin", "data": payload}],
+                },
+            )
+        err = cap.of_type("error")[-1]
+        self.assertEqual(err.get("code"), "file_too_large")
+
     async def test_rate_limit_uses_clock(self):
         cap, alice = await self._attach("alice")
         await self._act(alice, "join", {"room_id": "hall"})
@@ -332,14 +430,17 @@ class WorldPhysicsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(int(mode), 1)  # NORMAL
 
     async def test_no_xagent_import(self):
-        import agents_env
-        import agents_env.client as client_mod
-        import agents_env.clock as clock_mod
-        import agents_env.server as server_mod
-        import agents_env.store as store_mod
-        import agents_env.world as world_mod
+        import agents_world
+        import agents_world.client as client_mod
+        import agents_world.clock as clock_mod
+        import agents_world.files as files_mod
+        import agents_world.http as http_mod
+        import agents_world.neighbors as neighbors_mod
+        import agents_world.server as server_mod
+        import agents_world.store as store_mod
+        import agents_world.world as world_mod
 
-        for mod in (agents_env, world_mod, store_mod, server_mod, client_mod, clock_mod):
+        for mod in (agents_world, world_mod, store_mod, server_mod, client_mod, clock_mod, http_mod, neighbors_mod, files_mod):
             for name in dir(mod):
                 obj = getattr(mod, name)
                 module_name = getattr(obj, "__module__", "") or ""
@@ -360,7 +461,7 @@ class WebSocketVenueTests(unittest.IsolatedAsyncioTestCase):
                 "scenes": [],
             }
         )
-        from agents_env.server import WorldServer
+        from agents_world.server import WorldServer
 
         self.server = WorldServer.from_scene(
             scene,
@@ -368,10 +469,12 @@ class WebSocketVenueTests(unittest.IsolatedAsyncioTestCase):
             port=0,
             data_root=str(self.root),
         )
+        os.environ["AGENTS_WORLD_NEIGHBORS_ROOT"] = str(self.root)
         self.port = await self.server.start()
 
     async def asyncTearDown(self):
         await self.server.stop()
+        os.environ.pop("AGENTS_WORLD_NEIGHBORS_ROOT", None)
         self._tmpdir.cleanup()
 
     @property
@@ -379,7 +482,7 @@ class WebSocketVenueTests(unittest.IsolatedAsyncioTestCase):
         return f"ws://127.0.0.1:{self.port}"
 
     async def test_dummy_style_roundtrip(self):
-        from agents_env.client import WorldClient
+        from agents_world.client import WorldClient
 
         async with WorldClient(self.url, member_id="alice") as alice:
             async with WorldClient(self.url, member_id="bob") as bob:
@@ -396,7 +499,7 @@ class WebSocketVenueTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("room_seq", heard)
 
     async def test_malformed_sync_keeps_connection(self):
-        from agents_env.client import WorldClient
+        from agents_world.client import WorldClient
 
         async with WorldClient(self.url, member_id="alice") as alice:
             await alice.join("hall")
@@ -410,8 +513,16 @@ class WebSocketVenueTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(echo.get("kind"), "utterance")
 
+    async def test_speak_requires_presence(self):
+        from agents_world.client import WorldClient
+
+        async with WorldClient(self.url, member_id="alice") as alice:
+            await alice.speak("hall", "too soon")
+            err = await alice.wait_for(lambda m: m.get("type") == "error")
+            self.assertEqual(err.get("code"), "not_present")
+
     async def test_replaced_connection_is_closed(self):
-        from agents_env.client import WorldClient
+        from agents_world.client import WorldClient
 
         first = WorldClient(self.url, member_id="bob")
         await first.connect()
@@ -428,6 +539,55 @@ class WebSocketVenueTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(first._ws is None or first._ws.close_code is not None or first._ws.state.name != "OPEN")
         await second.close()
         await first.close()
+
+    async def test_http_serves_inhabitant_page(self):
+        status, headers, body = await _http_get(self.port, "/")
+        self.assertEqual(status, 200)
+        self.assertIn("text/html", headers.get("content-type", ""))
+        html = body.decode("utf-8")
+        blob = html
+        for src in _asset_paths(html):
+            asset_status, _, asset_body = await _http_get(self.port, src)
+            self.assertEqual(asset_status, 200)
+            blob += asset_body.decode("utf-8", "replace")
+        self.assertIn("请来", blob)
+        self.assertIn("请回", blob)
+        self.assertIn("presentInRoom", blob)
+        self.assertNotIn("正在输入", blob)
+        self.assertNotIn("等待回复", blob)
+        self.assertNotIn("世界不替他们思考", blob)
+        self.assertNotIn("不会等待回答", blob)
+        self.assertIn("发送文件", blob)
+
+    async def test_http_serves_spoken_file(self):
+        from agents_world.client import WorldClient
+
+        async with WorldClient(self.url, member_id="alice") as alice:
+            await alice.join("hall")
+            await alice.wait_for(lambda m: m.get("type") == "snapshot")
+            await alice.speak(
+                "hall",
+                "file",
+                attachments=[{"name": "note.txt", "mime": "text/plain", "data": b"venue-bytes"}],
+            )
+            echo = await alice.wait_for(
+                lambda m: m.get("type") == "event" and m.get("kind") == "utterance"
+            )
+            file_id = echo["attachments"][0]["id"]
+        status, headers, body = await _http_get(self.port, f"/files/{file_id}")
+        self.assertEqual(status, 200)
+        self.assertEqual(body, b"venue-bytes")
+        self.assertIn("text/plain", headers.get("content-type", ""))
+
+    async def test_http_neighbors_and_404(self):
+        missing_status, _, _ = await _http_get(self.port, "/nope")
+        status, headers, body = await _http_get(self.port, "/neighbors")
+        self.assertEqual(missing_status, 404)
+        self.assertEqual(status, 200)
+        self.assertIn("application/json", headers.get("content-type", ""))
+        payload = json.loads(body.decode("utf-8"))
+        self.assertIn("agents", payload)
+        self.assertIsInstance(payload["agents"], list)
 
 
 if __name__ == "__main__":

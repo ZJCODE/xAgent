@@ -1,13 +1,13 @@
-# Agents Env：独立世界进程
+# World：独立世界进程
 
-Env is a **serializer of reality**, not an agent orchestrator.
+The world process is a **serializer of reality**, not an agent orchestrator.
 
 It holds rooms, presence, an append-only event log, and wall-clock time.
 It does not call models, decide who should speak, or read anyone's diary.
 Inhabitants — humans, scripts, dummy clients, and later xAgent — join through
 the same protocol.
 
-This package (`agents_env/`) has **zero dependency** on `xagent.core` or
+This package (`agents_world/`) has **zero dependency** on `xagent.core` or
 `xagent.integrations`.
 
 ## First principles
@@ -21,7 +21,7 @@ This package (`agents_env/`) has **zero dependency** on `xagent.core` or
    is serialized by the world process. Silence is real wall-clock time, not a
    turn queue.
 4. **The world outlives any subject.** The room and clock keep going when no
-   one is thinking. Env is a long-lived process with a durable log. Delivery
+   one is thinking. World is a long-lived process with a durable log. Delivery
    of perceptions is per-subject and must not stall the world's clock.
 5. **Audience is physics.** A public room reaches everyone present. A 1:1 is
    another room with two people. No separate ACL layer.
@@ -68,7 +68,7 @@ This package (`agents_env/`) has **zero dependency** on `xagent.core` or
 | Room | `id`, `name`, `setting` |
 | Member | `id`, `display_name` (surface only; no persona fields) |
 | Presence | `(member_id, room_id)`, present?, live connection |
-| Event | `seq`, `room_seq`, `ts`, `room_id`, `kind`, `actor_id`, `text`, `mentions` |
+| Event | `seq`, `room_seq`, `ts`, `room_id`, `kind`, `actor_id`, `text`, `mentions`, `attachments?` |
 
 `kind` is only: `utterance` | `join` | `leave` | `scene`. Unknown kinds must be
 passed through by clients so old inhabitants survive a newer log.
@@ -82,7 +82,11 @@ Client → World:
 - `hello {member_id, display_name}`
 - `join {room_id}`
 - `leave {room_id}`
-- `speak {room_id, text, mentions?}`
+- `speak {room_id, text, mentions?, attachments?}`
+  - `attachments` are `{name, mime, data}` (base64) or `{id}` for a file already in this world
+  - `text` may be empty when attachments are present
+  - the log stores `{id, name, mime, size, url}` only; bytes live under `files/`
+  - `url` is `/files/<id>` on the same port; inhabitants fetch those bytes into their workspace
 - `sync {room_id, after_seq}`
 
 World → Client:
@@ -96,19 +100,21 @@ World → Client:
 - `error {code, message}`
 
 Error `code` values include: `bad_payload`, `unknown_type`, `unknown_room`,
-`not_present`, `text_required`, `text_too_long`, `rate_limited`,
+`not_present`, `text_required`, `text_too_long`, `too_many_files`,
+`file_too_large`, `bad_file`, `rate_limited`,
 `session_inactive`, `replaced`, `hello_timeout`, `internal`.
 
 Same `member_id` reconnects as the same body. A newer connection replaces the
 older one so one body occupies one place; the old socket is closed.
 
-Use `agents_env.client.WorldClient` as the reference inhabitant rather than
+Use `agents_world.client.WorldClient` as the reference inhabitant rather than
 re-implementing the handshake.
 
 ## Storage and process
 
-- CLI: `agents-env serve` starts the world on localhost WebSocket.
-- Data: `~/.agents-env/worlds/<world_id>/world.sqlite3`
+- CLI: `agents-world serve` starts the world. `http://127.0.0.1:7182` is the inhabitant page; WebSocket uses the same port.
+- Data: `~/.agents-world/worlds/<world_id>/world.sqlite3`
+- Files shown in a room: `~/.agents-world/worlds/<world_id>/files/<id>` (GET `/files/<id>`)
 - Never write into `~/.xagent/agents/<name>/`.
 - Scene YAML describes only the stage (rooms, setting text, timed ambience).
   No persona, model, or system prompt.
@@ -133,21 +139,22 @@ scenes:
 
 Phase one ships:
 
-- **Reference client** (`agents_env.client.WorldClient`)
-- **Human CLI** (`agents-env join`) — humans are first-class inhabitants.
-- **Dummy client** (`agents-env dummy`) — scripted presence for proving the venue.
+- **Inhabitant page** (`http://127.0.0.1:7182`) — a human body. Speak is enabled only after the join snapshot. Asking a local agent to enter/leave knocks that agent's own `/world/join` or `/world/leave`; the world does not start or evict minds. Do not reuse an agent's `member_id`.
+- **Reference client** (`agents_world.client.WorldClient`)
+- **Human CLI** (`agents-world join`) — humans are first-class inhabitants.
+- **Dummy client** (`agents-world dummy`) — scripted presence for proving the venue.
 
-An xAgent adapter is a later client that only depends on this protocol:
-hear → own `observe` / `chat`; speak → `speak`; never treat the room log as diary.
+An xAgent adapter lives in the agent process (`xagent.integrations.world.WorldInhabitant`):
+hear → own `observe` / `decide_participation` / `chat`; speak → `speak`; never treat the room log as diary.
 
 ## Non-goals
 
-- LLM or turn host inside env
+- LLM or turn host inside the world
 - Routing agent↔agent through Feishu / Weixin
 - Merging multiple agent runtimes or SQLite stores
 - Turning ChannelPage / AgentSwitcher into a group UI
 - Persona or model config in scene files
-- Storing env data under an agent directory
+- Storing world data under an agent directory
 
 ## GOAL.md check
 

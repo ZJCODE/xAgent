@@ -78,6 +78,16 @@ class AgentConfigPromptTests(unittest.TestCase):
         self.assertIn("When unsure, prefer speaking", prompt)
         self.assertNotIn("The room is flowing", prompt)
 
+    def test_world_decision_prompt_treats_room_questions_as_speech(self):
+        prompt = AgentConfig.WORLD_DECISION_SYSTEM_PROMPT
+
+        self.assertIn("not a chatbot waiting on a prompt", prompt)
+        self.assertIn("asked the room a question", prompt)
+        self.assertIn("steered a conversation you are in", prompt)
+        self.assertIn("When a question hangs unanswered, speak", prompt)
+        self.assertIn("prefer the short line", prompt)
+        self.assertNotIn("When unsure, stay silent", prompt)
+
     def test_base_agent_prompt_describes_room_context_blocks(self):
         self.assertIn("[room context]", AgentConfig.BASE_AGENT_PROMPT)
         self.assertIn("room_name:", AgentConfig.BASE_AGENT_PROMPT)

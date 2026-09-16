@@ -9,10 +9,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from ..base import BaseAgentConfig
 from .admin_service import AdminService
 from .admin_routes import register_admin_routes
+from .world_routes import register_world_routes
 from .models import ChatInput
 from ...core.agent import Agent
 from ...core.config import AgentConfig
 from ...core.runtime import (
+    AsyncTaskScheduler,
     SubconsciousDelivery,
     create_runtime_heartbeat,
     resolve_contacts_path,
@@ -47,6 +49,8 @@ class AgentHTTPServer(AdminService):
             logger=self.logger,
         )
         self.app = self._create_app()
+        self.world_inhabitant = None
+        self._world_task_scheduler = None
         self.app.add_middleware(
             CORSMiddleware,
             allow_origins=["*"],
@@ -100,6 +104,18 @@ class AgentHTTPServer(AdminService):
         self._add_routes(app)
         return app
 
+    def _world_can_handle_scheduled_task(self, task) -> bool:
+        inhabitant = getattr(self, "world_inhabitant", None)
+        if inhabitant is None:
+            return False
+        return inhabitant.can_handle_scheduled_task(task)
+
+    async def _dispatch_world_scheduled_task(self, task) -> None:
+        inhabitant = getattr(self, "world_inhabitant", None)
+        if inhabitant is None:
+            raise RuntimeError("world inhabitant is not present")
+        await inhabitant.dispatch_scheduled_task(task)
+
     @asynccontextmanager
     async def _lifespan(self, app: FastAPI):
         heartbeat = create_runtime_heartbeat(
@@ -117,8 +133,22 @@ class AgentHTTPServer(AdminService):
                     heartbeat.interval_seconds,
                 )
             await self.api.start()
+            self._world_task_scheduler = AsyncTaskScheduler(
+                self.tasks_dir,
+                can_handle=self._world_can_handle_scheduled_task,
+                dispatch=self._dispatch_world_scheduled_task,
+                logger_=self.logger,
+            )
+            await self._world_task_scheduler.start()
             yield
         finally:
+            scheduler = self._world_task_scheduler
+            self._world_task_scheduler = None
+            if scheduler is not None:
+                await scheduler.stop()
+            inhabitant = getattr(self, "world_inhabitant", None)
+            if inhabitant is not None:
+                await inhabitant.leave()
             await self.api.stop()
             if heartbeat is not None:
                 await heartbeat.stop()
@@ -126,6 +156,7 @@ class AgentHTTPServer(AdminService):
 
     def _add_routes(self, app: FastAPI) -> None:
         self.api.register_routes(app)
+        register_world_routes(app, self)
         register_admin_routes(app, lambda: self)
 
     def run(self, host: str = None, port: int = None) -> None:

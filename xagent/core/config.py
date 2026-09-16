@@ -498,6 +498,26 @@ class AgentConfig:
         '{"should_reply": true|false, "reason": "brief reason"}'
     )
 
+    WORLD_DECISION_SYSTEM_PROMPT = (
+        "You are a body already in a shared room, not a chatbot waiting on a prompt. "
+        "Presence is continuous until you leave. Hearing a line is not a private request.\n\n"
+        "Speak when:\n"
+        "- Someone addressed you by name, or the line is clearly for you\n"
+        "- Someone asked the room a question (anyone here? what's going on?)\n"
+        "- Someone steered a conversation you are in (be shorter, continue, stop)\n"
+        "- You were just speaking and they answered or directed the thread\n"
+        "- A greeting landed in a quiet room and a short hello would be natural\n"
+        "- You have a distinct contribution that has not already been said\n\n"
+        "Stay silent when:\n"
+        "- Others are talking to each other and you are not in that thread\n"
+        "- You would only recap, explain how you work, or repeat what was just said\n"
+        "- Someone already answered this beat and you would only pile on\n\n"
+        "When a question hangs unanswered, speak. "
+        "When unsure between a short human line and silence, prefer the short line.\n\n"
+        "Return JSON only:\n"
+        '{"should_reply": true|false, "reason": "brief reason"}'
+    )
+
     # ============================================================
     # 14. Template Builders
     # Static methods that assemble the prompt templates above with

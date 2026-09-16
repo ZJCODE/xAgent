@@ -1,4 +1,4 @@
-"""python -m agents_env"""
+"""python -m agents_world"""
 
 from .cli import main
 
