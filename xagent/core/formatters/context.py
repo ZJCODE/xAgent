@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Iterable, Optional
@@ -16,14 +15,6 @@ class RoomContextEntry:
     is_self: bool = False
 
 
-ROOM_CONTEXT_COVERS_PREFIX = "covers: "
-ROOM_CONTEXT_COVERS_SEPARATOR = ".."
-_ROOM_CONTEXT_COVERS_RE = re.compile(
-    r"^covers:\s*(\d{4}-\d{2}-\d{2} \d{2}:\d{2})\.\.(\d{4}-\d{2}-\d{2} \d{2}:\d{2})\s*$",
-    re.MULTILINE,
-)
-
-
 def format_room_context(
     room_id: str,
     entries: Iterable[RoomContextEntry],
@@ -31,14 +22,8 @@ def format_room_context(
     room_name: Optional[str] = None,
     present: Optional[Iterable[str]] = None,
 ) -> str:
-    """Render a room-context block understood by the core prompt.
-
-    The header carries a ``covers:`` span (oldest..newest entry, minute
-    precision) so the core can drop only the stored rows this block already
-    replays, instead of everything from the same place.
-    """
+    """Render a room-context block understood by the core prompt."""
     safe_room_id = sanitize_room_context_field(room_id)
-    entries = list(entries)
     body = format_room_context_body(entries)
     if not safe_room_id or not body:
         return body
@@ -48,43 +33,10 @@ def format_room_context(
     if safe_room_name:
         header_lines.append(f"room_name: {safe_room_name}")
     header_lines.append(f"room_id: {safe_room_id}")
-    covers_line = format_room_context_covers(entries)
-    if covers_line:
-        header_lines.append(covers_line)
     present_line = format_room_context_present(present)
     if present_line:
         header_lines.append(present_line)
     return "\n".join([*header_lines, "", body, "[/room context]"])
-
-
-def format_room_context_covers(entries: Iterable[RoomContextEntry]) -> Optional[str]:
-    """Render the ``covers:`` header line spanning the rendered entries."""
-    rendered = [entry for entry in entries if format_room_context_entry(entry)]
-    if not rendered:
-        return None
-    oldest = min(entry.occurred_at for entry in rendered)
-    newest = max(entry.occurred_at for entry in rendered)
-    return (
-        f"{ROOM_CONTEXT_COVERS_PREFIX}"
-        f"{format_room_context_timestamp(oldest)}"
-        f"{ROOM_CONTEXT_COVERS_SEPARATOR}"
-        f"{format_room_context_timestamp(newest)}"
-    )
-
-
-def parse_room_context_covers(room_context: str) -> Optional[tuple[datetime, datetime]]:
-    """Return the ``(oldest, newest)`` span declared by a room-context block."""
-    match = _ROOM_CONTEXT_COVERS_RE.search(room_context or "")
-    if match is None:
-        return None
-    try:
-        start = datetime.strptime(match.group(1), "%Y-%m-%d %H:%M")
-        end = datetime.strptime(match.group(2), "%Y-%m-%d %H:%M")
-    except ValueError:
-        return None
-    if end < start:
-        start, end = end, start
-    return start, end
 
 
 def format_room_context_present(present: Optional[Iterable[str]]) -> Optional[str]:
@@ -99,6 +51,7 @@ def format_room_context_present(present: Optional[Iterable[str]]) -> Optional[st
     if not labels:
         return None
     return f"present: {', '.join(labels)}"
+
 
 def format_room_context_body(entries: Iterable[RoomContextEntry]) -> str:
     """Render room-context lines ordered oldest to newest."""

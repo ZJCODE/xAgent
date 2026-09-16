@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from ..config import AgentConfig
-from ..formatters.context import parse_room_context_covers
 from ..inbox import INBOX_KIND_METADATA_KEY, is_scheduled_work
 from ...components import MessageStorage
 from ...schemas import Message, RoleType, MessageType
@@ -336,22 +335,21 @@ class MessageHandler:
             budgeted_entries,
             budgeted_observations,
         )
-        if (room_context or "").strip():
-            # The live room block replays a slice of this place's timeline;
-            # drop only the stored rows that fall inside that slice so a
-            # short or failed history pull never erases what storage knows.
-            experience_entries = MessageHandler._exclude_room_covered_experience(
-                experience_entries,
-                current_message=current_message,
-                covers=parse_room_context_covers(room_context),
-            )
+        if (room_context or "").strip() and current_message is not None:
+            # The live room block already contains the triggering line.
+            # Leave older same-place rows in recent_experience; duplicating
+            # a short room slice is cheaper than inventing a join protocol.
+            experience_entries = [
+                entry
+                for entry in experience_entries
+                if not MessageHandler._is_same_message(entry[1], current_message)
+            ]
 
         recent_experience = MessageHandler._build_recent_experience_context(
             experience_entries=experience_entries,
             omitted_messages=omitted_count,
             omitted_observations=omitted_observation_count,
             working_summary=working_summary,
-            current_message=current_message,
         )
         resolved_current_time = (
             current_time
@@ -481,7 +479,6 @@ class MessageHandler:
         omitted_messages: int,
         omitted_observations: int,
         working_summary: str = "",
-        current_message: Optional[Message] = None,
     ) -> str:
         lines: list[str] = []
         summary = (working_summary or "").strip()
@@ -500,12 +497,7 @@ class MessageHandler:
 
         for entry_type, msg, content in experience_entries:
             lines.extend(
-                MessageHandler._format_experience_entry(
-                    entry_type,
-                    msg,
-                    content,
-                    is_current=MessageHandler._is_same_message(msg, current_message),
-                )
+                MessageHandler._format_experience_entry(entry_type, msg, content)
             )
             lines.append("")
 
@@ -537,54 +529,6 @@ class MessageHandler:
             for msg, content in observation_entries
         )
         return sorted(entries, key=lambda entry: entry[1].timestamp)
-
-    @staticmethod
-    def _exclude_room_covered_experience(
-        experience_entries: List[tuple[str, Message, str]],
-        *,
-        current_message: Optional[Message],
-        covers: Optional[tuple[datetime, datetime]] = None,
-    ) -> List[tuple[str, Message, str]]:
-        """Drop same-place rows that the live ``room_context`` block already replays.
-
-        With a ``covers`` span, only rows whose timestamp falls inside it (plus
-        a one-minute tolerance, since the block renders minutes) are dropped;
-        older same-place rows stay in ``recent_experience``. Without a span
-        (hand-written or legacy blocks) the whole place is treated as covered.
-        """
-        if current_message is None:
-            return experience_entries
-        channel = str(current_message.channel or "").strip()
-        room_name = str(current_message.room_name or "").strip()
-        if not channel or not room_name:
-            return experience_entries
-
-        window: Optional[tuple[float, float]] = None
-        if covers is not None:
-            start, end = covers
-            tolerance = AgentConfig.ROOM_CONTEXT_COVERS_TOLERANCE_SECONDS
-            window = (start.timestamp() - tolerance, end.timestamp() + tolerance)
-
-        def covered(message: Message) -> bool:
-            if not MessageHandler._message_in_room(message, channel=channel, room_name=room_name):
-                return False
-            if window is None:
-                return True
-            return window[0] <= float(message.timestamp) <= window[1]
-
-        return [entry for entry in experience_entries if not covered(entry[1])]
-
-    @staticmethod
-    def _message_in_room(
-        message: Message,
-        *,
-        channel: str,
-        room_name: str,
-    ) -> bool:
-        return (
-            str(message.channel or "").strip() == channel
-            and str(message.room_name or "").strip() == room_name
-        )
 
     @staticmethod
     def _format_omitted_experience_note(
@@ -620,15 +564,11 @@ class MessageHandler:
         entry_type: str,
         message: Message,
         content: str,
-        *,
-        is_current: bool = False,
     ) -> List[str]:
         if entry_type == "observation":
             return [MessageHandler._format_context_event_header(message), content]
 
         header = MessageHandler._format_transcript_message_header(message)
-        if is_current:
-            header += AgentConfig.CURRENT_MESSAGE_MARKER
         lines = [header, content]
         image_count = MessageHandler._count_message_images(message)
         if image_count:

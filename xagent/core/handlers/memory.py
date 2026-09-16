@@ -530,7 +530,7 @@ class MemoryHandler:
         """Return rendered relationship cards for the given people.
 
         ``speaker_keys`` (the current speaker) are always included first;
-        ``participant_keys`` (other people in the room) fill remaining budget.
+        ``participant_keys`` fill remaining budget when a caller has extras.
         ``include_routing_id`` appends each person's ``user_id`` to the header
         so the subconscious can emit a deterministic ``recipient_hint``; reply
         turns leave it off so the identifier is never exposed to users.

@@ -364,25 +364,13 @@ class ToolExecutor:
         text: str,
         *,
         max_chars: int = AgentConfig.MAX_TOOL_RESULT_CHARS,
-        tail_chars: int = AgentConfig.TOOL_RESULT_TAIL_CHARS,
     ) -> str:
-        """Cap one tool result before it enters the turn context.
-
-        Keeps the head and the tail so the beginning of the output and any
-        trailing status or error remain visible, and tells the model how much
-        was dropped so it can narrow the call instead of guessing.
-        """
+        """Cap one tool result before it enters the turn context."""
         limit = max(1, int(max_chars))
         if len(text) <= limit:
             return text
-        tail = max(0, min(int(tail_chars), limit // 2))
-        head = limit - tail
-        omitted = len(text) - head - tail
-        marker = (
-            f"\n[... {omitted} chars omitted from tool output; "
-            "narrow the command or read the source in smaller parts ...]\n"
-        )
-        return text[:head].rstrip() + marker + (text[-tail:].lstrip() if tail else "")
+        omitted = len(text) - limit
+        return text[:limit] + f"\n[... {omitted} chars omitted from tool output ...]"
 
     @staticmethod
     def _image_result_description(tool_name: str, prompt_hint: Any = "") -> str:

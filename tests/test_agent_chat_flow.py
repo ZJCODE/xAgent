@@ -1418,13 +1418,12 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         await agent._relationship_context_for_turn(
             user_msg=current,
             user_id="joy",
-            recent_messages=recent,
         )
 
         self.assertEqual(captured["speaker_keys"], ["api:joy"])
-        self.assertEqual(captured["participant_keys"], [])
+        self.assertEqual(captured.get("participant_keys") or [], [])
 
-    async def test_room_turn_injects_only_same_place_peers(self):
+    async def test_room_turn_injects_only_the_speaker_card(self):
         agent, captured = self._relationship_capturing_agent()
         recent = [
             self._placed_message("other room", "erin", "feishu", room_name="ops"),
@@ -1437,11 +1436,10 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         await agent._relationship_context_for_turn(
             user_msg=current,
             user_id="joy",
-            recent_messages=recent,
         )
 
         self.assertEqual(captured["speaker_keys"], ["feishu:joy"])
-        self.assertEqual(captured["participant_keys"], ["feishu:carol"])
+        self.assertEqual(captured.get("participant_keys") or [], [])
 
     async def test_agent_turn_uses_nonblocking_working_context_snapshot(self):
         class SnapshotCompactor:
@@ -2504,8 +2502,7 @@ class ToolExecutorTransientTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_execute_single_budgets_oversized_tool_output(self):
         head_marker = "HEAD-START "
-        tail_marker = " TAIL-END exit=1"
-        payload = head_marker + ("x" * (AgentConfig.MAX_TOOL_RESULT_CHARS * 3)) + tail_marker
+        payload = head_marker + ("x" * (AgentConfig.MAX_TOOL_RESULT_CHARS * 3)) + " TAIL-END"
 
         async def dump() -> str:
             return payload
@@ -2520,10 +2517,10 @@ class ToolExecutorTransientTests(unittest.IsolatedAsyncioTestCase):
 
         content = tool_message["content"]
         self.assertIsNone(display_result)
-        self.assertLess(len(content), AgentConfig.MAX_TOOL_RESULT_CHARS + 200)
         self.assertTrue(content.startswith(head_marker))
-        self.assertTrue(content.endswith(tail_marker))
+        self.assertNotIn("TAIL-END", content)
         self.assertIn("chars omitted from tool output", content)
+        self.assertLessEqual(len(content), AgentConfig.MAX_TOOL_RESULT_CHARS + 80)
 
     async def test_execute_single_keeps_small_tool_output_intact(self):
         async def small() -> str:

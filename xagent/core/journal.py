@@ -108,7 +108,7 @@ Input markers:
 - `[scheduled task][for=Name][timestamp=Time][channel=Channel]` — a due task targeting Name, not something Name said.
 - `[ambient context][timestamp=Time][channel=Channel]` — something you noticed, overheard, or received via Channel.
 - `[ambient context][timestamp=Time][channel=Channel][room=RoomName]` — something you noticed, overheard, or received in RoomName via Channel.
-- `[room context]` ... `[/room context]` blocks: `room_name:`, `room_id:`, optional `covers:` and `present:` headers, lines like `Name YYYY-MM-DD HH:mm: text`; `ME ...` inside means you.
+- `[room context]` ... `[/room context]` blocks: `room_name:`, `room_id:`, optional `present:` header, lines like `Name YYYY-MM-DD HH:mm: text`; `ME ...` inside means you.
 
 Rules:
 - Treat the transcript as your own experience stream, not a user-owned log or searchable database.

@@ -56,14 +56,6 @@ class AgentConfig:
     # Attached by MessageStorage when loading rows; used so prompt budgeting
     # never drops messages that the working summary has not covered yet.
     MESSAGE_STORAGE_CURSOR_KEY = "storage_cursor"
-    # Appended to the recent_experience header of the message this turn
-    # answers, so the model never has to infer which row is "current" when
-    # other processes interleave rows into the shared stream.
-    CURRENT_MESSAGE_MARKER = "[current]"
-    # Room-context blocks declare a `covers: from..to` span at minute
-    # precision; stored rows inside the span (± this tolerance) are treated
-    # as already replayed by the block and left out of recent_experience.
-    ROOM_CONTEXT_COVERS_TOLERANCE_SECONDS = 60
 
     # ============================================================
     # 3. Model & Agent Defaults
@@ -141,10 +133,8 @@ class AgentConfig:
     # Context-side cap for one tool result as the model sees it. Distinct from
     # MAX_COMMAND_OUTPUT_SIZE: a run_command result carries stdout and stderr
     # together, and nothing else bounded what a single tool call could push
-    # into the turn. Head and tail are kept so both the start of the output
-    # and any final status/error stay visible.
+    # into the turn.
     MAX_TOOL_RESULT_CHARS = 16000
-    TOOL_RESULT_TAIL_CHARS = 3000
     MAX_SYSTEM_PROMPT_LENGTH = 16000  # soft limit for assembled instructions (chars)
     MAX_SKILLS_CATALOG_CHARS = 8000  # max characters for injected skill catalog
 
@@ -176,7 +166,7 @@ class AgentConfig:
     # ------------------------------------------------------------------
     # Relationship memory (per-person cards derived from the diary)
     # ------------------------------------------------------------------
-    # Max relationship cards injected into a single turn (speaker + others).
+    # Max relationship cards injected into a single turn.
     RELATIONSHIP_MAX_CARDS_PER_TURN = 4
     # Max cards summarised for the subconscious thinking layer.
     RELATIONSHIP_SUBCONSCIOUS_MAX_CARDS = 6
@@ -489,10 +479,9 @@ class AgentConfig:
         "- `[speaker=Name][timestamp=Time][channel=Channel]` — Name spoke via Channel. `[speaker=ME]` — you said this.\n"
         "- If a speaker tag looks like `Telos(ou_xxx)`, Telos is their display name on this channel and the parenthetical is the stable id. Address them as Telos. Do not read the id aloud. A display name means you already know what to call them; not remembering shared history is different from not knowing their name.\n"
         "- `[speaker=Name][timestamp=Time][channel=Channel][room=RoomName]` — Name spoke in RoomName via Channel. `[speaker=ME]` — you said this in that room.\n"
-        "- A trailing `[current]` marks the one message this turn answers. Rows after it arrived while you were being woken; they are context, not the request.\n"
         "- `[ambient context][timestamp=Time][channel=Channel]` — something observed or received via Channel, not a direct message.\n"
         "- `[ambient context][timestamp=Time][channel=Channel][room=RoomName]` — something observed or received in RoomName via Channel.\n"
-        "- `[room context]` ... `[/room context]` blocks: `room_name:`, `room_id:`, optional `covers:` (the time span this block replays), optional `present:` (who is here now), lines like `Name YYYY-MM-DD HH:mm: text`; `ME ...` inside means you.\n"
+        "- `[room context]` ... `[/room context]` blocks: `room_name:`, `room_id:`, optional `present:` (who is here now), lines like `Name YYYY-MM-DD HH:mm: text`; `ME ...` inside means you.\n"
         "- Keep people, rooms, preferences, commitments, and experiences separate. Do not carry one person's private topic into another person's reply unless they clearly joined or referred to it.\n"
         "\n"
     )

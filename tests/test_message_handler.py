@@ -369,7 +369,7 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         self.assertIn("Keep simple replies short", context_messages[2]["content"])
         self.assertIn("Never rely on Markdown image embeds", context_messages[2]["content"])
 
-    def test_current_message_header_carries_current_marker(self):
+    def test_private_turn_keeps_current_message_in_recent_experience(self):
         earlier = Message.create("earlier", role=RoleType.USER, sender_id="Joy")
         earlier.timestamp -= 10
         current = Message.create("answer this", role=RoleType.USER, sender_id="Joy")
@@ -387,31 +387,13 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
             current_message=current,
         )
 
-        experience = next(
-            message["content"]
-            for message in context_messages
-            if message["name"] == AgentConfig.RECENT_EXPERIENCE_NAME
-        )
-        lines = experience.splitlines()
-        marked = [line for line in lines if line.endswith(AgentConfig.CURRENT_MESSAGE_MARKER)]
-        self.assertEqual(len(marked), 1)
-        self.assertTrue(marked[0].startswith("[speaker=Joy]"))
-        marked_index = lines.index(marked[0])
-        self.assertEqual(lines[marked_index + 1], "answer this")
-        self.assertLess(marked_index, lines.index("someone joined plaza"))
-        self.assertNotIn(
-            AgentConfig.CURRENT_MESSAGE_MARKER,
-            lines[lines.index("earlier") - 1],
-        )
-
-    def test_no_current_marker_without_current_message(self):
-        context_messages = MessageHandler.build_turn_context_messages(
-            [Message.create("hello", role=RoleType.USER, sender_id="Joy")],
-            current_user_id="Joy",
-            current_time="2026-05-14 09:30",
-        )
-        experience = context_messages[0]["content"]
-        self.assertNotIn(AgentConfig.CURRENT_MESSAGE_MARKER, experience)
+        by_name = {message["name"]: message["content"] for message in context_messages}
+        experience = by_name[AgentConfig.RECENT_EXPERIENCE_NAME]
+        self.assertIn("earlier", experience)
+        self.assertIn("answer this", experience)
+        self.assertIn("someone joined plaza", experience)
+        self.assertNotIn("[current]", experience)
+        self.assertIn("what Joy just said", by_name[AgentConfig.CURRENT_TASK_NAME])
 
     def test_turn_layers_are_ordered_by_volatility(self):
         messages = [
@@ -505,7 +487,7 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         self.assertIn("Speak to everyone present", current_task)
         self.assertNotIn("Focus on what alice just said", current_task)
 
-    def test_room_context_suppresses_same_place_recent_experience(self):
+    def test_room_context_omits_current_line_from_recent_experience(self):
         world_line = Message.create("有人吗", role=RoleType.USER, sender_id="alice")
         world_line.channel = "world"
         world_line.room_name = "plaza"
@@ -545,15 +527,14 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         message.room_name = room_name
         return message
 
-    def test_room_context_span_keeps_older_same_place_rows(self):
+    def test_room_context_keeps_older_same_place_rows(self):
         base = datetime(2026, 5, 14, 9, 0)
         older = self._room_message("morning plan", "alice", base)
         inside = self._room_message("still on?", "bob", base.replace(minute=25))
         current = self._room_message("有人吗", "alice", base.replace(minute=30))
         room_block = (
             "[room context]\n"
-            "room_id: plaza\n"
-            "covers: 2026-05-14 09:25..2026-05-14 09:30\n\n"
+            "room_id: plaza\n\n"
             "bob 2026-05-14 09:25: still on?\n"
             "alice 2026-05-14 09:30: 有人吗\n"
             "[/room context]"
@@ -570,13 +551,13 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         by_name = {message["name"]: message["content"] for message in context_messages}
         experience = by_name[AgentConfig.RECENT_EXPERIENCE_NAME]
         self.assertIn("morning plan", experience)
-        self.assertNotIn("still on?", experience)
+        self.assertIn("still on?", experience)
         self.assertNotIn("有人吗", experience)
         self.assertIn("有人吗", by_name[AgentConfig.ROOM_CONTEXT_NAME])
 
-    def test_room_context_with_only_current_line_keeps_stored_history(self):
-        # Mirrors a failed/short history pull: the adapter still emits a block
-        # containing just the triggering line.
+    def test_short_room_context_keeps_stored_history(self):
+        # A failed/short history pull still emits a block with the triggering
+        # line; stored same-place rows stay in recent_experience.
         base = datetime(2026, 5, 14, 9, 0)
         history = self._room_message("earlier in the room", "bob", base)
         own_reply = Message.create("I said this earlier", role=RoleType.ASSISTANT, sender_id="agent")
@@ -586,8 +567,7 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         current = self._room_message("anyone?", "alice", base.replace(minute=30))
         room_block = (
             "[room context]\n"
-            "room_id: plaza\n"
-            "covers: 2026-05-14 09:30..2026-05-14 09:30\n\n"
+            "room_id: plaza\n\n"
             "alice 2026-05-14 09:30: anyone?\n"
             "[/room context]"
         )
@@ -608,59 +588,6 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         self.assertIn("earlier in the room", experience)
         self.assertIn("I said this earlier", experience)
         self.assertNotIn("anyone?", experience)
-
-    def test_room_context_span_tolerates_minute_rounding(self):
-        base = datetime(2026, 5, 14, 9, 30, 45)
-        current = self._room_message("anyone?", "alice", base)
-        room_block = (
-            "[room context]\n"
-            "room_id: plaza\n"
-            "covers: 2026-05-14 09:30..2026-05-14 09:30\n\n"
-            "alice 2026-05-14 09:30: anyone?\n"
-            "[/room context]"
-        )
-
-        context_messages = MessageHandler.build_turn_context_messages(
-            [current],
-            current_user_id="alice",
-            current_time="2026-05-14 09:30",
-            current_message=current,
-            room_context=room_block,
-        )
-
-        experience = next(
-            message["content"]
-            for message in context_messages
-            if message["name"] == AgentConfig.RECENT_EXPERIENCE_NAME
-        )
-        self.assertNotIn("anyone?", experience)
-
-    def test_room_context_without_span_falls_back_to_place_exclusion(self):
-        base = datetime(2026, 5, 14, 9, 0)
-        older = self._room_message("morning plan", "alice", base)
-        current = self._room_message("有人吗", "alice", base.replace(minute=30))
-        legacy_block = (
-            "[room context]\n"
-            "room_id: plaza\n\n"
-            "alice 2026-05-14 09:30: 有人吗\n"
-            "[/room context]"
-        )
-
-        context_messages = MessageHandler.build_turn_context_messages(
-            [older, current],
-            current_user_id="alice",
-            current_time="2026-05-14 09:30",
-            current_message=current,
-            room_context=legacy_block,
-        )
-
-        experience = next(
-            message["content"]
-            for message in context_messages
-            if message["name"] == AgentConfig.RECENT_EXPERIENCE_NAME
-        )
-        self.assertNotIn("morning plan", experience)
-        self.assertNotIn("有人吗", experience)
 
     def test_scheduled_turn_is_not_formatted_as_human_speech(self):
         due = Message.create(
