@@ -251,26 +251,30 @@ def default_prompt_registry() -> PromptRegistry:
             kind=KIND_INSTRUCTIONS,
             render=_render_skills,
         ),
+        # Turn layers are ordered by volatility so the stable prefix stays
+        # cacheable: diary changes only on journal writes, relationship cards
+        # change per speaker, notebook recall changes per message, and
+        # recent_experience changes every turn.
+        PromptSection(
+            name=AgentConfig.RECENT_MEMORY_NAME,
+            role="user",
+            order=0,
+            kind=KIND_TURN,
+            render=_render_memory,
+        ),
         PromptSection(
             name=AgentConfig.RELATIONSHIP_CONTEXT_NAME,
             role="user",
-            order=0,
+            order=10,
             kind=KIND_TURN,
             render=_render_relationship,
         ),
         PromptSection(
             name=AgentConfig.SUBCONSCIOUS_RELATIONSHIPS_NAME,
             role="user",
-            order=0,
-            kind=KIND_TURN,
-            render=_render_subconscious_relationships,
-        ),
-        PromptSection(
-            name=AgentConfig.RECENT_MEMORY_NAME,
-            role="user",
             order=10,
             kind=KIND_TURN,
-            render=_render_memory,
+            render=_render_subconscious_relationships,
         ),
         PromptSection(
             name=AgentConfig.NOTEBOOK_CONTEXT_NAME,

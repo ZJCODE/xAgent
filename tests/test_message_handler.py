@@ -369,6 +369,31 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         self.assertIn("Keep simple replies short", context_messages[2]["content"])
         self.assertIn("Never rely on Markdown image embeds", context_messages[2]["content"])
 
+    def test_turn_layers_are_ordered_by_volatility(self):
+        messages = [
+            Message.create("Hello", role=RoleType.USER, sender_id="Joy"),
+        ]
+
+        context_messages = MessageHandler.build_turn_context_messages(
+            messages,
+            current_user_id="Joy",
+            memory_context="## 2026-05-13 09:00\n\n昨天聊过路线图。",
+            relationship_context="## Joy\nWe are close.",
+            notebook_context="- (202605130900) Roadmap\n  Ship v1 first.",
+            current_time="2026-05-14 09:30",
+        )
+
+        self.assertEqual(
+            [message["name"] for message in context_messages],
+            [
+                AgentConfig.RECENT_MEMORY_NAME,
+                AgentConfig.RELATIONSHIP_CONTEXT_NAME,
+                AgentConfig.NOTEBOOK_CONTEXT_NAME,
+                AgentConfig.RECENT_EXPERIENCE_NAME,
+                AgentConfig.CURRENT_TASK_NAME,
+            ],
+        )
+
     def test_channel_instructions_are_a_separate_named_layer(self):
         messages = [
             Message.create("Hello", role=RoleType.USER, sender_id="Joy"),
