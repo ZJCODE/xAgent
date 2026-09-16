@@ -15,7 +15,9 @@ Before a Feishu message reaches the agent, the sender ID is resolved to a
 display name through the official contact API. The stable Feishu sender
 id (usually ``open_id``) is the ``user_id`` passed into ``agent.chat``;
 the display name is annotation only. Group room context renders speakers
-as ``name(id)`` when an ID is available.
+as ``name(id)`` when an ID is available. For group replies, the trigger
+utterance is stored as ``user_message``; recent room history is passed as
+prompt-only ``room_context`` and is not persisted as user speech.
 
 Group replies are sent as plain replies anchored to the source message
 (``reply_to``); never as Feishu topic/thread replies. p2p replies are sent
@@ -57,6 +59,7 @@ from .history import (
     FeishuHistoryFetcher,
     FeishuMessageRecord,
     format_room_context,
+    format_sender_label,
     replace_mentions,
     sanitize_transcript_field,
 )
@@ -814,22 +817,21 @@ class FeishuAdapter:
         sender_name: str,
         text: str,
     ) -> str:
-        """Build a compact single-message context for observation storage."""
-        room_name = await self._resolve_room_name(chat_id, raw_msg)
-        current_record = FeishuMessageRecord(
-            current_message_id or "",
-            sender_id,
+        """Build a compact attributed line for observation storage.
+
+        Ambient silence must not persist a full ``[room context]`` snapshot as
+        if it were spoken history; keep only the overheard utterance.
+        """
+        del chat_id, current_message_id, raw_msg  # attribution uses sender fields
+        label = format_sender_label(
             sender_name,
-            text,
-            self._message_create_time_ms(raw_msg),
+            sender_id,
+            sender_type=None,
         )
-        return format_room_context(
-            chat_id,
-            [current_record],
-            room_name=room_name,
-            bot_open_id=self._bot_open_id(),
-            bot_app_id=self.config.app_id,
-        )
+        body = (text or "").strip()
+        if label and body:
+            return f"{label}: {body}"
+        return body or label
 
     async def _group_decision_context(
         self,
@@ -1929,8 +1931,11 @@ class FeishuAdapter:
         image_sources = self._image_sources_for_model(image_assets) if supports_vision else []
 
         chat_text = self._append_image_markdown_context(text, image_assets)
+        room_context = ""
         if is_group:
-            chat_text = await self._chat_text_with_group_history(
+            # Trigger utterance stays in user_message (and storage). Room history
+            # is prompt-only so it does not pollute recent_experience / diary.
+            room_context = await self._chat_text_with_group_history(
                 chat_id=chat_id,
                 current_message_id=message_id,
                 raw_msg=raw_msg,
@@ -1949,6 +1954,7 @@ class FeishuAdapter:
             user_id=user_id,
             sender_name=sender_name,
             text=chat_text,
+            room_context=room_context,
             image_sources=image_sources,
             attachments=attachments,
             room_name=resolved_room_name,
@@ -2185,6 +2191,7 @@ class FeishuAdapter:
         image_sources: Optional[list[str]] = None,
         attachments: Optional[list[dict[str, Any]]] = None,
         room_name: Optional[str] = None,
+        room_context: str = "",
         is_group: bool = False,
     ) -> ChatTurnRequest:
         from ...components.memory import human_display_name
@@ -2196,6 +2203,7 @@ class FeishuAdapter:
             inbox_kind="user_turn",
             sender_name=human_display_name(sender_name, user_id=user_id),
             room_name=room_name,
+            room_context=room_context,
             channel_instructions=(
                 "For mentions, use <at user_id=\"ou_xxx\">Name</at>, never plain @Name. "
                 "Room context shows users as Name(id). Mention only when direct attention is needed."

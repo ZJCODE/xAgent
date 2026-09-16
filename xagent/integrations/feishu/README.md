@@ -185,8 +185,9 @@ sender's `app_id` with `client.application.v6.application.get(request)`. Queryin
 other apps requires Feishu's application information permission; without it,
 those senders fall back the same way as unresolved users.
 
-For routed group/topic traffic, the adapter wraps recent messages plus the
-current message in a room-context block before calling `agent.chat`:
+For routed group/topic replies, the adapter stores only the triggering
+utterance as `user_message`. Recent messages plus the current line are passed
+separately as prompt-only `room_context` (not persisted as user speech):
 
 ```text
 [room context]
@@ -194,7 +195,7 @@ room_name: Project Room
 room_id: oc_dd80df0e88ca4f803995f3b75f2c8833
 
 Telos(ou_xxx) 2026-05-12 15:05: @Mono hey
-you 2026-05-12 15:05: hey Telos
+ME 2026-05-12 15:05: hey Telos
 [/room context]
 ```
 

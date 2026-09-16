@@ -2,8 +2,10 @@
 
 The adapter only needs one operation for Phase 1: when the bot is mentioned
 in a group/topic, read a small window of recent messages so the reply is
-grounded in the current conversation. Missing scopes, missing SDK attributes,
-or transport errors yield an empty result rather than raising.
+grounded in the current conversation. The resulting room block is passed as
+prompt-only ``room_context``, not stored as the user utterance. Missing
+scopes, missing SDK attributes, or transport errors yield an empty result
+rather than raising.
 """
 from __future__ import annotations
 

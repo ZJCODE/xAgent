@@ -22,6 +22,7 @@ class ChatTurnRequest:
     channel: str
     room_name: Optional[str] = None
     channel_instructions: str = ""
+    room_context: str = ""
     attachments: Optional[list[dict[str, Any]]] = None
     image_source: Optional[Union[str, list[str]]] = None
     stream: bool = False
@@ -41,6 +42,8 @@ class ChatTurnRequest:
             kwargs["room_name"] = self.room_name
         if self.channel_instructions:
             kwargs["channel_instructions"] = self.channel_instructions
+        if self.room_context:
+            kwargs["room_context"] = self.room_context
         if self.attachments:
             kwargs["attachments"] = self.attachments
         if self.image_source is not None:

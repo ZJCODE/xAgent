@@ -116,6 +116,65 @@ class WorldInhabitantTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.agent.decisions[0]["metadata"]["recently_spoke"], False)
         self.assertFalse(any("hello hall" in str(item.get("context") or "") for item in self.agent.observed))
 
+    async def test_decide_and_speak_share_room_situation(self):
+        inhabitant = WorldInhabitant(self.agent, member_id="agent1", display_name="一号")
+        async with WorldClient(self.url, member_id="alice", display_name="爱丽丝") as alice:
+            await alice.join()
+            await alice.wait_for(lambda m: m.get("type") == "snapshot")
+            await inhabitant.join(world_url=self.url)
+            try:
+                await self._wait_present()
+                await alice.speak("有人吗")
+                heard = await alice.wait_for(
+                    lambda m: m.get("type") == "event"
+                    and m.get("kind") == "utterance"
+                    and m.get("actor_id") == "agent1",
+                    timeout=8.0,
+                )
+                self.assertEqual(heard.get("text"), "I heard that")
+            finally:
+                await inhabitant.leave()
+
+        decision_context = str(self.agent.decisions[0].get("context") or "")
+        chat = self.agent.chats[0]
+        room_block = str(chat.get("room_context") or "")
+        self.assertEqual(chat["user_message"], "有人吗")
+        self.assertNotIn("[room context]", chat["user_message"])
+        self.assertIn("[room context]", decision_context)
+        self.assertIn("[room context]", room_block)
+        self.assertIn("present:", room_block)
+        self.assertIn("一号(agent1)", room_block)
+        self.assertIn("爱丽丝(alice)", room_block)
+        self.assertIn("有人吗", room_block)
+        self.assertRegex(room_block, r"爱丽丝\(alice\) \d{4}-\d{2}-\d{2} \d{2}:\d{2}: 有人吗")
+        # Same situation object for decide and speak (block text matches).
+        self.assertIn(room_block, decision_context)
+        self.assertFalse(any("[room context]" in str(item.get("context") or "") for item in self.agent.observed))
+
+    async def test_silence_stores_trigger_not_room_block(self):
+        self.agent.should_reply = False
+        inhabitant = WorldInhabitant(self.agent, member_id="agent1", display_name="一号")
+        await inhabitant.join(world_url=self.url)
+        try:
+            await self._wait_present()
+            async with WorldClient(self.url, member_id="alice", display_name="爱丽丝") as alice:
+                await alice.join()
+                await alice.wait_for(lambda m: m.get("type") == "snapshot")
+                await alice.speak("the coffee is hot")
+                for _ in range(40):
+                    if self.agent.message_handler.users:
+                        break
+                    await asyncio.sleep(0.05)
+        finally:
+            await inhabitant.leave()
+
+        heard = self.agent.message_handler.users[0]
+        self.assertEqual(heard["user_message"], "the coffee is hot")
+        self.assertNotIn("[room context]", heard["user_message"])
+        decision_context = str(self.agent.decisions[0].get("context") or "")
+        self.assertIn("[room context]", decision_context)
+        self.assertIn("present:", decision_context)
+
     async def test_join_same_world_is_idempotent(self):
         inhabitant = WorldInhabitant(self.agent, member_id="agent1", display_name="一号")
         await inhabitant.join(world_url=self.url)

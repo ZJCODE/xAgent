@@ -20,6 +20,7 @@ def format_room_context(
     entries: Iterable[RoomContextEntry],
     *,
     room_name: Optional[str] = None,
+    present: Optional[Iterable[str]] = None,
 ) -> str:
     """Render a room-context block understood by the core prompt."""
     safe_room_id = sanitize_room_context_field(room_id)
@@ -32,8 +33,24 @@ def format_room_context(
     if safe_room_name:
         header_lines.append(f"room_name: {safe_room_name}")
     header_lines.append(f"room_id: {safe_room_id}")
+    present_line = format_room_context_present(present)
+    if present_line:
+        header_lines.append(present_line)
     return "\n".join([*header_lines, "", body, "[/room context]"])
 
+
+def format_room_context_present(present: Optional[Iterable[str]]) -> Optional[str]:
+    """Render a ``present:`` header line for who is currently in the room."""
+    if present is None:
+        return None
+    labels: list[str] = []
+    for item in present:
+        safe = sanitize_room_context_field(item)
+        if safe and safe not in labels:
+            labels.append(safe)
+    if not labels:
+        return None
+    return f"present: {', '.join(labels)}"
 
 def format_room_context_body(entries: Iterable[RoomContextEntry]) -> str:
     """Render room-context lines ordered oldest to newest."""

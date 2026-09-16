@@ -307,6 +307,7 @@ class MessageHandler:
         workspace_dir: Optional[Union[str, Path]] = None,
         current_message: Optional[Message] = None,
         channel_instructions: str = "",
+        room_context: str = "",
         task_mode: str = "reply",
         working_summary: str = "",
         covers_through_cursor: int = 0,
@@ -334,6 +335,13 @@ class MessageHandler:
             budgeted_entries,
             budgeted_observations,
         )
+        if (room_context or "").strip():
+            # Live room situation already covers this place; do not replay the
+            # same channel/room timeline inside recent_experience.
+            experience_entries = MessageHandler._exclude_room_covered_experience(
+                experience_entries,
+                current_message=current_message,
+            )
 
         recent_experience = MessageHandler._build_recent_experience_context(
             experience_entries=experience_entries,
@@ -364,6 +372,7 @@ class MessageHandler:
             current_user_id=speaker_label,
             current_time=resolved_current_time,
             channel_instructions=channel_instructions,
+            room_context=room_context,
             task_mode=task_mode,
             inbox_kind=inbox_kind,
         )
@@ -516,6 +525,41 @@ class MessageHandler:
             for msg, content in observation_entries
         )
         return sorted(entries, key=lambda entry: entry[1].timestamp)
+
+    @staticmethod
+    def _exclude_room_covered_experience(
+        experience_entries: List[tuple[str, Message, str]],
+        *,
+        current_message: Optional[Message],
+    ) -> List[tuple[str, Message, str]]:
+        """Drop same-place rows when a live ``room_context`` block is supplied."""
+        if current_message is None:
+            return experience_entries
+        channel = str(current_message.channel or "").strip()
+        room_name = str(current_message.room_name or "").strip()
+        if not channel or not room_name:
+            return experience_entries
+        return [
+            entry
+            for entry in experience_entries
+            if not MessageHandler._message_in_room(
+                entry[1],
+                channel=channel,
+                room_name=room_name,
+            )
+        ]
+
+    @staticmethod
+    def _message_in_room(
+        message: Message,
+        *,
+        channel: str,
+        room_name: str,
+    ) -> bool:
+        return (
+            str(message.channel or "").strip() == channel
+            and str(message.room_name or "").strip() == room_name
+        )
 
     @staticmethod
     def _format_omitted_experience_note(

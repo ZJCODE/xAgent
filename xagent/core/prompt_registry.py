@@ -34,6 +34,7 @@ class PromptAssembleContext:
     current_user_id: str = ""
     current_time: str = ""
     channel_instructions: str = ""
+    room_context: str = ""
     task_mode: str = "reply"
     inbox_kind: str = ""
 
@@ -171,7 +172,15 @@ def _render_current_task(ctx: PromptAssembleContext) -> str:
         current_user_id=ctx.current_user_id,
         current_time=resolved_current_time,
         inbox_kind=ctx.inbox_kind,
+        room_context=ctx.room_context,
     )
+
+
+def _render_room_context(ctx: PromptAssembleContext) -> str:
+    text = (ctx.room_context or "").strip()
+    if not text or ctx.task_mode == "subconscious_json":
+        return ""
+    return text
 
 
 def _render_channel_instructions(ctx: PromptAssembleContext) -> str:
@@ -283,6 +292,13 @@ def default_prompt_registry() -> PromptRegistry:
             order=20,
             kind=KIND_TURN,
             render=_render_experience,
+        ),
+        PromptSection(
+            name=AgentConfig.ROOM_CONTEXT_NAME,
+            role="user",
+            order=25,
+            kind=KIND_TURN,
+            render=_render_room_context,
         ),
         PromptSection(
             name=AgentConfig.CURRENT_TASK_NAME,

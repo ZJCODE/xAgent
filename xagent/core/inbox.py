@@ -87,6 +87,7 @@ class InboxItem:
     attachments: Optional[List[Dict[str, Any]]] = None
     image_source: Optional[Union[str, List[str]]] = None
     channel_instructions: str = ""
+    room_context: str = ""
     metadata: Dict[str, Any] = field(default_factory=dict)
     stream: bool = False
 

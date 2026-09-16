@@ -53,6 +53,24 @@ class AgentConfigPromptTests(unittest.TestCase):
         self.assertIn("Reply to the current situation", prompt)
         self.assertNotIn("user needs now", prompt)
 
+    def test_turn_reply_in_room_prompt_speaks_to_the_room(self):
+        prompt = AgentConfig.build_turn_reply_in_room_prompt("human")
+
+        self.assertIn("Speak to everyone present", prompt)
+        self.assertIn("not as a private assistant to human alone", prompt)
+        self.assertIn("human is the latest speaker", prompt)
+        self.assertNotIn("Focus on what human just said", prompt)
+
+    def test_current_task_uses_room_prompt_when_room_context_present(self):
+        task = AgentConfig.build_current_task(
+            "human",
+            current_time="2026-09-16 19:23",
+            room_context="[room context]\nroom_id: plaza\n\nhuman 2026-09-16 19:23: hi\n[/room context]",
+        )
+
+        self.assertIn("Speak to everyone present", task)
+        self.assertNotIn("Focus on what human just said", task)
+
     def test_base_agent_prompt_declares_independent_self_boundary(self):
         prompt = AgentConfig.BASE_AGENT_PROMPT
 

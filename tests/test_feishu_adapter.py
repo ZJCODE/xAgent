@@ -854,15 +854,19 @@ class FeishuAdapterTests(unittest.TestCase):
 
             asyncio.run(adapter._dispatch(msg))
 
-            user_message = agent.chat_calls[0]["user_message"]
-            self.assertIn("[room context]", user_message)
+            call = agent.chat_calls[0]
+            user_message = call["user_message"]
+            room_context = call.get("room_context") or ""
+            self.assertIn("[room context]", room_context)
             self.assertIn("![Feishu image](/api/workspace/blob?path=assets%2Finbound%2Ffeishu%2Fimages%2F", user_message)
+            self.assertIn("![Feishu image](/api/workspace/blob?path=assets%2Finbound%2Ffeishu%2Fimages%2F", room_context)
             self.assertTrue(
-                agent.chat_calls[0]["image_source"].startswith(
+                call["image_source"].startswith(
                     "/api/workspace/blob?path=assets%2Finbound%2Ffeishu%2Fimages%2F"
                 )
             )
             self.assertNotIn(str(workspace_dir), user_message)
+            self.assertNotIn("[room context]", user_message)
 
     def test_direct_chat_passes_explicit_sender_id_type_to_resolver(self):
         agent = _FakeAgent()
@@ -935,9 +939,11 @@ class FeishuAdapterTests(unittest.TestCase):
 
         self.assertEqual(len(agent.chat_calls), 1)
         self.assertEqual(resolver.calls[0], ("ou_sender", None, "open_id", "user"))
-        user_message = agent.chat_calls[0]["user_message"]
-        self.assertIn("Alice(ou_sender)", user_message)
-        self.assertIn("@Mono(ou_bot) @Tom(ou_tom) hi", user_message)
+        call = agent.chat_calls[0]
+        self.assertEqual(call["user_message"], "@Mono(ou_bot) @Tom(ou_tom) hi")
+        room_context = call.get("room_context") or ""
+        self.assertIn("Alice(ou_sender)", room_context)
+        self.assertIn("@Mono(ou_bot) @Tom(ou_tom) hi", room_context)
 
     def test_group_mention_from_other_bot_sender_is_routed(self):
         agent = _FakeAgent()
@@ -964,7 +970,8 @@ class FeishuAdapterTests(unittest.TestCase):
         asyncio.run(adapter._dispatch(msg))
 
         self.assertEqual(len(agent.chat_calls), 1)
-        self.assertIn("Helper Bot(ou_helper_bot)", agent.chat_calls[0]["user_message"])
+        self.assertEqual(agent.chat_calls[0]["user_message"], "@Mono ping")
+        self.assertIn("Helper Bot(ou_helper_bot)", agent.chat_calls[0].get("room_context") or "")
 
     def test_direct_chat_does_not_use_id_like_sender_name_fallback(self):
         agent = _FakeAgent()
@@ -1040,10 +1047,12 @@ class FeishuAdapterTests(unittest.TestCase):
 
         asyncio.run(adapter._dispatch(msg))
 
-        self.assertIn("[room context]", agent.chat_calls[0]["user_message"])
-        self.assertIn("room_id: oc_group", agent.chat_calls[0]["user_message"])
-        self.assertIn(": The user mentioned you without adding any text.", agent.chat_calls[0]["user_message"])
-        self.assertIn("[/room context]", agent.chat_calls[0]["user_message"])
+        self.assertEqual(agent.chat_calls[0]["user_message"], "The user mentioned you without adding any text.")
+        room_context = agent.chat_calls[0].get("room_context") or ""
+        self.assertIn("[room context]", room_context)
+        self.assertIn("room_id: oc_group", room_context)
+        self.assertIn(": The user mentioned you without adding any text.", room_context)
+        self.assertIn("[/room context]", room_context)
         self.assertEqual(adapter._channel.sent[0][2], {"uuid": "om_empty_at"})
 
     def test_group_mention_matches_raw_nested_open_id_dict(self):
@@ -1086,8 +1095,8 @@ class FeishuAdapterTests(unittest.TestCase):
         self.assertIn("[room context]", agent.decide_calls[0]["context"])
         self.assertIn("ambient group message", agent.decide_calls[0]["context"])
         self.assertEqual(len(agent.observe_calls), 1)
-        self.assertIn("[room context]", agent.observe_calls[0]["context"])
-        self.assertIn("ambient group message", agent.observe_calls[0]["context"])
+        self.assertNotIn("[room context]", agent.observe_calls[0]["context"])
+        self.assertEqual(agent.observe_calls[0]["context"], "Alice(ou_user): ambient group message")
         self.assertEqual(agent.observe_calls[0]["metadata"]["silence_reason"], "room is flowing")
         self.assertEqual(agent.observe_calls[0]["user_id"], "ou_user")
         self.assertEqual(adapter._channel.sent, [])
@@ -1115,7 +1124,9 @@ class FeishuAdapterTests(unittest.TestCase):
         self.assertEqual(len(agent.decide_calls), 1)
         self.assertEqual(len(agent.chat_calls), 1)
         self.assertEqual(agent.observe_calls, [])
-        self.assertIn("ambient group message", agent.chat_calls[0]["user_message"])
+        self.assertEqual(agent.chat_calls[0]["user_message"], "ambient group message")
+        self.assertIn("[room context]", agent.chat_calls[0].get("room_context") or "")
+        self.assertIn("ambient group message", agent.chat_calls[0].get("room_context") or "")
         self.assertEqual(agent.chat_calls[0]["user_id"], "ou_user")
         self.assertEqual(adapter._channel.sent[0][2], {"uuid": "om_ambient"})
 
@@ -1495,18 +1506,20 @@ class FeishuGroupHistoryTests(unittest.TestCase):
         asyncio.run(adapter._dispatch(msg))
 
         self.assertEqual(agent.observe_calls, [])
-        user_message = agent.chat_calls[0]["user_message"]
-        self.assertIn("[room context]", user_message)
-        self.assertIn("room_id: oc_group", user_message)
-        self.assertNotIn("room_name:", user_message)
-        self.assertIn("[/room context]", user_message)
-        self.assertNotIn("[Feishu group context]", user_message)
-        self.assertNotIn("The following recent group messages are context only", user_message)
-        self.assertNotIn("[Current mention]", user_message)
-        self.assertIn(f"Alice(ou_alice) {format_feishu_timestamp(1700000000000)}: hi all", user_message)
-        self.assertIn(f"Bob(ou_bob) {format_feishu_timestamp(1700000001000)}: ready?", user_message)
-        self.assertIn(f"Carol(ou_user) {format_feishu_timestamp(1700000002000)}: @Mono what's up", user_message)
-        self.assertNotIn("metadata", agent.chat_calls[0])
+        call = agent.chat_calls[0]
+        self.assertEqual(call["user_message"], "@Mono what's up")
+        room_context = call.get("room_context") or ""
+        self.assertIn("[room context]", room_context)
+        self.assertIn("room_id: oc_group", room_context)
+        self.assertNotIn("room_name:", room_context)
+        self.assertIn("[/room context]", room_context)
+        self.assertNotIn("[Feishu group context]", room_context)
+        self.assertNotIn("The following recent group messages are context only", room_context)
+        self.assertNotIn("[Current mention]", room_context)
+        self.assertIn(f"Alice(ou_alice) {format_feishu_timestamp(1700000000000)}: hi all", room_context)
+        self.assertIn(f"Bob(ou_bob) {format_feishu_timestamp(1700000001000)}: ready?", room_context)
+        self.assertIn(f"Carol(ou_user) {format_feishu_timestamp(1700000002000)}: @Mono what's up", room_context)
+        self.assertNotIn("metadata", call)
         self.assertEqual(captured["kwargs"]["chat_id"], "oc_group")
         self.assertEqual(captured["kwargs"]["current_message_id"], "om_at")
         self.assertIsNone(captured["kwargs"]["thread_id"])
@@ -1535,9 +1548,10 @@ class FeishuGroupHistoryTests(unittest.TestCase):
 
         asyncio.run(adapter._dispatch(msg))
 
+        self.assertEqual(agent.chat_calls[0]["user_message"], "@Mono hey")
         self.assertIn(
             f"Telos(ou_user) {format_feishu_timestamp(1700000000000)}: @Mono hey",
-            agent.chat_calls[0]["user_message"],
+            agent.chat_calls[0].get("room_context") or "",
         )
 
     def test_topic_mention_passes_thread_id_to_fetcher(self):
@@ -1584,10 +1598,12 @@ class FeishuGroupHistoryTests(unittest.TestCase):
         asyncio.run(adapter._dispatch(msg))
 
         self.assertNotIn("kwargs", captured)
-        self.assertIn("[room context]", agent.chat_calls[0]["user_message"])
-        self.assertIn("room_id: oc_group", agent.chat_calls[0]["user_message"])
-        self.assertIn(": @Tom hi", agent.chat_calls[0]["user_message"])
-        self.assertIn("[/room context]", agent.chat_calls[0]["user_message"])
+        self.assertEqual(agent.chat_calls[0]["user_message"], "@Tom hi")
+        room_context = agent.chat_calls[0].get("room_context") or ""
+        self.assertIn("[room context]", room_context)
+        self.assertIn("room_id: oc_group", room_context)
+        self.assertIn(": @Tom hi", room_context)
+        self.assertIn("[/room context]", room_context)
 
     def test_group_mention_uses_chat_name_for_room_context_when_available(self):
         from xagent.integrations.feishu.history import format_feishu_timestamp
@@ -1624,10 +1640,12 @@ class FeishuGroupHistoryTests(unittest.TestCase):
 
         self.assertEqual(chat_api.requests[0].chat_id, "oc_group")
         self.assertEqual(chat_api.requests[0].user_id_type, "open_id")
-        self.assertIn("[room context]", agent.chat_calls[0]["user_message"])
-        self.assertIn("room_name: Project Room", agent.chat_calls[0]["user_message"])
-        self.assertIn("room_id: oc_group", agent.chat_calls[0]["user_message"])
-        self.assertIn(f"Telos(ou_user) {format_feishu_timestamp(1700000000000)}: @Mono hey", agent.chat_calls[0]["user_message"])
+        self.assertEqual(agent.chat_calls[0]["user_message"], "@Mono hey")
+        room_context = agent.chat_calls[0].get("room_context") or ""
+        self.assertIn("[room context]", room_context)
+        self.assertIn("room_name: Project Room", room_context)
+        self.assertIn("room_id: oc_group", room_context)
+        self.assertIn(f"Telos(ou_user) {format_feishu_timestamp(1700000000000)}: @Mono hey", room_context)
 
     def test_history_failure_still_replies_to_current_mention(self):
         self._patch_fetcher(error=RuntimeError("no scope"))
@@ -1646,9 +1664,11 @@ class FeishuGroupHistoryTests(unittest.TestCase):
 
         asyncio.run(adapter._dispatch(msg))
 
-        self.assertIn("[room context]", agent.chat_calls[0]["user_message"])
-        self.assertIn("room_id: oc_group", agent.chat_calls[0]["user_message"])
-        self.assertIn(": @Mono hi", agent.chat_calls[0]["user_message"])
+        self.assertEqual(agent.chat_calls[0]["user_message"], "@Mono hi")
+        room_context = agent.chat_calls[0].get("room_context") or ""
+        self.assertIn("[room context]", room_context)
+        self.assertIn("room_id: oc_group", room_context)
+        self.assertIn(": @Mono hi", room_context)
         self.assertEqual(adapter._channel.sent[0][2], {"uuid": "om_at"})
 
 

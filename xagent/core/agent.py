@@ -337,6 +337,7 @@ class Agent:
         user_msg: Message,
         user_id: str,
         channel_instructions: str = "",
+        room_context: str = "",
     ):
         """Build the shared turn preparation context for both chat and chat_events."""
         working_context = await self._working_context_for_turn()
@@ -371,6 +372,7 @@ class Agent:
             workspace_dir=getattr(self, "workspace_dir", None),
             current_message=user_msg,
             channel_instructions=channel_instructions,
+            room_context=room_context,
             working_summary=working_context.summary,
             covers_through_cursor=working_context.covers_through_cursor,
             prompt_registry=getattr(msg_handler, "prompt_registry", None),
@@ -495,6 +497,7 @@ class Agent:
         attachments: Optional[List[Dict[str, Any]]] = None,
         stream: bool = False,
         channel_instructions: str = "",
+        room_context: str = "",
         room_name: Optional[str] = None,
         channel: Optional[str] = None,
         sender_name: str = "",
@@ -506,6 +509,7 @@ class Agent:
                 with the legacy Python API. New event consumers should prefer
                 ``chat_events(stream=True)``.
             room_name: Optional room/group name for multi-participant conversations.
+            room_context: Prompt-only situation block for the current room; not stored.
         """
         self._record_last_interaction()
         if stream:
@@ -518,6 +522,7 @@ class Agent:
                     attachments=attachments,
                     stream=True,
                     channel_instructions=channel_instructions,
+                    room_context=room_context,
                     room_name=room_name,
                     channel=channel,
                     sender_name=sender_name,
@@ -544,6 +549,7 @@ class Agent:
             attachments=attachments,
             stream=False,
             channel_instructions=channel_instructions,
+            room_context=room_context,
             room_name=room_name,
             channel=channel,
             sender_name=sender_name,
@@ -562,6 +568,7 @@ class Agent:
         attachments: Optional[List[Dict[str, Any]]] = None,
         stream: bool = False,
         channel_instructions: str = "",
+        room_context: str = "",
         room_name: Optional[str] = None,
         channel: Optional[str] = None,
         inbox_kind: Optional[Union[str, InboxKind]] = None,
@@ -575,6 +582,7 @@ class Agent:
 
         Args:
             room_name: Optional room/group name for multi-participant conversations.
+            room_context: Prompt-only room situation; never persisted as user speech.
             inbox_kind: How this input should be classified. Defaults to a
                 user turn; scheduled delivery context upgrades it to
                 ``scheduled_turn``.
@@ -594,6 +602,7 @@ class Agent:
             attachments=attachments,
             stream=stream,
             channel_instructions=channel_instructions,
+            room_context=room_context,
             room_name=room_name,
             channel=channel,
             inbox_kind=inbox_kind,
@@ -625,6 +634,7 @@ class Agent:
         image_source = inbox_item.image_source
         attachments = inbox_item.attachments
         channel_instructions = inbox_item.channel_instructions
+        room_context = inbox_item.room_context
         room_name = inbox_item.room_name
         channel = inbox_item.channel
         msg_handler = self.message_handler
@@ -673,6 +683,7 @@ class Agent:
                 user_msg=user_msg,
                 user_id=user_id,
                 channel_instructions=channel_instructions,
+                room_context=room_context,
             )
             turn_obs.set_input(input_messages)
             begin_see_image_turn = getattr(self.tool_executor, "begin_see_image_turn", None)
@@ -887,6 +898,7 @@ class Agent:
         attachments: Optional[List[Dict[str, Any]]],
         stream: bool,
         channel_instructions: str,
+        room_context: str = "",
         room_name: Optional[str],
         channel: Optional[str],
         inbox_kind: Optional[Union[str, InboxKind]],
@@ -915,6 +927,7 @@ class Agent:
             attachments=attachments,
             image_source=image_source,
             channel_instructions=channel_instructions,
+            room_context=room_context,
             metadata=extra_metadata,
             stream=stream,
         )
@@ -942,6 +955,7 @@ class Agent:
             attachments=item.attachments,
             stream=item.stream,
             channel_instructions=item.channel_instructions,
+            room_context=item.room_context,
             room_name=item.room_name,
             channel=item.channel,
             inbox_kind=item.kind,

@@ -91,6 +91,52 @@ class RoomContextFormatterTests(unittest.TestCase):
         self.assertNotIn("Alice", text)
         self.assertIn("Bob 2024-01-02 09:31: ready", text)
 
+    def test_format_room_context_includes_present_line(self):
+        text = format_room_context(
+            "plaza",
+            [
+                RoomContextEntry(
+                    speaker_label="爱丽丝(alice)",
+                    occurred_at=datetime(2024, 1, 2, 9, 30),
+                    text="有人吗",
+                ),
+            ],
+            room_name="大厅",
+            present=["爱丽丝(alice)", "一号(agent1)"],
+        )
+
+        self.assertEqual(
+            text,
+            "[room context]\n"
+            "room_name: 大厅\n"
+            "room_id: plaza\n"
+            "present: 爱丽丝(alice), 一号(agent1)\n\n"
+            "爱丽丝(alice) 2024-01-02 09:30: 有人吗\n"
+            "[/room context]",
+        )
+
+    def test_format_room_context_omits_present_when_empty(self):
+        text = format_room_context(
+            "room-1",
+            [
+                RoomContextEntry(
+                    speaker_label="Alice",
+                    occurred_at=datetime(2024, 1, 2, 9, 30),
+                    text="hi",
+                ),
+            ],
+            present=[],
+        )
+
+        self.assertNotIn("present:", text)
+        self.assertEqual(
+            text,
+            "[room context]\n"
+            "room_id: room-1\n\n"
+            "Alice 2024-01-02 09:30: hi\n"
+            "[/room context]",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

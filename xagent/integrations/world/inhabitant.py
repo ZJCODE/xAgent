@@ -12,6 +12,7 @@ import base64
 import logging
 import mimetypes
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import quote
@@ -21,6 +22,7 @@ from agents_world import MAX_ATTACHMENTS, MAX_ATTACHMENTS_BYTES, MAX_FILE_BYTES
 from agents_world.client import WorldClient
 
 from ...core.agent import Agent
+from ...core.formatters import RoomContextEntry, format_room_context
 from ...core.inbox import INBOX_KIND_METADATA_KEY, InboxKind
 from ...core.runtime import ScheduledDeliveryContext, scheduled_delivery_context
 from ...schemas.attachment import (
@@ -73,6 +75,7 @@ class WorldInhabitant:
         self._task: Optional[asyncio.Task[None]] = None
         self._recent: list[dict[str, Any]] = []
         self._names: dict[str, str] = {}
+        self._present: dict[str, str] = {}
         self._join_lock = asyncio.Lock()
         self._mind_lock = asyncio.Lock()
         self._speech_tasks: set[asyncio.Task[None]] = set()
@@ -102,6 +105,7 @@ class WorldInhabitant:
             self.world_name = ""
             self._recent = []
             self._names = {}
+            self._present = {}
             self._task = asyncio.create_task(self._run(), name=f"world-{self.member_id}")
             return self.status()
 
@@ -217,6 +221,7 @@ class WorldInhabitant:
             },
         )
         with scheduled_delivery_context(context):
+            situation = self._room_context()
             chat_events = getattr(self.agent, "chat_events", None)
             if callable(chat_events):
                 text = ""
@@ -226,6 +231,7 @@ class WorldInhabitant:
                     room_name=self.world_id,
                     channel=CHANNEL_WORLD,
                     channel_instructions=_CHANNEL_INSTRUCTIONS,
+                    room_context=situation,
                     inbox_kind="scheduled_turn",
                 ):
                     if event.get("type") == "message_done" and str(event.get("phase") or "final") == "final":
@@ -237,6 +243,7 @@ class WorldInhabitant:
                 room_name=self.world_id,
                 channel=CHANNEL_WORLD,
                 channel_instructions=_CHANNEL_INSTRUCTIONS,
+                room_context=situation,
             )
             return str(reply or "").strip()
 
@@ -274,6 +281,7 @@ class WorldInhabitant:
             self._recent = []
             self._remember(events)
             self._names.setdefault(self.member_id, self.display_name)
+            self._present.setdefault(self.member_id, self.display_name)
             self._entered = True
             await self._observe(
                 {"actor_id": self.member_id, "kind": "join"},
@@ -285,6 +293,8 @@ class WorldInhabitant:
         self._remember([msg])
         kind = str(msg.get("kind") or "")
         actor = str(msg.get("actor_id") or "")
+        if kind in {"join", "leave"}:
+            self._apply_presence_event(msg)
         if actor == self.member_id:
             return
         if kind in {"join", "leave"}:
@@ -317,13 +327,28 @@ class WorldInhabitant:
             self._recent = self._recent[-_ROOM_CONTEXT_LIMIT:]
 
     def _remember_present(self, present: list[Any]) -> None:
+        self._present = {}
         for item in present:
             if not isinstance(item, dict):
                 continue
             member_id = str(item.get("member_id") or "").strip()
             name = str(item.get("display_name") or "").strip()
             if member_id:
-                self._names[member_id] = name or member_id
+                label = name or member_id
+                self._names[member_id] = label
+                self._present[member_id] = label
+
+    def _apply_presence_event(self, event: dict[str, Any]) -> None:
+        actor = str(event.get("actor_id") or "").strip()
+        kind = str(event.get("kind") or "")
+        if not actor:
+            return
+        if kind == "join":
+            label = str(self._names.get(actor) or actor).strip() or actor
+            self._names[actor] = label
+            self._present[actor] = label
+        elif kind == "leave":
+            self._present.pop(actor, None)
 
     def _place_label(self) -> str:
         return str(self.world_name or self.world_id or "the world").strip() or "the world"
@@ -335,20 +360,70 @@ class WorldInhabitant:
         name = str(self._names.get(actor) or "").strip()
         return name or actor
 
+    def _speaker_address(self, actor_id: str) -> str:
+        actor = str(actor_id or "").strip()
+        if not actor:
+            return "someone"
+        name = str(self._names.get(actor) or "").strip() or actor
+        if name == actor:
+            return actor
+        return f"{name}({actor})"
+
+    def _present_labels(self) -> list[str]:
+        labels: list[str] = []
+        for member_id in self._present:
+            label = self._speaker_address(member_id)
+            if label and label not in labels:
+                labels.append(label)
+        return labels
+
+    @staticmethod
+    def _event_datetime(event: dict[str, Any]) -> datetime:
+        raw = event.get("ts")
+        try:
+            return datetime.fromtimestamp(float(raw))
+        except (TypeError, ValueError, OSError, OverflowError):
+            return datetime.now()
+
     def _room_context(self) -> str:
-        lines: list[str] = []
+        """Shared situation for decide + speak: place, present, recent timeline."""
+        entries: list[RoomContextEntry] = []
+        place = self._place_label()
         for event in self._recent:
-            kind = event.get("kind")
+            kind = str(event.get("kind") or "")
             actor = str(event.get("actor_id") or "")
-            speaker = self._speaker_label(actor)
+            speaker = self._speaker_address(actor)
+            occurred_at = self._event_datetime(event)
+            is_self = actor == self.member_id
             text = str(event.get("text") or "").strip()
             if kind == "utterance" and (text or event.get("attachments")):
-                line = _utterance_line(speaker, text, event.get("attachments"))
-                if line:
-                    lines.append(line)
+                body = _utterance_body(text, event.get("attachments"))
+                if body:
+                    entries.append(
+                        RoomContextEntry(
+                            speaker_label=speaker,
+                            occurred_at=occurred_at,
+                            text=body,
+                            is_self=is_self,
+                        )
+                    )
             elif kind in {"join", "leave"}:
-                lines.append(_presence_line(speaker, str(kind), self._place_label()))
-        return "\n".join(lines)
+                action = _presence_action(kind, place)
+                if action:
+                    entries.append(
+                        RoomContextEntry(
+                            speaker_label=speaker,
+                            occurred_at=occurred_at,
+                            text=action,
+                            is_self=is_self,
+                        )
+                    )
+        return format_room_context(
+            self.world_id,
+            entries,
+            room_name=self.world_name or self.world_id,
+            present=self._present_labels(),
+        )
 
     async def _hear_utterance(self, event: dict[str, Any]) -> None:
         actor = str(event.get("actor_id") or "")
@@ -462,11 +537,12 @@ class WorldInhabitant:
             return False
         named = self._addressed_to_self(event)
         recently_spoke = self._recently_spoke(event)
+        situation = self._room_context()
         context = (
             f"{_DECISION_PREFACE}\n"
             f"Named you: {'yes' if named else 'no'}\n"
             f"You were just speaking: {'yes' if recently_spoke else 'no'}\n\n"
-            f"{self._room_context()}"
+            f"{situation}"
         )
         try:
             decision = await decider(
@@ -499,6 +575,7 @@ class WorldInhabitant:
             return False
         sender_name = str(self._names.get(actor) or "").strip()
         attachments = await self._inbound_attachments(event)
+        situation = self._room_context()
         text = ""
         reply_attachments: list[Any] = []
         try:
@@ -512,6 +589,7 @@ class WorldInhabitant:
                         room_name=self.world_id,
                         channel=CHANNEL_WORLD,
                         channel_instructions=_CHANNEL_INSTRUCTIONS,
+                        room_context=situation,
                         attachments=attachments or None,
                         image_source=attachment_image_sources(attachments) or None,
                     ):
@@ -528,6 +606,7 @@ class WorldInhabitant:
                         room_name=self.world_id,
                         channel=CHANNEL_WORLD,
                         channel_instructions=_CHANNEL_INSTRUCTIONS,
+                        room_context=situation,
                         attachments=attachments or None,
                         image_source=attachment_image_sources(attachments) or None,
                     )
@@ -718,12 +797,19 @@ def _world_http_origin(world_url: str) -> str:
 
 def _presence_line(speaker: str, kind: str, place: str) -> str:
     who = str(speaker or "").strip() or "someone"
+    action = _presence_action(kind, place)
+    if not action:
+        return f"{who} {kind} {place}"
+    return f"{who} {action}"
+
+
+def _presence_action(kind: str, place: str) -> str:
     where = str(place or "").strip() or "the world"
     if kind == "join":
-        return f"{who} joined {where}"
+        return f"joined {where}"
     if kind == "leave":
-        return f"{who} left {where}"
-    return f"{who} {kind} {where}"
+        return f"left {where}"
+    return f"{kind} {where}"
 
 
 def _attachment_names(raw: Any) -> list[str]:

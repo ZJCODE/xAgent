@@ -397,6 +397,77 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         self.assertIn("<channel_instructions>", channel_layer)
         self.assertIn(mention_syntax, channel_layer)
 
+    def test_room_context_is_a_separate_named_layer(self):
+        messages = [
+            Message.create("有人吗", role=RoleType.USER, sender_id="alice"),
+        ]
+        room_block = (
+            "[room context]\n"
+            "room_name: 大厅\n"
+            "room_id: plaza\n"
+            "present: alice, 一号(agent1)\n\n"
+            "alice 2026-05-14 09:30: 有人吗\n"
+            "[/room context]"
+        )
+
+        context_messages = MessageHandler.build_turn_context_messages(
+            messages,
+            current_user_id="alice",
+            current_time="2026-05-14 09:30",
+            room_context=room_block,
+            channel_instructions="Speak to everyone present.",
+        )
+
+        self.assertEqual(
+            [message["name"] for message in context_messages],
+            [
+                AgentConfig.RECENT_EXPERIENCE_NAME,
+                AgentConfig.ROOM_CONTEXT_NAME,
+                AgentConfig.CURRENT_TASK_NAME,
+                AgentConfig.CHANNEL_INSTRUCTIONS_NAME,
+            ],
+        )
+        room_layer = context_messages[1]["content"]
+        current_task = context_messages[2]["content"]
+        self.assertIn("<current_task>", current_task)
+        self.assertNotIn("[room context]", current_task)
+        self.assertEqual(room_layer, room_block)
+        self.assertIn("present:", room_layer)
+        self.assertIn("Speak to everyone present", current_task)
+        self.assertNotIn("Focus on what alice just said", current_task)
+
+    def test_room_context_suppresses_same_place_recent_experience(self):
+        world_line = Message.create("有人吗", role=RoleType.USER, sender_id="alice")
+        world_line.channel = "world"
+        world_line.room_name = "plaza"
+        private = Message.create(" separately said hi", role=RoleType.USER, sender_id="bob")
+        private.channel = "api"
+        room_block = (
+            "[room context]\n"
+            "room_id: plaza\n"
+            "present: alice\n\n"
+            "alice 2026-05-14 09:30: 有人吗\n"
+            "[/room context]"
+        )
+
+        context_messages = MessageHandler.build_turn_context_messages(
+            [world_line, private],
+            current_user_id="alice",
+            current_time="2026-05-14 09:30",
+            current_message=world_line,
+            room_context=room_block,
+        )
+
+        by_name = {message["name"]: message["content"] for message in context_messages}
+        experience = by_name[AgentConfig.RECENT_EXPERIENCE_NAME]
+        room_layer = by_name[AgentConfig.ROOM_CONTEXT_NAME]
+        self.assertEqual(room_layer, room_block)
+        self.assertIn("有人吗", room_layer)
+        self.assertNotIn("有人吗", experience)
+        self.assertNotIn("[channel=world]", experience)
+        self.assertIn("separately said hi", experience)
+        self.assertIn("[channel=api]", experience)
+
     def test_scheduled_turn_is_not_formatted_as_human_speech(self):
         due = Message.create(
             "This scheduled task is now due. Execute it and return the message to deliver.\n\nTask: ping",
