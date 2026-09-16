@@ -173,6 +173,7 @@ class BaseAgentRunner:
             "runtime",
             "observability",
             "web",
+            "world",
         }
         unsupported_keys = sorted(set(config) - allowed_config_keys)
         if unsupported_keys:
@@ -207,6 +208,18 @@ class BaseAgentRunner:
                 raise ValueError("web.enabled must be a boolean")
             if "api_url" in web_cfg and not isinstance(web_cfg["api_url"], str):
                 raise ValueError("web.api_url must be a string")
+
+        world_cfg = config.get("world")
+        if world_cfg is not None:
+            if not isinstance(world_cfg, dict):
+                raise ValueError("world must be a dictionary")
+            allowed_world_keys = {"autojoin"}
+            unsupported_world_keys = sorted(set(world_cfg) - allowed_world_keys)
+            if unsupported_world_keys:
+                joined_keys = ", ".join(unsupported_world_keys)
+                raise ValueError(f"Unsupported world key(s): {joined_keys}")
+            if "autojoin" in world_cfg and not isinstance(world_cfg["autojoin"], bool):
+                raise ValueError("world.autojoin must be a boolean")
 
         runtime_cfg = config.get("runtime")
         if runtime_cfg is not None and not isinstance(runtime_cfg, dict):

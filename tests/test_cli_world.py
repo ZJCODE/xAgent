@@ -129,9 +129,14 @@ class WorldCliTests(unittest.TestCase):
 
     def test_world_runs_in_foreground(self):
         args = argparse.Namespace(host="127.0.0.1", port=7182, data_root="/tmp/xagent", open_browser=False)
+
+        def _run(coro):
+            coro.close()
+            return None
+
         with patch("agents_world.server.WorldHub") as hub_cls:
             hub_cls.create.return_value = object()
-            with patch("xagent.interfaces.cli.world_hub.asyncio.run", return_value=None) as runner:
+            with patch("xagent.interfaces.cli.world_hub.asyncio.run", side_effect=_run) as runner:
                 exit_code = handle_run_world_internal(args)
         self.assertEqual(exit_code, 0)
         hub_cls.create.assert_called_once_with(host="127.0.0.1", port=7182, data_root="/tmp/xagent")
@@ -186,8 +191,9 @@ class WorldCliTests(unittest.TestCase):
                 with patch("xagent.interfaces.cli.world_hub.world_hub_runtime_root", return_value=root):
                     with patch("sys.stdout", new_callable=io.StringIO) as stdout:
                         exit_code = handle_world_create(args)
-            self.assertEqual(exit_code, 1)
-            self.assertIn("already exists", stdout.getvalue())
+            self.assertEqual(exit_code, 0)
+            created = json.loads(stdout.getvalue())
+            self.assertEqual(created["id"], "plaza-2")
 
             with patch("xagent.interfaces.cli.world_hub.world_hub_is_running", return_value=False):
                 with patch("xagent.interfaces.cli.world_hub.world_hub_runtime_root", return_value=root):

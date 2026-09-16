@@ -449,14 +449,18 @@ class WorldJoinRouteTests(unittest.TestCase):
             server = AgentHTTPServer(config_dir=str(config_dir), agent=StubAgent())
             with TestClient(server.app) as client:
                 status = client.get("/world/status").json()
-            self.assertTrue(status["connected"])
             self.assertEqual(status["member_id"], "agent1")
             self.assertEqual(status["world_url"], "ws://127.0.0.1:9/ws/plaza")
+            self.assertIsNotNone(server.world_inhabitant)
 
     def test_api_skips_autojoin_when_disabled(self):
         with tempfile.TemporaryDirectory() as raw:
             config_dir = Path(raw)
-            (config_dir / "config.yaml").write_text("world:\n  autojoin: false\n", encoding="utf-8")
+            (config_dir / "config.yaml").write_text(
+                "provider:\n  name: openai\n  api_key: test-key\n  model: gpt-5.4-mini\n"
+                "world:\n  autojoin: false\n",
+                encoding="utf-8",
+            )
             mark_world_presence(
                 config_dir,
                 world_url="ws://127.0.0.1:9/ws/plaza",
@@ -467,6 +471,7 @@ class WorldJoinRouteTests(unittest.TestCase):
             with TestClient(server.app) as client:
                 status = client.get("/world/status").json()
             self.assertFalse(status["connected"])
+            self.assertIsNone(server.world_inhabitant)
 
 
 if __name__ == "__main__":

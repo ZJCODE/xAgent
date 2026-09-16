@@ -315,9 +315,13 @@ def _add_channel_lifecycle_subparsers(
     logs_parser.set_defaults(handler=runtime.handle_logs, channels=[channel])
 
 
-def _add_world_hub_arguments(parser: argparse.ArgumentParser, *, open_by_default: bool = False) -> None:
+def _add_world_bind_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--host", default=None, help="World hub host override")
     parser.add_argument("--port", type=int, default=None, help="World hub port override")
+
+
+def _add_world_hub_arguments(parser: argparse.ArgumentParser, *, open_by_default: bool = False) -> None:
+    _add_world_bind_arguments(parser)
     if open_by_default:
         parser.add_argument(
             "--open",
@@ -365,19 +369,19 @@ def _add_world_lifecycle_subparsers(parent_parser: argparse.ArgumentParser) -> N
     logs_parser.set_defaults(handler=world_hub.handle_world_logs)
 
     list_parser = sub.add_parser("list", help="List worlds on this machine")
-    _add_world_hub_arguments(list_parser)
+    _add_world_bind_arguments(list_parser)
     list_parser.add_argument("--json", action="store_true", dest="json_output", help="Print machine-readable JSON")
     list_parser.set_defaults(handler=world_hub.handle_world_list)
 
     create_parser = sub.add_parser("create", help="Create a world")
     create_parser.add_argument("name", help="World name (also used as the world id)")
-    _add_world_hub_arguments(create_parser)
+    _add_world_bind_arguments(create_parser)
     create_parser.set_defaults(handler=world_hub.handle_world_create)
 
     join_parser = sub.add_parser("join", help="Invite an agent into a world")
     join_parser.add_argument("world", help="World id to join")
     _add_agent_argument(join_parser)
-    _add_world_hub_arguments(join_parser)
+    _add_world_bind_arguments(join_parser)
     join_parser.add_argument("--member-id", dest="member_id", default=None, help="World member id (default: agent name)")
     join_parser.add_argument("--name", default=None, help="Display name (default: member id)")
     join_parser.add_argument("--start-hub", action="store_true", dest="start_hub", help="Start the world hub if it is not running")
@@ -390,7 +394,7 @@ def _add_world_lifecycle_subparsers(parent_parser: argparse.ArgumentParser) -> N
 
     chat_parser = sub.add_parser("chat", help="Join a world yourself in the terminal")
     chat_parser.add_argument("world", help="World id to enter")
-    _add_world_hub_arguments(chat_parser)
+    _add_world_bind_arguments(chat_parser)
     chat_parser.add_argument("--member-id", dest="member_id", default="human", help="Your member id (default: human)")
     chat_parser.add_argument("--name", default=None, help="Display name (default: member id)")
     chat_parser.add_argument("--start-hub", action="store_true", dest="start_hub", help="Start the world hub if it is not running")
