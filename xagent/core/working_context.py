@@ -9,12 +9,13 @@ This is intentionally separate from diary memory:
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import IO, Any, Callable, List, Optional, Protocol
+from typing import IO, Any, Awaitable, Callable, List, Optional, Protocol, Union
 
 try:
     import fcntl
@@ -38,12 +39,14 @@ WORKING_CONTEXT_FAILURE_COOLDOWN_SECONDS = 60.0
 @dataclass
 class WorkingContextState:
     covers_through_cursor: int = 0
+    covers_from_cursor: int = 0
     updated_at: float = 0.0
     summary: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "covers_through_cursor": int(self.covers_through_cursor),
+            "covers_from_cursor": int(self.covers_from_cursor),
             "updated_at": float(self.updated_at),
             "summary": str(self.summary or ""),
         }
@@ -55,12 +58,17 @@ class WorkingContextState:
         except (TypeError, ValueError):
             covers = 0
         try:
+            covers_from = int(payload.get("covers_from_cursor", 0) or 0)
+        except (TypeError, ValueError):
+            covers_from = 0
+        try:
             updated_at = float(payload.get("updated_at", 0.0) or 0.0)
         except (TypeError, ValueError):
             updated_at = 0.0
         summary = str(payload.get("summary", "") or "").strip()
         return cls(
             covers_through_cursor=max(0, covers),
+            covers_from_cursor=max(0, covers_from),
             updated_at=max(0.0, updated_at),
             summary=summary,
         )
@@ -199,6 +207,7 @@ class WorkingContextSummarizer:
         return """Compress earlier conversation into a working context summary for an ongoing agent turn.
 
 This is NOT a diary and NOT first-person life narrative.
+Everything before this window is already in the diary; do not restate it. Keep only what is still open or still needed to act.
 Preserve speaker attribution, open commitments, unfinished tasks, key identifiers/paths, and decisions.
 Omit feelings, style, and tool-output dumps unless a concrete fact is still needed.
 Write concise bullet-like prose. Prefer the language of the conversation.
@@ -241,12 +250,14 @@ class WorkingContextCompactor:
         summarizer: WorkingContextSummarizer,
         hot_window: int,
         roll_slack: int | None = None,
+        journal_cursor_reader: Optional[Callable[[], Union[int, Awaitable[int]]]] = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.store = store
         self.message_storage = message_storage
         self.summarizer = summarizer
         self.hot_window = max(1, int(hot_window))
+        self._journal_cursor_reader = journal_cursor_reader
         if roll_slack is None:
             self.roll_slack = AgentConfig.working_context_roll_slack(self.hot_window)
         else:
@@ -326,9 +337,11 @@ class WorkingContextCompactor:
 
         latest = max(0, latest)
         covers = max(0, int(state.covers_through_cursor))
+        journal_cursor = await self._journal_cursor()
         pending = latest - covers
         threshold = self.hot_window + self.roll_slack
-        if pending <= threshold:
+        needs_journal_refresh = journal_cursor > max(0, int(state.covers_from_cursor))
+        if pending <= threshold and not needs_journal_refresh:
             self._clear_retry()
             return WorkingContextView(
                 summary=state.summary.strip(),
@@ -336,7 +349,8 @@ class WorkingContextCompactor:
             )
 
         roll_end = latest - self.hot_window
-        if roll_end <= covers:
+        roll_start = max(covers, journal_cursor)
+        if roll_end <= roll_start:
             self._clear_retry()
             return WorkingContextView(
                 summary=state.summary.strip(),
@@ -345,7 +359,7 @@ class WorkingContextCompactor:
 
         try:
             messages = await self.message_storage.get_messages_in_cursor_range(
-                start_exclusive=covers,
+                start_exclusive=roll_start,
                 end_inclusive=roll_end,
             )
         except Exception as exc:
@@ -365,6 +379,7 @@ class WorkingContextCompactor:
             # so we do not keep re-scanning empty gaps.
             new_state = WorkingContextState(
                 covers_through_cursor=roll_end,
+                covers_from_cursor=journal_cursor,
                 updated_at=time.time(),
                 summary=state.summary,
             )
@@ -372,9 +387,14 @@ class WorkingContextCompactor:
             self._clear_retry()
             return WorkingContextView(summary="", covers_through_cursor=roll_end)
 
+        previous_summary = state.summary.strip()
+        if needs_journal_refresh or int(state.covers_from_cursor) <= 0:
+            if len(records) <= 2 * AgentConfig.DIARY_WRITE_BATCH:
+                previous_summary = ""
+
         try:
             summary = await self.summarizer.summarize(
-                previous_summary=state.summary,
+                previous_summary=previous_summary,
                 records=records,
             )
             summary = str(summary or "").strip()
@@ -389,6 +409,7 @@ class WorkingContextCompactor:
 
         new_state = WorkingContextState(
             covers_through_cursor=roll_end,
+            covers_from_cursor=journal_cursor,
             updated_at=time.time(),
             summary=summary,
         )
@@ -398,6 +419,18 @@ class WorkingContextCompactor:
             summary=new_state.summary,
             covers_through_cursor=roll_end,
         )
+
+    async def _journal_cursor(self) -> int:
+        reader = self._journal_cursor_reader
+        if reader is None:
+            return 0
+        try:
+            value = reader()
+            if inspect.isawaitable(value):
+                value = await value
+            return max(0, int(value or 0))
+        except (TypeError, ValueError):
+            return 0
 
     def _retry_ready(self) -> bool:
         return self._clock() >= self._retry_not_before

@@ -164,6 +164,20 @@ class RelationshipStore:
         return channel, user_id
 
     @staticmethod
+    def render_compact(body: str, *, max_chars: int = 300) -> str:
+        """First standing/boundary paragraph for audience cards in a room."""
+        from xagent.core.config import AgentConfig
+
+        limit = max(40, int(max_chars or AgentConfig.MAX_AUDIENCE_CARD_CHARS))
+        text = str(body or "").strip()
+        if not text:
+            return ""
+        paragraph = text.split("\n\n", 1)[0].strip()
+        if len(paragraph) <= limit:
+            return paragraph
+        return paragraph[: limit - 1].rstrip() + "…"
+
+    @staticmethod
     def _safe_segment(value: str) -> str:
         sanitized = _SLUG_UNSAFE.sub("_", value.strip()).strip("_") or "unknown"
         return sanitized[:64]

@@ -9,7 +9,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
-from .context_budget import content_char_length, estimate_tokens
+from .context_text import content_char_length, estimate_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +43,7 @@ class ContextManifest:
     total_chars: int
     total_est_tokens: int
     budget_tokens: Optional[int] = None
+    budget_reason: str = ""
     provider_shape: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -92,6 +93,7 @@ def build_context_manifest(
     turn_entries: list[ManifestEntry],
     tool_specs: Optional[list] = None,
     budget_tokens: Optional[int] = None,
+    budget_reason: str = "",
     provider_messages: Optional[list[dict]] = None,
 ) -> ContextManifest:
     tools = list(tool_specs or [])
@@ -111,6 +113,7 @@ def build_context_manifest(
         total_chars=total_chars,
         total_est_tokens=total_est_tokens,
         budget_tokens=budget_tokens,
+        budget_reason=str(budget_reason or ""),
         provider_shape=provider_shape,
     )
 

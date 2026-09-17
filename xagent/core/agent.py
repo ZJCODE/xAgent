@@ -16,7 +16,9 @@ from ..integrations.langfuse import (
     ObservabilityRuntime,
     build_session_id,
 )
+from .context_budget import apply_context_budget, fold_tool_outputs
 from .context_manifest import build_context_manifest, emit_context_manifest
+from .formatters import RoomSnapshot
 from ..schemas import (
     AgentTurnResult,
     Message,
@@ -94,6 +96,7 @@ class Agent:
         notes_enabled: bool = AgentConfig.NOTES_ENABLED,
         notes_auto_distill: bool = AgentConfig.NOTES_AUTO_DISTILL,
         subconscious_activity: float = AgentConfig.SUBCONSCIOUS_ACTIVITY,
+        context_budget_tokens: int = AgentConfig.CONTEXT_BUDGET_TOKENS,
         provider_name: str = PROVIDER_OPENAI,
         reasoning: Optional[ReasoningConfig] = None,
     ):
@@ -112,6 +115,7 @@ class Agent:
         self.notes_enabled = bool(notes_enabled)
         self.notes_auto_distill = bool(notes_auto_distill)
         self.subconscious_activity = subconscious_activity
+        self.context_budget_tokens = max(256, int(context_budget_tokens))
         self.observability = observability or NoopObservabilityRuntime()
         self.client = client
         if self.client is None:
@@ -300,11 +304,18 @@ class Agent:
             model_api=self.model_api,
             reasoning=self.maintenance_reasoning,
         )
+        memory_handler = getattr(self, "memory_handler", None)
+        journal_reader = None
+        if memory_handler is not None and callable(
+            getattr(memory_handler, "journaled_through_cursor", None)
+        ):
+            journal_reader = memory_handler.journaled_through_cursor
         return WorkingContextCompactor(
             store=store,
             message_storage=self.message_storage,
             summarizer=summarizer,
             hot_window=self.recent_messages,
+            journal_cursor_reader=journal_reader,
         )
 
     async def _working_context_for_turn(self) -> WorkingContextView:
@@ -341,6 +352,7 @@ class Agent:
     ):
         """Build the shared turn preparation context for both chat and chat_events."""
         working_context = await self._working_context_for_turn()
+        room_snapshot, _resolved_room = MessageHandler._resolve_room_context(room_context)
         recent_messages = await msg_handler.get_recent_messages(
             limit=AgentConfig.history_fetch_depth(self.recent_messages),
         )
@@ -348,6 +360,7 @@ class Agent:
         relationship_context = await self._relationship_context_for_turn(
             user_msg=user_msg,
             user_id=user_id,
+            room_snapshot=room_snapshot,
         )
         notebook_context = await self._notebook_context_for_turn(user_msg)
         tool_names = list(self.tool_manager._tools)
@@ -375,11 +388,24 @@ class Agent:
             room_context=room_context,
             working_summary=working_context.summary,
             covers_through_cursor=working_context.covers_through_cursor,
+            experience_token_cap=max(
+                512,
+                int(getattr(self, "context_budget_tokens", AgentConfig.CONTEXT_BUDGET_TOKENS) * 0.35),
+            ),
             prompt_registry=getattr(msg_handler, "prompt_registry", None),
+        )
+        instructions, iteration_messages, instruction_entries, turn_entries, budget_reason = apply_context_budget(
+            instructions,
+            iteration_messages,
+            instruction_entries,
+            turn_entries,
+            tool_specs,
+            budget_tokens=getattr(self, "context_budget_tokens", AgentConfig.CONTEXT_BUDGET_TOKENS),
         )
         input_messages = msg_handler.sanitize_input_messages(list(iteration_messages))
         inbox_kind = str((user_msg.metadata or {}).get(INBOX_KIND_METADATA_KEY) or "").strip()
         turn_id = user_msg.event_key or f"cursor:{getattr(user_msg, 'id', None) or user_msg.timestamp}"
+        budget_tokens = getattr(self, "context_budget_tokens", AgentConfig.CONTEXT_BUDGET_TOKENS)
         manifest = build_context_manifest(
             turn_id=str(turn_id),
             task_mode="reply",
@@ -387,6 +413,8 @@ class Agent:
             instruction_entries=instruction_entries,
             turn_entries=turn_entries,
             tool_specs=tool_specs,
+            budget_tokens=budget_tokens,
+            budget_reason=budget_reason,
             provider_messages=[*instructions, *input_messages],
         )
         emit_context_manifest(manifest, workspace_dir=getattr(self, "workspace_dir", None))
@@ -416,14 +444,9 @@ class Agent:
         self,
         user_msg: Message,
         user_id: str,
+        room_snapshot: Optional[RoomSnapshot] = None,
     ) -> str:
-        """Assemble the current speaker's relationship card for this turn.
-
-        Presence turns skip cards: the room block already names who is here,
-        and the last speaker is not a 1:1 counterpart.
-        """
-        if is_presence_turn((user_msg.metadata or {}).get(INBOX_KIND_METADATA_KEY)):
-            return ""
+        """Speaker full card plus compact audience cards when a room snapshot is present."""
         memory_handler = getattr(self, "memory_handler", None)
         if memory_handler is None or not callable(
             getattr(memory_handler, "get_relationship_context", None)
@@ -432,8 +455,18 @@ class Agent:
 
         channel = str(getattr(user_msg, "channel", None) or "").strip()
         speaker_key = RelationshipStore.make_key(channel, user_id)
+        participant_keys: list[str] = []
+        if room_snapshot is not None and room_snapshot.present_keys:
+            participant_keys = [
+                key for key in room_snapshot.present_keys if key and key != speaker_key
+            ]
+        compact = bool(participant_keys) or is_presence_turn(
+            (user_msg.metadata or {}).get(INBOX_KIND_METADATA_KEY)
+        )
         return await memory_handler.get_relationship_context(
             speaker_keys=[speaker_key],
+            participant_keys=participant_keys,
+            compact_participants=compact,
         )
 
     async def run_memory_maintenance(self, trigger: str = "count") -> None:
@@ -847,6 +880,10 @@ class Agent:
                         yield {"type": "done"}
                         return
 
+                    fold_tool_outputs(
+                        iteration_messages,
+                        max_total_chars=AgentConfig.MAX_TURN_TOOL_OUTPUT_CHARS,
+                    )
                     input_messages = msg_handler.sanitize_input_messages(list(iteration_messages))
                     continue
 

@@ -15,6 +15,7 @@ from ...schemas.attachment import (
     attachment_manifest_markdown,
     dedupe_attachments,
 )
+from ..context_budget import cap_message_content, trim_experience_entries
 from ..context_manifest import ManifestEntry, manifest_entry_from_message
 from ..prompt_registry import (
     KIND_DECISION,
@@ -334,6 +335,7 @@ class MessageHandler:
         task_mode: str = "reply",
         working_summary: str = "",
         covers_through_cursor: int = 0,
+        experience_token_cap: int = 0,
         prompt_registry: Optional[PromptRegistry] = None,
     ) -> list[dict]:
         """Build the per-turn model input context as named message layers."""
@@ -357,6 +359,7 @@ class MessageHandler:
             task_mode=task_mode,
             working_summary=working_summary,
             covers_through_cursor=covers_through_cursor,
+            experience_token_cap=experience_token_cap,
             prompt_registry=prompt_registry,
         )
         return messages_out
@@ -382,6 +385,7 @@ class MessageHandler:
         task_mode: str = "reply",
         working_summary: str = "",
         covers_through_cursor: int = 0,
+        experience_token_cap: int = 0,
         prompt_registry: Optional[PromptRegistry] = None,
     ) -> tuple[list[dict], list[ManifestEntry]]:
         """Build per-turn context layers and manifest entries for each non-empty section."""
@@ -413,12 +417,29 @@ class MessageHandler:
             room_snapshot=room_snapshot,
             has_room_block=bool(room_render),
         )
+        experience_entries = [
+            (
+                entry_type,
+                msg,
+                cap_message_content(content, AgentConfig.MAX_RAW_MESSAGE_CHARS),
+            )
+            for entry_type, msg, content in experience_entries
+        ]
+        unsummarized_dropped = 0
+        if experience_token_cap > 0:
+            experience_entries, unsummarized_dropped = trim_experience_entries(
+                experience_entries,
+                max_est_tokens=experience_token_cap,
+                covers_through_cursor=covers_through_cursor,
+                storage_cursor_fn=MessageHandler._storage_cursor,
+            )
 
         recent_experience = MessageHandler._build_recent_experience_context(
             experience_entries=experience_entries,
             omitted_messages=omitted_count,
             omitted_observations=omitted_observation_count,
             working_summary=working_summary,
+            unsummarized_dropped=unsummarized_dropped,
         )
         resolved_current_time = (
             current_time
@@ -590,11 +611,17 @@ class MessageHandler:
         omitted_messages: int,
         omitted_observations: int,
         working_summary: str = "",
+        unsummarized_dropped: int = 0,
     ) -> str:
         lines: list[str] = []
+        if unsummarized_dropped > 0:
+            lines.append(
+                f"[{unsummarized_dropped} earlier messages omitted; not yet summarized]"
+            )
+            lines.append("")
         summary = (working_summary or "").strip()
         if summary:
-            lines.append("[Earlier working context]")
+            lines.append("[Working context: since last diary entry]")
             lines.append(summary)
             lines.append("")
         elif omitted_messages or omitted_observations:
@@ -877,12 +904,6 @@ class MessageHandler:
                 if cursor is None or cursor > covers
             ]
             # Hard safety valve only; normal path relies on the compactor.
-            safety_cap = max(
-                keep_limit + AgentConfig.working_context_roll_slack(keep_limit),
-                keep_limit * 3,
-            )
-            if len(selected) > safety_cap:
-                return selected[-safety_cap:], len(selected) - safety_cap
             return selected, 0
 
         # No storage cursors (tests / legacy): classic newest-N budget.
@@ -1266,13 +1287,6 @@ class MessageHandler:
         instructions = "\n\n".join(
             message["content"] for message in instruction_messages if message.get("content")
         )
-
-        if len(instructions) > AgentConfig.MAX_SYSTEM_PROMPT_LENGTH:
-            logger.warning(
-                "Instructions length (%d chars) exceeds soft limit (%d). "
-                "Consider shortening the user system prompt.",
-                len(instructions), AgentConfig.MAX_SYSTEM_PROMPT_LENGTH,
-            )
 
         return instructions
 

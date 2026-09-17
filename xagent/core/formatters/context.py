@@ -4,6 +4,9 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Iterable, Optional
 
+from ..config import AgentConfig
+from ..context_text import cap_message_content
+
 
 @dataclass(frozen=True)
 class RoomContextEntry:
@@ -115,7 +118,10 @@ def format_room_context_body(entries: Iterable[RoomContextEntry]) -> str:
 def format_room_context_entry(entry: RoomContextEntry) -> Optional[str]:
     """Render a single structured room-context entry."""
     speaker = "ME" if entry.is_self else sanitize_room_context_field(entry.speaker_label)
-    text = " ".join((entry.text or "").split())
+    text = cap_message_content(
+        " ".join((entry.text or "").split()),
+        AgentConfig.MAX_ROOM_ENTRY_CHARS,
+    )
     if not speaker or not text:
         return None
     return f"{speaker} {format_room_context_timestamp(entry.occurred_at)}: {text}"

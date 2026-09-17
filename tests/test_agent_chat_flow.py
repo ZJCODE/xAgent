@@ -1442,18 +1442,18 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(captured["speaker_keys"], ["feishu:joy"])
         self.assertEqual(captured.get("participant_keys") or [], [])
 
-    async def test_presence_turn_skips_relationship_cards(self):
+    async def test_presence_turn_loads_speaker_relationship_card(self):
         agent, captured = self._relationship_capturing_agent()
         current = self._placed_message("hello hall", "alice", "world", room_name="plaza")
         current.metadata[INBOX_KIND_METADATA_KEY] = InboxKind.PRESENCE_TURN.value
 
-        context = await agent._relationship_context_for_turn(
+        await agent._relationship_context_for_turn(
             user_msg=current,
             user_id="alice",
         )
 
-        self.assertEqual(context, "")
-        self.assertEqual(captured, {})
+        self.assertEqual(captured["speaker_keys"], ["world:alice"])
+        self.assertTrue(captured.get("compact_participants"))
 
     async def test_agent_turn_uses_nonblocking_working_context_snapshot(self):
         class SnapshotCompactor:

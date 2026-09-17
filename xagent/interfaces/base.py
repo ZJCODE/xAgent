@@ -637,6 +637,10 @@ class BaseAgentRunner:
                 "notes_auto_distill", AgentConfig.NOTES_AUTO_DISTILL
             ),
             subconscious_activity=agent_section.get("subconscious_activity", AgentConfig.SUBCONSCIOUS_ACTIVITY),
+            context_budget_tokens=agent_section.get(
+                "context_budget_tokens",
+                AgentConfig.CONTEXT_BUDGET_TOKENS,
+            ),
         )
 
     def _initialize_observability(self, agent_cfg: Dict[str, Any]) -> ObservabilityRuntime:

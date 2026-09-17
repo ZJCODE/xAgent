@@ -143,15 +143,19 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             message_storage=self.storage,
             diary_write_batch=_TEST_DIARY_WRITE_BATCH,
             diary_context_days=2,
-            recent_max_chars=6000,
+            recent_max_chars=2800,
         )
 
         ctx = await handler.get_recent_context()
 
-        self.assertLessEqual(len(ctx), 6100)
+        self.assertLessEqual(len(ctx), 2900)
         self.assertIn(today.isoformat(), ctx)
-        self.assertIn("T" * 5000, ctx)
-        self.assertNotIn("Y" * 5000, ctx)
+        self.assertIn("T" * 100, ctx)
+        self.assertLessEqual(
+            max(len(part) for part in ctx.split("\n\n") if part.startswith("##")),
+            AgentConfig.MAX_DIARY_ENTRY_CHARS + 80,
+        )
+        self.assertNotIn("Y" * 500, ctx)
         self.assertIn(MemoryHandler.DIARY_OMITTED_NOTICE, ctx)
         self.assertNotIn("[day truncated]", ctx)
         self.assertNotIn(f"[{today.isoformat()}]", ctx)

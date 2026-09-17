@@ -410,7 +410,7 @@ class WorkingContextPromptInjectionTests(unittest.TestCase):
             omitted_observations=0,
             working_summary="alice chose plan B; bob still waiting",
         )
-        self.assertIn("[Earlier working context]", context)
+        self.assertIn("[Working context: since last diary entry]", context)
         self.assertIn("alice chose plan B", context)
         self.assertNotIn("Earlier experience omitted", context)
 

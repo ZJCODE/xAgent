@@ -140,8 +140,19 @@ class AgentConfig:
     # together, and nothing else bounded what a single tool call could push
     # into the turn.
     MAX_TOOL_RESULT_CHARS = 16000
-    MAX_SYSTEM_PROMPT_LENGTH = 16000  # soft limit for assembled instructions (chars)
     MAX_SKILLS_CATALOG_CHARS = 8000  # max characters for injected skill catalog
+
+    # Global model input budget (estimated tokens; Phase 3).
+    CONTEXT_BUDGET_TOKENS = 32000
+    CONTEXT_BUDGET_RESERVE_RATIO = 0.15
+    MIN_HOT_RAW_MESSAGES = 4
+    MAX_CURRENT_INPUT_CHARS = 12000
+    MAX_RAW_MESSAGE_CHARS = 4000
+    MAX_ROOM_ENTRY_CHARS = 600
+    MAX_RELATIONSHIP_CARD_CHARS = 1500
+    MAX_AUDIENCE_CARD_CHARS = 300
+    MAX_DIARY_ENTRY_CHARS = 2500
+    MAX_TURN_TOOL_OUTPUT_CHARS = 48000
 
     # ============================================================
     # 6. Retry & Reliability

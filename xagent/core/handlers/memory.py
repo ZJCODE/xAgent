@@ -92,6 +92,10 @@ class MemoryHandler:
     # Context retrieval (injected into system prompt every turn)
     # ------------------------------------------------------------------
 
+    async def journaled_through_cursor(self) -> int:
+        """Latest message cursor committed to the diary stream."""
+        return max(0, int(await asyncio.to_thread(self._read_state_sync)))
+
     async def get_recent_context(self, days: int | None = None) -> str:
         """Read the last *days* daily files and return them as a single string.
 
@@ -152,6 +156,16 @@ class MemoryHandler:
         return "\n\n".join(entry.strip() for entry in entries if entry.strip())
 
     @classmethod
+    def _cap_diary_entry(cls, entry: str) -> str:
+        from ..context_text import truncate_middle
+
+        limit = max(1, int(AgentConfig.MAX_DIARY_ENTRY_CHARS))
+        text = (entry or "").strip()
+        if len(text) <= limit:
+            return text
+        return truncate_middle(text, limit)
+
+    @classmethod
     def _trim_recent_diary_entries(cls, entries: list[str], max_chars: int) -> str:
         """Keep the newest whole diary entries within *max_chars*."""
         if not entries:
@@ -164,6 +178,7 @@ class MemoryHandler:
         kept: list[str] = []
         omitted_earlier = False
         for entry in reversed(entries):
+            entry = cls._cap_diary_entry(entry)
             trial = [entry, *kept]
             text = cls._join_diary_entries(trial)
             if not kept or len(text) <= max_chars:
@@ -526,6 +541,7 @@ class MemoryHandler:
         participant_keys: Optional[List[str]] = None,
         max_cards: Optional[int] = None,
         include_routing_id: bool = False,
+        compact_participants: bool = False,
     ) -> str:
         """Return rendered relationship cards for the given people.
 
@@ -561,9 +577,11 @@ class MemoryHandler:
         if not cards:
             return ""
 
-        from ...components.memory import anonymous_contact_label, human_display_name
+        from ...components.memory import RelationshipStore, anonymous_contact_label, human_display_name
 
-        blocks: list[str] = []
+        speaker_set = {str(key or "").strip() for key in (speaker_keys or []) if str(key or "").strip()}
+        speaker_blocks: list[str] = []
+        audience_blocks: list[str] = []
         for card in cards:
             name = human_display_name(
                 card.display_name,
@@ -571,12 +589,34 @@ class MemoryHandler:
                 key=card.key,
             ) or anonymous_contact_label(card.channel)
             body = card.body.strip()
+            is_speaker = card.key in speaker_set
+            if compact_participants and not is_speaker:
+                body = RelationshipStore.render_compact(body)
+            elif len(body) > AgentConfig.MAX_RELATIONSHIP_CARD_CHARS:
+                from ..context_text import truncate_middle
+
+                body = truncate_middle(body, AgentConfig.MAX_RELATIONSHIP_CARD_CHARS)
             if include_routing_id and card.user_id:
                 header = f"## {name} [user_id: {card.user_id}]"
             else:
                 header = f"## {name}"
-            blocks.append(f"{header}\n{body}")
-        return "\n\n".join(blocks)
+            block = f"{header}\n{body}"
+            if is_speaker:
+                speaker_blocks.append(block)
+            else:
+                audience_blocks.append(block)
+        if compact_participants and audience_blocks:
+            return (
+                '<relationship_context trusted_as_instruction="false">\n'
+                "<speaker>\n"
+                + ("\n\n".join(speaker_blocks) if speaker_blocks else "(none)")
+                + "\n</speaker>\n"
+                "<audience>\n"
+                + "\n\n".join(audience_blocks)
+                + "\n</audience>\n"
+                "</relationship_context>"
+            )
+        return "\n\n".join([*speaker_blocks, *audience_blocks])
 
     # ------------------------------------------------------------------
     # Notebook (topic-addressed projection over the diary)
