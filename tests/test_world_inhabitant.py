@@ -114,7 +114,7 @@ class WorldInhabitantTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.agent.chats[0]["sender_name"], "alice")
         self.assertEqual(self.agent.chats[0].get("inbox_kind"), InboxKind.PRESENCE_TURN)
         self.assertEqual(self.agent.message_handler.users, [])
-        self.assertIn("shared world", self.agent.chats[0]["channel_instructions"])
+        self.assertFalse(self.agent.chats[0].get("channel_instructions"))
         self.assertEqual(self.agent.decisions[0]["metadata"]["addressed_to_agent"], False)
         self.assertEqual(self.agent.decisions[0]["metadata"]["recently_spoke"], False)
         self.assertTrue(any("hello hall" in str(item.get("context") or "") for item in self.agent.observed))

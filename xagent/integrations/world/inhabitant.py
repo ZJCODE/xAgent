@@ -36,17 +36,6 @@ from ...utils.image_utils import workspace_blob_relative_path
 
 CHANNEL_WORLD = "world"
 _ROOM_CONTEXT_LIMIT = 20
-_CHANNEL_INSTRUCTIONS = (
-    "You are a body already in a shared world. Presence is continuous until you leave. "
-    "Do not describe APIs, sockets, being 'connected', or only existing when messaged. "
-    "Speak to everyone present, not as a private assistant to the last speaker. "
-    "If someone asks whether anyone is here, answer. "
-    "If someone asks you to be shorter, continue, or stop, do that in the next line — "
-    "do not go silent to be polite. "
-    "Reminders are your own alarm, not the world's. If you promise to call someone later "
-    "and you are still here when it is due, speak. "
-    "Do not greet again if you already greeted. Do not treat the world log as your diary."
-)
 _MARKDOWN_REF_RE = re.compile(r"!?\[(?:[^\]]*)\]\(([^)]+)\)")
 _BACKTICK_FILE_RE = re.compile(r"`([^`]+)`")
 _DECISION_PREFACE = (
@@ -232,7 +221,6 @@ class WorldInhabitant:
                     user_id=user_id,
                     room_name=self.world_id,
                     channel=CHANNEL_WORLD,
-                    channel_instructions=_CHANNEL_INSTRUCTIONS,
                     room_context=situation,
                     inbox_kind="scheduled_turn",
                 ):
@@ -244,7 +232,6 @@ class WorldInhabitant:
                 user_id=user_id,
                 room_name=self.world_id,
                 channel=CHANNEL_WORLD,
-                channel_instructions=_CHANNEL_INSTRUCTIONS,
                 room_context=situation,
                 inbox_kind="scheduled_turn",
             )
@@ -589,7 +576,6 @@ class WorldInhabitant:
                         sender_name=sender_name,
                         room_name=self.world_id,
                         channel=CHANNEL_WORLD,
-                        channel_instructions=_CHANNEL_INSTRUCTIONS,
                         room_context=situation,
                         attachments=attachments or None,
                         image_source=attachment_image_sources(attachments) or None,
@@ -607,7 +593,6 @@ class WorldInhabitant:
                         sender_name=sender_name,
                         room_name=self.world_id,
                         channel=CHANNEL_WORLD,
-                        channel_instructions=_CHANNEL_INSTRUCTIONS,
                         room_context=situation,
                         attachments=attachments or None,
                         image_source=attachment_image_sources(attachments) or None,

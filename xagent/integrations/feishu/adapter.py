@@ -2245,8 +2245,7 @@ class FeishuAdapter:
             room_name=room_name,
             room_context=room_context,
             channel_instructions=(
-                "For mentions, use <at user_id=\"ou_xxx\">Name</at>, never plain @Name. "
-                "Room context shows users as Name(id). Mention only when direct attention is needed."
+                'For mentions, use <at user_id="ou_xxx">Name</at>, never plain @Name.'
                 if is_group
                 else ""
             ),

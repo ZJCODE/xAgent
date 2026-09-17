@@ -558,6 +558,7 @@ class FeishuAdapterTests(unittest.TestCase):
         self.assertEqual(agent.chat_calls[0]["user_message"], "hello")
         self.assertEqual(agent.chat_calls[0]["inbox_kind"], "user_turn")
         self.assertEqual(agent.chat_calls[0]["channel"], "feishu")
+        self.assertNotIn("channel_instructions", agent.chat_calls[0])
         self.assertNotIn("sender_name", agent.chat_calls[0])
         self.assertNotIn("private", agent.chat_calls[0])
         self.assertEqual(adapter._channel.sent[0][2], {"uuid": "om_user"})
@@ -1512,6 +1513,11 @@ class FeishuGroupHistoryTests(unittest.TestCase):
         call = agent.chat_calls[0]
         self.assertEqual(call["user_message"], "@Mono what's up")
         self.assertEqual(call["inbox_kind"], "user_turn")
+        self.assertEqual(
+            call["channel_instructions"],
+            'For mentions, use <at user_id="ou_xxx">Name</at>, never plain @Name.',
+        )
+        self.assertNotIn("Room context shows users", call["channel_instructions"])
         room_context = call.get("room_context") or ""
         self.assertIn("[room context]", room_context)
         self.assertIn("room_id: oc_group", room_context)
