@@ -130,6 +130,25 @@ class JournalLLMServicePromptTests(unittest.IsolatedAsyncioTestCase):
             transcript,
         )
 
+    def test_format_transcript_world_uses_name_without_id(self):
+        transcript = JournalLLMService._format_transcript([
+            {
+                "role": "environment",
+                "type": "context_event",
+                "sender_id": "player2",
+                "content": "Player2: hi",
+                "timestamp": "2026-09-17 10:00:00",
+                "channel": "world",
+                "metadata": {"sender_name": "Player2"},
+            }
+        ])
+
+        self.assertIn(
+            "[ambient context][timestamp=2026-09-17 10:00:00][from=Player2][channel=world]",
+            transcript,
+        )
+        self.assertNotIn("Player2(player2)", transcript)
+
     def test_format_transcript_marks_scheduled_tasks_as_work_orders(self):
         transcript = JournalLLMService._format_transcript([
             {

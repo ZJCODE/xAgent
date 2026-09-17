@@ -604,7 +604,11 @@ Return JSON only: a list of note objects, or `[]`. No code fences, no commentary
         if JournalLLMService._is_self_speaker(sender=sender, role=role):
             return "ME"
         metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else {}
-        label = format_speaker_label(sender, str((metadata or {}).get("sender_name") or ""))
+        label = format_speaker_label(
+            sender,
+            str((metadata or {}).get("sender_name") or ""),
+            channel=str(message.get("channel") or ""),
+        )
         label = JournalLLMService._sanitize_marker_field(label)
         if label:
             return label

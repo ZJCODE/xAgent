@@ -99,13 +99,13 @@ class RoomContextFormatterTests(unittest.TestCase):
             "plaza",
             [
                 RoomContextEntry(
-                    speaker_label="爱丽丝(alice)",
+                    speaker_label="爱丽丝",
                     occurred_at=datetime(2024, 1, 2, 9, 30),
                     text="有人吗",
                 ),
             ],
             room_name="大厅",
-            present=["爱丽丝(alice)", "一号(agent1)"],
+            present=["爱丽丝", "一号"],
         )
 
         self.assertEqual(
@@ -113,8 +113,8 @@ class RoomContextFormatterTests(unittest.TestCase):
             "[room context]\n"
             "room_name: 大厅\n"
             "room_id: plaza\n"
-            "present: 爱丽丝(alice), 一号(agent1)\n\n"
-            "爱丽丝(alice) 2024-01-02 09:30: 有人吗\n"
+            "present: 爱丽丝, 一号\n\n"
+            "爱丽丝 2024-01-02 09:30: 有人吗\n"
             "[/room context]",
         )
 

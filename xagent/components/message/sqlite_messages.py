@@ -480,6 +480,7 @@ class MessageStorage:
         sender = format_speaker_label(
             message.sender_id or "",
             str((message.metadata or {}).get("sender_name") or ""),
+            channel=message.channel or "",
         ) or message.role.value
         header = f"[{ts}][speaker={sender}]"
         if message.channel:

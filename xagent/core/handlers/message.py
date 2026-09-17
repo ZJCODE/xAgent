@@ -786,6 +786,7 @@ class MessageHandler:
         return format_speaker_label(
             message.sender_id or "",
             str(metadata.get("sender_name") or ""),
+            channel=message.channel or "",
         ) or message.role.value
 
     @staticmethod
@@ -810,12 +811,18 @@ class MessageHandler:
         user_id: str,
         current_message: Optional[Message] = None,
     ) -> str:
-        """Stable id plus display name when the current speaker has one."""
+        """Cognitive speaker tag for this person on the current channel."""
         from ...components.memory import format_speaker_label
 
+        channel = ""
+        if current_message is not None:
+            channel = current_message.channel or ""
+        elif messages:
+            channel = messages[-1].channel or ""
         return format_speaker_label(
             user_id,
             MessageHandler._speaker_display_name(messages, user_id, current_message),
+            channel=channel,
         ) or user_id
 
     @staticmethod

@@ -477,7 +477,7 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
             "[room context]\n"
             "room_name: 大厅\n"
             "room_id: plaza\n"
-            "present: alice, 一号(agent1)\n\n"
+            "present: alice, 一号\n\n"
             "alice 2026-05-14 09:30: 有人吗\n"
             "[/room context]"
         )
@@ -1066,6 +1066,42 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         self.assertIn("Current speaker: Jun\n", current_task)
         self.assertIn("Focus on what Jun just said", current_task)
         self.assertNotIn("ou_user", current_task)
+
+    def test_world_transcript_uses_name_without_id(self):
+        message = Message.create("the coffee is hot", role=RoleType.USER, sender_id="player2")
+        message.channel = "world"
+        message.metadata = {"sender_name": "Player2"}
+        overheard = Message.create_context_event(
+            "Player2: the coffee is hot",
+            source="world",
+            event_type="utterance",
+            metadata={"sender_name": "Player2"},
+        )
+        overheard.sender_id = "player2"
+        overheard.channel = "world"
+
+        transcript = MessageHandler.build_recent_transcript_message(
+            [message, overheard],
+            current_user_id="player2",
+        )["content"]
+        context_messages = MessageHandler.build_turn_context_messages(
+            [message],
+            current_user_id="player2",
+            current_message=message,
+            current_time="2026-09-17 10:00",
+        )
+        current_task = next(
+            item["content"]
+            for item in context_messages
+            if item["name"] == AgentConfig.CURRENT_TASK_NAME
+        )
+
+        self.assertIn("[speaker=Player2]", transcript)
+        self.assertIn("[from=Player2]", transcript)
+        self.assertNotIn("Player2(player2)", transcript)
+        self.assertNotIn("[from=player2]", transcript)
+        self.assertIn("Current speaker: Player2\n", current_task)
+        self.assertNotIn("player2", current_task)
 
 
 if __name__ == "__main__":

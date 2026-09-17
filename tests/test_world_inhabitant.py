@@ -148,10 +148,13 @@ class WorldInhabitantTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("[room context]", decision_context)
         self.assertIn("[room context]", room_block)
         self.assertIn("present:", room_block)
-        self.assertIn("一号(agent1)", room_block)
-        self.assertIn("爱丽丝(alice)", room_block)
+        self.assertIn("一号", room_block)
+        self.assertIn("爱丽丝", room_block)
+        self.assertNotIn("一号(agent1)", room_block)
+        self.assertNotIn("爱丽丝(alice)", room_block)
+        self.assertNotIn("(player2)", room_block)
         self.assertIn("有人吗", room_block)
-        self.assertRegex(room_block, r"爱丽丝\(alice\) \d{4}-\d{2}-\d{2} \d{2}:\d{2}: 有人吗")
+        self.assertRegex(room_block, r"爱丽丝 \d{4}-\d{2}-\d{2} \d{2}:\d{2}: 有人吗")
         # Same situation object for decide and speak (block text matches).
         self.assertIn(room_block, decision_context)
         self.assertTrue(any("有人吗" in str(item.get("context") or "") for item in self.agent.observed))
@@ -379,8 +382,13 @@ class WorldAddressTests(unittest.TestCase):
 
     def test_speaker_label_is_one_name(self):
         self.inhabitant._names["testest"] = "Jun"
+        self.inhabitant._names["player2"] = "Player2"
+        self.inhabitant._names["aaac"] = "Aaac"
         self.assertEqual(self.inhabitant._speaker_label("testest"), "Jun")
         self.assertEqual(self.inhabitant._speaker_label("player1"), "player1")
+        self.assertEqual(self.inhabitant._speaker_label("player2"), "Player2")
+        self.inhabitant._present = {"player2": "Player2", "aaac": "Aaac"}
+        self.assertEqual(self.inhabitant._present_labels(), ["Player2", "Aaac"])
 
 
 def _world_task(*, content: str, world_url: str = "", user_id: str = "Jun"):

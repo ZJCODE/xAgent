@@ -44,6 +44,18 @@ _CHANNEL_CONTACT_LABELS = {
     "voice": "Voice contact",
 }
 _IDENTITY_CHANNELS = frozenset(_CHANNEL_CONTACT_LABELS)
+_NAMED_IDENTITY_CHANNELS = frozenset({"world"})
+
+
+def is_opaque_platform_id(value: str = "") -> bool:
+    """True when the id is a platform key, not a name a person would answer to."""
+    text = str(value or "").strip()
+    return bool(text) and text.startswith(_PLATFORM_ID_PREFIXES)
+
+
+def named_identity_channel(channel: str = "") -> bool:
+    """World identities are names. The protocol handle stays off the page."""
+    return str(channel or "").strip().lower() in _NAMED_IDENTITY_CHANNELS
 
 
 def human_display_name(value: Any, *, user_id: str = "", key: str = "") -> str:
@@ -70,11 +82,23 @@ def anonymous_contact_label(channel: str = "") -> str:
     return _CHANNEL_CONTACT_LABELS.get((channel or "").strip().lower(), "contact")
 
 
-def format_speaker_label(user_id: str = "", display_name: str = "") -> str:
-    """Return ``Name(id)`` when both are known, otherwise whichever exists."""
+def format_speaker_label(
+    user_id: str = "",
+    display_name: str = "",
+    *,
+    channel: str = "",
+) -> str:
+    """Cognitive speaker tag: a name, plus an opaque id only when that id is not a name.
+
+    Feishu-style platform keys are unreadable, so the tag is ``Name(id)``.
+    World (and any other named-identity channel) identifies people by the name
+    they are present as; ``Player2(player2)`` is the same person written twice.
+    """
     stable_id = str(user_id or "").strip()
     name = human_display_name(display_name, user_id=stable_id)
-    if name and stable_id and name != stable_id:
+    if named_identity_channel(channel) or not is_opaque_platform_id(stable_id):
+        return name or stable_id
+    if name and stable_id:
         return f"{name}({stable_id})"
     return name or stable_id
 

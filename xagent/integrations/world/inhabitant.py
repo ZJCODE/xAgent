@@ -342,25 +342,17 @@ class WorldInhabitant:
         return str(self.world_name or self.world_id or "the world").strip() or "the world"
 
     def _speaker_label(self, actor_id: str) -> str:
+        """Cognitive name in this world. The member id is a protocol handle."""
         actor = str(actor_id or "").strip()
         if not actor:
             return "someone"
         name = str(self._names.get(actor) or "").strip()
         return name or actor
 
-    def _speaker_address(self, actor_id: str) -> str:
-        actor = str(actor_id or "").strip()
-        if not actor:
-            return "someone"
-        name = str(self._names.get(actor) or "").strip() or actor
-        if name == actor:
-            return actor
-        return f"{name}({actor})"
-
     def _present_labels(self) -> list[str]:
         labels: list[str] = []
         for member_id in self._present:
-            label = self._speaker_address(member_id)
+            label = self._speaker_label(member_id)
             if label and label not in labels:
                 labels.append(label)
         return labels
@@ -380,7 +372,7 @@ class WorldInhabitant:
         for event in self._recent:
             kind = str(event.get("kind") or "")
             actor = str(event.get("actor_id") or "")
-            speaker = self._speaker_address(actor)
+            speaker = self._speaker_label(actor)
             occurred_at = self._event_datetime(event)
             is_self = actor == self.member_id
             text = str(event.get("text") or "").strip()

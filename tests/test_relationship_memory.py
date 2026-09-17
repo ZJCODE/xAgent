@@ -36,7 +36,7 @@ class RelationshipStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(human_display_name("feishu:ou_1", key="feishu:ou_1"), "")
         self.assertEqual(human_display_name("  "), "")
 
-    def test_format_speaker_label_joins_name_and_id(self):
+    def test_format_speaker_label_joins_name_and_opaque_id(self):
         from xagent.components.memory import format_speaker_label
 
         self.assertEqual(format_speaker_label("ou_1", "Jun"), "Jun(ou_1)")
@@ -44,6 +44,15 @@ class RelationshipStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(format_speaker_label("ou_1", "Feishu User"), "ou_1")
         self.assertEqual(format_speaker_label("alice", ""), "alice")
         self.assertEqual(format_speaker_label("", "Jun"), "Jun")
+
+    def test_format_speaker_label_named_identity_is_just_the_name(self):
+        from xagent.components.memory import format_speaker_label
+
+        self.assertEqual(format_speaker_label("player2", "Player2"), "Player2")
+        self.assertEqual(format_speaker_label("alice", "爱丽丝"), "爱丽丝")
+        self.assertEqual(format_speaker_label("player2", "Player2", channel="world"), "Player2")
+        self.assertEqual(format_speaker_label("ou_1", "Jun", channel="world"), "Jun")
+        self.assertEqual(format_speaker_label("player2", "player2", channel="world"), "player2")
 
     def test_speaker_address_name_prefers_display_name(self):
         from xagent.components.memory import speaker_address_name

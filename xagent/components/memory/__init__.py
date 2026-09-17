@@ -12,6 +12,8 @@ from .relationship_memory import (
     anonymous_contact_label,
     format_speaker_label,
     human_display_name,
+    is_opaque_platform_id,
+    named_identity_channel,
     speaker_address_name,
 )
 
@@ -26,5 +28,7 @@ __all__ = [
     "anonymous_contact_label",
     "format_speaker_label",
     "human_display_name",
+    "is_opaque_platform_id",
+    "named_identity_channel",
     "speaker_address_name",
 ]
