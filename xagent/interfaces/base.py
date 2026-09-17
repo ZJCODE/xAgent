@@ -64,6 +64,7 @@ class BaseAgentConfig:
     MESSAGE_DB_FILENAME = AgentConfig.MESSAGE_DB_FILENAME
     CONFIG_FILENAME = "config.yaml"
     IDENTITY_FILENAME = "identity.md"
+    OPERATOR_POLICY_FILENAME = "operator_policy.md"
     DEFAULT_HOST = "127.0.0.1"
     DEFAULT_PORT = 8010
     RUNTIME_HEARTBEAT_ENABLED = AgentConfig.RUNTIME_HEARTBEAT_ENABLED
@@ -103,10 +104,12 @@ class BaseAgentRunner:
         self.config_dir = self._resolve_config_dir(config_dir)
         self.config_path = self.config_dir / BaseAgentConfig.CONFIG_FILENAME
         self.identity_path = self.config_dir / BaseAgentConfig.IDENTITY_FILENAME
+        self.operator_policy_path = self.config_dir / BaseAgentConfig.OPERATOR_POLICY_FILENAME
         
         # Load and validate configuration
         self.config = self._load_config(self.config_path)
         self.identity = self._load_identity(self.identity_path)
+        self.operator_policy = self._load_operator_policy(self.operator_policy_path)
         
         # Local runtime data lives beside config.yaml.
         self.workspace = self.config_dir
@@ -595,6 +598,13 @@ class BaseAgentRunner:
         if not identity:
             raise ValueError(f"Identity file is empty: {identity_path}")
         return identity
+
+    @staticmethod
+    def _load_operator_policy(operator_policy_path: Path) -> str:
+        """Load optional operator policy from operator_policy.md (empty when missing)."""
+        if not operator_policy_path.is_file():
+            return ""
+        return operator_policy_path.read_text(encoding="utf-8").strip()
     
     def _initialize_agent(self) -> Agent:
         """
@@ -615,6 +625,7 @@ class BaseAgentRunner:
         agent_section = agent_cfg.get("agent") or {}
         return Agent(
             system_prompt=self.identity,
+            operator_policy=self.operator_policy,
             model=self._get_agent_model(agent_cfg),
             provider_name=self._get_provider_name(agent_cfg),
             model_api=self._get_provider_model_api(agent_cfg),

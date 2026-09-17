@@ -1,5 +1,7 @@
 """Ordered, named prompt sections assembled before each model step.
 
+Layer order and trust boundaries: ``docs/context-architecture-plan.md`` §3.1.
+
 Registrations emit the same ``{role, name, content}`` dicts the model client
 already consumes. Empty render results are skipped.
 """
@@ -23,6 +25,7 @@ class PromptAssembleContext:
     """Runtime values available to section renderers."""
 
     system_prompt: str = ""
+    operator_policy: str = ""
     tool_names: Optional[List[str]] = None
     skills_catalog: str = ""
     workspace_context: str = ""
@@ -134,6 +137,10 @@ def _render_tool_policy(ctx: PromptAssembleContext) -> str:
     if not ctx.tool_names:
         return ""
     return AgentConfig.TOOL_POLICY_BASELINE
+
+
+def _render_operator_policy(ctx: PromptAssembleContext) -> str:
+    return AgentConfig.build_operator_policy_context(ctx.operator_policy or "")
 
 
 def _render_identity(ctx: PromptAssembleContext) -> str:
@@ -278,6 +285,16 @@ def default_prompt_registry() -> PromptRegistry:
             trust="policy",
             priority="required",
             authority="core",
+        ),
+        PromptSection(
+            name=AgentConfig.OPERATOR_POLICY_NAME,
+            role="system",
+            order=-40,
+            kind=KIND_INSTRUCTIONS,
+            render=_render_operator_policy,
+            trust="policy",
+            priority="required",
+            authority="operator",
         ),
         PromptSection(
             name=AgentConfig.IDENTITY_CONTEXT_NAME,

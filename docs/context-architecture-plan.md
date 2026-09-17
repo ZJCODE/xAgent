@@ -1,6 +1,6 @@
 # 上下文架构更新方案（Context Architecture Plan）
 
-状态：Phase 1–3 已落地（dedupe / manifest / 全局预算）；Phase 4–5 部分落地（working summary↔journal、audience 关系卡）；Phase 6 待实施
+状态：Phase 1–6 已落地（含文案收敛、operator policy、死代码清理）；后续可按附录 A 基线微调预算
 适用范围：主对话 / tool loop、群聊参与决策、潜意识、working-context 压缩、日记 / 关系卡 / 笔记维护
 不在范围内：模型 provider 协议本身、工具实现、渠道适配器的收发逻辑
 

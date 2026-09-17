@@ -11,7 +11,7 @@ An image is one fact that can be used in several ways. Those ways are different 
 | Job | How you look it up | Channel |
 | --- | --- | --- |
 | Keep the file | Workspace path | Disk |
-| See it | Same path, opened onto the model's eyes | Vision input on `current_task` |
+| See it | Same path, opened onto the model's eyes | Vision input on `current_input` |
 | Remember that it happened | Diary | First-person narrative |
 | Show it to someone | Same path | `attach_artifact` (outbound) |
 
@@ -33,7 +33,7 @@ Dropped alternatives, and why:
 
 - **Write a seeing-record into the experience stream when first viewed.** That is a parallel memory of the file. It goes stale, it duplicates the pixels in words, and it is the wrong axis. Path is enough.
 - **Skill (`SKILL.md`).** A skill is a procedure loaded as text via `read_skill`. It cannot open the vision channel. Domain methods ("how to read this kind of gel") may become skills later; *whether the agent can look* is not a skill.
-- **`understand_image` / caption / OCR tool.** That is a second pair of eyes that returns words. The main model already sees. Tool results are observations; current image tool results are specifically *not* shown to the model. Understanding is what happens after the pixels are on `current_task`.
+- **`understand_image` / caption / OCR tool.** That is a second pair of eyes that returns words. The main model already sees. Tool results are observations; current image tool results are specifically *not* shown to the model. Understanding is what happens after the pixels are on `current_input`.
 - **Re-inject every historical image every turn.** Looking is on demand. Cost and context are the reason path exists.
 - **`generate_image`.** Optional outbound faculty: writes a new image under `assets/generated/images/`. Delivery to the user is a structured attachment on that tool result; looking at it later uses `see_image`; resending uses `attach_artifact`. Same path handle as every other image job.
 - **`attach_artifact`.** Outbound: show or send a file to a person. Inbound seeing is the opposite direction.
@@ -42,7 +42,7 @@ Dropped alternatives, and why:
 
 One injection site. Two ways to name a path.
 
-All vision input is assembled onto `current_task` as `image_url` blocks — the same place user attachments already go (`MessageHandler.build_turn_context_messages`). Do not add a second multimodal slot.
+All vision input is assembled onto `current_input` as `image_url` blocks — the same place user attachments already go (`MessageHandler.build_turn_context_messages`). Do not add a second multimodal slot.
 
 ### 4.1 User names a stored image this turn
 
@@ -63,7 +63,7 @@ Bind it only when `supports_vision` is true (same pattern as `web_search` only w
 Contract:
 
 - **In:** one workspace path (workspace-relative, blob URL, or absolute path inside the workspace — same resolver family as `attach_artifact`).
-- **Effect:** the path is queued for the **next model iteration** of this turn as `current_task` vision input.
+- **Effect:** the path is queued for the **next model iteration** of this turn as `current_input` vision input.
 - **Observation text:** a short ack (`path`, size, mime). Not a caption. Not "I see a login form". The pixels are the payload; the text only confirms the channel opened.
 - **Not:** user-visible delivery. If the person should receive the file, that remains `attach_artifact`.
 
@@ -71,7 +71,7 @@ If `supports_vision` is false, the tool is absent and `capability_limits` alread
 
 ### 4.3 Shared inject pipeline
 
-User attachments, paths named in the current user message, and paths requested via `see_image` all go through one helper: resolve inside workspace → read bytes → compress for transport (existing `compress_image_bytes_for_transport`) → data URI → `image_url` on `current_task`.
+User attachments, paths named in the current user message, and paths requested via `see_image` all go through one helper: resolve inside workspace → read bytes → compress for transport (existing `compress_image_bytes_for_transport`) → data URI → `image_url` on `current_input`.
 
 Cap remains `MAX_IMAGES_PER_MESSAGE` (5). Extra paths fail closed with a clear observation, they are not silently dropped without a reason.
 
@@ -81,7 +81,7 @@ Workspace-only. No fetch of arbitrary `https://` URLs as a side effect of this j
 
 1. Recent experience already lists the path.
 2. The agent calls `see_image` with that path.
-3. The next iteration of the same turn has the pixels on `current_task`.
+3. The next iteration of the same turn has the pixels on `current_input`.
 4. It answers from what it sees.
 
 No new memory write. No nested vision model. No skill load.
@@ -115,7 +115,7 @@ No new memory write. No nested vision model. No skill load.
 
 ## 8. Acceptance
 
-- A follow-up that does not re-attach the picture can still result in `image_url` on `current_task` after `see_image`.
+- A follow-up that does not re-attach the picture can still result in `image_url` on `current_input` after `see_image`.
 - The tool observation is not a description of image contents.
 - `attach_artifact` still does not put pixels on the model.
 - With `supports_vision: false`, `see_image` is not bound.

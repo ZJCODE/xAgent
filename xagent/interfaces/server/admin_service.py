@@ -47,6 +47,7 @@ class AdminService(BaseAgentRunner):
             self.config_dir = config_dir_path
             self.config_path = config_dir_path / BaseAgentConfig.CONFIG_FILENAME
             self.identity_path = config_dir_path / BaseAgentConfig.IDENTITY_FILENAME
+            self.operator_policy_path = config_dir_path / BaseAgentConfig.OPERATOR_POLICY_FILENAME
             try:
                 self.config = self._load_config(self.config_path)
             except Exception:
@@ -172,6 +173,15 @@ class AdminService(BaseAgentRunner):
             raise HTTPException(status_code=500, detail="Identity file path is unavailable")
         return Path(identity_path).expanduser().resolve()
 
+    def _get_operator_policy_path(self) -> Path:
+        policy_path = getattr(self, "operator_policy_path", None)
+        if policy_path is None:
+            config_dir = getattr(self, "config_dir", None)
+            if config_dir is not None:
+                return Path(config_dir) / BaseAgentConfig.OPERATOR_POLICY_FILENAME
+            raise HTTPException(status_code=500, detail="Operator policy file path is unavailable")
+        return Path(policy_path).expanduser().resolve()
+
     def _get_agent_identity(self) -> str:
         identity = getattr(self.agent, "identity", None)
         if identity is None:
@@ -187,3 +197,13 @@ class AdminService(BaseAgentRunner):
             if message_handler is not None:
                 message_handler.system_prompt = identity
         self.identity = identity
+
+    def _set_agent_operator_policy(self, policy: str) -> None:
+        if hasattr(self.agent, "set_operator_policy"):
+            self.agent.set_operator_policy(policy)
+        else:
+            self.agent.operator_policy = policy
+            message_handler = getattr(self.agent, "message_handler", None)
+            if message_handler is not None:
+                message_handler.operator_policy = policy
+        self.operator_policy = policy

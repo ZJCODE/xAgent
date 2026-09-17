@@ -24,6 +24,7 @@ from ...interfaces.cli.config_editor import (
 from .models import (
     ConfigInput,
     IdentityInput,
+    OperatorPolicyInput,
     SkillCreateInput,
     SkillEntryCreateInput,
     SkillEntryMoveInput,
@@ -387,6 +388,47 @@ def register_admin_routes(
             "path": str(identity_path),
             "filename": identity_path.name,
             "modified": identity_path.stat().st_mtime,
+        }
+
+    @app.get("/api/agent/operator-policy", tags=["Monitoring"])
+    async def agent_operator_policy():
+        server = resolve_admin()
+        policy_path = server._get_operator_policy_path()
+        if not policy_path.is_file():
+            return {
+                "policy": "",
+                "path": str(policy_path),
+                "filename": policy_path.name,
+                "modified": None,
+            }
+        content = policy_path.read_text(encoding="utf-8")
+        return {
+            "policy": content,
+            "path": str(policy_path),
+            "filename": policy_path.name,
+            "modified": policy_path.stat().st_mtime,
+        }
+
+    @app.put("/api/agent/operator-policy", tags=["Monitoring"])
+    async def update_agent_operator_policy(input_data: OperatorPolicyInput):
+        server = resolve_admin()
+        policy = input_data.policy.strip()
+        policy_path = server._get_operator_policy_path()
+        policy_path.parent.mkdir(parents=True, exist_ok=True)
+        file_content = f"{policy}\n" if policy else ""
+        if file_content:
+            policy_path.write_text(file_content, encoding="utf-8")
+        elif policy_path.is_file():
+            policy_path.write_text("", encoding="utf-8")
+        server._set_agent_operator_policy(policy)
+
+        modified = policy_path.stat().st_mtime if policy_path.is_file() else None
+        return {
+            "status": "ok",
+            "policy": file_content,
+            "path": str(policy_path),
+            "filename": policy_path.name,
+            "modified": modified,
         }
 
     @app.get("/api/agent/config", tags=["Monitoring"])

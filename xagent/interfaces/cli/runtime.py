@@ -1037,6 +1037,11 @@ def handle_identity(args: argparse.Namespace) -> int:
             print(f"Identity not found: {path}")
             return 1
         print(path.read_text(encoding="utf-8"), end="")
+        print(
+            "\n# Tip: move deployment-specific rules to operator_policy.md "
+            "(same directory as identity.md) for the operator policy layer.",
+            file=sys.stderr,
+        )
         return 0
     print(f"Unknown identity command: {args.identity_command}")
     return 1

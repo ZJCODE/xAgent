@@ -1,6 +1,7 @@
 """Regression tests for one-event-one-appearance context architecture (Phase 1)."""
 
 import unittest
+import unittest.mock
 from datetime import datetime
 
 from xagent.core.config import AgentConfig
@@ -177,6 +178,26 @@ class ContextDedupeTests(unittest.TestCase):
         experience = next(m["content"] for m in messages if m["name"] == AgentConfig.RECENT_EXPERIENCE_NAME)
         self.assertIn("plain observation body", experience)
         self.assertNotIn("Alice: plain observation body", experience)
+
+    def test_no_policy_text_in_user_role_messages(self):
+        handler = MessageHandler(message_storage=unittest.mock.MagicMock())
+        instruction_messages = handler.build_instruction_messages(
+            tool_names=["run_command"],
+            channel_instructions="Feishu group policy line.",
+        )
+        turn_messages = MessageHandler.build_turn_context_messages(
+            [Message.create("hi", role=RoleType.USER, sender_id="Joy")],
+            current_user_id="Joy",
+            channel_instructions="Feishu group policy line.",
+        )
+        turn_text = _flatten_turn_text(turn_messages)
+        self.assertNotIn("<channel_policy", turn_text)
+        self.assertNotIn("<tool_policy", turn_text)
+        instruction_text = "\n".join(
+            m["content"] for m in instruction_messages if isinstance(m.get("content"), str)
+        )
+        self.assertIn("<channel_policy", instruction_text)
+        self.assertIn("<tool_policy", instruction_text)
 
 
 if __name__ == "__main__":

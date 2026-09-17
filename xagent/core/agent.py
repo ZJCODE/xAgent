@@ -78,6 +78,7 @@ class Agent:
     def __init__(
         self,
         system_prompt: Optional[str] = None,
+        operator_policy: Optional[str] = None,
         model: Optional[str] = None,
         client: Optional[Any] = None,
         model_api: str = MODEL_API_OPENAI_RESPONSES,
@@ -128,6 +129,7 @@ class Agent:
 
                 self.client = self.observability.create_client({}) or AsyncOpenAI()
         self.system_prompt = system_prompt or ""
+        self.operator_policy = (operator_policy or "").strip()
         self._assistant_sender_id = "agent"
 
         workspace_path: Optional[Path] = None
@@ -219,6 +221,7 @@ class Agent:
         self.message_handler = MessageHandler(
             message_storage=self.message_storage,
             system_prompt=self.system_prompt,
+            operator_policy=self.operator_policy,
             workspace_dir=getattr(self, "workspace_dir", None),
         )
         self.tool_executor = ToolExecutor(
@@ -243,6 +246,11 @@ class Agent:
         self.system_prompt = identity or ""
         if hasattr(self, "message_handler"):
             self.message_handler.system_prompt = self.system_prompt
+
+    def set_operator_policy(self, policy: str) -> None:
+        self.operator_policy = (policy or "").strip()
+        if hasattr(self, "message_handler"):
+            self.message_handler.operator_policy = self.operator_policy
 
     @property
     def tools(self) -> dict:
@@ -373,6 +381,7 @@ class Agent:
             supports_vision=self.supports_vision,
             workspace_context=workspace_context,
             channel_instructions=channel_instructions,
+            operator_policy=getattr(self, "operator_policy", ""),
         )
         iteration_messages, turn_entries = MessageHandler.build_turn_context_with_manifest(
             recent_messages,

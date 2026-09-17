@@ -76,6 +76,12 @@ class IdentityInput(BaseModel):
     identity: str
 
 
+class OperatorPolicyInput(BaseModel):
+    """Request body for updating operator_policy.md."""
+
+    policy: str
+
+
 class ConfigInput(BaseModel):
     """Request body for updating config.yaml."""
 

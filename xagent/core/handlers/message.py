@@ -1,5 +1,4 @@
 import logging
-import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
@@ -55,11 +54,13 @@ class MessageHandler:
         self,
         message_storage: MessageStorage,
         system_prompt: str = "",
+        operator_policy: str = "",
         workspace_dir: Optional[Union[str, Path]] = None,
         prompt_registry: Optional[PromptRegistry] = None,
     ):
         self.message_storage = message_storage
         self.system_prompt = system_prompt
+        self.operator_policy = operator_policy or ""
         self.workspace_dir = Path(workspace_dir).expanduser().resolve() if workspace_dir is not None else None
         self.prompt_registry = prompt_registry or default_prompt_registry()
 
@@ -200,18 +201,6 @@ class MessageHandler:
     ) -> List[Message]:
         return await self.message_storage.get_messages(limit)
 
-    async def get_input_messages(
-        self,
-        limit: int,
-    ) -> list:
-        """Retrieve and serialize recent messages for model input."""
-        messages = await self.get_recent_messages(limit)
-        return [msg.to_model_input() for msg in messages]
-
-    @staticmethod
-    def to_model_input(messages: List[Message]) -> list:
-        return [msg.to_model_input() for msg in messages]
-
     @staticmethod
     def filter_conversation_messages(messages: List[Message]) -> List[Message]:
         """Keep only persisted user/assistant natural-language messages."""
@@ -227,101 +216,12 @@ class MessageHandler:
         return [msg for msg in messages if msg.type == MessageType.CONTEXT_EVENT]
 
     @staticmethod
-    def build_recent_transcript_message(
-        messages: List[Message],
-        current_user_id: str,
-        memory_context: str = "",
-        context_events: Optional[List[Message]] = None,
-        max_messages: int = AgentConfig.DEFAULT_RECENT_MESSAGES,
-        max_context_events: int = AgentConfig.MAX_CONTEXT_EVENTS,
-        include_images: bool = True,
-        workspace_dir: Optional[Union[str, Path]] = None,
-    ) -> dict:
-        """Collapse recent conversation history into one user transcript message.
-
-                Includes per-turn dynamic context that changes each call:
-                    - Runtime metadata (date and current speaker)
-          - Recent memory (conditional)
-                    - Recent experience in chronological order
-        """
-        conversation_messages = MessageHandler.filter_conversation_messages(messages)
-        observation_messages = (
-            MessageHandler.filter_context_events(messages)
-            if context_events is None
-            else MessageHandler.filter_context_events(context_events)
-        )
-        budgeted_entries, omitted_count = MessageHandler._budget_transcript_entries(
-            conversation_messages,
-            max_messages=max_messages,
-        )
-        budgeted_messages = [msg for msg, _ in budgeted_entries]
-        budgeted_observations, omitted_observation_count = MessageHandler._budget_context_events(
-            observation_messages,
-            max_events=max_context_events,
-        )
-        experience_entries = MessageHandler._merge_experience_entries(
-            budgeted_entries,
-            budgeted_observations,
-        )
-
-        transcript_lines: list[str] = []
-
-        # --- Runtime context ---
-        transcript_lines.append(AgentConfig.DEFAULT_SYSTEM_PROMPT.rstrip())
-        transcript_lines.append(
-            f"- Current speaker: {MessageHandler._speaker_address_for(messages, current_user_id)}"
-        )
-        transcript_lines.append(f"- Date: {time.strftime('%Y-%m-%d')}")
-        transcript_lines.append("")
-
-        # --- Recent memory (conditional) ---
-        if memory_context:
-            transcript_lines.append(
-            "**Recent Memory** "
-                "(attribution rules per instructions):\n\n"
-                + memory_context
-            )
-            transcript_lines.append("")
-
-        # --- Recent experience ---
-        transcript_lines.append("==========\n")
-        transcript_lines.append("")
-        transcript_lines.append("**Recent Experience** (conversation and observations in chronological order):")
-        transcript_lines.append("")
-
-        if omitted_count or omitted_observation_count:
-            transcript_lines.append(
-                MessageHandler._format_omitted_experience_note(
-                    omitted_messages=omitted_count,
-                    omitted_observations=omitted_observation_count,
-                )
-            )
-            transcript_lines.append("")
-
-        for entry_type, msg, content in experience_entries:
-            transcript_lines.extend(
-                MessageHandler._format_experience_entry(entry_type, msg, content)
-            )
-            transcript_lines.append("")
-
-        transcript_lines.append(AgentConfig.build_turn_reply_prompt(current_user_id))
-
-        transcript_text = "\n".join(transcript_lines).strip()
-
-        # print("=== Built transcript message content ===")
-        # print(transcript_text)
-        # print("=== End transcript message content ===")
-
-        return {"role": RoleType.USER.value, "content": transcript_text}
-
-    @staticmethod
     def build_turn_context_messages(
         messages: List[Message],
         current_user_id: str,
         memory_context: str = "",
         relationship_context: str = "",
         notebook_context: str = "",
-        workspace_context: str = "",
         context_events: Optional[List[Message]] = None,
         current_time: Optional[str] = None,
         current_date: Optional[str] = None,
@@ -345,7 +245,6 @@ class MessageHandler:
             memory_context=memory_context,
             relationship_context=relationship_context,
             notebook_context=notebook_context,
-            workspace_context=workspace_context,
             context_events=context_events,
             current_time=current_time,
             current_date=current_date,
@@ -371,7 +270,6 @@ class MessageHandler:
         memory_context: str = "",
         relationship_context: str = "",
         notebook_context: str = "",
-        workspace_context: str = "",
         context_events: Optional[List[Message]] = None,
         current_time: Optional[str] = None,
         current_date: Optional[str] = None,
@@ -1266,30 +1164,6 @@ class MessageHandler:
             return "image/gif"
         return "image/png"
 
-    def build_instructions(
-        self,
-        tool_names: Optional[List[str]] = None,
-        skills_catalog: str = "",
-        workspace_context: str = "",
-    ) -> str:
-        """Build the static instructions string for the model.
-
-        Contains only behavioural rules that do not change per-turn:
-          1. Core Principles — foundational behaviour guidelines
-          2. Tool Policy — short cross-tool floor rules when tools are active
-          3. User System Prompt — developer-supplied customisation
-        """
-        instruction_messages = self.build_instruction_messages(
-            tool_names=tool_names,
-            skills_catalog=skills_catalog,
-            workspace_context=workspace_context,
-        )
-        instructions = "\n\n".join(
-            message["content"] for message in instruction_messages if message.get("content")
-        )
-
-        return instructions
-
     def build_instruction_messages(
         self,
         tool_names: Optional[List[str]] = None,
@@ -1297,6 +1171,7 @@ class MessageHandler:
         supports_vision: bool = True,
         workspace_context: str = "",
         channel_instructions: str = "",
+        operator_policy: str = "",
         is_subconscious: bool = False,
     ) -> list[dict]:
         """Build static named system layers for the model input.
@@ -1312,6 +1187,7 @@ class MessageHandler:
             supports_vision=supports_vision,
             workspace_context=workspace_context,
             channel_instructions=channel_instructions,
+            operator_policy=operator_policy,
             is_subconscious=is_subconscious,
         )
         return messages
@@ -1323,10 +1199,12 @@ class MessageHandler:
         supports_vision: bool = True,
         workspace_context: str = "",
         channel_instructions: str = "",
+        operator_policy: str = "",
         is_subconscious: bool = False,
     ) -> tuple[list[dict], list[ManifestEntry]]:
         ctx = PromptAssembleContext(
             system_prompt=self.system_prompt,
+            operator_policy=operator_policy or getattr(self, "operator_policy", "") or "",
             tool_names=list(tool_names or []),
             skills_catalog=skills_catalog,
             workspace_context=workspace_context,
@@ -1342,12 +1220,6 @@ class MessageHandler:
         return self.prompt_registry.assemble(KIND_DECISION, ctx)
 
     @staticmethod
-    def _build_tool_policy(tool_names: Optional[List[str]] = None) -> str:
-        if not tool_names:
-            return ""
-        return AgentConfig.TOOL_POLICY_BASELINE
-
-    @staticmethod
     def sanitize_input_messages(input_messages: list) -> list:
         """Remove leading tool result messages, which are invalid without a prior assistant tool call."""
         while input_messages and (
@@ -1356,11 +1228,3 @@ class MessageHandler:
         ):
             input_messages.pop(0)
         return input_messages
-
-    @staticmethod
-    def filter_non_tool_messages(messages: list) -> list:
-        """Filter messages to only user and assistant roles."""
-        return [
-            msg for msg in messages
-            if msg.get("role") in (RoleType.USER.value, RoleType.ASSISTANT.value)
-        ]

@@ -2294,32 +2294,36 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
             Message.create("x" * 30, role=RoleType.USER, sender_id="alice")
         )
 
-        transcript = MessageHandler.build_recent_transcript_message(
+        layers = MessageHandler.build_turn_context_messages(
             messages,
             current_user_id="alice",
+            current_message=messages[-1],
             max_messages=2,
-        )["content"]
+        )
+        recent = next(m["content"] for m in layers if m["name"] == AgentConfig.RECENT_EXPERIENCE_NAME)
+        current_input = next(m["content"] for m in layers if m["name"] == AgentConfig.CURRENT_INPUT_NAME)
 
-        self.assertIn("[Earlier experience omitted: 2 conversation messages]", transcript)
-        self.assertNotIn("message-0", transcript)
-        self.assertIn("message-2", transcript)
-        self.assertIn("x" * 30, transcript)
+        self.assertIn("[Earlier experience omitted: 2 conversation messages]", recent)
+        self.assertNotIn("message-0", recent)
+        self.assertIn("message-2", recent)
+        self.assertIn("x" * 30, current_input)
 
-    async def test_transcript_budget_records_images_without_attaching_them(self):
+    async def test_recent_experience_records_images_without_attaching_to_current_input(self):
         image_url = "https://example.com/chart.png"
         messages = [
-            Message.create("older", role=RoleType.USER, sender_id="alice"),
             Message.create("look at this", role=RoleType.USER, sender_id="alice", image_source=image_url),
+            Message.create("what is it", role=RoleType.USER, sender_id="alice"),
         ]
 
-        model_message = MessageHandler.build_recent_transcript_message(
+        layers = MessageHandler.build_turn_context_messages(
             messages,
             current_user_id="alice",
-            max_messages=1,
+            current_message=messages[-1],
+            max_messages=2,
         )
+        recent = next(m["content"] for m in layers if m["name"] == AgentConfig.RECENT_EXPERIENCE_NAME)
 
-        self.assertIsInstance(model_message["content"], str)
-        self.assertIn("[Attached image: 1]", model_message["content"])
+        self.assertIn("[Attached image: 1]", recent)
 
     async def test_observe_ingests_event_without_calling_model(self):
         storage = InMemoryMessageStorage()

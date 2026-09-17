@@ -252,11 +252,7 @@ explainable. Revisit only if recall measurably fails.
 
 ## 8. Inject
 
-A `KIND_TURN` prompt section at `order=15`:
-
-```
-relationship_context (0) -> recent_memory (10) -> notebook_context (15) -> recent_experience (20) -> current_task (30)
-```
+Turn-layer order is defined in `docs/context-architecture-plan.md` §3.1 (`recent_memory` → `relationship_context` → `notebook_context` → `recent_experience` → `room_snapshot` → `current_input`).
 
 **Index, not contents.** One list: notes whose keys hit the current message, each
 with a title and a snippet (up to `NOTEBOOK_SNIPPET_MAX_CHARS`). Cap

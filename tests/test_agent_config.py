@@ -46,20 +46,22 @@ class RunnerWithoutAgent(BaseAgentRunner):
 
 class AgentConfigPromptTests(unittest.TestCase):
 
-    def test_turn_reply_prompt_uses_dynamic_participant_identity(self):
-        prompt = AgentConfig.build_turn_reply_prompt("alice")
+    def test_turn_guidance_user_mentions_speaker(self):
+        guidance = AgentConfig.TURN_GUIDANCE_USER.format(speaker="alice")
+        self.assertIn("what alice just said", guidance)
 
-        self.assertIn("what alice just said", prompt)
-        self.assertIn("Reply to the current situation", prompt)
-        self.assertNotIn("user needs now", prompt)
+    def test_turn_guidance_in_room_speaks_to_the_room(self):
+        guidance = AgentConfig.TURN_GUIDANCE_USER_IN_ROOM.format(
+            room="plaza",
+            speaker="human",
+        )
+        self.assertIn("speak to the room", guidance.lower())
+        self.assertIn("human is the latest speaker", guidance)
 
-    def test_turn_reply_in_room_prompt_speaks_to_the_room(self):
-        prompt = AgentConfig.build_turn_reply_in_room_prompt("human")
-
-        self.assertIn("Speak to everyone present", prompt)
-        self.assertIn("not as a private assistant to human alone", prompt)
-        self.assertIn("human is the latest speaker", prompt)
-        self.assertNotIn("Focus on what human just said", prompt)
+    def test_identity_profile_wrapper(self):
+        rendered = AgentConfig.build_identity_context("You are Telos.")
+        self.assertIn('<identity_profile authority="profile">', rendered)
+        self.assertNotIn("trusted_as_instruction", rendered)
 
     def test_current_task_uses_room_prompt_when_room_context_present(self):
         task = AgentConfig.build_current_input(
@@ -131,12 +133,10 @@ class AgentConfigPromptTests(unittest.TestCase):
         self.assertIn("Name YYYY-MM-DD HH:mm: text", AgentConfig.BASE_AGENT_PROMPT)
         self.assertIn("[/room context]", AgentConfig.BASE_AGENT_PROMPT)
 
-    def test_turn_reply_prompt_requires_attachment_delivery_for_images(self):
-        prompt = AgentConfig.build_turn_reply_prompt("alice")
-
-        self.assertIn("Never rely on Markdown image embeds", prompt)
-        self.assertIn("structured attachment", prompt)
-        self.assertIn("attach_artifact", prompt)
+    def test_tool_policy_requires_attachment_delivery_for_images(self):
+        policy = AgentConfig.TOOL_POLICY_BASELINE
+        self.assertIn("structured attachments", policy)
+        self.assertIn("attach_artifact", policy)
 
     def test_memory_defaults_are_internal_balanced_values(self):
         self.assertEqual(AgentConfig.DIARY_CONTEXT_DAYS, 2)

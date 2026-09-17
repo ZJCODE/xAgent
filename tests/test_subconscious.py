@@ -643,23 +643,30 @@ class SubconsciousLoopTests(unittest.TestCase):
             contents = [i["content"] for i in instructions]
             self.assertTrue(any("Context and Attribution" in c for c in contents))
             self.assertTrue(any("already know what to call them" in c for c in contents))
-            self.assertTrue(any("avoid unsolicited messages" in c for c in contents))
-            self.assertTrue(any("would speak now" in c for c in contents))
-            self.assertTrue(any("must not be spoken to another" in c for c in contents))
             self.assertFalse(any("quiet hours" in c.lower() for c in contents))
             self.assertFalse(any("All available tools are defined" in c for c in contents))
             self.assertEqual(agent.model_client.calls[0]["tool_specs"], [])
             agent._workspace_context.assert_not_called()
             agent._skills_catalog_context.assert_not_called()
 
+            turn_contents = [
+                m["content"] for m in agent.model_client.calls[0]["messages"]
+                if isinstance(m.get("content"), str)
+            ]
+            self.assertTrue(any('kind="reflection"' in c for c in turn_contents))
+            self.assertTrue(any("avoid unsolicited messages" in c for c in turn_contents))
+            self.assertTrue(any("would speak now" in c for c in turn_contents))
+            self.assertTrue(any("do not send their thread to someone else" in c for c in turn_contents))
+
             identities = [i for i in instructions if i.get("name") == "identity_context"]
             self.assertEqual(len(identities), 1)
             self.assertIn("I am a test identity.", identities[0]["content"])
+            self.assertIn('<identity_profile authority="profile">', identities[0]["content"])
 
             modes = [i for i in instructions if i.get("name") == AgentConfig.CURRENT_MODE_NAME]
             self.assertEqual(len(modes), 1)
             self.assertIn('<current_mode name="private_reflection">', modes[0]["content"])
-            self.assertIn("<purpose>", modes[0]["content"])
+            self.assertIn("No tools or external actions", modes[0]["content"])
             core = next(
                 i["content"] for i in instructions
                 if i.get("name") == AgentConfig.CORE_INTERACTION_RULES_NAME

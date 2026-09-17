@@ -15,6 +15,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any, Iterable, Optional
 
+from ...core.config import AgentConfig
 from ...core.formatters import (
     RoomContextEntry,
     RoomSnapshot,
@@ -336,6 +337,28 @@ def fallback_sender_label(sender_type: Optional[str]) -> str:
     return FEISHU_USER_FALLBACK_NAME
 
 
+def collect_feishu_present_keys(
+    records: Iterable[FeishuMessageRecord],
+    *,
+    max_cards: Optional[int] = None,
+) -> list[str]:
+    """Distinct recent human senders as relationship keys (feishu:user_id)."""
+    cap = max_cards
+    if cap is None:
+        cap = max(0, AgentConfig.RELATIONSHIP_MAX_CARDS_PER_TURN - 1)
+    seen: set[str] = set()
+    keys: list[str] = []
+    for record in records:
+        sender_id = (record.sender_id or "").strip()
+        if not sender_id or sender_id in seen:
+            continue
+        seen.add(sender_id)
+        keys.append(f"feishu:{sender_id}")
+        if cap and len(keys) >= cap:
+            break
+    return keys
+
+
 def build_feishu_room_snapshot(
     room_id: str,
     records: Iterable[FeishuMessageRecord],
@@ -346,17 +369,21 @@ def build_feishu_room_snapshot(
     present_keys: Optional[list[str]] = None,
 ) -> RoomSnapshot:
     """Structured room situation for dedupe and rendering."""
+    record_list = list(records)
     entries = _build_room_context_entries(
-        records,
+        record_list,
         bot_open_id=bot_open_id,
         bot_app_id=bot_app_id,
     )
+    resolved_present_keys = present_keys
+    if resolved_present_keys is None:
+        resolved_present_keys = collect_feishu_present_keys(record_list)
     return RoomSnapshot(
         room_id=room_id,
         room_name=(room_name or "").strip(),
         entries=tuple(entries),
         present_labels=(),
-        present_keys=tuple(present_keys or ()),
+        present_keys=tuple(resolved_present_keys or ()),
     )
 
 

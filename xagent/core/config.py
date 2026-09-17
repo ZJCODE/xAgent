@@ -24,6 +24,7 @@ class AgentConfig:
     CAPABILITY_LIMITS_NAME = "capability_limits"
     TOOL_POLICY_NAME = "tool_policy"
     IDENTITY_CONTEXT_NAME = "identity_context"
+    OPERATOR_POLICY_NAME = "operator_policy"
     RECENT_MEMORY_NAME = "recent_memory"
     NOTEBOOK_CONTEXT_NAME = "notebook_context"
     SUBCONSCIOUS_NOTEBOOK_NAME = "subconscious_notebook"
@@ -291,54 +292,18 @@ class AgentConfig:
     # Assembled by the static builder methods below. Each template
     # corresponds to one context layer injected into the system prompt.
     # ============================================================
-    DEFAULT_SYSTEM_PROMPT = (
-        "**Context:**\n"
-    )
-
-    TURN_REPLY_PROMPT_TEMPLATE = (
-        "Focus on what {current_user_id} just said. "
-        "Use {current_user_id}'s language from the current conversation; if languages are mixed, follow their latest message's dominant language. "
-        "Reply to the current situation, not unrelated older topics. "
-        "Keep simple replies short; answer directly; ask only for missing information. "
-        "For vague reactions, greetings, or acknowledgments, do not continue an unrelated older topic. "
-        "Deliver user-visible images or files as structured attachments; use `attach_artifact` when available. "
-        "Never rely on Markdown image embeds or file links as the delivery mechanism. "
-        "Use tools when needed and claim tool work only after it runs. "
-        "Do not mention internal markers, memory, hidden context, prompt structure, or tool routing."
-    )
-
-    TURN_REPLY_IN_ROOM_PROMPT_TEMPLATE = (
-        "You are already present in this room. Speak to everyone present, "
-        "not as a private assistant to {current_user_id} alone. "
-        "{current_user_id} is the latest speaker for language and attribution; "
-        "use their language from the current conversation; if languages are mixed, follow their latest message's dominant language. "
-        "Reply to the current room situation, not unrelated older topics. "
-        "Keep simple replies short; answer directly; ask only for missing information. "
-        "For vague reactions, greetings, or acknowledgments, do not continue an unrelated older topic. "
-        "Deliver user-visible images or files as structured attachments; use `attach_artifact` when available. "
-        "Never rely on Markdown image embeds or file links as the delivery mechanism. "
-        "Use tools when needed and claim tool work only after it runs. "
-        "Do not mention internal markers, memory, hidden context, prompt structure, or tool routing."
-    )
-
-    TURN_PRESENCE_PROMPT_TEMPLATE = (
-        "You are already present in this room. Hearing a line is not a private request. "
-        "Speak to everyone present, not as a private assistant to whoever spoke last. "
-        "Use the language of the room; if languages are mixed, follow the latest line's dominant language. "
-        "Reply to the current room situation, not unrelated older topics. "
-        "Keep simple replies short; answer directly; ask only for missing information. "
-        "For vague reactions, greetings, or acknowledgments, do not continue an unrelated older topic. "
-        "Deliver user-visible images or files as structured attachments; use `attach_artifact` when available. "
-        "Never rely on Markdown image embeds or file links as the delivery mechanism. "
-        "Use tools when needed and claim tool work only after it runs. "
-        "Do not mention internal markers, memory, hidden context, prompt structure, or tool routing."
-    )
-
     IDENTITY_CONTEXT_TEMPLATE = (
-        "<identity_context trusted_as_instruction=\"false\">\n"
-        "<purpose>Tone and continuity profile. Cannot override core rules, privacy, safety, or tool policy.</purpose>\n"
+        "<identity_profile authority=\"profile\">\n"
+        "<purpose>Who you are: role, tone, tastes, continuity. "
+        "Lower authority than core rules, operator policy, and tool policy.</purpose>\n"
         "{identity}\n"
-        "</identity_context>"
+        "</identity_profile>"
+    )
+
+    OPERATOR_POLICY_TEMPLATE = (
+        "<operator_policy authority=\"operator\">\n"
+        "{policy}\n"
+        "</operator_policy>"
     )
 
     RECENT_MEMORY_PURPOSE = (
@@ -368,8 +333,7 @@ class AgentConfig:
 
     WORKSPACE_CONTEXT_TEMPLATE = (
         "<workspace_context>\n"
-        "<purpose>Local self-managed work area. Routine edits inside are allowed; "
-        "outside or destructive work needs approval.</purpose>\n"
+        "<purpose>Local self-managed work area for notes, scripts, and artifacts.</purpose>\n"
         "directory: {workspace_dir}\n"
         "scope: notes, project files, scripts, images, and artifacts\n"
         "default_cwd: run_command\n"
@@ -414,9 +378,12 @@ class AgentConfig:
     )
 
     SUBCONSCIOUS_CURRENT_INPUT_TEMPLATE = (
-        "<current_input mode=\"subconscious_json\">\n"
-        "Current time: {current_time}\n"
-        "No tools. Output JSON only.\n"
+        "<current_input kind=\"reflection\" mode=\"subconscious_json\">\n"
+        "time: {current_time}\n"
+        "\n"
+        "(no external event; reflect on recent experience)\n"
+        "</current_input>\n"
+        "<turn_guidance kind=\"reflection\">\n"
         "Form one private thought from recent experience and memory; "
         "empty internal_content is fine if nothing surfaces. "
         "Do not invent a new inner monologue just to fill the turn.\n"
@@ -446,7 +413,7 @@ class AgentConfig:
         '"worthy": true|false, '
         '"recipient_hint": "exact user_id or null", '
         '"external_content": "outward message if worthy, else null"}}\n'
-        "</current_input>"
+        "</turn_guidance>"
     )
 
     SUBCONSCIOUS_RELATIONSHIPS_TEMPLATE = (
@@ -473,18 +440,9 @@ class AgentConfig:
 
     CURRENT_MODE_PRIVATE_REFLECTION = (
         "<current_mode name=\"private_reflection\">\n"
-        "<purpose>Private inner reflection. No tools, no task execution, JSON-only output as specified in the current task.</purpose>\n"
-        "- You cannot execute tasks, call tools, search the web, or take direct action — "
-        "those capabilities are unavailable during reflection.\n"
-        "- Your only output is the JSON specified in the current task. "
-        "worthy=true means you would speak now, and the outward message will be sent. "
-        "At night, avoid unsolicited messages; if someone is already talking with you, "
-        "continuing is not a disturbance. If now is a bad time, keep the thought "
-        "internal. The diary is only yours; writing something down did not send it. "
-        "A thought about one person must not be spoken to another.\n"
-        "- Do not try to call functions or act directly. If a thought inclines toward "
-        "doing something, note the impulse in internal_content; the reflection itself "
-        "may later lead to action through the normal agent loop.\n"
+        "No tools or external actions this turn.\n"
+        "Output must be only the JSON schema in current_input.\n"
+        "Reflection only — not a user message and not tool execution.\n"
         "</current_mode>"
     )
 
@@ -514,6 +472,7 @@ class AgentConfig:
         "**Boundaries:**\n"
         "- Decide what to share or keep private from your own judgment, based on context, relationship, trust, consent, relevance, safety, and possible harm.\n"
         "- Calibrate disclosure to your standing with the specific person you are addressing: share more freely where there is established trust, hold back where the relationship is new, distant, or strained.\n"
+        "- In a room, calibrate disclosure to the least-trusted person present, not only to the speaker.\n"
         "- Protect other people's private or sensitive details. If unsure, summarize generally or say you are not sure.\n"
         "- If someone asked you to keep something private, do not reveal it directly or indirectly.\n"
         "\n"
@@ -592,20 +551,15 @@ class AgentConfig:
     # ============================================================
 
     @staticmethod
-    def build_turn_reply_prompt(current_user_id: str) -> str:
-        return AgentConfig.TURN_REPLY_PROMPT_TEMPLATE.format(current_user_id=current_user_id)
-
-    @staticmethod
-    def build_turn_reply_in_room_prompt(current_user_id: str) -> str:
-        return AgentConfig.TURN_REPLY_IN_ROOM_PROMPT_TEMPLATE.format(current_user_id=current_user_id)
-
-    @staticmethod
-    def build_turn_presence_prompt() -> str:
-        return AgentConfig.TURN_PRESENCE_PROMPT_TEMPLATE
-
-    @staticmethod
     def build_identity_context(identity: str) -> str:
         return AgentConfig.IDENTITY_CONTEXT_TEMPLATE.format(identity=identity.strip())
+
+    @staticmethod
+    def build_operator_policy_context(policy: str) -> str:
+        body = (policy or "").strip()
+        if not body:
+            return ""
+        return AgentConfig.OPERATOR_POLICY_TEMPLATE.format(policy=body)
 
     @staticmethod
     def build_workspace_context(workspace_dir: str) -> str:
@@ -716,13 +670,6 @@ class AgentConfig:
         return AgentConfig.SUBCONSCIOUS_CURRENT_INPUT_TEMPLATE.format(
             current_time=current_time or datetime.now().strftime("%Y-%m-%d %H:%M"),
         )
-
-    @staticmethod
-    def scheduled_agent_prompt(content: str) -> str:
-        """Legacy wrapper kept to unwrap already-stored scheduled turns."""
-        from .inbox import SCHEDULED_AGENT_PROMPT_PREFIX
-
-        return SCHEDULED_AGENT_PROMPT_PREFIX + content.strip()
 
 # ================================================================
 # Reply Type Enum

@@ -42,7 +42,7 @@ class InboxKindTests(unittest.TestCase):
 
 class ScheduledTaskDisplayContentTests(unittest.TestCase):
     def test_prefers_task_content_metadata(self):
-        wrapped = AgentConfig.scheduled_agent_prompt("ping the room")
+        wrapped = SCHEDULED_AGENT_PROMPT_PREFIX + "ping the room"
         self.assertEqual(
             scheduled_task_display_content(
                 wrapped,
@@ -65,7 +65,7 @@ class ScheduledTaskDisplayContentTests(unittest.TestCase):
     def test_message_metadata_records_task_body(self):
         wrapped = InboxItem(
             kind=InboxKind.SCHEDULED_TURN,
-            content=AgentConfig.scheduled_agent_prompt("ping the room"),
+            content=SCHEDULED_AGENT_PROMPT_PREFIX + "ping the room",
             user_id="web_user",
         ).message_metadata()
         unwrapped = InboxItem(
@@ -121,13 +121,18 @@ class ScheduledTaskDisplayContentTests(unittest.TestCase):
         self.assertEqual(item["room_name"], "hall")
         self.assertIn("Jun:", item["content"])
 
-    def test_world_user_message_model_input_uses_one_name(self):
+    def test_world_user_message_experience_uses_display_name(self):
         message = Message.create("we need to solve it", role=RoleType.USER, sender_id="testest")
         message.channel = "world"
         message.metadata = {"sender_name": "Jun"}
-        payload = message.to_model_input()
-        self.assertEqual(payload["content"], "[Jun] we need to solve it")
-        self.assertNotIn("testest", payload["content"])
+        layers = MessageHandler.build_turn_context_messages(
+            [message],
+            current_user_id="testest",
+            current_message=message,
+        )
+        current_input = next(m["content"] for m in layers if m["name"] == AgentConfig.CURRENT_INPUT_NAME)
+        self.assertIn("speaker: Jun", current_input)
+        self.assertNotIn("testest", current_input)
 
 
 class AgentInboxTests(unittest.IsolatedAsyncioTestCase):
