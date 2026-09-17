@@ -176,7 +176,7 @@ class WorldInhabitantTests(unittest.IsolatedAsyncioTestCase):
         heard = next(
             item for item in self.agent.observed if "the coffee is hot" in str(item.get("context") or "")
         )
-        self.assertEqual(heard["context"], "爱丽丝: the coffee is hot")
+        self.assertEqual(heard["context"], "alice: the coffee is hot")
         self.assertNotIn("[room context]", heard["context"])
         self.assertEqual(self.agent.message_handler.users, [])
         decision_context = str(self.agent.decisions[0].get("context") or "")
