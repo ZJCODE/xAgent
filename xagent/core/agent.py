@@ -16,6 +16,7 @@ from ..integrations.langfuse import (
     ObservabilityRuntime,
     build_session_id,
 )
+from .context_manifest import build_context_manifest, emit_context_manifest
 from ..schemas import (
     AgentTurnResult,
     Message,
@@ -353,13 +354,14 @@ class Agent:
         tool_specs = self.tool_manager.cached_tool_specs
         workspace_context = self._workspace_context(tool_names)
         skills_catalog = self._skills_catalog_context()
-        instructions = msg_handler.build_instruction_messages(
+        instructions, instruction_entries = msg_handler.build_instruction_messages_with_manifest(
             tool_names=tool_names,
             skills_catalog=skills_catalog,
             supports_vision=self.supports_vision,
             workspace_context=workspace_context,
+            channel_instructions=channel_instructions,
         )
-        iteration_messages = msg_handler.build_turn_context_messages(
+        iteration_messages, turn_entries = MessageHandler.build_turn_context_with_manifest(
             recent_messages,
             current_user_id=user_id,
             memory_context=memory_context,
@@ -376,7 +378,20 @@ class Agent:
             prompt_registry=getattr(msg_handler, "prompt_registry", None),
         )
         input_messages = msg_handler.sanitize_input_messages(list(iteration_messages))
-        return tool_specs, instructions, iteration_messages, input_messages
+        inbox_kind = str((user_msg.metadata or {}).get(INBOX_KIND_METADATA_KEY) or "").strip()
+        turn_id = user_msg.event_key or f"cursor:{getattr(user_msg, 'id', None) or user_msg.timestamp}"
+        manifest = build_context_manifest(
+            turn_id=str(turn_id),
+            task_mode="reply",
+            inbox_kind=inbox_kind,
+            instruction_entries=instruction_entries,
+            turn_entries=turn_entries,
+            tool_specs=tool_specs,
+            provider_messages=[*instructions, *input_messages],
+        )
+        emit_context_manifest(manifest, workspace_dir=getattr(self, "workspace_dir", None))
+        self._last_context_manifest = manifest
+        return tool_specs, instructions, iteration_messages, input_messages, manifest
 
     async def _notebook_context_for_turn(self, user_msg: Message) -> str:
         """Assemble the notebook index, recalled against the current message.
@@ -477,8 +492,10 @@ class Agent:
         attachments: Optional[List[Dict[str, Any]]] = None,
         stream: bool = False,
         channel_instructions: str = "",
-        room_context: str = "",
+        room_context: Union[str, Any] = "",
         room_name: Optional[str] = None,
+        room_id: Optional[str] = None,
+        source_event_id: Optional[str] = None,
         channel: Optional[str] = None,
         sender_name: str = "",
         inbox_kind: Optional[Union[str, InboxKind]] = None,
@@ -505,6 +522,8 @@ class Agent:
                     channel_instructions=channel_instructions,
                     room_context=room_context,
                     room_name=room_name,
+                    room_id=room_id,
+                    source_event_id=source_event_id,
                     channel=channel,
                     sender_name=sender_name,
                     inbox_kind=inbox_kind,
@@ -533,6 +552,8 @@ class Agent:
             channel_instructions=channel_instructions,
             room_context=room_context,
             room_name=room_name,
+            room_id=room_id,
+            source_event_id=source_event_id,
             channel=channel,
             sender_name=sender_name,
             inbox_kind=inbox_kind,
@@ -551,8 +572,10 @@ class Agent:
         attachments: Optional[List[Dict[str, Any]]] = None,
         stream: bool = False,
         channel_instructions: str = "",
-        room_context: str = "",
+        room_context: Union[str, Any] = "",
         room_name: Optional[str] = None,
+        room_id: Optional[str] = None,
+        source_event_id: Optional[str] = None,
         channel: Optional[str] = None,
         inbox_kind: Optional[Union[str, InboxKind]] = None,
         sender_name: str = "",
@@ -588,6 +611,8 @@ class Agent:
             channel_instructions=channel_instructions,
             room_context=room_context,
             room_name=room_name,
+            room_id=room_id,
+            source_event_id=source_event_id,
             channel=channel,
             inbox_kind=inbox_kind,
             sender_name=sender_name,
@@ -644,6 +669,8 @@ class Agent:
                     image_source,
                     attachments=attachments,
                     room_name=room_name,
+                    room_id=inbox_item.room_id,
+                    source_event_id=inbox_item.source_event_id,
                     channel=channel,
                     metadata=user_metadata,
                     persist=not is_presence_turn(inbox_item.kind),
@@ -663,7 +690,7 @@ class Agent:
                 yield {"type": "done"}
                 return
 
-            tool_specs, instructions, iteration_messages, input_messages = await self._build_turn_context(
+            tool_specs, instructions, iteration_messages, input_messages, manifest = await self._build_turn_context(
                 msg_handler=msg_handler,
                 user_msg=user_msg,
                 user_id=user_id,
@@ -671,6 +698,9 @@ class Agent:
                 room_context=room_context,
             )
             turn_obs.set_input(input_messages)
+            manifest_hook = getattr(turn_obs, "set_context_manifest", None)
+            if callable(manifest_hook):
+                manifest_hook(manifest)
             begin_see_image_turn = getattr(self.tool_executor, "begin_see_image_turn", None)
             if callable(begin_see_image_turn):
                 begin_see_image_turn(
@@ -891,8 +921,10 @@ class Agent:
         attachments: Optional[List[Dict[str, Any]]],
         stream: bool,
         channel_instructions: str,
-        room_context: str = "",
+        room_context: Union[str, Any] = "",
         room_name: Optional[str],
+        room_id: Optional[str] = None,
+        source_event_id: Optional[str] = None,
         channel: Optional[str],
         inbox_kind: Optional[Union[str, InboxKind]],
         sender_name: str = "",
@@ -921,6 +953,8 @@ class Agent:
             image_source=image_source,
             channel_instructions=channel_instructions,
             room_context=room_context,
+            room_id=room_id,
+            source_event_id=source_event_id,
             metadata=extra_metadata,
             stream=stream,
         )
@@ -962,11 +996,17 @@ class Agent:
         event_type: str = "observation",
         metadata: Optional[Dict[str, Any]] = None,
         room_name: Optional[str] = None,
+        room_id: Optional[str] = None,
+        source_event_id: Optional[str] = None,
         channel: Optional[str] = None,
         user_id: Optional[str] = None,
     ) -> AgentTurnResult:
         """Record environmental context without generating a reply."""
         event_metadata = dict(metadata or {})
+        if room_id and "room_id" not in event_metadata:
+            event_metadata["room_id"] = room_id
+        if source_event_id and "source_event_id" not in event_metadata:
+            event_metadata["source_event_id"] = source_event_id
         event_metadata.setdefault(INBOX_KIND_METADATA_KEY, InboxKind.OBSERVATION.value)
         sender_id = (
             str(user_id or "").strip()
@@ -980,6 +1020,10 @@ class Agent:
             event_type=event_type,
             metadata=event_metadata,
             room_name=room_name,
+            room_id=room_id or str(event_metadata.get("room_id") or "").strip() or None,
+            source_event_id=source_event_id
+            or str(event_metadata.get("source_event_id") or "").strip()
+            or None,
             channel=channel,
             sender_id=sender_id,
         )

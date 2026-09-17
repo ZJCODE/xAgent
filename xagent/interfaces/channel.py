@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Optional, Protocol, Union
 
+from ..core.formatters import RoomSnapshot
 from ..core.inbox import InboxKind
 from ..core.runtime.subconscious import SubconsciousDelivery
 
@@ -21,8 +22,10 @@ class ChatTurnRequest:
     user_id: str
     channel: str
     room_name: Optional[str] = None
+    room_id: Optional[str] = None
+    source_event_id: Optional[str] = None
     channel_instructions: str = ""
-    room_context: str = ""
+    room_context: Union[str, RoomSnapshot] = ""
     attachments: Optional[list[dict[str, Any]]] = None
     image_source: Optional[Union[str, list[str]]] = None
     stream: bool = False
@@ -40,6 +43,10 @@ class ChatTurnRequest:
             kwargs["stream"] = True
         if self.room_name:
             kwargs["room_name"] = self.room_name
+        if self.room_id:
+            kwargs["room_id"] = self.room_id
+        if self.source_event_id:
+            kwargs["source_event_id"] = self.source_event_id
         if self.channel_instructions:
             kwargs["channel_instructions"] = self.channel_instructions
         if self.room_context:

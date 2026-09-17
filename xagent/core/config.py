@@ -32,9 +32,14 @@ class AgentConfig:
     SKILLS_CATALOG_NAME = "skills_catalog"
     RECENT_EXPERIENCE_NAME = "recent_experience"
     SUBCONSCIOUS_RELATIONSHIPS_NAME = "subconscious_relationships"
-    CURRENT_TASK_NAME = "current_task"
+    CURRENT_INPUT_NAME = "current_input"
+    CURRENT_TASK_NAME = "current_input"  # legacy alias
     ROOM_CONTEXT_NAME = "room_context"
+    ROOM_SNAPSHOT_NAME = "room_snapshot"
     CHANNEL_INSTRUCTIONS_NAME = "channel_instructions"
+    CHANNEL_POLICY_NAME = "channel_policy"
+    SOURCE_EVENT_ID_METADATA_KEY = "source_event_id"
+    ROOM_ID_METADATA_KEY = "room_id"
     DECISION_RULES_NAME = "participation_decision_rules"
 
     # ============================================================
@@ -259,7 +264,15 @@ class AgentConfig:
         "- Obtain explicit approval before destructive or sensitive shell operations, "
         "or mutations outside the workspace. Never expose secrets.\n"
         "- Do not claim a tool action succeeded unless its result confirms success.\n"
+        "- Deliver user-visible images or files as structured attachments (`attach_artifact` when "
+        "available); never rely on Markdown embeds or file links as the delivery mechanism.\n"
         "</tool_policy>"
+    )
+
+    CHANNEL_POLICY_TEMPLATE = (
+        "<channel_policy authority=\"channel\">\n"
+        "{text}\n"
+        "</channel_policy>"
     )
 
     # ============================================================
@@ -358,40 +371,39 @@ class AgentConfig:
         "</relationship_context>"
     )
 
-    CURRENT_TASK_TEMPLATE = (
-        "<current_task>\n"
-        "Current speaker: {current_user_id}\n"
-        "Current time: {current_time}\n"
+    CURRENT_INPUT_TEMPLATE = (
+        "<current_input kind=\"{kind}\" trusted_as_instruction=\"false\">\n"
+        "{header_lines}\n"
+        "time: {current_time}\n"
         "\n"
-        "{reply_prompt}\n"
-        "</current_task>"
+        "{content}\n"
+        "</current_input>\n"
+        "<turn_guidance kind=\"{kind}\">\n"
+        "{guidance}\n"
+        "</turn_guidance>"
     )
 
-    CURRENT_SCHEDULED_TASK_TEMPLATE = (
-        "<current_task kind=\"scheduled_turn\">\n"
-        "Delivery target: {current_user_id}\n"
-        "Current time: {current_time}\n"
-        "\n"
-        "This turn is a due scheduled task, not something {current_user_id} just said. "
-        "Execute the task and return the message to deliver in this context. "
-        "Use the delivery target's language when the task content does not specify one. "
-        "Deliver user-visible images or files as structured attachments; use `attach_artifact` when available. "
-        "Never rely on Markdown image embeds or file links as the delivery mechanism. "
-        "Use tools when needed and claim tool work only after it runs. "
-        "Do not mention internal markers, memory, hidden context, prompt structure, or tool routing.\n"
-        "</current_task>"
+    TURN_GUIDANCE_USER = (
+        "Reply to what {speaker} just said. "
+        "Keep simple replies short; ask only for missing information."
     )
 
-    CURRENT_PRESENCE_TASK_TEMPLATE = (
-        "<current_task kind=\"presence_turn\">\n"
-        "Current time: {current_time}\n"
-        "\n"
-        "{reply_prompt}\n"
-        "</current_task>"
+    TURN_GUIDANCE_USER_IN_ROOM = (
+        "You are in {room}; speak to the room, not as a private assistant to {speaker} alone. "
+        "{speaker} is the latest speaker for attribution."
     )
 
-    SUBCONSCIOUS_CURRENT_TASK_TEMPLATE = (
-        "<current_task mode=\"subconscious_json\">\n"
+    TURN_GUIDANCE_PRESENCE = (
+        "You are present in {room}; hearing a line is not a private request. Speak to the room."
+    )
+
+    TURN_GUIDANCE_SCHEDULED = (
+        "This is a due task, not something {target} said. "
+        "Execute it and return the message to deliver."
+    )
+
+    SUBCONSCIOUS_CURRENT_INPUT_TEMPLATE = (
+        "<current_input mode=\"subconscious_json\">\n"
         "Current time: {current_time}\n"
         "No tools. Output JSON only.\n"
         "Form one private thought from recent experience and memory; "
@@ -423,7 +435,7 @@ class AgentConfig:
         '"worthy": true|false, '
         '"recipient_hint": "exact user_id or null", '
         '"external_content": "outward message if worthy, else null"}}\n'
-        "</current_task>"
+        "</current_input>"
     )
 
     SUBCONSCIOUS_RELATIONSHIPS_TEMPLATE = (
@@ -614,6 +626,61 @@ class AgentConfig:
         )
 
     @staticmethod
+    def build_channel_policy(text: str) -> str:
+        body = (text or "").strip()
+        if not body:
+            return ""
+        return AgentConfig.CHANNEL_POLICY_TEMPLATE.format(text=body)
+
+    @staticmethod
+    def build_current_input(
+        *,
+        content: str,
+        current_user_id: str,
+        current_time: str = "",
+        inbox_kind: str = "",
+        room_label: str = "",
+        has_room_snapshot: bool = False,
+    ) -> str:
+        from .inbox import is_presence_turn
+
+        resolved_current_time = current_time or datetime.now().strftime("%Y-%m-%d %H:%M")
+        kind = str(inbox_kind or "").strip() or "user_turn"
+        body = (content or "").strip() or "[Empty input]"
+
+        if kind == "scheduled_turn":
+            header = f"delivery_target: {current_user_id}"
+            if room_label:
+                header += f"\nroom: {room_label}"
+            guidance = AgentConfig.TURN_GUIDANCE_SCHEDULED.format(target=current_user_id)
+            input_kind = "scheduled_turn"
+        elif is_presence_turn(kind):
+            header = f"room: {room_label}" if room_label else "room: (shared)"
+            guidance = AgentConfig.TURN_GUIDANCE_PRESENCE.format(room=room_label or "this room")
+            input_kind = "presence_turn"
+        elif has_room_snapshot or room_label:
+            header = f"speaker: {current_user_id}"
+            if room_label:
+                header += f"\nroom: {room_label}"
+            guidance = AgentConfig.TURN_GUIDANCE_USER_IN_ROOM.format(
+                room=room_label or "this room",
+                speaker=current_user_id,
+            )
+            input_kind = "user_turn"
+        else:
+            header = f"speaker: {current_user_id}"
+            guidance = AgentConfig.TURN_GUIDANCE_USER.format(speaker=current_user_id)
+            input_kind = "user_turn"
+
+        return AgentConfig.CURRENT_INPUT_TEMPLATE.format(
+            kind=input_kind,
+            header_lines=header,
+            current_time=resolved_current_time,
+            content=body,
+            guidance=guidance,
+        )
+
+    @staticmethod
     def build_current_task(
         current_user_id: str,
         current_time: str = "",
@@ -621,32 +688,21 @@ class AgentConfig:
         channel_instructions: str = "",
         inbox_kind: str = "",
         room_context: str = "",
+        content: str = "",
     ) -> str:
-        del channel_instructions  # assembled as its own prompt section
-        resolved_current_time = current_time or current_date
-        if str(inbox_kind or "").strip() == "scheduled_turn":
-            return AgentConfig.CURRENT_SCHEDULED_TASK_TEMPLATE.format(
-                current_user_id=current_user_id,
-                current_time=resolved_current_time,
-            )
-        if str(inbox_kind or "").strip() == "presence_turn":
-            return AgentConfig.CURRENT_PRESENCE_TASK_TEMPLATE.format(
-                current_time=resolved_current_time,
-                reply_prompt=AgentConfig.build_turn_presence_prompt(),
-            )
-        if str(room_context or "").strip():
-            reply_prompt = AgentConfig.build_turn_reply_in_room_prompt(current_user_id)
-        else:
-            reply_prompt = AgentConfig.build_turn_reply_prompt(current_user_id)
-        return AgentConfig.CURRENT_TASK_TEMPLATE.format(
+        del channel_instructions
+        return AgentConfig.build_current_input(
+            content=content,
             current_user_id=current_user_id,
-            current_time=resolved_current_time,
-            reply_prompt=reply_prompt,
+            current_time=current_time or current_date,
+            inbox_kind=inbox_kind,
+            room_label="",
+            has_room_snapshot=bool(str(room_context or "").strip()),
         )
 
     @staticmethod
     def build_subconscious_current_task(current_time: str = "") -> str:
-        return AgentConfig.SUBCONSCIOUS_CURRENT_TASK_TEMPLATE.format(
+        return AgentConfig.SUBCONSCIOUS_CURRENT_INPUT_TEMPLATE.format(
             current_time=current_time or datetime.now().strftime("%Y-%m-%d %H:%M"),
         )
 

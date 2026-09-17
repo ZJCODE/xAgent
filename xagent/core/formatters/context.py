@@ -13,6 +13,55 @@ class RoomContextEntry:
     occurred_at: datetime
     text: str
     is_self: bool = False
+    event_id: Optional[str] = None
+    speaker_key: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class RoomSnapshot:
+    """Structured room situation for dedupe and rendering."""
+
+    room_id: str
+    room_name: str
+    entries: tuple[RoomContextEntry, ...]
+    present_labels: tuple[str, ...] = ()
+    present_keys: tuple[str, ...] = ()
+
+    @property
+    def event_keys(self) -> set[str]:
+        keys: set[str] = set()
+        for entry in self.entries:
+            if entry.event_id:
+                keys.add(entry.event_id)
+        return keys
+
+    def render(self) -> str:
+        return format_room_context(
+            self.room_id,
+            self.entries,
+            room_name=self.room_name or None,
+            present=self.present_labels or None,
+        )
+
+    @classmethod
+    def from_legacy_text(cls, text: str) -> "RoomSnapshot":
+        """Parse a rendered ``[room context]`` block without entry event ids."""
+        raw = (text or "").strip()
+        room_id = ""
+        room_name = ""
+        for line in raw.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("room_id:"):
+                room_id = stripped.split(":", 1)[1].strip()
+            elif stripped.startswith("room_name:"):
+                room_name = stripped.split(":", 1)[1].strip()
+        return cls(
+            room_id=room_id,
+            room_name=room_name,
+            entries=(),
+            present_labels=(),
+            present_keys=(),
+        )
 
 
 def format_room_context(
@@ -30,7 +79,7 @@ def format_room_context(
 
     safe_room_name = sanitize_room_context_field(room_name)
     header_lines = ["[room context]"]
-    if safe_room_name:
+    if safe_room_name and safe_room_name != safe_room_id:
         header_lines.append(f"room_name: {safe_room_name}")
     header_lines.append(f"room_id: {safe_room_id}")
     present_line = format_room_context_present(present)

@@ -17,7 +17,16 @@ except ImportError:  # pragma: no cover - optional dependency
 from xagent.integrations.feishu import adapter as feishu_adapter_module
 from xagent.integrations.feishu.adapter import FeishuAdapter, _FeishuOutboundAttachment
 from xagent.integrations.feishu.config import FeishuAdapterConfig
+from xagent.core.formatters import RoomSnapshot
 from xagent.core.runtime import ContactEntry, SubconsciousDelivery, enqueue_scheduled_task, list_task_records
+
+
+def _normalize_chat_kwargs(kwargs: dict) -> dict:
+    payload = dict(kwargs)
+    room_context = payload.get("room_context")
+    if isinstance(room_context, RoomSnapshot):
+        payload["room_context"] = room_context.render()
+    return payload
 
 
 class _FakeAgent:
@@ -29,11 +38,11 @@ class _FakeAgent:
         self.flush_count = 0
 
     async def chat(self, **kwargs):
-        self.chat_calls.append(kwargs)
+        self.chat_calls.append(_normalize_chat_kwargs(kwargs))
         return "agent reply"
 
     async def chat_events(self, **kwargs):
-        self.chat_calls.append(kwargs)
+        self.chat_calls.append(_normalize_chat_kwargs(kwargs))
         yield {"type": "message_start", "message_id": "m1", "phase": "final"}
         yield {"type": "message_done", "message_id": "m1", "phase": "final", "content": "agent reply"}
         yield {"type": "done"}
@@ -65,7 +74,7 @@ class _AttachmentEventAgent(_FakeAgent):
         self.attachments = attachments
 
     async def chat_events(self, **kwargs):
-        self.chat_calls.append(kwargs)
+        self.chat_calls.append(_normalize_chat_kwargs(kwargs))
         yield {
             "type": "message_done",
             "message_id": "m1",
@@ -83,13 +92,13 @@ class _SlowChatAgent(_FakeAgent):
         self.release = release
 
     async def chat(self, **kwargs):
-        self.chat_calls.append(kwargs)
+        self.chat_calls.append(_normalize_chat_kwargs(kwargs))
         self.started.set()
         await self.release.wait()
         return "agent reply"
 
     async def chat_events(self, **kwargs):
-        self.chat_calls.append(kwargs)
+        self.chat_calls.append(_normalize_chat_kwargs(kwargs))
         self.started.set()
         await self.release.wait()
         yield {"type": "message_done", "message_id": "m1", "phase": "final", "content": "agent reply"}
@@ -1097,7 +1106,7 @@ class FeishuAdapterTests(unittest.TestCase):
         self.assertIn("ambient group message", agent.decide_calls[0]["context"])
         self.assertEqual(len(agent.observe_calls), 1)
         self.assertNotIn("[room context]", agent.observe_calls[0]["context"])
-        self.assertEqual(agent.observe_calls[0]["context"], "Alice(ou_user): ambient group message")
+        self.assertEqual(agent.observe_calls[0]["context"], "ambient group message")
         self.assertEqual(agent.observe_calls[0]["metadata"]["silence_reason"], "room is flowing")
         self.assertEqual(agent.observe_calls[0]["user_id"], "ou_user")
         self.assertEqual(adapter._channel.sent, [])
@@ -1125,7 +1134,7 @@ class FeishuAdapterTests(unittest.TestCase):
         self.assertEqual(len(agent.decide_calls), 1)
         self.assertEqual(len(agent.chat_calls), 1)
         self.assertEqual(len(agent.observe_calls), 1)
-        self.assertEqual(agent.observe_calls[0]["context"], "Alice(ou_user): ambient group message")
+        self.assertEqual(agent.observe_calls[0]["context"], "ambient group message")
         self.assertNotIn("silence_reason", agent.observe_calls[0]["metadata"])
         self.assertEqual(agent.chat_calls[0]["user_message"], "ambient group message")
         self.assertEqual(agent.chat_calls[0]["inbox_kind"], "presence_turn")

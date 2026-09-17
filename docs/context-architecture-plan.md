@@ -591,12 +591,12 @@ if presence_turn or room snapshot present:
 
 ---
 
-## 15. 待拍板事项
+## 15. 拍板结论（2026-09-17）
 
-1. identity.md 中现有策略性文字：渐进（继续生效，提示迁移）还是立即降级。本方案按**渐进**实施。
-2. `CONTEXT_BUDGET_TOKENS` 默认值 32000 是否合适；是否按 provider 给不同默认。
-3. `skills_catalog` 归 optional（可被裁）是否接受；替代是归 continuity 但放在最后。
-4. Phase 4 是否同时把 `DIARY_CONTEXT_DAYS`（按天）改为按 cursor 与 summary 对齐。本方案**不改**：diary 是叙事层，按天更符合其语义。
+1. **identity.md**：**渐进**。继续作为 profile 加载并生效；包装改为 `identity_profile authority="profile"`；CLI/admin 提示策略性规则可迁至 `operator_policy.md`。符合 GOAL「稳定自我身份」且不破坏现有部署。
+2. **`CONTEXT_BUDGET_TOKENS`**：默认 **32000**（估算 token）；**不按 provider 分叉**（避免配置矩阵）；manifest 上线后再按附录 A 基线微调。
+3. **`skills_catalog`**：**optional**。技能可通过工具/catalog 再查；预算紧张时优先保 diary / hot raw / current_input（连续性 + 当前任务）。
+4. **`DIARY_CONTEXT_DAYS`**：Phase 4 **不改**按天语义；working summary 仅按 cursor 与 journal 对齐，diary 注入仍按天切片。
 
 ---
 

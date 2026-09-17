@@ -286,7 +286,8 @@ class AgentInboxTests(unittest.IsolatedAsyncioTestCase):
             for message in model_client.calls[0]
         )
         self.assertIn('kind="presence_turn"', rendered)
-        self.assertIn("Hearing a line is not a private request", rendered)
+        self.assertIn("hearing a line is not a private request", rendered.lower())
+        self.assertIn("hello hall", rendered)
         self.assertNotIn("Current speaker:", rendered)
         self.assertNotIn("what alice just said", rendered)
         self.assertIn("[room context]", rendered)
@@ -311,10 +312,10 @@ class AgentInboxTests(unittest.IsolatedAsyncioTestCase):
             str(message.get("content") or "")
             for message in model_client.calls[0]
         )
-        self.assertIn("[scheduled task]", rendered)
-        self.assertIn("[for=web_user]", rendered)
+        self.assertIn("ping the room", rendered)
+        self.assertIn("delivery_target: web_user", rendered)
+        self.assertIn('kind="scheduled_turn"', rendered)
         self.assertNotIn("[speaker=web_user]", rendered)
-        self.assertIn("due scheduled task", rendered)
         self.assertNotIn("what web_user just said", rendered)
         self.assertNotIn("This scheduled task is now due", rendered)
 

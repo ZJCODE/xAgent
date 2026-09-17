@@ -26,6 +26,7 @@ except ImportError:  # pragma: no cover - POSIX platforms
     msvcrt = None
 
 from ..config import AgentConfig
+from ..handlers.message import MessageHandler
 from .scheduler import _fsync_directory
 
 logger = logging.getLogger(__name__)
@@ -468,14 +469,14 @@ class SubconsciousLoop:
         relationship_context = await self._collect_relationship_context()
         notebook_context = await self._collect_notebook_context(memory_context)
 
-        instructions = message_handler.build_instruction_messages(
+        instructions, instruction_entries = message_handler.build_instruction_messages_with_manifest(
             tool_names=[],
             skills_catalog="",
             supports_vision=bool(getattr(self._agent, "supports_vision", True)),
             workspace_context="",
             is_subconscious=True,
         )
-        iteration_messages = message_handler.build_turn_context_messages(
+        iteration_messages, turn_entries = MessageHandler.build_turn_context_with_manifest(
             recent_messages,
             current_user_id=getattr(self._agent, "_assistant_sender_id", "agent"),
             memory_context=memory_context,
@@ -488,6 +489,18 @@ class SubconsciousLoop:
             prompt_registry=getattr(message_handler, "prompt_registry", None),
         )
         input_messages = message_handler.sanitize_input_messages(list(iteration_messages))
+        from ..context_manifest import build_context_manifest, emit_context_manifest
+
+        manifest = build_context_manifest(
+            turn_id="subconscious",
+            task_mode="subconscious_json",
+            inbox_kind="",
+            instruction_entries=instruction_entries,
+            turn_entries=turn_entries,
+            tool_specs=[],
+            provider_messages=[*instructions, *input_messages],
+        )
+        emit_context_manifest(manifest, workspace_dir=getattr(self._agent, "workspace_dir", None))
         return instructions, input_messages, []
 
     @staticmethod

@@ -62,27 +62,29 @@ class AgentConfigPromptTests(unittest.TestCase):
         self.assertNotIn("Focus on what human just said", prompt)
 
     def test_current_task_uses_room_prompt_when_room_context_present(self):
-        task = AgentConfig.build_current_task(
-            "human",
+        task = AgentConfig.build_current_input(
+            content="hi",
+            current_user_id="human",
             current_time="2026-09-16 19:23",
-            room_context="[room context]\nroom_id: plaza\n\nhuman 2026-09-16 19:23: hi\n[/room context]",
+            has_room_snapshot=True,
+            room_label="plaza",
         )
 
-        self.assertIn("Speak to everyone present", task)
+        self.assertIn("speak to the room", task.lower())
         self.assertNotIn("Focus on what human just said", task)
 
     def test_current_task_presence_turn_does_not_name_a_ticket_owner(self):
-        task = AgentConfig.build_current_task(
-            "alice",
+        task = AgentConfig.build_current_input(
+            content="hi",
+            current_user_id="alice",
             current_time="2026-09-16 19:23",
             inbox_kind="presence_turn",
-            room_context="[room context]\nroom_id: plaza\n\nalice 2026-09-16 19:23: hi\n[/room context]",
+            room_label="plaza",
         )
 
         self.assertIn('kind="presence_turn"', task)
-        self.assertIn("Hearing a line is not a private request", task)
-        self.assertIn("Speak to everyone present", task)
-        self.assertNotIn("Current speaker: alice", task)
+        self.assertIn("hearing a line is not a private request", task.lower())
+        self.assertNotIn("\nspeaker:", task)
         self.assertNotIn("private assistant to alice", task)
         self.assertNotIn("Focus on what alice just said", task)
 

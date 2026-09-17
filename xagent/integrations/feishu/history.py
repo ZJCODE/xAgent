@@ -17,6 +17,7 @@ from typing import Any, Iterable, Optional
 
 from ...core.formatters import (
     RoomContextEntry,
+    RoomSnapshot,
     format_room_context as format_structured_room_context,
     format_room_context_body,
     format_room_context_timestamp,
@@ -335,6 +336,30 @@ def fallback_sender_label(sender_type: Optional[str]) -> str:
     return FEISHU_USER_FALLBACK_NAME
 
 
+def build_feishu_room_snapshot(
+    room_id: str,
+    records: Iterable[FeishuMessageRecord],
+    *,
+    room_name: Optional[str] = None,
+    bot_open_id: Optional[str] = None,
+    bot_app_id: Optional[str] = None,
+    present_keys: Optional[list[str]] = None,
+) -> RoomSnapshot:
+    """Structured room situation for dedupe and rendering."""
+    entries = _build_room_context_entries(
+        records,
+        bot_open_id=bot_open_id,
+        bot_app_id=bot_app_id,
+    )
+    return RoomSnapshot(
+        room_id=room_id,
+        room_name=(room_name or "").strip(),
+        entries=tuple(entries),
+        present_labels=(),
+        present_keys=tuple(present_keys or ()),
+    )
+
+
 def format_room_context(
     room_id: str,
     records: Iterable[FeishuMessageRecord],
@@ -344,12 +369,13 @@ def format_room_context(
     bot_app_id: Optional[str] = None,
 ) -> str:
     """Render a Feishu group/topic context block for ``agent.chat``."""
-    entries = _build_room_context_entries(
+    return build_feishu_room_snapshot(
+        room_id,
         records,
+        room_name=room_name,
         bot_open_id=bot_open_id,
         bot_app_id=bot_app_id,
-    )
-    return format_structured_room_context(room_id, entries, room_name=room_name)
+    ).render()
 
 
 def format_feishu_timestamp(create_time_ms: int) -> str:
@@ -424,12 +450,16 @@ def _build_room_context_entries(
                 record.sender_id,
                 sender_type=record.sender_type,
             )
+        message_id = str(record.message_id or "").strip()
+        sender_id = str(record.sender_id or "").strip()
         entries.append(
             RoomContextEntry(
                 speaker_label=speaker_label,
                 occurred_at=_feishu_timestamp_to_datetime(record.create_time_ms),
                 text=text,
                 is_self=is_self,
+                event_id=f"feishu:{message_id}" if message_id else None,
+                speaker_key=f"feishu:{sender_id}" if sender_id else None,
             )
         )
     return entries

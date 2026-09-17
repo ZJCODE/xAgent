@@ -35,6 +35,15 @@ class _TurnObservation:
         except Exception:
             pass
 
+    def set_context_manifest(self, manifest: Any) -> None:
+        if self.span is None or manifest is None:
+            return
+        try:
+            payload = manifest.to_dict() if hasattr(manifest, "to_dict") else manifest
+            self.span.update(metadata=_string_metadata({"context_manifest": payload}))
+        except Exception:
+            pass
+
     def set_output(self, content: str) -> None:
         if self.span is None:
             return

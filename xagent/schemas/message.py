@@ -57,11 +57,39 @@ class Message(BaseModel):
     sender_id: Optional[str] = Field(None, description="Stable identifier for the speaker in the agent message stream")
     recipient_id: Optional[str] = Field(None, description="Identifier of the intended recipient (user_id for P2P, chat_id for groups, 'agent' for user messages, null for context events)")
     channel: Optional[str] = Field(None, description="Channel the message originated from (feishu, cli, web, weixin, voice)")
-    room_name: Optional[str] = Field(None, description="Room or group name; only set for group conversations, null for p2p")
+    room_name: Optional[str] = Field(None, description="Room or group display name; only set for group conversations, null for p2p")
+    room_id: Optional[str] = Field(None, description="Stable room identifier (chat_id, world_id, etc.)")
+    source_event_id: Optional[str] = Field(None, description="Channel-native event id for dedupe across layers")
     content: str = Field(..., description="The content of the message")
     timestamp: float = Field(default_factory=time.time, description="The timestamp of when the message was sent")
     images: Optional[List[ImageContent]] = Field(None, description="Image content associated with the message")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional message metadata")
+
+    @property
+    def event_key(self) -> Optional[str]:
+        """Stable key for cross-layer dedupe (event id or storage cursor)."""
+        if self.source_event_id:
+            return str(self.source_event_id).strip() or None
+        meta = self.metadata if isinstance(self.metadata, dict) else {}
+        raw = meta.get("source_event_id")
+        if raw:
+            return str(raw).strip() or None
+        from ..core.config import AgentConfig
+
+        cursor_raw = meta.get(AgentConfig.MESSAGE_STORAGE_CURSOR_KEY)
+        try:
+            cursor = int(cursor_raw)
+        except (TypeError, ValueError):
+            return None
+        return f"cursor:{cursor}" if cursor > 0 else None
+
+    @property
+    def resolved_room_id(self) -> Optional[str]:
+        if self.room_id:
+            return str(self.room_id).strip() or None
+        meta = self.metadata if isinstance(self.metadata, dict) else {}
+        raw = meta.get("room_id")
+        return str(raw).strip() if raw else None
 
     @classmethod
     def create(

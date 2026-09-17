@@ -5,7 +5,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from ..config import AgentConfig
-from ..inbox import INBOX_KIND_METADATA_KEY, is_scheduled_work
+from ..formatters import RoomSnapshot
+from ..inbox import INBOX_KIND_METADATA_KEY, InboxKind, is_scheduled_work, scheduled_task_display_content
 from ...components import MessageStorage
 from ...schemas import Message, RoleType, MessageType
 from ...schemas.attachment import (
@@ -14,6 +15,7 @@ from ...schemas.attachment import (
     attachment_manifest_markdown,
     dedupe_attachments,
 )
+from ..context_manifest import ManifestEntry, manifest_entry_from_message
 from ..prompt_registry import (
     KIND_DECISION,
     KIND_INSTRUCTIONS,
@@ -67,6 +69,8 @@ class MessageHandler:
         image_source: Optional[Union[str, List[str]]] = None,
         attachments: Optional[List[Dict[str, Any]]] = None,
         room_name: Optional[str] = None,
+        room_id: Optional[str] = None,
+        source_event_id: Optional[str] = None,
         channel: Optional[str] = None,
         recipient_id: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
@@ -101,6 +105,11 @@ class MessageHandler:
         msg.recipient_id = recipient_id or "agent"
         if room_name:
             msg.room_name = room_name
+        MessageHandler._stamp_message_identity(
+            msg,
+            room_id=room_id,
+            source_event_id=source_event_id,
+        )
         if channel:
             msg.channel = channel
         if metadata:
@@ -153,6 +162,8 @@ class MessageHandler:
         event_type: str = "observation",
         metadata: Optional[Dict[str, Any]] = None,
         room_name: Optional[str] = None,
+        room_id: Optional[str] = None,
+        source_event_id: Optional[str] = None,
         role: RoleType = RoleType.ENVIRONMENT,
         channel: Optional[str] = None,
         recipient_id: Optional[str] = None,
@@ -172,6 +183,11 @@ class MessageHandler:
             event_msg.recipient_id = recipient_id
         if room_name:
             event_msg.room_name = room_name
+        MessageHandler._stamp_message_identity(
+            event_msg,
+            room_id=room_id,
+            source_event_id=source_event_id,
+        )
         if channel:
             event_msg.channel = channel
         await self.message_storage.add_messages(event_msg)
@@ -314,13 +330,61 @@ class MessageHandler:
         workspace_dir: Optional[Union[str, Path]] = None,
         current_message: Optional[Message] = None,
         channel_instructions: str = "",
-        room_context: str = "",
+        room_context: Union[str, RoomSnapshot, None] = "",
         task_mode: str = "reply",
         working_summary: str = "",
         covers_through_cursor: int = 0,
         prompt_registry: Optional[PromptRegistry] = None,
     ) -> list[dict]:
         """Build the per-turn model input context as named message layers."""
+        messages_out, _entries = MessageHandler.build_turn_context_with_manifest(
+            messages,
+            current_user_id,
+            memory_context=memory_context,
+            relationship_context=relationship_context,
+            notebook_context=notebook_context,
+            workspace_context=workspace_context,
+            context_events=context_events,
+            current_time=current_time,
+            current_date=current_date,
+            max_messages=max_messages,
+            max_context_events=max_context_events,
+            include_images=include_images,
+            workspace_dir=workspace_dir,
+            current_message=current_message,
+            channel_instructions=channel_instructions,
+            room_context=room_context,
+            task_mode=task_mode,
+            working_summary=working_summary,
+            covers_through_cursor=covers_through_cursor,
+            prompt_registry=prompt_registry,
+        )
+        return messages_out
+
+    @staticmethod
+    def build_turn_context_with_manifest(
+        messages: List[Message],
+        current_user_id: str,
+        memory_context: str = "",
+        relationship_context: str = "",
+        notebook_context: str = "",
+        workspace_context: str = "",
+        context_events: Optional[List[Message]] = None,
+        current_time: Optional[str] = None,
+        current_date: Optional[str] = None,
+        max_messages: int = AgentConfig.DEFAULT_RECENT_MESSAGES,
+        max_context_events: int = AgentConfig.MAX_CONTEXT_EVENTS,
+        include_images: bool = True,
+        workspace_dir: Optional[Union[str, Path]] = None,
+        current_message: Optional[Message] = None,
+        channel_instructions: str = "",
+        room_context: Union[str, RoomSnapshot, None] = "",
+        task_mode: str = "reply",
+        working_summary: str = "",
+        covers_through_cursor: int = 0,
+        prompt_registry: Optional[PromptRegistry] = None,
+    ) -> tuple[list[dict], list[ManifestEntry]]:
+        """Build per-turn context layers and manifest entries for each non-empty section."""
         conversation_messages = MessageHandler.filter_conversation_messages(messages)
         observation_messages = (
             MessageHandler.filter_context_events(messages)
@@ -342,15 +406,13 @@ class MessageHandler:
             budgeted_entries,
             budgeted_observations,
         )
-        if (room_context or "").strip() and current_message is not None:
-            # The live room block already contains the triggering line.
-            # Leave older same-place rows in recent_experience; duplicating
-            # a short room slice is cheaper than inventing a join protocol.
-            experience_entries = [
-                entry
-                for entry in experience_entries
-                if not MessageHandler._is_same_message(entry[1], current_message)
-            ]
+        room_snapshot, room_render = MessageHandler._resolve_room_context(room_context)
+        experience_entries = MessageHandler._exclude_covered_experience_entries(
+            experience_entries,
+            current_message=current_message,
+            room_snapshot=room_snapshot,
+            has_room_block=bool(room_render),
+        )
 
         recent_experience = MessageHandler._build_recent_experience_context(
             experience_entries=experience_entries,
@@ -368,6 +430,15 @@ class MessageHandler:
             inbox_kind = str(
                 (current_message.metadata or {}).get(INBOX_KIND_METADATA_KEY) or ""
             ).strip()
+        current_input_content = MessageHandler._current_input_content(
+            current_message,
+            inbox_kind=inbox_kind,
+        )
+        room_label = ""
+        if room_snapshot is not None:
+            room_label = (room_snapshot.room_name or room_snapshot.room_id or "").strip()
+        elif current_message is not None and (current_message.room_name or "").strip():
+            room_label = str(current_message.room_name or "").strip()
         speaker_label = MessageHandler._speaker_address_for(
             conversation_messages,
             current_user_id,
@@ -381,18 +452,21 @@ class MessageHandler:
             current_user_id=speaker_label,
             current_time=resolved_current_time,
             channel_instructions=channel_instructions,
-            room_context=room_context,
+            room_context=room_render,
+            room_label=room_label,
+            has_room_snapshot=bool(room_render),
+            current_input_content=current_input_content,
             task_mode=task_mode,
             inbox_kind=inbox_kind,
         )
         registry = prompt_registry or default_prompt_registry()
-        context_messages = registry.assemble(KIND_TURN, ctx)
+        context_messages, manifest_entries = registry.assemble_with_manifest(KIND_TURN, ctx)
 
         current_task_text = next(
             (
                 str(message["content"])
                 for message in context_messages
-                if message.get("name") == AgentConfig.CURRENT_TASK_NAME
+                if message.get("name") == AgentConfig.CURRENT_INPUT_NAME
                 and isinstance(message.get("content"), str)
             ),
             "",
@@ -411,7 +485,7 @@ class MessageHandler:
             )
         if current_images and current_task_text:
             for message in context_messages:
-                if message.get("name") != AgentConfig.CURRENT_TASK_NAME:
+                if message.get("name") != AgentConfig.CURRENT_INPUT_NAME:
                     continue
                 content = [{"type": "text", "text": current_task_text}]
                 content.extend(
@@ -420,12 +494,42 @@ class MessageHandler:
                 )
                 message["content"] = content
                 break
-        return context_messages
+            current_layer = next(
+                (message for message in context_messages if message.get("name") == AgentConfig.CURRENT_INPUT_NAME),
+                {},
+            )
+            MessageHandler._refresh_manifest_entry_for_message(
+                manifest_entries,
+                message_name=AgentConfig.CURRENT_INPUT_NAME,
+                message=current_layer,
+            )
+        return context_messages, manifest_entries
+
+    @staticmethod
+    def _refresh_manifest_entry_for_message(
+        entries: list[ManifestEntry],
+        *,
+        message_name: str,
+        message: dict,
+    ) -> None:
+        if not message or message.get("name") != message_name:
+            return
+        for index, entry in enumerate(entries):
+            if entry.name != message_name:
+                continue
+            entries[index] = manifest_entry_from_message(
+                message,
+                kind=entry.kind,
+                trust=entry.trust,
+                priority=entry.priority,
+                authority=entry.authority,
+            )
+            return
 
     @staticmethod
     def count_current_task_images(messages: list[dict]) -> int:
         for message in messages:
-            if message.get("name") != AgentConfig.CURRENT_TASK_NAME:
+            if message.get("name") != AgentConfig.CURRENT_INPUT_NAME:
                 continue
             content = message.get("content")
             if not isinstance(content, list):
@@ -444,7 +548,7 @@ class MessageHandler:
         if not extra_sources:
             return
         for message in messages:
-            if message.get("name") != AgentConfig.CURRENT_TASK_NAME:
+            if message.get("name") != AgentConfig.CURRENT_INPUT_NAME:
                 continue
             content = message.get("content")
             text = ""
@@ -552,14 +656,94 @@ class MessageHandler:
         return "[Earlier experience omitted: " + ", ".join(parts) + "]"
 
     @staticmethod
-    def _is_same_message(message: Message, other: Optional[Message]) -> bool:
-        """Identity check that works for the freshly stored copy and the reloaded row.
+    def _stamp_message_identity(
+        message: Message,
+        *,
+        room_id: Optional[str] = None,
+        source_event_id: Optional[str] = None,
+    ) -> None:
+        if room_id:
+            message.room_id = str(room_id).strip() or None
+            if message.room_id:
+                message.metadata[AgentConfig.ROOM_ID_METADATA_KEY] = message.room_id
+        if source_event_id:
+            message.source_event_id = str(source_event_id).strip() or None
+            if message.source_event_id:
+                message.metadata[AgentConfig.SOURCE_EVENT_ID_METADATA_KEY] = message.source_event_id
 
-        The message returned by ``store_user_message`` carries no storage
-        cursor, so compare the immutable fields instead.
-        """
+    @staticmethod
+    def _resolve_room_context(
+        room_context: Union[str, RoomSnapshot, None],
+    ) -> tuple[Optional[RoomSnapshot], str]:
+        if isinstance(room_context, RoomSnapshot):
+            return room_context, room_context.render()
+        text = str(room_context or "").strip()
+        if not text:
+            return None, ""
+        snapshot = RoomSnapshot.from_legacy_text(text)
+        if snapshot.room_id:
+            return snapshot, text
+        return None, text
+
+    @staticmethod
+    def _current_input_content(
+        current_message: Optional[Message],
+        *,
+        inbox_kind: str = "",
+    ) -> str:
+        if current_message is None:
+            return ""
+        kind = str(inbox_kind or "").strip()
+        if kind == InboxKind.SCHEDULED_TURN.value:
+            return scheduled_task_display_content(
+                current_message.content,
+                current_message.metadata,
+            )
+        return (current_message.content or "").strip()
+
+    @staticmethod
+    def _exclude_covered_experience_entries(
+        experience_entries: List[tuple[str, Message, str]],
+        *,
+        current_message: Optional[Message],
+        room_snapshot: Optional[RoomSnapshot],
+        has_room_block: bool = False,
+    ) -> List[tuple[str, Message, str]]:
+        covered_keys = room_snapshot.event_keys if room_snapshot else set()
+        snapshot_room_id = (room_snapshot.room_id if room_snapshot else "") or ""
+        current_key = current_message.event_key if current_message else None
+
+        filtered: list[tuple[str, Message, str]] = []
+        for entry in experience_entries:
+            _, msg, _ = entry
+            if current_message is not None and MessageHandler._is_same_message(msg, current_message):
+                continue
+            key = msg.event_key
+            if current_key and key and key == current_key:
+                continue
+            if covered_keys and key and key in covered_keys:
+                msg_room = msg.resolved_room_id or ""
+                if snapshot_room_id and msg_room == snapshot_room_id:
+                    continue
+            if (
+                not covered_keys
+                and has_room_block
+                and current_message is not None
+                and MessageHandler._is_same_message(msg, current_message)
+            ):
+                continue
+            filtered.append(entry)
+        return filtered
+
+    @staticmethod
+    def _is_same_message(message: Message, other: Optional[Message]) -> bool:
+        """Identity check that works for the freshly stored copy and the reloaded row."""
         if other is None:
             return False
+        left_key = message.event_key
+        right_key = other.event_key
+        if left_key and right_key and left_key == right_key:
+            return True
         return (
             message.timestamp == other.timestamp
             and (message.sender_id or "") == (other.sender_id or "")
@@ -1098,6 +1282,7 @@ class MessageHandler:
         skills_catalog: str = "",
         supports_vision: bool = True,
         workspace_context: str = "",
+        channel_instructions: str = "",
         is_subconscious: bool = False,
     ) -> list[dict]:
         """Build static named system layers for the model input.
@@ -1107,15 +1292,35 @@ class MessageHandler:
         When *supports_vision* is False a ``capability_limits`` layer is
         injected instead of appending a notice onto core rules.
         """
+        messages, _entries = self.build_instruction_messages_with_manifest(
+            tool_names=tool_names,
+            skills_catalog=skills_catalog,
+            supports_vision=supports_vision,
+            workspace_context=workspace_context,
+            channel_instructions=channel_instructions,
+            is_subconscious=is_subconscious,
+        )
+        return messages
+
+    def build_instruction_messages_with_manifest(
+        self,
+        tool_names: Optional[List[str]] = None,
+        skills_catalog: str = "",
+        supports_vision: bool = True,
+        workspace_context: str = "",
+        channel_instructions: str = "",
+        is_subconscious: bool = False,
+    ) -> tuple[list[dict], list[ManifestEntry]]:
         ctx = PromptAssembleContext(
             system_prompt=self.system_prompt,
             tool_names=list(tool_names or []),
             skills_catalog=skills_catalog,
             workspace_context=workspace_context,
+            channel_instructions=channel_instructions,
             supports_vision=supports_vision,
             is_subconscious=is_subconscious,
         )
-        return self.prompt_registry.assemble(KIND_INSTRUCTIONS, ctx)
+        return self.prompt_registry.assemble_with_manifest(KIND_INSTRUCTIONS, ctx)
 
     def build_decision_messages(self) -> list[dict]:
         """Named system layers for a participation decision request."""

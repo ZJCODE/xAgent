@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 
 from agents_world.client import WorldClient
 from agents_world.server import WorldHub
+from xagent.core.formatters import RoomSnapshot
 from xagent.core.inbox import InboxKind
 from xagent.core.runtime import current_delivery_context, scheduled_delivery_context
 from xagent.integrations.world import WorldInhabitant
@@ -61,6 +62,12 @@ class StubAgent:
     async def chat(self, user_message, user_id="", **kwargs):
         self.chats.append({"user_message": user_message, "user_id": user_id, **kwargs})
         return "I heard that"
+
+
+def _room_context_text(value) -> str:
+    if isinstance(value, RoomSnapshot):
+        return value.render()
+    return str(value or "")
 
 
 class WorldInhabitantTests(unittest.IsolatedAsyncioTestCase):
@@ -140,7 +147,7 @@ class WorldInhabitantTests(unittest.IsolatedAsyncioTestCase):
 
         decision_context = str(self.agent.decisions[0].get("context") or "")
         chat = self.agent.chats[0]
-        room_block = str(chat.get("room_context") or "")
+        room_block = _room_context_text(chat.get("room_context"))
         self.assertEqual(chat["user_message"], "有人吗")
         self.assertEqual(chat.get("inbox_kind"), InboxKind.PRESENCE_TURN)
         self.assertEqual(self.agent.message_handler.users, [])
@@ -179,7 +186,7 @@ class WorldInhabitantTests(unittest.IsolatedAsyncioTestCase):
         heard = next(
             item for item in self.agent.observed if "the coffee is hot" in str(item.get("context") or "")
         )
-        self.assertEqual(heard["context"], "alice: the coffee is hot")
+        self.assertEqual(heard["context"], "the coffee is hot")
         self.assertNotIn("[room context]", heard["context"])
         self.assertEqual(self.agent.message_handler.users, [])
         decision_context = str(self.agent.decisions[0].get("context") or "")
@@ -252,10 +259,10 @@ class WorldInhabitantTests(unittest.IsolatedAsyncioTestCase):
         heard = next(
             item for item in self.agent.observed if "the coffee is hot" in str(item.get("context") or "")
         )
-        self.assertEqual(heard["context"], "alice: the coffee is hot")
+        self.assertEqual(heard["context"], "the coffee is hot")
         self.assertEqual(heard["event_type"], "utterance")
         self.assertEqual(heard["channel"], "world")
-        self.assertEqual(heard["room_name"], "mind-venue")
+        self.assertEqual(heard["room_name"], "大厅")
         self.assertEqual(heard["user_id"], "alice")
         self.assertEqual(heard["metadata"]["sender_name"], "alice")
         self.assertEqual(self.agent.decisions[0]["metadata"]["addressed_to_agent"], False)

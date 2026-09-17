@@ -11,6 +11,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional, Union
 
+from .formatters import RoomSnapshot
+
 INBOX_KIND_METADATA_KEY = "inbox_kind"
 TASK_CONTENT_METADATA_KEY = "task_content"
 SCHEDULED_AGENT_PROMPT_PREFIX = (
@@ -100,7 +102,9 @@ class InboxItem:
     attachments: Optional[List[Dict[str, Any]]] = None
     image_source: Optional[Union[str, List[str]]] = None
     channel_instructions: str = ""
-    room_context: str = ""
+    room_context: Union[str, RoomSnapshot] = ""
+    room_id: Optional[str] = None
+    source_event_id: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
     stream: bool = False
 
@@ -112,6 +116,10 @@ class InboxItem:
         """Metadata persisted on the stored user message or context event."""
         payload = dict(self.metadata or {})
         payload[INBOX_KIND_METADATA_KEY] = self.kind.value
+        if self.source_event_id:
+            payload["source_event_id"] = self.source_event_id
+        if self.room_id:
+            payload["room_id"] = self.room_id
         if self.kind is InboxKind.SCHEDULED_TURN:
             payload.setdefault("source", "scheduled_task")
             payload.setdefault(

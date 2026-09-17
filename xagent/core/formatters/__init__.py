@@ -1,5 +1,6 @@
 from .context import (
     RoomContextEntry,
+    RoomSnapshot,
     format_room_context,
     format_room_context_body,
     format_room_context_entry,
@@ -10,6 +11,7 @@ from .context import (
 
 __all__ = [
     "RoomContextEntry",
+    "RoomSnapshot",
     "format_room_context",
     "format_room_context_body",
     "format_room_context_entry",

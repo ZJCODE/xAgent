@@ -349,9 +349,10 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         )
 
     def test_build_turn_context_messages_match_prompt_layers(self):
-        messages = [
-            Message.create("Hello", role=RoleType.USER, sender_id="Joy"),
-        ]
+        earlier = Message.create("Earlier", role=RoleType.USER, sender_id="Joy")
+        earlier.timestamp -= 5
+        current = Message.create("Hello", role=RoleType.USER, sender_id="Joy")
+        messages = [earlier, current]
         memory_context = (
             "## 2026-05-13 09:00\n\n"
             "昨天聊过路线图。"
@@ -362,6 +363,7 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
             current_user_id="Joy",
             memory_context=memory_context,
             current_time="2026-05-14 09:30",
+            current_message=current,
         )
 
         self.assertEqual(
@@ -369,7 +371,7 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
             [
                 AgentConfig.RECENT_MEMORY_NAME,
                 AgentConfig.RECENT_EXPERIENCE_NAME,
-                AgentConfig.CURRENT_TASK_NAME,
+                AgentConfig.CURRENT_INPUT_NAME,
             ],
         )
         self.assertEqual([message["role"] for message in context_messages], ["user", "user", "user"])
@@ -382,13 +384,13 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         self.assertNotIn("[2026-05-13]", memory)
         self.assertIn("<recent_experience>", context_messages[1]["content"])
         self.assertIn("[speaker=Joy][timestamp=", context_messages[1]["content"])
-        self.assertIn("<current_task>", context_messages[2]["content"])
-        self.assertIn("Current speaker: Joy", context_messages[2]["content"])
-        self.assertIn("Current time: 2026-05-14 09:30", context_messages[2]["content"])
-        self.assertIn("what Joy just said", context_messages[2]["content"])
-        self.assertIn("Use Joy's language from the current conversation", context_messages[2]["content"])
-        self.assertIn("Keep simple replies short", context_messages[2]["content"])
-        self.assertIn("Never rely on Markdown image embeds", context_messages[2]["content"])
+        current_input = context_messages[2]["content"]
+        self.assertIn("<current_input", current_input)
+        self.assertIn("speaker: Joy", current_input)
+        self.assertIn("time: 2026-05-14 09:30", current_input)
+        self.assertIn("Hello", current_input)
+        self.assertIn("Reply to what Joy just said", current_input)
+        self.assertIn("Keep simple replies short", current_input)
 
     def test_private_turn_keeps_current_message_in_recent_experience(self):
         earlier = Message.create("earlier", role=RoleType.USER, sender_id="Joy")
@@ -411,10 +413,10 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         by_name = {message["name"]: message["content"] for message in context_messages}
         experience = by_name[AgentConfig.RECENT_EXPERIENCE_NAME]
         self.assertIn("earlier", experience)
-        self.assertIn("answer this", experience)
+        self.assertNotIn("answer this", experience)
         self.assertIn("someone joined plaza", experience)
         self.assertNotIn("[current]", experience)
-        self.assertIn("what Joy just said", by_name[AgentConfig.CURRENT_TASK_NAME])
+        self.assertIn("answer this", by_name[AgentConfig.CURRENT_INPUT_NAME])
 
     def test_turn_layers_are_ordered_by_volatility(self):
         messages = [
@@ -442,32 +444,17 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         )
 
     def test_channel_instructions_are_a_separate_named_layer(self):
-        messages = [
-            Message.create("Hello", role=RoleType.USER, sender_id="Joy"),
-        ]
         mention_syntax = 'To mention someone, use <at user_id="ou_xxx"></at>.'
-
-        context_messages = MessageHandler.build_turn_context_messages(
-            messages,
-            current_user_id="Joy",
-            current_time="2026-05-14 09:30",
+        handler = MessageHandler(message_storage=_FakeMessageStorage())
+        instruction_messages = handler.build_instruction_messages(
             channel_instructions=mention_syntax,
         )
-
-        self.assertEqual(
-            [message["name"] for message in context_messages],
-            [
-                AgentConfig.RECENT_EXPERIENCE_NAME,
-                AgentConfig.CURRENT_TASK_NAME,
-                AgentConfig.CHANNEL_INSTRUCTIONS_NAME,
-            ],
+        channel_layer = next(
+            message for message in instruction_messages
+            if message.get("name") == AgentConfig.CHANNEL_POLICY_NAME
         )
-        current_task = context_messages[1]["content"]
-        channel_layer = context_messages[2]["content"]
-        self.assertIn("<current_task>", current_task)
-        self.assertNotIn("ou_xxx", current_task)
-        self.assertIn("<channel_instructions>", channel_layer)
-        self.assertIn(mention_syntax, channel_layer)
+        self.assertIn("<channel_policy", channel_layer["content"])
+        self.assertIn(mention_syntax, channel_layer["content"])
 
     def test_room_context_is_a_separate_named_layer(self):
         messages = [
@@ -482,12 +469,13 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
             "[/room context]"
         )
 
+        current = messages[-1]
         context_messages = MessageHandler.build_turn_context_messages(
             messages,
             current_user_id="alice",
             current_time="2026-05-14 09:30",
+            current_message=current,
             room_context=room_block,
-            channel_instructions="Speak to everyone present.",
         )
 
         self.assertEqual(
@@ -495,18 +483,18 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
             [
                 AgentConfig.RECENT_EXPERIENCE_NAME,
                 AgentConfig.ROOM_CONTEXT_NAME,
-                AgentConfig.CURRENT_TASK_NAME,
-                AgentConfig.CHANNEL_INSTRUCTIONS_NAME,
+                AgentConfig.CURRENT_INPUT_NAME,
             ],
         )
         room_layer = context_messages[1]["content"]
-        current_task = context_messages[2]["content"]
-        self.assertIn("<current_task>", current_task)
-        self.assertNotIn("[room context]", current_task)
+        current_input = context_messages[2]["content"]
+        self.assertIn("<current_input", current_input)
+        self.assertNotIn("[room context]", current_input)
         self.assertEqual(room_layer, room_block)
         self.assertIn("present:", room_layer)
-        self.assertIn("Speak to everyone present", current_task)
-        self.assertNotIn("Focus on what alice just said", current_task)
+        self.assertIn("有人吗", current_input)
+        self.assertIn("speak to the room", current_input.lower())
+        self.assertNotIn("Focus on what alice just said", current_input)
 
     def test_room_context_omits_current_line_from_recent_experience(self):
         world_line = Message.create("有人吗", role=RoleType.USER, sender_id="alice")
@@ -628,14 +616,12 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         )
 
         experience = context_messages[0]["content"]
-        current_task = context_messages[1]["content"]
-        self.assertIn("[scheduled task]", experience)
-        self.assertIn("[for=Joy]", experience)
-        self.assertNotIn("[speaker=Joy]", experience)
-        self.assertIn('kind="scheduled_turn"', current_task)
-        self.assertIn("Delivery target: Joy", current_task)
-        self.assertNotIn("what Joy just said", current_task)
-        self.assertNotIn("Current speaker: Joy", current_task)
+        current_input = context_messages[1]["content"]
+        self.assertNotIn("ping", experience)
+        self.assertIn('kind="scheduled_turn"', current_input)
+        self.assertIn("delivery_target: Joy", current_input)
+        self.assertIn("ping", current_input)
+        self.assertNotIn("what Joy just said", current_input)
 
     def test_presence_turn_current_task_does_not_name_a_speaker(self):
         overheard = Message.create("hello hall", role=RoleType.USER, sender_id="alice")
@@ -656,15 +642,17 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
             room_context=room_block,
         )
 
-        current_task = next(
+        current_input = next(
             message["content"]
             for message in context_messages
-            if message["name"] == AgentConfig.CURRENT_TASK_NAME
+            if message["name"] == AgentConfig.CURRENT_INPUT_NAME
         )
-        self.assertIn('kind="presence_turn"', current_task)
-        self.assertIn("Hearing a line is not a private request", current_task)
-        self.assertNotIn("Current speaker:", current_task)
-        self.assertNotIn("what alice just said", current_task)
+        self.assertIn('kind="presence_turn"', current_input)
+        self.assertIn("hello hall", current_input)
+        self.assertIn("hearing a line is not a private request", current_input.lower())
+        self.assertIn("room:", current_input)
+        self.assertNotIn("\nspeaker:", current_input)
+        self.assertNotIn("what alice just said", current_input)
 
     def test_unwrapped_scheduled_task_body_is_still_not_human_speech(self):
         due = Message.create("看下 CPU", role=RoleType.USER, sender_id="Joy")
@@ -680,11 +668,9 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
             current_message=due,
         )
 
-        experience = context_messages[0]["content"]
-        self.assertIn("[scheduled task]", experience)
-        self.assertIn("看下 CPU", experience)
-        self.assertNotIn("[speaker=Joy]", experience)
-        self.assertNotIn("This scheduled task is now due", experience)
+        by_name = {message["name"]: message["content"] for message in context_messages}
+        self.assertIn("看下 CPU", by_name[AgentConfig.CURRENT_INPUT_NAME])
+        self.assertNotIn("This scheduled task is now due", by_name[AgentConfig.CURRENT_INPUT_NAME])
 
     def test_subconscious_mode_has_no_contacts_layer_and_injects_relationships(self):
         messages = [
@@ -1054,25 +1040,26 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
             current_message=message,
             current_time="2026-08-16 16:36",
         )
-        current_task = next(
+        current_input = next(
             item["content"]
             for item in context_messages
-            if item["name"] == AgentConfig.CURRENT_TASK_NAME
+            if item["name"] == AgentConfig.CURRENT_INPUT_NAME
         )
 
         self.assertIn("[speaker=Jun(ou_user)]", transcript)
         self.assertIn("Current speaker: Jun\n", transcript)
         self.assertNotIn("Current speaker: Jun(ou_user)", transcript)
-        self.assertIn("Current speaker: Jun\n", current_task)
-        self.assertIn("Focus on what Jun just said", current_task)
-        self.assertNotIn("ou_user", current_task)
+        self.assertIn("speaker: Jun", current_input)
+        self.assertIn("早啊", current_input)
+        self.assertIn("Reply to what Jun just said", current_input)
+        self.assertNotIn("ou_user", current_input)
 
     def test_world_transcript_uses_name_without_id(self):
         message = Message.create("the coffee is hot", role=RoleType.USER, sender_id="player2")
         message.channel = "world"
         message.metadata = {"sender_name": "Player2"}
         overheard = Message.create_context_event(
-            "Player2: the coffee is hot",
+            "the coffee is hot",
             source="world",
             event_type="utterance",
             metadata={"sender_name": "Player2"},
@@ -1090,18 +1077,19 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
             current_message=message,
             current_time="2026-09-17 10:00",
         )
-        current_task = next(
+        current_input = next(
             item["content"]
             for item in context_messages
-            if item["name"] == AgentConfig.CURRENT_TASK_NAME
+            if item["name"] == AgentConfig.CURRENT_INPUT_NAME
         )
 
         self.assertIn("[speaker=Player2]", transcript)
         self.assertIn("[from=Player2]", transcript)
         self.assertNotIn("Player2(player2)", transcript)
         self.assertNotIn("[from=player2]", transcript)
-        self.assertIn("Current speaker: Player2\n", current_task)
-        self.assertNotIn("player2", current_task)
+        self.assertIn("speaker: Player2", current_input)
+        self.assertIn("the coffee is hot", current_input)
+        self.assertNotIn("player2", current_input)
 
 
 if __name__ == "__main__":

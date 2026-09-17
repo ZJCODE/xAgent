@@ -8,9 +8,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Literal, Optional, Tuple
 
 from .config import AgentConfig
+from .context_manifest import ManifestEntry, manifest_entry_from_message
 
 KIND_INSTRUCTIONS = "instructions"
 KIND_TURN = "turn"
@@ -35,8 +36,16 @@ class PromptAssembleContext:
     current_time: str = ""
     channel_instructions: str = ""
     room_context: str = ""
+    room_label: str = ""
+    has_room_snapshot: bool = False
+    current_input_content: str = ""
     task_mode: str = "reply"
     inbox_kind: str = ""
+
+
+TrustKind = Literal["policy", "data"]
+PriorityKind = Literal["required", "continuity", "optional"]
+AuthorityKind = Literal["core", "operator", "profile", "channel", "task", "none"]
 
 
 @dataclass(frozen=True)
@@ -46,6 +55,9 @@ class PromptSection:
     order: int
     kind: str
     render: Callable[[PromptAssembleContext], str]
+    trust: TrustKind = "data"
+    priority: PriorityKind = "continuity"
+    authority: AuthorityKind = "none"
 
 
 class PromptRegistry:
@@ -68,19 +80,38 @@ class PromptRegistry:
         return dispose
 
     def assemble(self, kind: str, ctx: PromptAssembleContext) -> list[dict]:
+        messages, _entries = self.assemble_with_manifest(kind, ctx)
+        return messages
+
+    def assemble_with_manifest(
+        self,
+        kind: str,
+        ctx: PromptAssembleContext,
+    ) -> tuple[list[dict], list[ManifestEntry]]:
         selected = [section for section in self._sections.values() if section.kind == kind]
         selected.sort(key=lambda section: (section.order, section.name))
         messages: list[dict] = []
+        entries: list[ManifestEntry] = []
         for section in selected:
             content = str(section.render(ctx) or "").strip()
             if not content:
                 continue
-            messages.append({
+            message = {
                 "role": section.role,
                 "name": section.name,
                 "content": content,
-            })
-        return messages
+            }
+            messages.append(message)
+            entries.append(
+                manifest_entry_from_message(
+                    message,
+                    kind=kind,
+                    trust=section.trust,
+                    priority=section.priority,
+                    authority=section.authority,
+                )
+            )
+        return messages, entries
 
 
 def _render_core_interaction_rules(_ctx: PromptAssembleContext) -> str:
@@ -168,12 +199,18 @@ def _render_current_task(ctx: PromptAssembleContext) -> str:
     resolved_current_time = ctx.current_time or datetime.now().strftime("%Y-%m-%d %H:%M")
     if ctx.task_mode == "subconscious_json":
         return AgentConfig.build_subconscious_current_task(current_time=resolved_current_time)
-    return AgentConfig.build_current_task(
+    return AgentConfig.build_current_input(
+        content=ctx.current_input_content,
         current_user_id=ctx.current_user_id,
         current_time=resolved_current_time,
         inbox_kind=ctx.inbox_kind,
-        room_context=ctx.room_context,
+        room_label=ctx.room_label,
+        has_room_snapshot=ctx.has_room_snapshot,
     )
+
+
+def _render_channel_policy(ctx: PromptAssembleContext) -> str:
+    return AgentConfig.build_channel_policy(ctx.channel_instructions)
 
 
 def _render_room_context(ctx: PromptAssembleContext) -> str:
@@ -208,6 +245,9 @@ def default_prompt_registry() -> PromptRegistry:
             order=-100,
             kind=KIND_INSTRUCTIONS,
             render=_render_core_interaction_rules,
+            trust="policy",
+            priority="required",
+            authority="core",
         ),
         PromptSection(
             name=AgentConfig.CURRENT_MODE_NAME,
@@ -215,6 +255,9 @@ def default_prompt_registry() -> PromptRegistry:
             order=-90,
             kind=KIND_INSTRUCTIONS,
             render=_render_current_mode,
+            trust="policy",
+            priority="required",
+            authority="core",
         ),
         PromptSection(
             name=AgentConfig.CAPABILITY_LIMITS_NAME,
@@ -222,6 +265,9 @@ def default_prompt_registry() -> PromptRegistry:
             order=-80,
             kind=KIND_INSTRUCTIONS,
             render=_render_capability_limits,
+            trust="policy",
+            priority="required",
+            authority="core",
         ),
         PromptSection(
             name=AgentConfig.TOOL_POLICY_NAME,
@@ -229,6 +275,9 @@ def default_prompt_registry() -> PromptRegistry:
             order=-50,
             kind=KIND_INSTRUCTIONS,
             render=_render_tool_policy,
+            trust="policy",
+            priority="required",
+            authority="core",
         ),
         PromptSection(
             name=AgentConfig.IDENTITY_CONTEXT_NAME,
@@ -236,6 +285,9 @@ def default_prompt_registry() -> PromptRegistry:
             order=0,
             kind=KIND_INSTRUCTIONS,
             render=_render_identity,
+            trust="policy",
+            priority="required",
+            authority="profile",
         ),
         PromptSection(
             name=AgentConfig.WORKSPACE_CONTEXT_NAME,
@@ -243,6 +295,8 @@ def default_prompt_registry() -> PromptRegistry:
             order=10,
             kind=KIND_INSTRUCTIONS,
             render=_render_workspace,
+            trust="data",
+            priority="optional",
         ),
         PromptSection(
             name=AgentConfig.SKILLS_CATALOG_NAME,
@@ -250,6 +304,18 @@ def default_prompt_registry() -> PromptRegistry:
             order=20,
             kind=KIND_INSTRUCTIONS,
             render=_render_skills,
+            trust="data",
+            priority="optional",
+        ),
+        PromptSection(
+            name=AgentConfig.CHANNEL_POLICY_NAME,
+            role="system",
+            order=30,
+            kind=KIND_INSTRUCTIONS,
+            render=_render_channel_policy,
+            trust="policy",
+            priority="required",
+            authority="channel",
         ),
         # Turn layers are ordered by volatility so the stable prefix stays
         # cacheable: diary changes only on journal writes, relationship cards
@@ -261,6 +327,8 @@ def default_prompt_registry() -> PromptRegistry:
             order=0,
             kind=KIND_TURN,
             render=_render_memory,
+            trust="data",
+            priority="continuity",
         ),
         PromptSection(
             name=AgentConfig.RELATIONSHIP_CONTEXT_NAME,
@@ -268,6 +336,8 @@ def default_prompt_registry() -> PromptRegistry:
             order=10,
             kind=KIND_TURN,
             render=_render_relationship,
+            trust="data",
+            priority="continuity",
         ),
         PromptSection(
             name=AgentConfig.SUBCONSCIOUS_RELATIONSHIPS_NAME,
@@ -275,6 +345,8 @@ def default_prompt_registry() -> PromptRegistry:
             order=10,
             kind=KIND_TURN,
             render=_render_subconscious_relationships,
+            trust="data",
+            priority="continuity",
         ),
         PromptSection(
             name=AgentConfig.NOTEBOOK_CONTEXT_NAME,
@@ -282,6 +354,8 @@ def default_prompt_registry() -> PromptRegistry:
             order=15,
             kind=KIND_TURN,
             render=_render_notebook,
+            trust="data",
+            priority="optional",
         ),
         PromptSection(
             name=AgentConfig.SUBCONSCIOUS_NOTEBOOK_NAME,
@@ -289,6 +363,8 @@ def default_prompt_registry() -> PromptRegistry:
             order=15,
             kind=KIND_TURN,
             render=_render_subconscious_notebook,
+            trust="data",
+            priority="optional",
         ),
         PromptSection(
             name=AgentConfig.RECENT_EXPERIENCE_NAME,
@@ -296,6 +372,8 @@ def default_prompt_registry() -> PromptRegistry:
             order=20,
             kind=KIND_TURN,
             render=_render_experience,
+            trust="data",
+            priority="continuity",
         ),
         PromptSection(
             name=AgentConfig.ROOM_CONTEXT_NAME,
@@ -303,20 +381,18 @@ def default_prompt_registry() -> PromptRegistry:
             order=25,
             kind=KIND_TURN,
             render=_render_room_context,
+            trust="data",
+            priority="continuity",
         ),
         PromptSection(
-            name=AgentConfig.CURRENT_TASK_NAME,
+            name=AgentConfig.CURRENT_INPUT_NAME,
             role="user",
             order=30,
             kind=KIND_TURN,
             render=_render_current_task,
-        ),
-        PromptSection(
-            name=AgentConfig.CHANNEL_INSTRUCTIONS_NAME,
-            role="user",
-            order=40,
-            kind=KIND_TURN,
-            render=_render_channel_instructions,
+            trust="data",
+            priority="required",
+            authority="task",
         ),
         PromptSection(
             name=AgentConfig.DECISION_RULES_NAME,
@@ -324,6 +400,9 @@ def default_prompt_registry() -> PromptRegistry:
             order=-100,
             kind=KIND_DECISION,
             render=_render_decision_rules,
+            trust="policy",
+            priority="required",
+            authority="core",
         ),
         PromptSection(
             name=AgentConfig.IDENTITY_CONTEXT_NAME,
@@ -331,6 +410,9 @@ def default_prompt_registry() -> PromptRegistry:
             order=0,
             kind=KIND_DECISION,
             render=_render_identity,
+            trust="policy",
+            priority="required",
+            authority="profile",
         ),
     ):
         registry.section(section)

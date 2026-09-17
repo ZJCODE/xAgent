@@ -1694,13 +1694,13 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
                 message for message in input_messages
                 if message.get("name") == AgentConfig.RECENT_EXPERIENCE_NAME
             )
-            self.assertIn("/api/workspace/blob?path=assets%2Finbound%2Flocal%2Fimages%2F", recent_experience["content"])
-            self.assertIn("path: assets/inbound/local/images/", recent_experience["content"])
-            current_task = next(
+            current_input = next(
                 message for message in input_messages
-                if message.get("name") == AgentConfig.CURRENT_TASK_NAME
+                if message.get("name") == AgentConfig.CURRENT_INPUT_NAME
             )
-            self.assertIsInstance(current_task["content"], str)
+            self.assertIn("/api/workspace/blob?path=assets%2Finbound%2Flocal%2Fimages%2F", current_input["content"])
+            self.assertIn("path: assets/inbound/local/images/", current_input["content"])
+            self.assertIsInstance(current_input["content"], str)
 
             stored_messages = await storage.get_messages(10)
             self.assertEqual(len(stored_messages), 2)
@@ -2152,7 +2152,11 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("old-00", transcript)
         self.assertNotIn("old-10", transcript)
         self.assertIn("old-49", transcript)
-        self.assertIn("latest request", transcript)
+        current_input = next(
+            message for message in model_client.calls[0]
+            if message["name"] == AgentConfig.CURRENT_INPUT_NAME
+        )["content"]
+        self.assertIn("latest request", current_input)
 
     async def test_chat_respects_explicit_recent_messages(self):
         storage = InMemoryMessageStorage([
@@ -2182,7 +2186,11 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("old-36", transcript)
         self.assertNotIn("old-35", transcript)
         self.assertIn("old-49", transcript)
-        self.assertIn("latest request", transcript)
+        current_input = next(
+            message for message in model_client.calls[0]
+            if message["name"] == AgentConfig.CURRENT_INPUT_NAME
+        )["content"]
+        self.assertIn("latest request", current_input)
 
     async def test_chat_fills_hot_window_when_observations_are_dense(self):
         """Fetch depth must exceed the hot window so observations cannot starve it."""
@@ -2225,7 +2233,11 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("talk-31", transcript)
         self.assertNotIn("talk-30", transcript)
         self.assertIn("talk-39", transcript)
-        self.assertIn("latest request", transcript)
+        current_input = next(
+            message for message in model_client.calls[0]
+            if message["name"] == AgentConfig.CURRENT_INPUT_NAME
+        )["content"]
+        self.assertIn("latest request", current_input)
 
     async def test_chat_hides_model_error_event_from_user(self):
         storage = InMemoryMessageStorage()

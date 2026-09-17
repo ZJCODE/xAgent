@@ -23,7 +23,7 @@ from agents_world import MAX_ATTACHMENTS, MAX_ATTACHMENTS_BYTES, MAX_FILE_BYTES
 from agents_world.client import WorldClient
 
 from ...core.agent import Agent
-from ...core.formatters import RoomContextEntry, format_room_context
+from ...core.formatters import RoomContextEntry, RoomSnapshot, format_room_context
 from ...core.inbox import InboxKind
 from ...core.runtime import ScheduledDeliveryContext, scheduled_delivery_context
 from ...schemas.attachment import (
@@ -212,14 +212,15 @@ class WorldInhabitant:
             },
         )
         with scheduled_delivery_context(context):
-            situation = self._room_context()
+            situation = self._room_snapshot()
             chat_events = getattr(self.agent, "chat_events", None)
             if callable(chat_events):
                 text = ""
                 async for event in chat_events(
                     user_message=prompt,
                     user_id=user_id,
-                    room_name=self.world_id,
+                    room_name=self.world_name or self.world_id,
+                    room_id=self.world_id,
                     channel=CHANNEL_WORLD,
                     room_context=situation,
                     inbox_kind="scheduled_turn",
@@ -365,7 +366,7 @@ class WorldInhabitant:
         except (TypeError, ValueError, OSError, OverflowError):
             return datetime.now()
 
-    def _room_context(self) -> str:
+    def _room_snapshot(self) -> RoomSnapshot:
         """Shared situation for decide + speak: place, present, recent timeline."""
         entries: list[RoomContextEntry] = []
         place = self._place_label()
@@ -375,6 +376,13 @@ class WorldInhabitant:
             speaker = self._speaker_label(actor)
             occurred_at = self._event_datetime(event)
             is_self = actor == self.member_id
+            seq = event.get("seq")
+            event_id = (
+                f"world:{self.world_id}:{seq}"
+                if self.world_id and seq is not None
+                else None
+            )
+            speaker_key = f"world:{actor}" if actor else None
             text = str(event.get("text") or "").strip()
             if kind == "utterance" and (text or event.get("attachments")):
                 body = _utterance_body(text, event.get("attachments"))
@@ -385,6 +393,8 @@ class WorldInhabitant:
                             occurred_at=occurred_at,
                             text=body,
                             is_self=is_self,
+                            event_id=event_id,
+                            speaker_key=speaker_key,
                         )
                     )
             elif kind in {"join", "leave"}:
@@ -396,14 +406,25 @@ class WorldInhabitant:
                             occurred_at=occurred_at,
                             text=action,
                             is_self=is_self,
+                            event_id=event_id,
+                            speaker_key=speaker_key,
                         )
                     )
-        return format_room_context(
-            self.world_id,
-            entries,
-            room_name=self.world_name or self.world_id,
-            present=self._present_labels(),
+        present_keys = tuple(
+            f"world:{member_id}"
+            for member_id in self._present
+            if member_id and member_id != self.member_id
         )
+        return RoomSnapshot(
+            room_id=self.world_id,
+            room_name=(self.world_name or self.world_id or "").strip(),
+            entries=tuple(entries),
+            present_labels=tuple(self._present_labels()),
+            present_keys=present_keys,
+        )
+
+    def _room_context(self) -> str:
+        return self._room_snapshot().render()
 
     async def _hear_utterance(self, event: dict[str, Any]) -> None:
         actor = str(event.get("actor_id") or "")
@@ -428,13 +449,21 @@ class WorldInhabitant:
         }
         if attachments:
             metadata[ATTACHMENT_METADATA_KEY] = attachments
+        seq = event.get("seq")
+        source_event_id = (
+            f"world:{self.world_id}:{seq}"
+            if self.world_id and seq is not None
+            else None
+        )
         try:
             await self.agent.observe(
-                context=f"{speaker}: {said}",
+                context=said,
                 source=CHANNEL_WORLD,
                 event_type="utterance",
                 metadata=metadata,
-                room_name=self.world_id,
+                room_name=self.world_name or self.world_id,
+                room_id=self.world_id,
+                source_event_id=source_event_id,
                 channel=CHANNEL_WORLD,
                 user_id=actor,
             )
@@ -555,7 +584,13 @@ class WorldInhabitant:
             return False
         sender_name = str(self._names.get(actor) or "").strip()
         attachments = await self._inbound_attachments(event)
-        situation = self._room_context()
+        situation = self._room_snapshot()
+        seq = event.get("seq")
+        source_event_id = (
+            f"world:{self.world_id}:{seq}"
+            if self.world_id and seq is not None
+            else None
+        )
         text = ""
         reply_attachments: list[Any] = []
         try:
@@ -566,7 +601,9 @@ class WorldInhabitant:
                         user_message=said,
                         user_id=actor,
                         sender_name=sender_name,
-                        room_name=self.world_id,
+                        room_name=self.world_name or self.world_id,
+                        room_id=self.world_id,
+                        source_event_id=source_event_id,
                         channel=CHANNEL_WORLD,
                         room_context=situation,
                         attachments=attachments or None,

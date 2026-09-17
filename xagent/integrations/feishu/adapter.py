@@ -769,12 +769,15 @@ class FeishuAdapter:
         room_name = await self._resolve_room_name(chat_id, raw_msg)
         if room_name:
             metadata["room_name"] = room_name
+        message_id = str(message_id or metadata.get("message_id") or "").strip()
         await observer(
             context=context,
             source="feishu",
             event_type="group_message",
             metadata=metadata,
             room_name=room_name,
+            room_id=chat_id,
+            source_event_id=f"feishu:{message_id}" if message_id else None,
             channel="feishu",
             user_id=self._stable_user_id(sender_id, sender_name),
         )
@@ -854,10 +857,7 @@ class FeishuAdapter:
             sender_id,
             sender_type=None,
         )
-        body = (text or "").strip()
-        if label and body:
-            return f"{label}: {body}"
-        return body or label
+        return (text or "").strip() or label
 
     async def _group_decision_context(
         self,
@@ -1812,7 +1812,9 @@ class FeishuAdapter:
         sender_name: str,
         text: str,
         records: Optional[list[FeishuMessageRecord]] = None,
-    ) -> str:
+    ):
+        from .history import build_feishu_room_snapshot
+
         if records is None:
             records = await self._fetch_group_history(
                 chat_id=chat_id,
@@ -1829,7 +1831,7 @@ class FeishuAdapter:
         )
         context_records = [*records, current_record]
 
-        return format_room_context(
+        return build_feishu_room_snapshot(
             chat_id,
             context_records,
             room_name=room_name,
@@ -1992,6 +1994,8 @@ class FeishuAdapter:
             image_sources=image_sources,
             attachments=attachments,
             room_name=resolved_room_name,
+            chat_id=chat_id if is_group else "",
+            message_id=message_id,
             is_group=is_group,
             mentioned=mentioned,
         ).to_chat_kwargs()
@@ -2226,12 +2230,15 @@ class FeishuAdapter:
         image_sources: Optional[list[str]] = None,
         attachments: Optional[list[dict[str, Any]]] = None,
         room_name: Optional[str] = None,
-        room_context: str = "",
+        room_context: Any = "",
+        chat_id: str = "",
+        message_id: Optional[str] = None,
         is_group: bool = False,
         mentioned: bool = False,
     ) -> ChatTurnRequest:
         from ...components.memory import human_display_name
 
+        event_id = str(message_id or "").strip()
         return ChatTurnRequest(
             user_message=text,
             user_id=user_id,
@@ -2243,6 +2250,8 @@ class FeishuAdapter:
             ),
             sender_name=human_display_name(sender_name, user_id=user_id),
             room_name=room_name,
+            room_id=chat_id or None,
+            source_event_id=f"feishu:{event_id}" if event_id else None,
             room_context=room_context,
             channel_instructions=(
                 'For mentions, use <at user_id="ou_xxx">Name</at>, never plain @Name.'
