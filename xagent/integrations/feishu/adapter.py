@@ -15,9 +15,10 @@ Before a Feishu message reaches the agent, the sender ID is resolved to a
 display name through the official contact API. The stable Feishu sender
 id (usually ``open_id``) is the ``user_id`` passed into ``agent.chat``;
 the display name is annotation only. Group room context renders speakers
-as ``name(id)`` when an ID is available. For group replies, the trigger
-utterance is stored as ``user_message``; recent room history is passed as
-prompt-only ``room_context`` and is not persisted as user speech.
+as ``name(id)`` when an ID is available. For group replies, an @mention is a 1:1-style user turn with prompt-only
+``room_context``. An unmentioned line the agent decides to answer is a
+presence turn: the trigger is overheard (``observe``) and not stored as
+user speech.
 
 Group replies are sent as plain replies anchored to the source message
 (``reply_to``); never as Feishu topic/thread replies. p2p replies are sent
@@ -45,6 +46,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from ...core.agent import Agent
 from ...core.config import AgentConfig
+from ...core.inbox import InboxKind
 from ...core.runtime import (
     AsyncTaskScheduler,
     ScheduledDeliveryContext,
@@ -609,6 +611,16 @@ class FeishuAdapter:
                     raw_msg=msg,
                 )
                 if self._decision_should_reply(decision):
+                    await self._handle_group_observation(
+                        chat_type=chat_type,
+                        chat_id=chat_id,
+                        message_id=message_id,
+                        sender_id=sender_id,
+                        sender_name=sender_name,
+                        raw_msg=msg,
+                        context=observation_context,
+                        decision=decision,
+                    )
                     await self._route_group_chat(
                         msg=msg,
                         chat_type=chat_type,
@@ -717,6 +729,7 @@ class FeishuAdapter:
             sender_name=sender_name,
             text=text,
             is_group=True,
+            mentioned=mentioned,
             raw_msg=msg,
             image_assets=image_assets,
             attachments=self._attachments_from_attachment_assets(attachment_assets),
@@ -749,9 +762,10 @@ class FeishuAdapter:
             "addressed_to_agent": False,
             "memory_worthy": True,
         }
-        reason = self._decision_reason(decision)
-        if reason:
-            metadata["silence_reason"] = reason
+        if decision is not None and not self._decision_should_reply(decision):
+            reason = self._decision_reason(decision)
+            if reason:
+                metadata["silence_reason"] = reason
         room_name = await self._resolve_room_name(chat_id, raw_msg)
         if room_name:
             metadata["room_name"] = room_name
@@ -1937,6 +1951,7 @@ class FeishuAdapter:
         sender_name: str,
         text: str,
         is_group: bool,
+        mentioned: bool = False,
         raw_msg: Any = None,
         image_assets: Optional[list[_FeishuInboundImageAsset]] = None,
         attachments: Optional[list[dict[str, Any]]] = None,
@@ -1950,7 +1965,8 @@ class FeishuAdapter:
         chat_text = self._append_image_markdown_context(text, image_assets)
         room_context = ""
         if is_group:
-            # Trigger utterance stays in user_message (and storage). Room history
+            # Trigger stays in user_message. @mention turns persist it as USER.
+            # Unmentioned presence turns keep it in-memory only. Room history
             # is prompt-only so it does not pollute recent_experience / diary.
             room_context = await self._chat_text_with_group_history(
                 chat_id=chat_id,
@@ -1977,6 +1993,7 @@ class FeishuAdapter:
             attachments=attachments,
             room_name=resolved_room_name,
             is_group=is_group,
+            mentioned=mentioned,
         ).to_chat_kwargs()
         anchor = self._reply_anchor(raw_msg=raw_msg, message_id=message_id)
         context = ScheduledDeliveryContext(
@@ -2211,6 +2228,7 @@ class FeishuAdapter:
         room_name: Optional[str] = None,
         room_context: str = "",
         is_group: bool = False,
+        mentioned: bool = False,
     ) -> ChatTurnRequest:
         from ...components.memory import human_display_name
 
@@ -2218,7 +2236,11 @@ class FeishuAdapter:
             user_message=text,
             user_id=user_id,
             channel="feishu",
-            inbox_kind="user_turn",
+            inbox_kind=(
+                InboxKind.PRESENCE_TURN.value
+                if is_group and not mentioned
+                else InboxKind.USER_TURN.value
+            ),
             sender_name=human_display_name(sender_name, user_id=user_id),
             room_name=room_name,
             room_context=room_context,

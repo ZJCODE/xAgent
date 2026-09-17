@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 
 from agents_world.client import WorldClient
 from agents_world.server import WorldHub
+from xagent.core.inbox import InboxKind
 from xagent.core.runtime import current_delivery_context, scheduled_delivery_context
 from xagent.integrations.world import WorldInhabitant
 from xagent.integrations.world.presence import mark_world_presence, read_world_presence
@@ -111,10 +112,12 @@ class WorldInhabitantTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.agent.chats[0]["user_message"], "hello hall")
         self.assertEqual(self.agent.chats[0]["user_id"], "alice")
         self.assertEqual(self.agent.chats[0]["sender_name"], "alice")
+        self.assertEqual(self.agent.chats[0].get("inbox_kind"), InboxKind.PRESENCE_TURN)
+        self.assertEqual(self.agent.message_handler.users, [])
         self.assertIn("shared world", self.agent.chats[0]["channel_instructions"])
         self.assertEqual(self.agent.decisions[0]["metadata"]["addressed_to_agent"], False)
         self.assertEqual(self.agent.decisions[0]["metadata"]["recently_spoke"], False)
-        self.assertFalse(any("hello hall" in str(item.get("context") or "") for item in self.agent.observed))
+        self.assertTrue(any("hello hall" in str(item.get("context") or "") for item in self.agent.observed))
 
     async def test_decide_and_speak_share_room_situation(self):
         inhabitant = WorldInhabitant(self.agent, member_id="agent1", display_name="一号")
@@ -139,6 +142,8 @@ class WorldInhabitantTests(unittest.IsolatedAsyncioTestCase):
         chat = self.agent.chats[0]
         room_block = str(chat.get("room_context") or "")
         self.assertEqual(chat["user_message"], "有人吗")
+        self.assertEqual(chat.get("inbox_kind"), InboxKind.PRESENCE_TURN)
+        self.assertEqual(self.agent.message_handler.users, [])
         self.assertNotIn("[room context]", chat["user_message"])
         self.assertIn("[room context]", decision_context)
         self.assertIn("[room context]", room_block)
@@ -149,7 +154,7 @@ class WorldInhabitantTests(unittest.IsolatedAsyncioTestCase):
         self.assertRegex(room_block, r"爱丽丝\(alice\) \d{4}-\d{2}-\d{2} \d{2}:\d{2}: 有人吗")
         # Same situation object for decide and speak (block text matches).
         self.assertIn(room_block, decision_context)
-        self.assertFalse(any("[room context]" in str(item.get("context") or "") for item in self.agent.observed))
+        self.assertTrue(any("有人吗" in str(item.get("context") or "") for item in self.agent.observed))
 
     async def test_silence_stores_trigger_not_room_block(self):
         self.agent.should_reply = False
@@ -162,15 +167,18 @@ class WorldInhabitantTests(unittest.IsolatedAsyncioTestCase):
                 await alice.wait_for(lambda m: m.get("type") == "snapshot")
                 await alice.speak("the coffee is hot")
                 for _ in range(40):
-                    if self.agent.message_handler.users:
+                    if any("the coffee is hot" in str(item.get("context") or "") for item in self.agent.observed):
                         break
                     await asyncio.sleep(0.05)
         finally:
             await inhabitant.leave()
 
-        heard = self.agent.message_handler.users[0]
-        self.assertEqual(heard["user_message"], "the coffee is hot")
-        self.assertNotIn("[room context]", heard["user_message"])
+        heard = next(
+            item for item in self.agent.observed if "the coffee is hot" in str(item.get("context") or "")
+        )
+        self.assertEqual(heard["context"], "爱丽丝: the coffee is hot")
+        self.assertNotIn("[room context]", heard["context"])
+        self.assertEqual(self.agent.message_handler.users, [])
         decision_context = str(self.agent.decisions[0].get("context") or "")
         self.assertIn("[room context]", decision_context)
         self.assertIn("present:", decision_context)
@@ -220,7 +228,7 @@ class WorldInhabitantTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.agent.observed[1]["context"], "human left my-world")
         self.assertEqual(self.agent.observed[0]["metadata"]["world_name"], "my-world")
 
-    async def test_silence_stores_utterance_as_user_message(self):
+    async def test_silence_stores_utterance_as_observation(self):
         self.agent.should_reply = False
         inhabitant = WorldInhabitant(self.agent, member_id="agent1", display_name="一号")
         await inhabitant.join(world_url=self.url)
@@ -231,18 +239,21 @@ class WorldInhabitantTests(unittest.IsolatedAsyncioTestCase):
                 await alice.wait_for(lambda m: m.get("type") == "snapshot")
                 await alice.speak( "the coffee is hot")
                 for _ in range(40):
-                    if self.agent.message_handler.users:
+                    if any("the coffee is hot" in str(item.get("context") or "") for item in self.agent.observed):
                         break
                     await asyncio.sleep(0.05)
         finally:
             await inhabitant.leave()
         self.assertEqual(self.agent.chats, [])
-        self.assertFalse(any("the coffee is hot" in str(item.get("context") or "") for item in self.agent.observed))
-        heard = self.agent.message_handler.users[0]
-        self.assertEqual(heard["user_message"], "the coffee is hot")
-        self.assertEqual(heard["user_id"], "alice")
+        self.assertEqual(self.agent.message_handler.users, [])
+        heard = next(
+            item for item in self.agent.observed if "the coffee is hot" in str(item.get("context") or "")
+        )
+        self.assertEqual(heard["context"], "alice: the coffee is hot")
+        self.assertEqual(heard["event_type"], "utterance")
         self.assertEqual(heard["channel"], "world")
         self.assertEqual(heard["room_name"], "mind-venue")
+        self.assertEqual(heard["user_id"], "alice")
         self.assertEqual(heard["metadata"]["sender_name"], "alice")
         self.assertEqual(self.agent.decisions[0]["metadata"]["addressed_to_agent"], False)
         self.assertEqual(self.agent.decisions[0]["metadata"]["recently_spoke"], False)
@@ -270,6 +281,8 @@ class WorldInhabitantTests(unittest.IsolatedAsyncioTestCase):
             await inhabitant.leave()
         chat = self.agent.chats[0]
         self.assertEqual(chat["user_message"], "see this [shared note.txt]")
+        self.assertEqual(chat.get("inbox_kind"), InboxKind.PRESENCE_TURN)
+        self.assertEqual(self.agent.message_handler.users, [])
         attachments = chat.get("attachments") or []
         self.assertEqual(len(attachments), 1)
         self.assertTrue(str(attachments[0].get("file_name") or "").startswith("note"))
@@ -320,15 +333,18 @@ class WorldInhabitantTests(unittest.IsolatedAsyncioTestCase):
                     attachments=[{"name": "photo.png", "mime": "image/png", "data": b"\x89PNG"}],
                 )
                 for _ in range(80):
-                    if self.agent.message_handler.users:
+                    if any("photo.png" in str(item.get("context") or "") for item in self.agent.observed):
                         break
                     await asyncio.sleep(0.05)
         finally:
             await inhabitant.leave()
         self.assertEqual(self.agent.chats, [])
-        heard = self.agent.message_handler.users[0]
-        self.assertEqual(heard["user_message"], "shared photo.png")
-        attachments = heard.get("attachments") or []
+        self.assertEqual(self.agent.message_handler.users, [])
+        heard = next(
+            item for item in self.agent.observed if "photo.png" in str(item.get("context") or "")
+        )
+        self.assertIn("shared photo.png", heard["context"])
+        attachments = (heard.get("metadata") or {}).get("attachments") or []
         self.assertEqual(len(attachments), 1)
         self.assertEqual(attachments[0]["kind"], "image")
         saved = self.workspace / attachments[0]["path"]

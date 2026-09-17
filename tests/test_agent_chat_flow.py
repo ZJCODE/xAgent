@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, patch
 from xagent.core.agent import Agent
 from xagent.core.config import AgentConfig, ReplyType
 from xagent.core.handlers.message import MessageHandler
+from xagent.core.inbox import INBOX_KIND_METADATA_KEY, InboxKind
 from xagent.core.handlers.model import (
     ChatToolCall,
     ModelClient,
@@ -1441,6 +1442,19 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(captured["speaker_keys"], ["feishu:joy"])
         self.assertEqual(captured.get("participant_keys") or [], [])
 
+    async def test_presence_turn_skips_relationship_cards(self):
+        agent, captured = self._relationship_capturing_agent()
+        current = self._placed_message("hello hall", "alice", "world", room_name="plaza")
+        current.metadata[INBOX_KIND_METADATA_KEY] = InboxKind.PRESENCE_TURN.value
+
+        context = await agent._relationship_context_for_turn(
+            user_msg=current,
+            user_id="alice",
+        )
+
+        self.assertEqual(context, "")
+        self.assertEqual(captured, {})
+
     async def test_agent_turn_uses_nonblocking_working_context_snapshot(self):
         class SnapshotCompactor:
             def __init__(self):
@@ -1499,6 +1513,35 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("should we ship?", model_client.calls[0][0]["content"])
         self.assertIn("Return JSON only", model_client.calls[0][0]["content"])
         self.assertIn("Prefer joining when you have something to add", model_client.calls[0][0]["content"])
+
+    async def test_decide_participation_includes_diary_excerpt(self):
+        class DiaryMemoryHandler(FakeMemoryHandler):
+            async def get_recent_context(self):
+                return "I promised Jun I would stay in the hall."
+
+        storage = InMemoryMessageStorage()
+        model_client = CapturingModelClient([
+            (ReplyType.SIMPLE_REPLY, '{"should_reply": true, "reason": "I said I would stay"}'),
+        ])
+        agent = self._build_agent(
+            storage=storage,
+            model_client=model_client,
+            memory_handler=DiaryMemoryHandler(),
+        )
+
+        decision = await Agent.decide_participation(
+            agent,
+            context="[room context]\nroom_id: hall\n\nJun 2026-09-16 10:00: you still here?\n[/room context]",
+            source="world",
+            event_type="group_message",
+            metadata={"room_id": "hall", "addressed_to_agent": False},
+        )
+
+        self.assertTrue(decision.should_reply)
+        content = model_client.calls[0][0]["content"]
+        self.assertIn("Your recent diary", content)
+        self.assertIn("I promised Jun I would stay in the hall.", content)
+        self.assertIn("you still here?", content)
 
     async def test_decide_participation_world_presence_is_not_a_private_prompt(self):
         storage = InMemoryMessageStorage()

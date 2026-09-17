@@ -70,8 +70,14 @@ class MessageHandler:
         channel: Optional[str] = None,
         recipient_id: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        persist: bool = True,
     ) -> Message:
-        """Store a user message, auto-detecting embedded image URLs and attachments."""
+        """Store a user message, auto-detecting embedded image URLs and attachments.
+
+        ``persist=False`` still builds the in-memory row (images, attachments)
+        so a presence turn can attach them to current_task without writing a
+        USER utterance into storage.
+        """
         normalized_attachments = dedupe_attachments(list(attachments or []))
         message_content = self._append_attachment_manifest(user_message, normalized_attachments)
         image_sources = self._merge_image_sources(message_content, image_source)
@@ -103,7 +109,8 @@ class MessageHandler:
             msg.metadata[ATTACHMENT_METADATA_KEY] = normalized_attachments
         if image_metadata:
             msg.metadata["images"] = image_metadata
-        await self.message_storage.add_messages(msg)
+        if persist:
+            await self.message_storage.add_messages(msg)
         return msg
 
     async def store_model_reply(

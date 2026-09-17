@@ -12,6 +12,7 @@ from xagent.core.inbox import (
     AgentInbox,
     InboxItem,
     InboxKind,
+    is_presence_turn,
     scheduled_task_display_content,
 )
 from xagent.core.runtime import ScheduledDeliveryContext, scheduled_delivery_context
@@ -27,6 +28,16 @@ from tests.test_agent_chat_flow import (
     FakeToolManager,
     InMemoryMessageStorage,
 )
+
+
+class InboxKindTests(unittest.TestCase):
+    def test_presence_turn_wakes_without_being_a_user_turn(self):
+        self.assertTrue(InboxKind.PRESENCE_TURN.wakes)
+        self.assertTrue(is_presence_turn(InboxKind.PRESENCE_TURN))
+        self.assertTrue(is_presence_turn("presence_turn"))
+        self.assertFalse(is_presence_turn(InboxKind.USER_TURN))
+        self.assertFalse(is_presence_turn(InboxKind.OBSERVATION))
+        self.assertFalse(InboxKind.OBSERVATION.wakes)
 
 
 class ScheduledTaskDisplayContentTests(unittest.TestCase):
@@ -235,6 +246,50 @@ class AgentInboxTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(model_client.calls, [])
         self.assertFalse(agent.inbox.busy)
+
+    async def test_presence_turn_does_not_persist_trigger_as_user_speech(self):
+        storage = InMemoryMessageStorage()
+        model_client = CapturingModelClient([(ReplyType.SIMPLE_REPLY, "I am here")])
+        agent = self._build_agent(storage, model_client)
+        room_block = (
+            "[room context]\n"
+            "room_id: plaza\n"
+            "present: alice, agent1\n\n"
+            "alice 2026-09-16 10:00: hello hall\n"
+            "[/room context]"
+        )
+
+        events = [
+            event
+            async for event in agent.chat_events(
+                user_message="hello hall",
+                user_id="alice",
+                channel="world",
+                room_name="plaza",
+                room_context=room_block,
+                inbox_kind=InboxKind.PRESENCE_TURN,
+            )
+        ]
+
+        self.assertTrue(any(event.get("type") == "done" for event in events))
+        self.assertEqual(
+            [msg.role for msg in storage.messages],
+            [RoleType.ASSISTANT],
+        )
+        self.assertEqual(storage.messages[0].content, "I am here")
+        self.assertEqual(
+            [msg.role for msg in agent.memory_handler.experience_messages],
+            [RoleType.ASSISTANT],
+        )
+        rendered = "\n".join(
+            str(message.get("content") or "")
+            for message in model_client.calls[0]
+        )
+        self.assertIn('kind="presence_turn"', rendered)
+        self.assertIn("Hearing a line is not a private request", rendered)
+        self.assertNotIn("Current speaker:", rendered)
+        self.assertNotIn("what alice just said", rendered)
+        self.assertIn("[room context]", rendered)
 
     async def test_scheduled_turn_prompt_does_not_treat_task_as_speech(self):
         storage = InMemoryMessageStorage()

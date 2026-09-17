@@ -1,8 +1,9 @@
 """One agent's body in an agents-world world.
 
 The world never calls this module. The agent process connects as a client:
-hear events, record them as observations, decide whether to speak, then `speak`.
-The room log is not the agent's diary.
+hear events, record them as overheard observations, decide whether to speak,
+then `speak`. The room log is not the agent's diary. Opening the mouth is a
+presence turn: the trigger is not stored as a private user message.
 """
 
 from __future__ import annotations
@@ -23,9 +24,10 @@ from agents_world.client import WorldClient
 
 from ...core.agent import Agent
 from ...core.formatters import RoomContextEntry, format_room_context
-from ...core.inbox import INBOX_KIND_METADATA_KEY, InboxKind
+from ...core.inbox import InboxKind
 from ...core.runtime import ScheduledDeliveryContext, scheduled_delivery_context
 from ...schemas.attachment import (
+    ATTACHMENT_METADATA_KEY,
     DEFAULT_WORLD_ATTACHMENT_DIR,
     attachment_image_sources,
     save_workspace_attachment_bytes,
@@ -244,6 +246,7 @@ class WorldInhabitant:
                 channel=CHANNEL_WORLD,
                 channel_instructions=_CHANNEL_INSTRUCTIONS,
                 room_context=situation,
+                inbox_kind="scheduled_turn",
             )
             return str(reply or "").strip()
 
@@ -311,11 +314,9 @@ class WorldInhabitant:
         async with self._mind_lock:
             if not self.connected or self._client is None:
                 return
-            if await self._should_speak(event):
-                stored = await self._speak_reply(event)
-                if stored:
-                    return
             await self._hear_utterance(event)
+            if await self._should_speak(event):
+                await self._speak_reply(event)
 
     def _remember(self, events: list[dict[str, Any]]) -> None:
         for event in events:
@@ -433,30 +434,30 @@ class WorldInhabitant:
         )
         if not said or not actor:
             return
-        handler = getattr(self.agent, "message_handler", None)
-        store = getattr(handler, "store_user_message", None)
-        if not callable(store):
-            await self._observe(event, event_type="group_message")
-            return
+        speaker = self._speaker_label(actor)
         sender_name = str(self._names.get(actor) or actor).strip()
         attachments = await self._inbound_attachments(event)
+        metadata = {
+            "world_id": self.world_id,
+            "world_name": self.world_name or self.world_id,
+            "actor_id": actor,
+            "sender_id": actor,
+            "sender_name": sender_name,
+            "seq": event.get("seq"),
+            "kind": event.get("kind"),
+            "event_type": "utterance",
+        }
+        if attachments:
+            metadata[ATTACHMENT_METADATA_KEY] = attachments
         try:
-            await store(
-                said,
-                actor,
+            await self.agent.observe(
+                context=f"{speaker}: {said}",
+                source=CHANNEL_WORLD,
+                event_type="utterance",
+                metadata=metadata,
                 room_name=self.world_id,
                 channel=CHANNEL_WORLD,
-                attachments=attachments or None,
-                image_source=attachment_image_sources(attachments) or None,
-                metadata={
-                    INBOX_KIND_METADATA_KEY: InboxKind.OBSERVATION.value,
-                    "source": CHANNEL_WORLD,
-                    "event_type": "group_message",
-                    "sender_name": sender_name,
-                    "actor_id": actor,
-                    "seq": event.get("seq"),
-                    "kind": event.get("kind"),
-                },
+                user_id=actor,
             )
         except Exception:
             self.logger.exception("world hear failed: member_id=%s", self.member_id)
@@ -592,6 +593,7 @@ class WorldInhabitant:
                         room_context=situation,
                         attachments=attachments or None,
                         image_source=attachment_image_sources(attachments) or None,
+                        inbox_kind=InboxKind.PRESENCE_TURN,
                     ):
                         if item.get("type") == "message_done" and str(item.get("phase") or "final") == "final":
                             text = str(item.get("content") or "").strip()
@@ -609,6 +611,7 @@ class WorldInhabitant:
                         room_context=situation,
                         attachments=attachments or None,
                         image_source=attachment_image_sources(attachments) or None,
+                        inbox_kind=InboxKind.PRESENCE_TURN,
                     )
                     text = str(reply or "").strip()
         except Exception:

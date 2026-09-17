@@ -71,6 +71,21 @@ class AgentConfigPromptTests(unittest.TestCase):
         self.assertIn("Speak to everyone present", task)
         self.assertNotIn("Focus on what human just said", task)
 
+    def test_current_task_presence_turn_does_not_name_a_ticket_owner(self):
+        task = AgentConfig.build_current_task(
+            "alice",
+            current_time="2026-09-16 19:23",
+            inbox_kind="presence_turn",
+            room_context="[room context]\nroom_id: plaza\n\nalice 2026-09-16 19:23: hi\n[/room context]",
+        )
+
+        self.assertIn('kind="presence_turn"', task)
+        self.assertIn("Hearing a line is not a private request", task)
+        self.assertIn("Speak to everyone present", task)
+        self.assertNotIn("Current speaker: alice", task)
+        self.assertNotIn("private assistant to alice", task)
+        self.assertNotIn("Focus on what alice just said", task)
+
     def test_base_agent_prompt_declares_independent_self_boundary(self):
         prompt = AgentConfig.BASE_AGENT_PROMPT
 

@@ -68,3 +68,15 @@ class ChatTurnRequestTests(unittest.TestCase):
         kwargs = request.to_chat_kwargs()
         self.assertEqual(kwargs["inbox_kind"], "scheduled_turn")
         self.assertTrue(kwargs["stream"])
+
+    def test_presence_kind_is_passed_through(self):
+        request = ChatTurnRequest(
+            user_message="hello hall",
+            user_id="alice",
+            channel="world",
+            inbox_kind=InboxKind.PRESENCE_TURN.value,
+            room_context="[room context]\nroom_id: plaza\n[/room context]",
+        )
+        kwargs = request.to_chat_kwargs()
+        self.assertEqual(kwargs["inbox_kind"], "presence_turn")
+        self.assertIn("[room context]", kwargs["room_context"])

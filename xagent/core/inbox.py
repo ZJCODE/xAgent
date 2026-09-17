@@ -24,12 +24,18 @@ class InboxKind(str, Enum):
 
     USER_TURN = "user_turn"
     SCHEDULED_TURN = "scheduled_turn"
+    PRESENCE_TURN = "presence_turn"
     OBSERVATION = "observation"
     STEER = "steer"
 
     @property
     def wakes(self) -> bool:
-        return self in {InboxKind.USER_TURN, InboxKind.SCHEDULED_TURN, InboxKind.STEER}
+        return self in {
+            InboxKind.USER_TURN,
+            InboxKind.SCHEDULED_TURN,
+            InboxKind.PRESENCE_TURN,
+            InboxKind.STEER,
+        }
 
 
 def is_scheduled_work(metadata: Optional[Dict[str, Any]] = None) -> bool:
@@ -39,6 +45,13 @@ def is_scheduled_work(metadata: Optional[Dict[str, Any]] = None) -> bool:
     if kind == InboxKind.SCHEDULED_TURN.value:
         return True
     return str(payload.get("source") or "").strip() == "scheduled_task"
+
+
+def is_presence_turn(kind: Optional[Union["InboxKind", str]] = None) -> bool:
+    """True when this waking turn is presence in a shared room, not a 1:1 request."""
+    if isinstance(kind, InboxKind):
+        return kind is InboxKind.PRESENCE_TURN
+    return str(kind or "").strip() == InboxKind.PRESENCE_TURN.value
 
 
 def scheduled_task_display_content(

@@ -89,6 +89,27 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         self.assertEqual(msg.metadata["attachments"][0]["path"], "reports/out.pdf")
         self.assertEqual(storage.messages, [msg])
 
+    def test_store_user_message_persist_false_builds_row_without_storage(self):
+        import asyncio
+
+        storage = _FakeMessageStorage()
+        handler = MessageHandler(
+            message_storage=storage,
+            workspace_dir="/tmp/workspace",
+        )
+
+        msg = asyncio.run(handler.store_user_message(
+            "hello hall",
+            "alice",
+            metadata={INBOX_KIND_METADATA_KEY: InboxKind.PRESENCE_TURN.value},
+            persist=False,
+        ))
+
+        self.assertEqual(msg.content, "hello hall")
+        self.assertEqual(msg.role, RoleType.USER)
+        self.assertEqual(msg.metadata[INBOX_KIND_METADATA_KEY], InboxKind.PRESENCE_TURN.value)
+        self.assertEqual(storage.messages, [])
+
     def test_store_user_message_promotes_workspace_image_source_to_attachment(self):
         import asyncio
 
@@ -615,6 +636,35 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         self.assertIn("Delivery target: Joy", current_task)
         self.assertNotIn("what Joy just said", current_task)
         self.assertNotIn("Current speaker: Joy", current_task)
+
+    def test_presence_turn_current_task_does_not_name_a_speaker(self):
+        overheard = Message.create("hello hall", role=RoleType.USER, sender_id="alice")
+        overheard.channel = "world"
+        overheard.metadata[INBOX_KIND_METADATA_KEY] = InboxKind.PRESENCE_TURN.value
+        room_block = (
+            "[room context]\n"
+            "room_id: plaza\n\n"
+            "alice 2026-09-16 10:00: hello hall\n"
+            "[/room context]"
+        )
+
+        context_messages = MessageHandler.build_turn_context_messages(
+            [overheard],
+            current_user_id="alice",
+            current_time="2026-09-16 10:00",
+            current_message=overheard,
+            room_context=room_block,
+        )
+
+        current_task = next(
+            message["content"]
+            for message in context_messages
+            if message["name"] == AgentConfig.CURRENT_TASK_NAME
+        )
+        self.assertIn('kind="presence_turn"', current_task)
+        self.assertIn("Hearing a line is not a private request", current_task)
+        self.assertNotIn("Current speaker:", current_task)
+        self.assertNotIn("what alice just said", current_task)
 
     def test_unwrapped_scheduled_task_body_is_still_not_human_speech(self):
         due = Message.create("看下 CPU", role=RoleType.USER, sender_id="Joy")

@@ -43,6 +43,7 @@ from .inbox import (
     AgentInbox,
     InboxItem,
     InboxKind,
+    is_presence_turn,
     normalize_inbox_kind,
 )
 from .handlers import MemoryHandler, MessageHandler, ModelClient
@@ -401,7 +402,13 @@ class Agent:
         user_msg: Message,
         user_id: str,
     ) -> str:
-        """Assemble the current speaker's relationship card for this turn."""
+        """Assemble the current speaker's relationship card for this turn.
+
+        Presence turns skip cards: the room block already names who is here,
+        and the last speaker is not a 1:1 counterpart.
+        """
+        if is_presence_turn((user_msg.metadata or {}).get(INBOX_KIND_METADATA_KEY)):
+            return ""
         memory_handler = getattr(self, "memory_handler", None)
         if memory_handler is None or not callable(
             getattr(memory_handler, "get_relationship_context", None)
@@ -474,6 +481,7 @@ class Agent:
         room_name: Optional[str] = None,
         channel: Optional[str] = None,
         sender_name: str = "",
+        inbox_kind: Optional[Union[str, InboxKind]] = None,
     ) -> Union[str, AsyncGenerator[str, None]]:
         """Generate a reply from the agent given a user message.
 
@@ -499,6 +507,7 @@ class Agent:
                     room_name=room_name,
                     channel=channel,
                     sender_name=sender_name,
+                    inbox_kind=inbox_kind,
                 ):
                     event_type = event.get("type")
                     message_id = str(event.get("message_id") or "")
@@ -526,6 +535,7 @@ class Agent:
             room_name=room_name,
             channel=channel,
             sender_name=sender_name,
+            inbox_kind=inbox_kind,
         ):
             if event.get("type") == "message_done" and event.get("phase") == "final":
                 final_reply = str(event.get("content") or "")
@@ -558,7 +568,8 @@ class Agent:
             room_context: Prompt-only room situation; never persisted as user speech.
             inbox_kind: How this input should be classified. Defaults to a
                 user turn; scheduled delivery context upgrades it to
-                ``scheduled_turn``.
+                ``scheduled_turn``. ``presence_turn`` wakes the agent in a
+                shared room without persisting the trigger as user speech.
         """
         self._record_last_interaction()
         from .runtime import current_delivery_context
@@ -635,6 +646,7 @@ class Agent:
                     room_name=room_name,
                     channel=channel,
                     metadata=user_metadata,
+                    persist=not is_presence_turn(inbox_item.kind),
                 )
             except ValueError as exc:
                 payload = build_public_error(
@@ -790,7 +802,11 @@ class Agent:
                             recipient_id=room_name or user_id,
                         )
                         self._schedule_experience_write(
-                            messages=[user_msg, assistant_msg],
+                            messages=self._experience_messages_for_turn(
+                                inbox_item,
+                                user_msg=user_msg,
+                                assistant_msg=assistant_msg,
+                            ),
                         )
                         turn_obs.set_output(tool_result.content)
                         yield {"type": "done"}
@@ -825,7 +841,11 @@ class Agent:
                         recipient_id=room_name or user_id,
                     )
                     self._schedule_experience_write(
-                        messages=[user_msg, assistant_msg],
+                        messages=self._experience_messages_for_turn(
+                            inbox_item,
+                            user_msg=user_msg,
+                            assistant_msg=assistant_msg,
+                        ),
                     )
                     turn_obs.set_output(visible_text)
                     yield {"type": "done"}
@@ -998,6 +1018,21 @@ class Agent:
             source="subconscious",
         )
 
+    async def _decision_memory_excerpt(self) -> str:
+        handler = getattr(self, "memory_handler", None)
+        getter = getattr(handler, "get_recent_context", None)
+        if not callable(getter):
+            return ""
+        try:
+            text = str(await getter() or "").strip()
+        except Exception as exc:
+            logger.warning("Failed to load diary excerpt for participation decision: %s", exc)
+            return ""
+        limit = max(0, int(AgentConfig.DECISION_MEMORY_EXCERPT_CHARS))
+        if not text or limit <= 0 or len(text) <= limit:
+            return text
+        return text[-limit:].lstrip()
+
     async def decide_participation(
         self,
         context: str,
@@ -1007,11 +1042,11 @@ class Agent:
     ) -> ParticipationDecision:
         """Decide whether an observed event deserves an outward reply.
 
-        Uses only the provided room context (which should include recent group
-        history) and the agent's identity. Does not pull from message storage
-        or memory — the decision is scoped to the current room's conversation.
+        Uses the provided room situation plus a short diary excerpt so the
+        decision shares a life with the later reply, without the full turn stack.
         """
         try:
+            memory_excerpt = await self._decision_memory_excerpt()
             message_handler = getattr(self, "message_handler", None)
             if source == "world":
                 instructions = [{
@@ -1048,6 +1083,7 @@ class Agent:
                     source=source,
                     event_type=event_type,
                     metadata=metadata,
+                    memory_excerpt=memory_excerpt,
                 ),
             }]
 
@@ -1071,6 +1107,7 @@ class Agent:
         source: str,
         event_type: str,
         metadata: Optional[Dict[str, Any]] = None,
+        memory_excerpt: str = "",
     ) -> str:
         if source == "world":
             named = bool((metadata or {}).get("addressed_to_agent"))
@@ -1090,10 +1127,17 @@ class Agent:
                 )
         else:
             bias = "Prefer joining when you have something to add."
+        excerpt = (memory_excerpt or "").strip()
+        memory_block = (
+            f"Your recent diary (for whether this relates to you):\n{excerpt}\n\n"
+            if excerpt
+            else ""
+        )
         return (
             "<participation_decision>\n"
             f"Source: {source}\n"
             f"Event type: {event_type}\n\n"
+            f"{memory_block}"
             "Recent group conversation:\n"
             f"{context.strip()}\n\n"
             f"Decide whether to reply now. {bias} "
@@ -1172,6 +1216,17 @@ class Agent:
         self._schedule_experience_write(
             messages=[*triggering_messages, assistant_msg],
         )
+
+    @staticmethod
+    def _experience_messages_for_turn(
+        inbox_item: InboxItem,
+        *,
+        user_msg: Message,
+        assistant_msg: Message,
+    ) -> List[Message]:
+        if is_presence_turn(inbox_item.kind):
+            return [assistant_msg]
+        return [user_msg, assistant_msg]
 
     def _schedule_experience_write(
         self,

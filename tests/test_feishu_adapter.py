@@ -1123,8 +1123,11 @@ class FeishuAdapterTests(unittest.TestCase):
 
         self.assertEqual(len(agent.decide_calls), 1)
         self.assertEqual(len(agent.chat_calls), 1)
-        self.assertEqual(agent.observe_calls, [])
+        self.assertEqual(len(agent.observe_calls), 1)
+        self.assertEqual(agent.observe_calls[0]["context"], "Alice(ou_user): ambient group message")
+        self.assertNotIn("silence_reason", agent.observe_calls[0]["metadata"])
         self.assertEqual(agent.chat_calls[0]["user_message"], "ambient group message")
+        self.assertEqual(agent.chat_calls[0]["inbox_kind"], "presence_turn")
         self.assertIn("[room context]", agent.chat_calls[0].get("room_context") or "")
         self.assertIn("ambient group message", agent.chat_calls[0].get("room_context") or "")
         self.assertEqual(agent.chat_calls[0]["user_id"], "ou_user")
@@ -1508,6 +1511,7 @@ class FeishuGroupHistoryTests(unittest.TestCase):
         self.assertEqual(agent.observe_calls, [])
         call = agent.chat_calls[0]
         self.assertEqual(call["user_message"], "@Mono what's up")
+        self.assertEqual(call["inbox_kind"], "user_turn")
         room_context = call.get("room_context") or ""
         self.assertIn("[room context]", room_context)
         self.assertIn("room_id: oc_group", room_context)
@@ -1561,6 +1565,8 @@ class FeishuGroupHistoryTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual(len(agent.decide_calls), 1)
         self.assertEqual(len(agent.chat_calls), 1)
+        self.assertEqual(len(agent.observe_calls), 1)
+        self.assertEqual(agent.chat_calls[0]["inbox_kind"], "presence_turn")
         decision_context = agent.decide_calls[0]["context"]
         room_context = agent.chat_calls[0].get("room_context") or ""
         self.assertIn("Alice(ou_alice)", decision_context)
