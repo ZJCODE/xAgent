@@ -10,7 +10,10 @@ from typing import Any, Optional
 
 from urllib.parse import quote
 
+from dataclasses import dataclass
+
 from . import DEFAULT_HOST, DEFAULT_PORT, __version__
+from .chat_format import format_chat_event, format_join_intro
 from .config import WorldConfig
 from .paths import allocate_world_id, list_world_ids, remove_world_dir, world_data_dir
 from .store import open_store_for_world
@@ -56,6 +59,16 @@ def main(argv: Optional[list[str]] = None) -> int:
     join_p.add_argument("--url", default="", help="Full ws URL (overrides host/port/world-id)")
     join_p.add_argument("--member-id", required=True)
     join_p.add_argument("--name", default="", help="Display name (default: member-id)")
+    join_p.add_argument(
+        "--full-history",
+        action="store_true",
+        help="Print the full event log when joining (default: summary only)",
+    )
+    join_p.add_argument(
+        "--raw",
+        action="store_true",
+        help="Print protocol-style lines ([seq] kind actor) instead of chat formatting",
+    )
 
     dummy_p = sub.add_parser("dummy", help="Scripted client for venue proofs")
     dummy_p.add_argument("--world-id", required=True, help="World to join")
@@ -161,43 +174,108 @@ async def _cmd_serve(args: argparse.Namespace) -> int:
     return 0
 
 
+@dataclass
+class _ChatPrinter:
+    member_id: str
+    raw: bool
+    full_history: bool
+    seen_snapshot: bool = False
+    snapshot_ready: Optional[asyncio.Event] = None
+
+    def print_message(self, msg: dict[str, Any]) -> None:
+        if self.raw:
+            _print_raw_server_message(msg)
+            if msg.get("type") == "snapshot" and not msg.get("sync") and self.snapshot_ready is not None:
+                self.snapshot_ready.set()
+            return
+        msg_type = msg.get("type")
+        if msg_type == "event":
+            line = format_chat_event(msg, member_id=self.member_id)
+            if line:
+                print(line, flush=True)
+            return
+        if msg_type == "snapshot":
+            if msg.get("sync"):
+                count = len(msg.get("events") or [])
+                print(f"(synced {count} missed event{'s' if count != 1 else ''})", flush=True)
+                for event in msg.get("events") or []:
+                    line = format_chat_event(event, member_id=self.member_id)
+                    if line:
+                        print(line, flush=True)
+                return
+            if self.seen_snapshot:
+                return
+            self.seen_snapshot = True
+            present = msg.get("present") or []
+            events = msg.get("events") or []
+            world_name = str(msg.get("name") or msg.get("world_id") or "world")
+            for line in format_join_intro(
+                world_name=world_name,
+                present=present,
+                member_id=self.member_id,
+                event_count=len(events),
+                full_history=self.full_history,
+            ):
+                print(line, flush=True)
+            if self.full_history:
+                for event in events:
+                    formatted = format_chat_event(event, member_id=self.member_id)
+                    if formatted:
+                        print(formatted, flush=True)
+            if self.snapshot_ready is not None:
+                self.snapshot_ready.set()
+            return
+        if msg_type == "error":
+            code = msg.get("code")
+            prefix = f"{code}: " if code else ""
+            print(f"! error: {prefix}{msg.get('message')}", file=sys.stderr, flush=True)
+            return
+        if msg_type == "lagged":
+            print(f"! lagged; sync after {msg.get('after_seq')}", file=sys.stderr, flush=True)
+            return
+        print(json.dumps(msg, ensure_ascii=False), flush=True)
+
+
 async def _cmd_join(args: argparse.Namespace) -> int:
     from .client import WorldClient
 
     member_id = args.member_id
     name = args.name or member_id
     url = _ws_url(args)
+    snapshot_ready = asyncio.Event()
+    printer = _ChatPrinter(
+        member_id=member_id,
+        raw=bool(getattr(args, "raw", False)),
+        full_history=bool(getattr(args, "full_history", False)),
+        snapshot_ready=snapshot_ready,
+    )
 
-    print(f"connecting to {url} as {name}({member_id}) …", flush=True)
+    print(f"Connecting as {name} …", flush=True)
     async with WorldClient(url, member_id=member_id, display_name=name) as client:
         welcome = client.welcome or {}
         if welcome.get("type") != "welcome":
             print(f"unexpected: {welcome}", file=sys.stderr)
             return 1
-        print(
-            f"world={welcome.get('world_id')} "
-            f"name={welcome.get('name')} "
-            f"protocol={welcome.get('protocol_version')}"
-        )
         await client.join()
-        print(
-            "joined. Type messages and Enter. /leave to leave, /quit to exit.",
-            flush=True,
-        )
 
         stop = asyncio.Event()
 
-        async def printer() -> None:
+        async def event_printer() -> None:
             try:
                 async for msg in client.events():
-                    _print_server_message(msg)
+                    printer.print_message(msg)
             except Exception:
                 pass
             finally:
                 stop.set()
 
-        printer_task = asyncio.create_task(printer())
+        printer_task = asyncio.create_task(event_printer())
         loop = asyncio.get_running_loop()
+        try:
+            await asyncio.wait_for(snapshot_ready.wait(), timeout=15.0)
+        except asyncio.TimeoutError:
+            print("! timed out waiting for world snapshot", file=sys.stderr, flush=True)
+            return 1
 
         try:
             while not stop.is_set():
@@ -211,8 +289,11 @@ async def _cmd_join(args: argparse.Namespace) -> int:
                     break
                 if text == "/leave":
                     await client.leave()
+                    print("· you left (still connected; /quit to exit)", flush=True)
                     continue
                 await client.speak(text)
+                if not printer.raw:
+                    print("… waiting for a reply", flush=True)
         finally:
             stop.set()
             printer_task.cancel()
@@ -264,7 +345,7 @@ async def _cmd_dummy(args: argparse.Namespace) -> int:
     return 0
 
 
-def _print_server_message(msg: dict[str, Any]) -> None:
+def _print_raw_server_message(msg: dict[str, Any]) -> None:
     msg_type = msg.get("type")
     if msg_type == "event":
         kind = msg.get("kind")

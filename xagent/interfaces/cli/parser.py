@@ -14,6 +14,14 @@ class XAgentArgumentParser(argparse.ArgumentParser):
 
     def error(self, message: str) -> None:
         if self.prog == "xagent" and "invalid choice" in message:
+            argv = sys.argv[1:]
+            if len(argv) >= 3 and argv[0] == "--agent" and argv[2] == "world":
+                self.exit(
+                    2,
+                    "xagent: error: unknown command. Use agent flags after the world subcommand:\n"
+                    "  xagent world join WORLD --agent NAME\n"
+                    "  xagent world leave --agent NAME\n",
+                )
             self.print_usage(sys.stderr)
             self.exit(2, "xagent: error: unknown command. Use 'xagent --help' to see available commands.\n")
         if "arguments are required" in message:
@@ -68,6 +76,7 @@ class XAgentArgumentParser(argparse.ArgumentParser):
             "  xagent api start",
             "  xagent web start",
             "  xagent web open",
+            "  xagent world up plaza",
             "  xagent world start",
             "  xagent world open",
             "  xagent world create plaza",
@@ -322,6 +331,28 @@ def _add_world_bind_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--port", type=int, default=None, help="World hub port override")
 
 
+def _add_world_verbose_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Show agent auto-rejoin details when the hub starts",
+    )
+
+
+def _add_world_chat_display_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--full-history",
+        action="store_true",
+        help="Print the full event log when entering terminal chat",
+    )
+    parser.add_argument(
+        "--raw",
+        action="store_true",
+        help="Protocol-style chat output ([seq] kind actor) instead of readable lines",
+    )
+
+
 def _add_world_hub_arguments(parser: argparse.ArgumentParser, *, open_by_default: bool = False) -> None:
     _add_world_bind_arguments(parser)
     if open_by_default:
@@ -351,6 +382,7 @@ def _add_world_lifecycle_subparsers(parent_parser: argparse.ArgumentParser) -> N
 
     start_parser = sub.add_parser("start", help="Start the world hub in the background")
     _add_world_hub_arguments(start_parser)
+    _add_world_verbose_argument(start_parser)
     start_parser.set_defaults(handler=world_hub.handle_world_start)
 
     stop_parser = sub.add_parser("stop", help="Stop the background world hub")
@@ -358,6 +390,7 @@ def _add_world_lifecycle_subparsers(parent_parser: argparse.ArgumentParser) -> N
 
     restart_parser = sub.add_parser("restart", help="Restart the background world hub")
     _add_world_hub_arguments(restart_parser)
+    _add_world_verbose_argument(restart_parser)
     restart_parser.set_defaults(handler=world_hub.handle_world_restart)
 
     status_parser = sub.add_parser("status", help="Show world hub status")
@@ -378,7 +411,36 @@ def _add_world_lifecycle_subparsers(parent_parser: argparse.ArgumentParser) -> N
     create_parser = sub.add_parser("create", help="Create a world")
     create_parser.add_argument("name", help="World name (also used as the world id)")
     _add_world_bind_arguments(create_parser)
+    create_parser.add_argument("--json", action="store_true", dest="json_output", help="Print machine-readable JSON")
     create_parser.set_defaults(handler=world_hub.handle_world_create)
+
+    up_parser = sub.add_parser(
+        "up",
+        help="Start hub, ensure a world exists, and invite local agents",
+    )
+    up_parser.add_argument(
+        "world",
+        nargs="?",
+        default="plaza",
+        help="World id (default: plaza)",
+    )
+    _add_world_hub_arguments(up_parser)
+    _add_world_verbose_argument(up_parser)
+    up_parser.add_argument(
+        "--agent",
+        dest="invite_agents",
+        action="append",
+        default=None,
+        metavar="NAME",
+        help="Agent to invite (repeatable; default: all managed agents)",
+    )
+    up_parser.add_argument(
+        "--chat",
+        action="store_true",
+        dest="enter_chat",
+        help="Enter terminal chat after setup",
+    )
+    up_parser.set_defaults(handler=world_hub.handle_world_up)
 
     remove_parser = sub.add_parser("remove", help="Delete a world and its event log")
     remove_parser.add_argument("world", help="World id to delete")
@@ -386,7 +448,12 @@ def _add_world_lifecycle_subparsers(parent_parser: argparse.ArgumentParser) -> N
     remove_parser.add_argument("--yes", action="store_true", help="Confirm deletion without prompting")
     remove_parser.set_defaults(handler=world_hub.handle_world_remove)
 
-    join_parser = sub.add_parser("join", help="Invite an agent into a world")
+    join_parser = sub.add_parser(
+        "join",
+        help="Invite an agent into a world (agent API must be running, or use --start-api)",
+        epilog="To chat yourself in the terminal: xagent world chat WORLD",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     join_parser.add_argument("world", help="World id to join")
     _add_agent_argument(join_parser)
     _add_world_bind_arguments(join_parser)
@@ -394,6 +461,7 @@ def _add_world_lifecycle_subparsers(parent_parser: argparse.ArgumentParser) -> N
     join_parser.add_argument("--name", default=None, help="Display name (default: member id)")
     join_parser.add_argument("--start-hub", action="store_true", dest="start_hub", help="Start the world hub if it is not running")
     join_parser.add_argument("--start-api", action="store_true", dest="start_api", help="Start this agent's API channel if it is not running")
+    _add_world_verbose_argument(join_parser)
     join_parser.set_defaults(handler=world_hub.handle_world_join)
 
     leave_parser = sub.add_parser("leave", help="Ask an agent to leave the world")
@@ -406,6 +474,8 @@ def _add_world_lifecycle_subparsers(parent_parser: argparse.ArgumentParser) -> N
     chat_parser.add_argument("--member-id", dest="member_id", default="human", help="Your member id (default: human)")
     chat_parser.add_argument("--name", default=None, help="Display name (default: member id)")
     chat_parser.add_argument("--start-hub", action="store_true", dest="start_hub", help="Start the world hub if it is not running")
+    _add_world_verbose_argument(chat_parser)
+    _add_world_chat_display_arguments(chat_parser)
     chat_parser.set_defaults(handler=world_hub.handle_world_chat)
 
 

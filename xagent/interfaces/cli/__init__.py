@@ -97,6 +97,7 @@ from .world_hub import (
     handle_world_start,
     handle_world_status,
     handle_world_stop,
+    handle_world_up,
 )
 
 __all__ = [
@@ -155,6 +156,7 @@ __all__ = [
     "handle_world_start",
     "handle_world_status",
     "handle_world_stop",
+    "handle_world_up",
     "handle_run_world_internal",
     "handle_version",
     "handle_voice",

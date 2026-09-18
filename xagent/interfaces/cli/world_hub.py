@@ -361,7 +361,12 @@ def _start_background_world(args: argparse.Namespace) -> tuple[bool, bool]:
     return False, False
 
 
-def restore_local_world_presence(*, host: Optional[str] = None, port: Optional[int] = None) -> list[dict[str, Any]]:
+def restore_local_world_presence(
+    *,
+    host: Optional[str] = None,
+    port: Optional[int] = None,
+    verbose: bool = False,
+) -> list[dict[str, Any]]:
     """Re-invite local agents that still want to be present."""
     registry = load_agent_registry_or_empty()
     restored: list[dict[str, Any]] = []
@@ -402,7 +407,8 @@ def restore_local_world_presence(*, host: Optional[str] = None, port: Optional[i
         world_id = str(payload.get("world_id") or presence.get("world_id") or world_id_from_url(world_url))
         message = "rejoined" if ok else (error or payload.get("detail") or payload.get("error") or f"HTTP {status}")
         if ok:
-            print(f"{name}: rejoined {world_id or world_url}")
+            if verbose:
+                print(f"{name}: rejoined {world_id or world_url}")
         else:
             print(f"{name}: failed to rejoin ({message})")
         restored.append({"agent": name, "ok": ok, "message": str(message), "world_id": world_id})
@@ -415,7 +421,11 @@ def _after_hub_up(args: argparse.Namespace, *, restore: bool) -> None:
         print("World hub did not become reachable. Check: xagent world logs")
         return
     if restore:
-        restore_local_world_presence(host=host, port=port)
+        restore_local_world_presence(
+            host=host,
+            port=port,
+            verbose=bool(getattr(args, "verbose", False)),
+        )
 
 
 def handle_world_start(args: argparse.Namespace) -> int:
@@ -588,7 +598,11 @@ def handle_world_create(args: argparse.Namespace) -> int:
     if world_hub_is_running() and wait_for_world_hub(host=host, port=port, timeout=1.0):
         status, payload, error = create_world_on_hub(name, host=host, port=port)
         if status == 201:
-            print(json.dumps({"id": payload.get("id"), "name": payload.get("name")}, ensure_ascii=False))
+            world_id = str(payload.get("id") or "")
+            if getattr(args, "json_output", False):
+                print(json.dumps({"id": world_id, "name": payload.get("name")}, ensure_ascii=False))
+            else:
+                _print_world_created_next_steps(world_id)
             return 0
         message = payload.get("error") or error or f"HTTP {status}"
         print(f"Error: {message}")
@@ -597,8 +611,19 @@ def handle_world_create(args: argparse.Namespace) -> int:
     if code != 0:
         print(f"Error: {error or 'failed to create world'}")
         return code
-    print(json.dumps({"id": payload.get("id"), "name": payload.get("name")}, ensure_ascii=False))
+    world_id = str(payload.get("id") or "")
+    if getattr(args, "json_output", False):
+        print(json.dumps({"id": world_id, "name": payload.get("name")}, ensure_ascii=False))
+    else:
+        _print_world_created_next_steps(world_id)
     return 0
+
+
+def _print_world_created_next_steps(world_id: str) -> None:
+    print(f"Created world {world_id}.")
+    print(f"  xagent world up {world_id}          # start hub, invite agents")
+    print(f"  xagent world chat {world_id}        # chat in the terminal")
+    print(f"  xagent world join {world_id} --agent <name> --start-api")
 
 
 def handle_world_remove(args: argparse.Namespace) -> int:
@@ -795,18 +820,87 @@ def handle_world_chat(args: argparse.Namespace) -> int:
     display_name = str(getattr(args, "name", None) or member_id).strip() or member_id
     from agents_world.cli import main as agents_world_main
 
-    return agents_world_main(
-        [
-            "join",
-            "--world-id",
-            world_id,
-            "--host",
-            world_hub_browse_host(host),
-            "--port",
-            str(port),
-            "--member-id",
-            member_id,
-            "--name",
-            display_name,
-        ]
-    )
+    argv = [
+        "join",
+        "--world-id",
+        world_id,
+        "--host",
+        world_hub_browse_host(host),
+        "--port",
+        str(port),
+        "--member-id",
+        member_id,
+        "--name",
+        display_name,
+    ]
+    if getattr(args, "full_history", False):
+        argv.append("--full-history")
+    if getattr(args, "raw", False):
+        argv.append("--raw")
+    return agents_world_main(argv)
+
+
+def handle_world_up(args: argparse.Namespace) -> int:
+    """Start hub, ensure a world exists, and invite local agents (playground flow)."""
+    world_id = str(getattr(args, "world", None) or "plaza").strip()
+    if not world_id:
+        print("Error: world id is required")
+        return 1
+    setattr(args, "start_hub", True)
+    hub_code = _ensure_hub_running(args)
+    if hub_code != 0:
+        return hub_code
+    host, port = _resolved_hub_bind(args)
+    known = {str(item.get("id") or "") for item in list_world_summaries(host=host, port=port)}
+    if world_id not in known:
+        create_args = argparse.Namespace(
+            name=world_id,
+            host=getattr(args, "host", None),
+            port=getattr(args, "port", None),
+            json_output=False,
+        )
+        code = handle_world_create(create_args)
+        if code != 0:
+            return code
+        known.add(world_id)
+
+    invite_names: list[str] = []
+    explicit = getattr(args, "invite_agents", None) or []
+    if explicit:
+        invite_names = [str(name).strip() for name in explicit if str(name).strip()]
+    else:
+        registry = load_agent_registry_or_empty()
+        invite_names = sorted(registry.agents.keys())
+
+    joined: list[str] = []
+    for agent_name in invite_names:
+        join_args = argparse.Namespace(
+            world=world_id,
+            world_id=world_id,
+            agent=agent_name,
+            host=getattr(args, "host", None),
+            port=getattr(args, "port", None),
+            member_id=None,
+            name=None,
+            start_hub=False,
+            start_api=True,
+        )
+        if handle_world_join(join_args) == 0:
+            joined.append(agent_name)
+
+    url = world_hub_public_url(host=host, port=port)
+    print(f"World {world_id} is ready at {url}")
+    if joined:
+        print(f"Invited: {', '.join(joined)}")
+    else:
+        print("No agents invited. Use: xagent world join {0} --agent <name> --start-api".format(world_id))
+    print(f"  xagent world chat {world_id}")
+    print(f"  xagent world open")
+
+    if getattr(args, "open_browser", False):
+        open_code = handle_world_open(args)
+        if open_code != 0:
+            return open_code
+    if getattr(args, "enter_chat", False):
+        return handle_world_chat(args)
+    return 0

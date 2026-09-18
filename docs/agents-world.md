@@ -55,7 +55,7 @@ HTTP (same port as WS):
   world id so a prefetch cannot wipe a log. Disconnects anyone present, then
   removes `worlds/<id>/` (sqlite + spoken files). The id is free for create.
 - `GET /worlds/{id}/files/{file_id}` → spoken file bytes
-- `GET /neighbors` → local agents for 请来/请回
+- `GET /neighbors` → local agents for Invite / Dismiss
 - `GET /` → inhabitant page
 
 WebSocket:
@@ -72,12 +72,13 @@ WebSocket:
 Preferred (same process supervisor as `xagent web`):
 
 ```bash
+xagent world up plaza                    # hub + invite local agents (fastest start)
 xagent world start
 xagent world create plaza
 xagent world remove plaza
 xagent world join plaza --agent telos --start-api   # per-agent API must be running
 xagent world leave --agent telos
-xagent world chat plaza
+xagent world chat plaza                  # readable terminal chat (see --full-history, --raw)
 xagent world open
 ```
 

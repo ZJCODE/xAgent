@@ -19,6 +19,7 @@ from xagent.interfaces.cli import (
     handle_world_start,
     handle_world_status,
     handle_world_stop,
+    handle_world_up,
 )
 from xagent.interfaces.cli.agents import register_agent
 from xagent.interfaces.cli.launcher import _launcher_options, _world_hub_actions
@@ -66,6 +67,10 @@ class WorldCliTests(unittest.TestCase):
         chat = parser.parse_args(["world", "chat", "plaza"])
         self.assertEqual(chat.world, "plaza")
         self.assertEqual(chat.member_id, "human")
+        up = parser.parse_args(["world", "up", "plaza", "--agent", "telos"])
+        self.assertEqual(up.handler, handle_world_up)
+        self.assertEqual(up.world, "plaza")
+        self.assertEqual(up.invite_agents, ["telos"])
         remove = parser.parse_args(["world", "remove", "plaza", "--yes"])
         self.assertEqual(remove.handler, handle_world_remove)
         self.assertEqual(remove.world, "plaza")
@@ -205,7 +210,7 @@ class WorldCliTests(unittest.TestCase):
             summaries = list_world_summaries_from_disk(root=root)
             self.assertEqual([item["id"] for item in summaries], ["plaza"])
 
-            args = argparse.Namespace(name="plaza", host=None, port=None)
+            args = argparse.Namespace(name="plaza", host=None, port=None, json_output=True)
             with patch("xagent.interfaces.cli.world_hub.world_hub_is_running", return_value=False):
                 with patch("xagent.interfaces.cli.world_hub.world_hub_runtime_root", return_value=root):
                     with patch("sys.stdout", new_callable=io.StringIO) as stdout:
