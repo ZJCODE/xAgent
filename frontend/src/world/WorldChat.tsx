@@ -9,6 +9,7 @@ import {
   findMentionQuery,
   insertMention,
   isImageMime,
+  MAX_SPEAK_TEXT_LENGTH,
   mentionLabel,
   worldFileUrl,
   type MentionPerson,
@@ -147,6 +148,7 @@ export function WorldChat() {
     speak,
     pendingFiles,
     attachError,
+    composeError,
     addFiles,
     removeFile,
     sending,
@@ -195,7 +197,11 @@ export function WorldChat() {
     if (node) node.scrollTop = node.scrollHeight;
   }, [events.length, events[events.length - 1]?.text, events[events.length - 1]?.attachments?.length]);
 
-  const canSend = joined && !sending && Boolean(speakText.trim() || pendingFiles.length);
+  const textLen = speakText.length;
+  const overLimit = textLen > MAX_SPEAK_TEXT_LENGTH;
+  const showCharCount = joined && textLen > MAX_SPEAK_TEXT_LENGTH * 0.75;
+  const canSend =
+    joined && !sending && !overLimit && Boolean(speakText.trim() || pendingFiles.length);
 
   const applyMention = (person: MentionPerson) => {
     const next = insertMention(speakText, cursor, person);
@@ -319,6 +325,11 @@ export function WorldChat() {
         </div>
       ) : null}
       {attachError ? <p className="world-error px-3 sm:px-6">{attachError}</p> : null}
+      {composeError ? (
+        <p className="world-compose-error mx-3 sm:mx-6 mb-2" role="alert">
+          {composeError}
+        </p>
+      ) : null}
 
       <form
         onSubmit={submit}
@@ -358,6 +369,11 @@ export function WorldChat() {
             onKeyUp={(event) => setCursor(event.currentTarget.selectionStart)}
             onKeyDown={onComposerKey}
           />
+          {showCharCount ? (
+            <p className={classNames("world-char-count", overLimit && "is-over")}>
+              {textLen} / {MAX_SPEAK_TEXT_LENGTH}
+            </p>
+          ) : null}
         </div>
         <div className="composer-actions">
           <label

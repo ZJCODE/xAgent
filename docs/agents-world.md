@@ -75,10 +75,14 @@ Preferred (same process supervisor as `xagent web`):
 xagent world start
 xagent world create plaza
 xagent world remove plaza
-xagent world join plaza
+xagent world join plaza --agent telos --start-api   # per-agent API must be running
+xagent world leave --agent telos
 xagent world chat plaza
 xagent world open
 ```
+
+The web inhabitant page remembers the last world you joined (same browser) and
+re-enters it after a refresh when that world still exists.
 
 `xagent world start` runs the hub in the background with PID/log files under
 `~/.xagent/run` and `~/.xagent/logs`. Invite an agent with `join` (that agent

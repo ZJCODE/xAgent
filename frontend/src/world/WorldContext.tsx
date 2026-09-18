@@ -17,6 +17,8 @@ import {
   HUMAN_MEMBER_ID,
   MAX_ATTACHMENTS,
   MAX_FILE_BYTES,
+  MAX_SPEAK_TEXT_LENGTH,
+  LAST_WORLD_STORAGE_KEY,
   worldWsUrl,
   type NeighborAgent,
   type PendingFile,
@@ -53,6 +55,7 @@ interface WorldContextValue extends WorldState {
   setSpeakText: (value: string) => void;
   pendingFiles: PendingFile[];
   attachError: string;
+  composeError: string;
   addFiles: (files: FileList | File[]) => void;
   removeFile: (id: string) => void;
   sending: boolean;
@@ -100,7 +103,9 @@ export function WorldProvider({ children }: { children: ReactNode }) {
   const [speakText, setSpeakText] = useState("");
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
   const [attachError, setAttachError] = useState("");
+  const [composeError, setComposeError] = useState("");
   const [sending, setSending] = useState(false);
+  const autoRejoinAttempted = useRef(false);
   const [creating, setCreating] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -109,6 +114,11 @@ export function WorldProvider({ children }: { children: ReactNode }) {
   const lastSeqRef = useRef(0);
   const stateRef = useRef(state);
   stateRef.current = state;
+
+  const updateSpeakText = useCallback((value: string) => {
+    setComposeError("");
+    setSpeakText(value);
+  }, []);
 
   const displayOf = useCallback((id: string) => {
     if (id === HUMAN_MEMBER_ID || id.startsWith(`${HUMAN_MEMBER_ID}-`)) {
@@ -190,6 +200,14 @@ export function WorldProvider({ children }: { children: ReactNode }) {
           statusKind: "ok",
         };
       });
+      const wid = stateRef.current.worldId;
+      if (wid) {
+        try {
+          sessionStorage.setItem(LAST_WORLD_STORAGE_KEY, wid);
+        } catch {
+          /* ignore quota / private mode */
+        }
+      }
       return;
     }
     if (type === "event") {
@@ -225,8 +243,13 @@ export function WorldProvider({ children }: { children: ReactNode }) {
     }
     if (type === "error") {
       const message = `${msg.code ? `${msg.code}: ` : ""}${msg.message || "error"}`;
-      if (["bad_file", "too_many_files", "file_too_large", "text_required"].includes(String(msg.code || ""))) {
+      const code = String(msg.code || "");
+      if (["bad_file", "too_many_files", "file_too_large", "text_required"].includes(code)) {
         setAttachError(message);
+        return;
+      }
+      if (["text_too_long", "rate_limited"].includes(code)) {
+        setComposeError(message);
         return;
       }
       if (msg.code === "replaced") {
@@ -547,8 +570,13 @@ export function WorldProvider({ children }: { children: ReactNode }) {
       })),
     ];
     const mentions = extractMentions(text, people);
+    if (text.length > MAX_SPEAK_TEXT_LENGTH) {
+      setComposeError(`text_too_long: text exceeds ${MAX_SPEAK_TEXT_LENGTH} characters`);
+      return;
+    }
     setSending(true);
     setAttachError("");
+    setComposeError("");
     try {
       const ws = wsRef.current;
       if (!ws || ws.readyState !== WebSocket.OPEN) {
@@ -616,14 +644,27 @@ export function WorldProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    void refreshWorlds();
+    void (async () => {
+      const worlds = await refreshWorlds();
+      if (autoRejoinAttempted.current) return;
+      autoRejoinAttempted.current = true;
+      let saved = "";
+      try {
+        saved = sessionStorage.getItem(LAST_WORLD_STORAGE_KEY) || "";
+      } catch {
+        saved = "";
+      }
+      if (!saved || !worlds.some((item) => item.id === saved)) return;
+      if (stateRef.current.worldId || stateRef.current.connected) return;
+      await enterWorld(saved);
+    })();
     void loadNeighbors();
     const timer = window.setInterval(() => {
       void refreshWorlds();
       void loadNeighbors();
     }, 5000);
     return () => window.clearInterval(timer);
-  }, [loadNeighbors, refreshWorlds]);
+  }, [enterWorld, loadNeighbors, refreshWorlds]);
 
   useEffect(() => () => disconnectSocket(), [disconnectSocket]);
 
@@ -642,9 +683,10 @@ export function WorldProvider({ children }: { children: ReactNode }) {
       createName,
       setCreateName,
       speakText,
-      setSpeakText,
+      setSpeakText: updateSpeakText,
       pendingFiles,
       attachError,
+      composeError,
       addFiles,
       removeFile,
       sending,
@@ -664,8 +706,10 @@ export function WorldProvider({ children }: { children: ReactNode }) {
       state,
       createName,
       speakText,
+      updateSpeakText,
       pendingFiles,
       attachError,
+      composeError,
       sidebarOpen,
       creating,
       deleting,
