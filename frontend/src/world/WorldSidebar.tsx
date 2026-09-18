@@ -6,11 +6,11 @@ import { useWorld } from "./WorldContext";
 import { WorldSwitcher } from "./WorldSwitcher";
 import type { NeighborAgent } from "./protocol";
 
-function agentStatus(agent: NeighborAgent, here: boolean): { label: string; tone: string } {
-  if (here) return { label: "Present", tone: "is-here" };
-  if (agent.world_ready) return { label: "Ready", tone: "is-ready" };
-  if (agent.running) return { label: "Restart API", tone: "is-stale" };
-  return { label: "Offline", tone: "" };
+function agentStatus(agent: NeighborAgent, here: boolean): { label: string; title: string; tone: string } {
+  if (here) return { label: "在场", title: "Present in this world", tone: "is-here" };
+  if (agent.world_ready) return { label: "可请来", title: "Ready to invite", tone: "is-ready" };
+  if (agent.running) return { label: "需重启 API", title: "Restart the agent API", tone: "is-stale" };
+  return { label: "离线", title: "Offline", tone: "" };
 }
 
 export function WorldSidebar() {
@@ -65,7 +65,10 @@ export function WorldSidebar() {
         </section>
 
         <section className="world-section">
-          <h2>Local agents</h2>
+          <h2>本机智能体</h2>
+          <p className="world-hint world-agent-hint">
+            请来 = 进入当前世界；请回 = 离开世界（不关闭进程）。
+          </p>
           {sorted.length ? (
             <ul className="world-agents">
               {sorted.map((agent) => {
@@ -76,15 +79,25 @@ export function WorldSidebar() {
                     <span className="world-agent-avatar">{initialOf(agent.title || agent.name)}</span>
                     <div className="world-agent-copy">
                       <strong>{agent.title || agent.name}</strong>
-                      {status.label !== "Offline" ? <span>{status.label}</span> : null}
+                      {status.label !== "离线" ? <span title={status.title}>{status.label}</span> : null}
                     </div>
                     {here ? (
-                      <button type="button" className="world-agent-action" onClick={() => void knockAgent(agent, "leave")}>
-                        Dismiss
+                      <button
+                        type="button"
+                        className="world-agent-action"
+                        title="Leave this world (Dismiss)"
+                        onClick={() => void knockAgent(agent, "leave")}
+                      >
+                        请回
                       </button>
                     ) : agent.world_ready ? (
-                      <button type="button" className="world-agent-action is-primary" onClick={() => void knockAgent(agent, "join")}>
-                        Invite
+                      <button
+                        type="button"
+                        className="world-agent-action is-primary"
+                        title="Join this world (Invite)"
+                        onClick={() => void knockAgent(agent, "join")}
+                      >
+                        请来
                       </button>
                     ) : null}
                   </li>

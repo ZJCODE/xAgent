@@ -17,6 +17,15 @@ import {
   type WorldEvent,
 } from "./protocol";
 import { useWorld } from "./WorldContext";
+import {
+  REPLY_WAIT_TIMEOUT_MS,
+  buildChatRows,
+  countOtherPresent,
+  hasReplyAfterSeq,
+  lastSelfUtteranceSeq,
+  systemEventLabel,
+  type ChatRow,
+} from "./worldDisplay";
 
 function UtteranceText({
   text,
@@ -112,13 +121,45 @@ function EventView({
     );
   }
 
-  if (kind === "join") {
-    return <div className="world-system">{mine ? "you" : name} joined</div>;
-  }
-  if (kind === "leave") {
-    return <div className="world-system">{mine ? "you" : name} left</div>;
+  if (kind === "join" || kind === "leave") {
+    return (
+      <div className="world-system" title={kind === "join" ? "joined" : "left"}>
+        {systemEventLabel(event, memberId, displayOf)}
+      </div>
+    );
   }
   return <div className="world-system">[{kind}] {mine ? "you" : name}{event.text ? `: ${event.text}` : ""}</div>;
+}
+
+function ReconnectedRow() {
+  return (
+    <div className="world-system" title="Reconnected to this world">
+      已重新连接
+    </div>
+  );
+}
+
+function ChatRowView({
+  row,
+  memberId,
+  displayOf,
+  people,
+}: {
+  row: ChatRow;
+  memberId: string;
+  displayOf: (id: string) => string;
+  people: MentionPerson[];
+}) {
+  if (row.kind === "reconnected") return <ReconnectedRow key={row.key} />;
+  return (
+    <EventView
+      key={row.key}
+      event={row.event}
+      memberId={memberId}
+      displayOf={displayOf}
+      people={people}
+    />
+  );
 }
 
 function FileBubble({ attachment }: { attachment: WorldAttachment }) {
@@ -161,6 +202,10 @@ export function WorldChat() {
   const [cursor, setCursor] = useState(0);
   const [activeIndex, setActiveIndex] = useState(0);
   const [dismissedStart, setDismissedStart] = useState<number | null>(null);
+  const [replyWaitAnchorSeq, setReplyWaitAnchorSeq] = useState<number | null>(null);
+  const [replyWaitTimedOut, setReplyWaitTimedOut] = useState(false);
+  const prevSendingRef = useRef(false);
+  const utteranceSeqBeforeSendRef = useRef(0);
 
   const people = useMemo<MentionPerson[]>(() => {
     const presentIds = new Set(present.map((item) => item.member_id));
@@ -192,10 +237,52 @@ export function WorldChat() {
     setActiveIndex(0);
   }, [mentionQuery?.query, mentionQuery?.start, mentionMatches.length]);
 
+  const chatRows = useMemo(() => buildChatRows(events, memberId), [events, memberId]);
+  const othersPresent = useMemo(() => countOtherPresent(present, memberId), [present, memberId]);
+
+  useEffect(() => {
+    if (sending && !prevSendingRef.current) {
+      utteranceSeqBeforeSendRef.current = lastSelfUtteranceSeq(events, memberId);
+    }
+    if (prevSendingRef.current && !sending) {
+      const seq = lastSelfUtteranceSeq(events, memberId);
+      if (seq > utteranceSeqBeforeSendRef.current) {
+        setReplyWaitAnchorSeq(seq);
+        setReplyWaitTimedOut(false);
+      }
+    }
+    prevSendingRef.current = sending;
+  }, [sending, events, memberId]);
+
+  useEffect(() => {
+    if (replyWaitAnchorSeq === null) return;
+    if (hasReplyAfterSeq(events, memberId, replyWaitAnchorSeq)) {
+      setReplyWaitAnchorSeq(null);
+      setReplyWaitTimedOut(false);
+    }
+  }, [events, memberId, replyWaitAnchorSeq]);
+
+  useEffect(() => {
+    if (replyWaitAnchorSeq === null || replyWaitTimedOut) return;
+    const timer = window.setTimeout(() => setReplyWaitTimedOut(true), REPLY_WAIT_TIMEOUT_MS);
+    return () => window.clearTimeout(timer);
+  }, [replyWaitAnchorSeq, replyWaitTimedOut]);
+
+  const showReplyWait =
+    replyWaitAnchorSeq !== null &&
+    !replyWaitTimedOut &&
+    !hasReplyAfterSeq(events, memberId, replyWaitAnchorSeq);
+
   useEffect(() => {
     const node = scrollRef.current;
     if (node) node.scrollTop = node.scrollHeight;
-  }, [events.length, events[events.length - 1]?.text, events[events.length - 1]?.attachments?.length]);
+  }, [
+    events.length,
+    events[events.length - 1]?.text,
+    events[events.length - 1]?.attachments?.length,
+    showReplyWait,
+    replyWaitTimedOut,
+  ]);
 
   const textLen = speakText.length;
   const overLimit = textLen > MAX_SPEAK_TEXT_LENGTH;
@@ -286,16 +373,32 @@ export function WorldChat() {
       }}
     >
       <div ref={scrollRef} className="fade-mask flex-1 min-h-0 overflow-y-auto px-3 sm:px-6 py-4 sm:py-6 space-y-4">
-        {events.length ? (
-          events.map((event, index) => (
-            <EventView
-              key={event.seq || `${event.kind}-${event.actor_id}-${index}`}
-              event={event}
-              memberId={memberId}
-              displayOf={displayOf}
-              people={people}
-            />
-          ))
+        {chatRows.length ? (
+          <>
+            {chatRows.map((row) => (
+              <ChatRowView
+                key={row.key}
+                row={row}
+                memberId={memberId}
+                displayOf={displayOf}
+                people={people}
+              />
+            ))}
+            {showReplyWait ? (
+              <div className="world-awaiting-reply" aria-live="polite">
+                {othersPresent > 0 ? (
+                  <span>等待回复…</span>
+                ) : (
+                  <span>当前没有其它成员在场，可先 @ 请来本机智能体</span>
+                )}
+              </div>
+            ) : null}
+            {replyWaitTimedOut && replyWaitAnchorSeq !== null ? (
+              <div className="world-awaiting-reply is-muted" aria-live="polite">
+                暂时没有回应，可以 @ 某人或稍后再试
+              </div>
+            ) : null}
+          </>
         ) : (
           <EmptyState icon={<MessageSquareText size={24} />} title={joined ? "No messages yet" : "Not in a world"}>
             {joined

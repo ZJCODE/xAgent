@@ -344,6 +344,39 @@
   text-align: center;
 }
 
+.world-agent-hint {
+  margin: 0 0 10px;
+  line-height: 1.4;
+}
+
+.world-awaiting-reply {
+  align-self: center;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.45;
+  text-align: center;
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-muted) 12%, transparent);
+  animation: world-await-pulse 1.6s ease-in-out infinite;
+}
+
+.world-awaiting-reply.is-muted {
+  animation: none;
+  background: transparent;
+  font-size: 12px;
+}
+
+@keyframes world-await-pulse {
+  0%,
+  100% {
+    opacity: 0.72;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
 .world-file-meta {
   color: var(--text-muted);
   font-size: 12px;
