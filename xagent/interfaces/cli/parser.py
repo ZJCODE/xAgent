@@ -6,6 +6,7 @@ import argparse
 import sys
 
 from . import agents, processes_status, runtime, setup, update, world_hub
+from .cli_hints import misplaced_agent_flag_hint
 from .channels import CHANNEL_API, CHANNEL_FEISHU, CHANNEL_VOICE, CHANNEL_WEIXIN
 
 
@@ -14,14 +15,9 @@ class XAgentArgumentParser(argparse.ArgumentParser):
 
     def error(self, message: str) -> None:
         if self.prog == "xagent" and "invalid choice" in message:
-            argv = sys.argv[1:]
-            if len(argv) >= 3 and argv[0] == "--agent" and argv[2] == "world":
-                self.exit(
-                    2,
-                    "xagent: error: unknown command. Use agent flags after the world subcommand:\n"
-                    "  xagent world join WORLD --agent NAME\n"
-                    "  xagent world leave --agent NAME\n",
-                )
+            hint = misplaced_agent_flag_hint(sys.argv[1:])
+            if hint:
+                self.exit(2, hint)
             self.print_usage(sys.stderr)
             self.exit(2, "xagent: error: unknown command. Use 'xagent --help' to see available commands.\n")
         if "arguments are required" in message:
@@ -43,18 +39,18 @@ class XAgentArgumentParser(argparse.ArgumentParser):
             "  update      Update xAgent using its current installation method",
             "",
             "Use Now:",
-            "  chat        Chat in the terminal",
+            "  chat        Chat in the terminal (no api start required)",
             "  web         Manage the browser web UI",
-            "  world       Start the shared world hub",
+            "  world       Shared worlds (world up, world chat, world open)",
             "  voice       Use microphone / speaker mode for this session",
             "",
             "Keep Running:",
-            "  api         API channel: start, stop, restart, status, logs",
+            "  api         API channel (required for web + world agents)",
             "  voice       Voice channel: start, stop, restart, status, logs",
             "  feishu      Feishu bot: setup, start, stop, restart, status, logs",
             "  weixin      Weixin DM: setup, start, stop, restart, status, logs",
-            "  world       World hub: start, stop, restart, status, logs, join, leave, remove",
-            "  status      Show all configured channel processes",
+            "  world       Hub lifecycle: start, stop, logs, join, leave, remove",
+            "  status      Active agent channels + web + world hub",
             "  processes   List or restart all managed background processes",
             "",
             "Inspect:",
@@ -82,6 +78,7 @@ class XAgentArgumentParser(argparse.ArgumentParser):
             "  xagent world create plaza",
             "  xagent world remove plaza",
             "  xagent world join plaza --agent telos --start-api",
+            "  xagent world chat plaza",
             "  xagent world leave --agent telos",
             "  xagent status",
             "  xagent api logs -f",
@@ -627,6 +624,12 @@ def build_parser() -> argparse.ArgumentParser:
     for command_name in ("show", "validate", "path"):
         config_cmd = config_sub.add_parser(command_name, help=f"{command_name} config.yaml")
         _add_agent_argument(config_cmd)
+        if command_name == "show":
+            config_cmd.add_argument(
+                "--secrets",
+                action="store_true",
+                help="Show raw secret fields (default: redacted)",
+            )
         config_cmd.set_defaults(handler=runtime.handle_config)
     _show_help_on_missing_action(config_parser)
 
@@ -656,7 +659,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     identity_parser = inspect_sub.add_parser("identity", help="Show identity.md information")
     identity_sub = identity_parser.add_subparsers(dest="identity_command", metavar="<action>")
-    identity_sub.required = True
+    identity_sub.required = False
+    identity_parser.set_defaults(identity_command="show", handler=runtime.handle_identity)
     for command_name in ("show", "path"):
         identity_cmd = identity_sub.add_parser(command_name, help=f"{command_name} identity.md")
         _add_agent_argument(identity_cmd)

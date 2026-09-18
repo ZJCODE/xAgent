@@ -760,7 +760,11 @@ def handle_status_all(args: argparse.Namespace) -> int:
         return 0
 
     print(f"Runtime: {config_dir}")
-    print()
+    if not getattr(args, "json_output", False):
+        from .cli_hints import CHAT_VS_API_NOTE
+
+        print(CHAT_VS_API_NOTE)
+        print()
     for row in rows:
         pid_text = f" pid={row['pid']}" if row["pid"] is not None else ""
         print(f"{row['channel']}: {row['status']}{pid_text}")
@@ -1017,7 +1021,14 @@ def handle_config(args: argparse.Namespace) -> int:
         if not path.is_file():
             print(f"Config not found: {path}")
             return 1
-        print(path.read_text(encoding="utf-8"), end="")
+        from .config_display import format_config_for_display
+
+        raw = path.read_text(encoding="utf-8")
+        reveal = bool(getattr(args, "secrets", False))
+        text, redacted = format_config_for_display(raw, reveal_secrets=reveal)
+        print(text, end="")
+        if redacted:
+            print("# Secrets redacted. Use: xagent config show --secrets", file=sys.stderr)
         return 0
     if args.config_command == "validate":
         BaseAgentRunner(config_dir=str(runtime_dir(args)))
@@ -1029,10 +1040,11 @@ def handle_config(args: argparse.Namespace) -> int:
 
 def handle_identity(args: argparse.Namespace) -> int:
     path = identity_path(args)
-    if args.identity_command == "path":
+    command = getattr(args, "identity_command", None) or "show"
+    if command == "path":
         print(path)
         return 0
-    if args.identity_command == "show":
+    if command == "show":
         if not path.is_file():
             print(f"Identity not found: {path}")
             return 1
@@ -1043,7 +1055,7 @@ def handle_identity(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 0
-    print(f"Unknown identity command: {args.identity_command}")
+    print(f"Unknown identity command: {command}")
     return 1
 
 
@@ -1245,6 +1257,9 @@ def handle_doctor(args: argparse.Namespace) -> int:
         print(online_message)
         if not online_ok:
             ok = False
+    from .cli_hints import CHAT_VS_API_NOTE
+
+    print(CHAT_VS_API_NOTE)
     return 0 if ok else 1
 
 
@@ -1316,16 +1331,17 @@ def print_quick_start() -> None:
         print("First time? Run:  xagent agents create default")
         print("")
     print("Use now:")
-    print("  xagent chat                     Chat in the terminal")
+    print("  xagent chat                     Chat in the terminal (no api start required)")
     print("  xagent web open                 Open the browser web client")
-    print("  xagent world open               Open the world inhabitant page")
+    print("  xagent world up plaza           Start hub, invite agents, then chat or open")
+    print("  xagent world chat plaza         Chat in a world from the terminal")
     print("  xagent voice                    Use microphone / speaker mode")
     print("")
     print("Keep running:")
-    print("  xagent api start                Start the api channel")
+    print("  xagent api start                Start the api channel (needed for web + world agents)")
     print("  xagent web start                Start the browser web client")
-    print("  xagent world start              Start the shared world hub")
-    print("  xagent world join plaza         Invite the active agent into a world")
+    print("  xagent world start              Start the shared world hub only")
+    print("  xagent world join plaza --agent NAME --start-api")
     print("  xagent voice start              Start voice channel")
     print("  xagent status                   Show channel and client status")
     print("  xagent api logs -f              Follow api channel logs")
