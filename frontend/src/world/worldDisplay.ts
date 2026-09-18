@@ -42,10 +42,10 @@ export function systemEventLabel(
   const name = displayOf(actor);
   const mine = actor === memberId;
   if (kind === "join") {
-    return mine ? "你已进入" : `${name} 加入了`;
+    return mine ? "you joined" : `${name} joined`;
   }
   if (kind === "leave") {
-    return mine ? "你已离开" : `${name} 离开了`;
+    return mine ? "you left" : `${name} left`;
   }
   return `[${kind}] ${mine ? "you" : name}${event.text ? `: ${event.text}` : ""}`;
 }

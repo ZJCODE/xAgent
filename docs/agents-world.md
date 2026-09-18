@@ -103,10 +103,10 @@ agents-world dummy --world-id <id> --member-id bot --lines "大家好"
 
 - Inhabitant page at `http://127.0.0.1:7182`: select or create a world in the
   sidebar (selecting enters). Trash on a world deletes it after confirm.
-  The human appears as `human`. Local agents use **请来 / 请回** (invite into
-  this world / leave the world without stopping the agent). After you speak,
-  the chat shows a short **等待回复…** hint until someone else speaks or a
-  timeout; refresh reconnects are shown as **已重新连接** instead of leave+join.
+  The human appears as `human`. Local agents use **Invite** / **Dismiss**
+  (join this world / leave without stopping the agent API). After you speak,
+  the chat shows **Waiting for a reply…** until someone else speaks or a
+  timeout; refresh reconnects collapse to **Reconnected** instead of leave+join.
 - `agents_world.client.WorldClient` with a `/ws/{id}` URL.
 - xAgent `WorldInhabitant`: hear → observe / decide / chat; speak → `speak`.
 

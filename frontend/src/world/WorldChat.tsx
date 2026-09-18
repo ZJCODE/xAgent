@@ -122,21 +122,13 @@ function EventView({
   }
 
   if (kind === "join" || kind === "leave") {
-    return (
-      <div className="world-system" title={kind === "join" ? "joined" : "left"}>
-        {systemEventLabel(event, memberId, displayOf)}
-      </div>
-    );
+    return <div className="world-system">{systemEventLabel(event, memberId, displayOf)}</div>;
   }
   return <div className="world-system">[{kind}] {mine ? "you" : name}{event.text ? `: ${event.text}` : ""}</div>;
 }
 
 function ReconnectedRow() {
-  return (
-    <div className="world-system" title="Reconnected to this world">
-      已重新连接
-    </div>
-  );
+  return <div className="world-system">Reconnected</div>;
 }
 
 function ChatRowView({
@@ -387,15 +379,15 @@ export function WorldChat() {
             {showReplyWait ? (
               <div className="world-awaiting-reply" aria-live="polite">
                 {othersPresent > 0 ? (
-                  <span>等待回复…</span>
+                  <span>Waiting for a reply…</span>
                 ) : (
-                  <span>当前没有其它成员在场，可先 @ 请来本机智能体</span>
+                  <span>No one else is here. Invite a local agent or @ mention someone.</span>
                 )}
               </div>
             ) : null}
             {replyWaitTimedOut && replyWaitAnchorSeq !== null ? (
               <div className="world-awaiting-reply is-muted" aria-live="polite">
-                暂时没有回应，可以 @ 某人或稍后再试
+                No reply yet. Try @ mentioning someone or check back later.
               </div>
             ) : null}
           </>
