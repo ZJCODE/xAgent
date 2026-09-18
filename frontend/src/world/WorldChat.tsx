@@ -395,7 +395,13 @@ export function WorldChat() {
             />
             <Paperclip size={18} />
           </label>
-          <Button type="submit" variant="primary" className="send-button" disabled={!canSend}>
+          <Button
+            type="submit"
+            variant="primary"
+            className="send-button"
+            disabled={!canSend}
+            title={overLimit ? `Message exceeds ${MAX_SPEAK_TEXT_LENGTH} characters` : undefined}
+          >
             <Send size={16} />
             Send
           </Button>

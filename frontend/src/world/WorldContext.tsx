@@ -159,11 +159,21 @@ export function WorldProvider({ children }: { children: ReactNode }) {
   const handleMessage = useCallback((msg: WorldEvent) => {
     const type = msg.type;
     if (type === "welcome") {
-      setState((prev) => ({
-        ...prev,
-        worldId: msg.world_id || prev.worldId,
-        worldName: msg.name || prev.worldName,
-      }));
+      setState((prev) => {
+        const worldId = String(msg.world_id || prev.worldId || "").trim();
+        if (worldId) {
+          try {
+            sessionStorage.setItem(LAST_WORLD_STORAGE_KEY, worldId);
+          } catch {
+            /* ignore quota / private mode */
+          }
+        }
+        return {
+          ...prev,
+          worldId: worldId || prev.worldId,
+          worldName: msg.name || prev.worldName,
+        };
+      });
       send({ type: "join" });
       return;
     }
@@ -189,6 +199,14 @@ export function WorldProvider({ children }: { children: ReactNode }) {
         for (const person of roster) {
           names[person.member_id] = person.display_name || person.member_id;
         }
+        const worldId = String(prev.worldId || "").trim();
+        if (worldId) {
+          try {
+            sessionStorage.setItem(LAST_WORLD_STORAGE_KEY, worldId);
+          } catch {
+            /* ignore quota / private mode */
+          }
+        }
         return {
           ...prev,
           worldName: msg.name || prev.worldName,
@@ -200,14 +218,6 @@ export function WorldProvider({ children }: { children: ReactNode }) {
           statusKind: "ok",
         };
       });
-      const wid = stateRef.current.worldId;
-      if (wid) {
-        try {
-          sessionStorage.setItem(LAST_WORLD_STORAGE_KEY, wid);
-        } catch {
-          /* ignore quota / private mode */
-        }
-      }
       return;
     }
     if (type === "event") {
@@ -355,6 +365,11 @@ export function WorldProvider({ children }: { children: ReactNode }) {
     const { member_id: name, display_name } = identity;
 
     disconnectSocket();
+    try {
+      sessionStorage.setItem(LAST_WORLD_STORAGE_KEY, targetId);
+    } catch {
+      /* ignore */
+    }
     setState((prev) => ({
       ...prev,
       worldId: targetId,
