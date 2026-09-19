@@ -55,15 +55,11 @@ export function WorldSidebar() {
     openIdentityDialog,
   } = useWorld();
 
-  const hubKinds = present.some((item) => item.kind);
-  const agentNames = new Set(neighbors.map((agent) => agent.name));
-  const peoplePresent = hubKinds
-    ? present.filter((item) => !isAgentKind(memberKind(item)))
-    : present.filter((item) => !agentNames.has(item.member_id));
-  const agentsPresent = hubKinds
-    ? present.filter((item) => isAgentKind(memberKind(item)))
-    : present.filter((item) => agentNames.has(item.member_id));
-  const showKindFallbackHint = !hubKinds && present.length > 0;
+  const localAgentIds = new Set(neighbors.map((agent) => agent.name));
+  const isPresentAgent = (item: WorldMember) =>
+    isAgentKind(memberKind(item)) || localAgentIds.has(item.member_id);
+  const peoplePresent = present.filter((item) => !isPresentAgent(item));
+  const agentsPresent = present.filter((item) => isPresentAgent(item));
 
   const sorted = [...neighbors].sort((left, right) => {
     const rank = (agent: NeighborAgent) => {
@@ -113,9 +109,6 @@ export function WorldSidebar() {
       <div className="world-sidebar-scroll">
         <section className="world-section world-section-first">
           <h2 className="world-section-label">People</h2>
-          {showKindFallbackHint ? (
-            <p className="world-hint">Older hub: only local invited agents appear under Agents.</p>
-          ) : null}
           <RosterList people={peoplePresent} memberId={memberId} displayOf={displayOf} />
         </section>
 
