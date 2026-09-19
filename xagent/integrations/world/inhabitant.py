@@ -12,6 +12,7 @@ import asyncio
 import base64
 import logging
 import mimetypes
+import random
 import re
 from datetime import datetime
 from pathlib import Path
@@ -36,11 +37,14 @@ from ...utils.image_utils import workspace_blob_relative_path
 
 CHANNEL_WORLD = "world"
 _ROOM_CONTEXT_LIMIT = 20
+# Wall-clock beat before decide/speak: humans do not all jump in the same instant.
+_PAUSE_NAMED_SEC = (0.15, 0.55)
+_PAUSE_AMBIENT_SEC = (0.55, 2.25)
 _MARKDOWN_REF_RE = re.compile(r"!?\[(?:[^\]]*)\]\(([^)]+)\)")
 _BACKTICK_FILE_RE = re.compile(r"`([^`]+)`")
 _DECISION_PREFACE = (
     "You are already present in this world. "
-    "Hearing a line is not a private request."
+    "Hearing a line is shared airtime — not a private request and not an obligation to speak."
 )
 
 
@@ -303,8 +307,28 @@ class WorldInhabitant:
             if not self.connected or self._client is None:
                 return
             await self._hear_utterance(event)
+            await self._listening_pause(event)
+            if not self.connected or self._client is None:
+                return
             if await self._should_speak(event):
                 await self._speak_reply(event)
+
+    async def _listening_pause(self, event: dict[str, Any]) -> None:
+        """Hold the mind lock through a short beat so peer lines can land first."""
+        seconds = self._listening_pause_seconds(event)
+        if seconds <= 0:
+            return
+        try:
+            await asyncio.sleep(seconds)
+        except asyncio.CancelledError:
+            raise
+
+    def _listening_pause_seconds(self, event: dict[str, Any]) -> float:
+        if self._addressed_to_self(event):
+            low, high = _PAUSE_NAMED_SEC
+        else:
+            low, high = _PAUSE_AMBIENT_SEC
+        return random.uniform(low, high)
 
     def _remember(self, events: list[dict[str, Any]]) -> None:
         for event in events:
@@ -552,6 +576,32 @@ class WorldInhabitant:
             replies.append((label, body or "(attachment)"))
         return replies
 
+    def _trigger_line(self, event: dict[str, Any]) -> str:
+        actor = str(event.get("actor_id") or "")
+        speaker = self._speaker_label(actor)
+        body = _utterance_body(
+            str(event.get("text") or "").strip(),
+            event.get("attachments"),
+        )
+        if body:
+            return f"{speaker}: {body}"
+        return f"{speaker}: (no text)"
+
+    def _participation_decision_context(self, event: dict[str, Any]) -> str:
+        named = self._addressed_to_self(event)
+        recently_spoke = self._recently_spoke(event)
+        peer_replies = self._replies_after_trigger(event)
+        situation = self._room_context()
+        return (
+            f"{_DECISION_PREFACE}\n\n"
+            f"The line you heard:\n{self._trigger_line(event)}\n\n"
+            f"Your social read:\n"
+            f"Named you: {'yes' if named else 'no'}\n"
+            f"You were just speaking: {'yes' if recently_spoke else 'no'}\n"
+            f"{self._format_peer_replies(peer_replies)}\n\n"
+            f"Recent room (timeline):\n{situation}"
+        )
+
     @staticmethod
     def _format_peer_replies(replies: list[tuple[str, str]]) -> str:
         if not replies:
@@ -583,14 +633,7 @@ class WorldInhabitant:
         recently_spoke = self._recently_spoke(event)
         peer_replies = self._replies_after_trigger(event)
         peer_reply_count = len(peer_replies)
-        situation = self._room_context()
-        context = (
-            f"{_DECISION_PREFACE}\n"
-            f"Named you: {'yes' if named else 'no'}\n"
-            f"You were just speaking: {'yes' if recently_spoke else 'no'}\n"
-            f"{self._format_peer_replies(peer_replies)}\n\n"
-            f"{situation}"
-        )
+        context = self._participation_decision_context(event)
         try:
             decision = await decider(
                 context=context,

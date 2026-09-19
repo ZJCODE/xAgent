@@ -6,6 +6,7 @@ import asyncio
 import base64
 import tempfile
 import unittest
+from unittest.mock import patch
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -72,6 +73,12 @@ def _room_context_text(value) -> str:
 
 class WorldInhabitantTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
+        self._pause_patch = patch.object(
+            WorldInhabitant,
+            "_listening_pause_seconds",
+            return_value=0.0,
+        )
+        self._pause_patch.start()
         self._tmpdir = tempfile.TemporaryDirectory()
         self.hub = WorldHub.create(
             host="127.0.0.1",
@@ -86,6 +93,7 @@ class WorldInhabitantTests(unittest.IsolatedAsyncioTestCase):
         self.agent = StubAgent(workspace_dir=self.workspace)
 
     async def asyncTearDown(self):
+        self._pause_patch.stop()
         await self.hub.stop()
         self._tmpdir.cleanup()
 
@@ -96,6 +104,19 @@ class WorldInhabitantTests(unittest.IsolatedAsyncioTestCase):
             if session is not None and session.present:
                 return
             await asyncio.sleep(0.05)
+
+    def test_participation_context_highlights_trigger_line(self):
+        inhabitant = WorldInhabitant(self.agent, member_id="agent1", display_name="一号")
+        inhabitant._names["alice"] = "爱丽丝"
+        event = {"kind": "utterance", "actor_id": "alice", "seq": 5, "text": "有人吗"}
+        inhabitant._recent = [event]
+        ctx = inhabitant._participation_decision_context(event)
+        self.assertIn("The line you heard:", ctx)
+        self.assertIn("爱丽丝: 有人吗", ctx)
+        self.assertIn("Recent room (timeline):", ctx)
+        trigger_idx = ctx.index("The line you heard:")
+        room_idx = ctx.index("Recent room (timeline):")
+        self.assertLess(trigger_idx, room_idx)
 
     def test_replies_after_trigger_lists_peer_lines(self):
         inhabitant = WorldInhabitant(self.agent, member_id="agent2", display_name="二号")
@@ -160,6 +181,7 @@ class WorldInhabitantTests(unittest.IsolatedAsyncioTestCase):
                 await inhabitant.leave()
 
         decision_context = str(self.agent.decisions[0].get("context") or "")
+        self.assertIn("The line you heard:", decision_context)
         chat = self.agent.chats[0]
         room_block = _room_context_text(chat.get("room_context"))
         self.assertEqual(chat["user_message"], "有人吗")
@@ -378,6 +400,18 @@ class WorldInhabitantTests(unittest.IsolatedAsyncioTestCase):
 class WorldAddressTests(unittest.TestCase):
     def setUp(self):
         self.inhabitant = WorldInhabitant(StubAgent(), member_id="aaac", display_name="Aaac")
+
+    def test_listening_pause_shorter_when_named(self):
+        inhabitant = WorldInhabitant(StubAgent(), member_id="agent2", display_name="二号")
+        ambient = [
+            inhabitant._listening_pause_seconds({"text": "anyone here?"})
+            for _ in range(30)
+        ]
+        named = [
+            inhabitant._listening_pause_seconds({"text": "@agent2 hi"})
+            for _ in range(30)
+        ]
+        self.assertLess(max(named), min(ambient))
 
     def test_only_mentions_and_at_names_count_as_self(self):
         self.assertTrue(self.inhabitant._addressed_to_self({"text": "@aaac are you there"}))
