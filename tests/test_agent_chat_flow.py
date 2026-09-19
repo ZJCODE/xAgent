@@ -1567,7 +1567,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
             str(item.get("content", "")) if isinstance(item, dict) else str(item)
             for item in (model_client.instructions_calls[0] or [])
         )
-        self.assertIn("not a chatbot waiting on a prompt", instruction_text)
+        self.assertIn("live group", instruction_text)
 
     async def test_decide_participation_world_named_line_asks_to_reply(self):
         storage = InMemoryMessageStorage()

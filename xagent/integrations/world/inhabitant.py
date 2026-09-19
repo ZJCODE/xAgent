@@ -529,13 +529,14 @@ class WorldInhabitant:
                 return True
         return False
 
-    def _peer_already_answered(self, event: dict[str, Any]) -> bool:
-        """Another member already spoke after this trigger (reduce pile-on replies)."""
+    def _replies_after_trigger(self, event: dict[str, Any]) -> list[tuple[str, str]]:
+        """Utterances from others after this line (same social beat), for group-aware decisions."""
         trigger_seq = event.get("seq")
         if trigger_seq is None:
-            return False
+            return []
         speaker = str(event.get("actor_id") or "")
-        for item in reversed(self._recent):
+        replies: list[tuple[str, str]] = []
+        for item in self._recent:
             if item is event:
                 continue
             if str(item.get("kind") or "") != "utterance":
@@ -544,10 +545,24 @@ class WorldInhabitant:
             if seq is None or int(seq) <= int(trigger_seq):
                 continue
             replier = str(item.get("actor_id") or "")
-            if not replier or replier in {speaker, self.member_id}:
+            if not replier or replier == speaker:
                 continue
-            return True
-        return False
+            label = str(self._names.get(replier) or replier)
+            body = _utterance_body(str(item.get("text") or "").strip(), item.get("attachments"))
+            replies.append((label, body or "(attachment)"))
+        return replies
+
+    @staticmethod
+    def _format_peer_replies(replies: list[tuple[str, str]]) -> str:
+        if not replies:
+            return "Replies to this line since you heard it: (none yet — the beat is still open.)"
+        lines = ["Replies to this line since you heard it:"]
+        for name, text in replies:
+            snippet = text.replace("\n", " ").strip()
+            if len(snippet) > 160:
+                snippet = snippet[:157] + "..."
+            lines.append(f"- {name}: {snippet}")
+        return "\n".join(lines)
 
     def _recently_spoke(self, event: dict[str, Any]) -> bool:
         current_seq = event.get("seq")
@@ -566,18 +581,14 @@ class WorldInhabitant:
             return False
         named = self._addressed_to_self(event)
         recently_spoke = self._recently_spoke(event)
-        if not named and not recently_spoke and self._peer_already_answered(event):
-            self.logger.info(
-                "world participation: defer member_id=%s seq=%s (peer already replied)",
-                self.member_id,
-                event.get("seq"),
-            )
-            return False
+        peer_replies = self._replies_after_trigger(event)
+        peer_reply_count = len(peer_replies)
         situation = self._room_context()
         context = (
             f"{_DECISION_PREFACE}\n"
             f"Named you: {'yes' if named else 'no'}\n"
-            f"You were just speaking: {'yes' if recently_spoke else 'no'}\n\n"
+            f"You were just speaking: {'yes' if recently_spoke else 'no'}\n"
+            f"{self._format_peer_replies(peer_replies)}\n\n"
             f"{situation}"
         )
         try:
@@ -589,6 +600,7 @@ class WorldInhabitant:
                     "world_id": self.world_id,
                     "addressed_to_agent": named,
                     "recently_spoke": recently_spoke,
+                    "peer_reply_count": peer_reply_count,
                 },
             )
         except Exception:
@@ -601,11 +613,13 @@ class WorldInhabitant:
             should = bool(getattr(decision, "should_reply", False))
             reason = str(getattr(decision, "reason", "") or "")
         self.logger.info(
-            "world participation: member_id=%s seq=%s should_reply=%s addressed=%s reason=%s",
+            "world participation: member_id=%s seq=%s should_reply=%s addressed=%s "
+            "peer_replies=%s reason=%s",
             self.member_id,
             event.get("seq"),
             should,
             named,
+            peer_reply_count,
             reason[:120],
         )
         return should

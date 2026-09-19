@@ -97,14 +97,19 @@ class WorldInhabitantTests(unittest.IsolatedAsyncioTestCase):
                 return
             await asyncio.sleep(0.05)
 
-    def test_peer_already_answered_detects_later_utterance(self):
+    def test_replies_after_trigger_lists_peer_lines(self):
         inhabitant = WorldInhabitant(self.agent, member_id="agent2", display_name="二号")
+        inhabitant._names["agent1"] = "一号"
         trigger = {"kind": "utterance", "actor_id": "human", "seq": 10, "text": "hi"}
         inhabitant._recent = [
             trigger,
             {"kind": "utterance", "actor_id": "agent1", "seq": 11, "text": "hello back"},
         ]
-        self.assertTrue(inhabitant._peer_already_answered(trigger))
+        replies = inhabitant._replies_after_trigger(trigger)
+        self.assertEqual(replies, [("一号", "hello back")])
+        formatted = inhabitant._format_peer_replies(replies)
+        self.assertIn("一号", formatted)
+        self.assertIn("hello back", formatted)
 
     async def test_hears_utterance_and_speaks(self):
         inhabitant = WorldInhabitant(self.agent, member_id="agent1", display_name="一号")
