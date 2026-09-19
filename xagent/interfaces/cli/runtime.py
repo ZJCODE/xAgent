@@ -1357,6 +1357,7 @@ def print_quick_start() -> None:
     print("  xagent memory list --days 7     Show recent daily journals")
     print("  xagent doctor                   Check readiness")
     print("")
+    print("Guide: docs/quickstart-web-world-cli.md")
     print("Full help: xagent --help")
 
 

@@ -471,7 +471,9 @@ export function AgentPage() {
         </Panel>
 
         <Panel className="danger-panel">
-          <PanelHeader title="Maintenance" />
+          <details className="maintenance-details">
+            <summary className="maintenance-summary">Advanced maintenance</summary>
+            <p className="wizard-hint maintenance-hint">Clear local data or permanently delete this agent.</p>
           <div className="maintenance-list">
             <MaintenanceRow
               title="Memory"
@@ -502,6 +504,7 @@ export function AgentPage() {
               </Button>
             </div>
           </div>
+          </details>
         </Panel>
       </div>
 

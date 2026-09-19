@@ -1,5 +1,6 @@
 import { Activity, Eye, FileIcon, Paperclip, Play, RadioTower, Send, Square, UserRound, Wifi, WifiOff, X } from "lucide-react";
 import { FormEvent, useEffect, useRef, useState, type ReactNode } from "react";
+import { AwaitingReply } from "../components/AwaitingReply";
 import { Markdown } from "../components/Markdown";
 import { Button, EmptyState, IconButton, StatusBadge } from "../components/ui";
 import { useAgentSession } from "../context/AgentSessionContext";
@@ -342,14 +343,20 @@ function ChatPanel({
 
       <div ref={scrollRef} className="fade-mask flex-1 min-h-0 overflow-y-auto px-3 sm:px-6 py-4 sm:py-6 space-y-4">
         {panel.messages.length ? (
-          panel.messages.map((message) => <ChatMessageView key={message.id} message={message} />)
+          <>
+            {panel.messages.map((message) => (
+              <ChatMessageView key={message.id} message={message} />
+            ))}
+            {panel.sending ? <AwaitingReply /> : null}
+          </>
         ) : !statusReady ? (
           <EmptyState icon={<RadioTower size={24} />} title="Checking API channel">
             Loading channel status...
           </EmptyState>
         ) : chatEnabled ? (
           <EmptyState icon={<Send size={24} />} title="Start a message stream">
-            Type a message and press Enter to send.
+            Type a message and press Enter to send. Memory and Skills live in the sidebar; World opens shared
+            rooms in a separate tab.
           </EmptyState>
         ) : (
           channelBlock

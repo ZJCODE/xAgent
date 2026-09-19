@@ -529,6 +529,26 @@ class WorldInhabitant:
                 return True
         return False
 
+    def _peer_already_answered(self, event: dict[str, Any]) -> bool:
+        """Another member already spoke after this trigger (reduce pile-on replies)."""
+        trigger_seq = event.get("seq")
+        if trigger_seq is None:
+            return False
+        speaker = str(event.get("actor_id") or "")
+        for item in reversed(self._recent):
+            if item is event:
+                continue
+            if str(item.get("kind") or "") != "utterance":
+                continue
+            seq = item.get("seq")
+            if seq is None or int(seq) <= int(trigger_seq):
+                continue
+            replier = str(item.get("actor_id") or "")
+            if not replier or replier in {speaker, self.member_id}:
+                continue
+            return True
+        return False
+
     def _recently_spoke(self, event: dict[str, Any]) -> bool:
         current_seq = event.get("seq")
         utterances = [
@@ -546,6 +566,13 @@ class WorldInhabitant:
             return False
         named = self._addressed_to_self(event)
         recently_spoke = self._recently_spoke(event)
+        if not named and not recently_spoke and self._peer_already_answered(event):
+            self.logger.info(
+                "world participation: defer member_id=%s seq=%s (peer already replied)",
+                self.member_id,
+                event.get("seq"),
+            )
+            return False
         situation = self._room_context()
         context = (
             f"{_DECISION_PREFACE}\n"
@@ -568,8 +595,20 @@ class WorldInhabitant:
             self.logger.exception("world participation decision failed")
             return False
         if isinstance(decision, dict):
-            return bool(decision.get("should_reply"))
-        return bool(getattr(decision, "should_reply", False))
+            should = bool(decision.get("should_reply"))
+            reason = str(decision.get("reason") or "")
+        else:
+            should = bool(getattr(decision, "should_reply", False))
+            reason = str(getattr(decision, "reason", "") or "")
+        self.logger.info(
+            "world participation: member_id=%s seq=%s should_reply=%s addressed=%s reason=%s",
+            self.member_id,
+            event.get("seq"),
+            should,
+            named,
+            reason[:120],
+        )
+        return should
 
     async def _speak_reply(self, event: dict[str, Any]) -> bool:
         client = self._client

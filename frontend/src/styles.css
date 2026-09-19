@@ -3415,3 +3415,50 @@ input::placeholder {
     min-height: var(--channel-action-size);
   }
 }
+
+.awaiting-reply {
+  align-self: center;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.45;
+  text-align: center;
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-muted) 12%, transparent);
+  animation: awaiting-reply-pulse 1.6s ease-in-out infinite;
+}
+
+.awaiting-reply.is-muted {
+  animation: none;
+  background: transparent;
+  font-size: 12px;
+}
+
+@keyframes awaiting-reply-pulse {
+  0%,
+  100% {
+    opacity: 0.72;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.maintenance-details {
+  padding: 0;
+}
+
+.maintenance-summary {
+  cursor: pointer;
+  font-weight: 600;
+  padding: 12px 16px;
+  list-style: none;
+}
+
+.maintenance-summary::-webkit-details-marker {
+  display: none;
+}
+
+.maintenance-hint {
+  margin: 0 16px 8px;
+}

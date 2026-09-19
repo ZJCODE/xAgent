@@ -75,8 +75,8 @@ export function AppLayout({ route, onNavigate, children }: AppLayoutProps) {
             href={DEFAULT_WORLD_HUB_URL}
             target="_blank"
             rel="noreferrer"
-            title="Open world"
-            aria-label="Open world"
+            title="Open shared worlds (World hub, e.g. demo-plaza)"
+            aria-label="Open shared worlds"
           >
             <Globe size={16} />
           </a>

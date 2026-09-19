@@ -17,8 +17,9 @@ import {
   type WorldEvent,
 } from "./protocol";
 import { useWorld } from "./WorldContext";
+import { AwaitingReply } from "../components/AwaitingReply";
+import { REPLY_WAIT_TIMEOUT_MS } from "../lib/awaitingReply";
 import {
-  REPLY_WAIT_TIMEOUT_MS,
   buildChatRows,
   countOtherPresent,
   hasReplyAfterSeq,
@@ -377,13 +378,13 @@ export function WorldChat() {
               />
             ))}
             {showReplyWait ? (
-              <div className="world-awaiting-reply" aria-live="polite">
-                {othersPresent > 0 ? (
-                  <span>Waiting for a reply…</span>
-                ) : (
-                  <span>No one else is here. Invite a local agent or @ mention someone.</span>
-                )}
-              </div>
+              othersPresent > 0 ? (
+                <AwaitingReply className="world-awaiting-reply" />
+              ) : (
+                <div className="world-awaiting-reply is-muted" aria-live="polite">
+                  No one else is here. Invite a local agent or @ mention someone.
+                </div>
+              )
             ) : null}
             {replyWaitTimedOut && replyWaitAnchorSeq !== null ? (
               <div className="world-awaiting-reply is-muted" aria-live="polite">

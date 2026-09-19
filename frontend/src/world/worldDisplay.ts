@@ -1,6 +1,7 @@
+import { REPLY_WAIT_TIMEOUT_MS } from "../lib/awaitingReply";
 import type { WorldEvent } from "./protocol";
 
-export const REPLY_WAIT_TIMEOUT_MS = 90_000;
+export { REPLY_WAIT_TIMEOUT_MS };
 
 export type ChatRow =
   | { kind: "event"; event: WorldEvent; key: string }
