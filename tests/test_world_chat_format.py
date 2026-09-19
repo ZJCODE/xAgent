@@ -14,6 +14,29 @@ class WorldChatFormatTests(unittest.TestCase):
             "mira: hey",
         )
 
+    def test_utterance_prefers_name_at_time_of_speaking(self):
+        self.assertEqual(
+            format_chat_event(
+                {"kind": "utterance", "actor_id": "alice", "actor_name": "爱丽丝", "text": "hi"},
+                member_id="bob",
+            ),
+            "爱丽丝: hi",
+        )
+        self.assertEqual(
+            format_chat_event(
+                {"kind": "join", "actor_id": "alice", "actor_name": "爱丽丝"},
+                member_id="bob",
+            ),
+            "· 爱丽丝 joined",
+        )
+        self.assertEqual(
+            format_chat_event(
+                {"kind": "utterance", "actor_id": "alice", "actor_name": "爱丽丝", "text": "mine"},
+                member_id="alice",
+            ),
+            "you: mine",
+        )
+
     def test_join_leave(self):
         self.assertEqual(
             format_chat_event({"kind": "join", "actor_id": "echo"}, member_id="human"),

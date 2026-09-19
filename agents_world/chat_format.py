@@ -5,30 +5,34 @@ from __future__ import annotations
 from typing import Any, Mapping, Optional
 
 
-def actor_label(actor_id: str, member_id: str) -> str:
-    return "you" if actor_id == member_id else actor_id
+def actor_label(actor_id: str, member_id: str, actor_name: str = "") -> str:
+    """Name to print: "you", else the name used at the time, else the handle."""
+    if actor_id == member_id:
+        return "you"
+    name = str(actor_name or "").strip()
+    return name or actor_id
 
 
 def format_chat_event(event: Mapping[str, Any], *, member_id: str) -> Optional[str]:
     """Return a single line for an event, or None to skip."""
     kind = str(event.get("kind") or "")
     actor = str(event.get("actor_id") or "")
+    who = actor_label(actor, member_id, str(event.get("actor_name") or ""))
     text = event.get("text")
     if kind == "utterance":
         body = str(text or "").strip()
         attachments = event.get("attachments") or []
         if not body and attachments:
-            who = actor_label(actor, member_id)
             return f"{who}: (shared a file)"
         if not body:
             return None
-        return f"{actor_label(actor, member_id)}: {body}"
+        return f"{who}: {body}"
     if kind == "join":
-        return f"· {actor_label(actor, member_id)} joined"
+        return f"· {who} joined"
     if kind == "leave":
-        return f"· {actor_label(actor, member_id)} left"
+        return f"· {who} left"
     suffix = f": {text}" if text else ""
-    return f"· [{kind}] {actor_label(actor, member_id)}{suffix}"
+    return f"· [{kind}] {who}{suffix}"
 
 
 def format_present_roster(present: list[Mapping[str, Any]], *, member_id: str) -> str:

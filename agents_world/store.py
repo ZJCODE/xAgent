@@ -75,7 +75,8 @@ class WorldStore:
                 actor_id TEXT NOT NULL,
                 text TEXT NOT NULL,
                 mentions_json TEXT NOT NULL DEFAULT '[]',
-                attachments_json TEXT NOT NULL DEFAULT '[]'
+                attachments_json TEXT NOT NULL DEFAULT '[]',
+                actor_name TEXT NOT NULL DEFAULT ''
             );
             CREATE TABLE IF NOT EXISTS files (
                 id TEXT PRIMARY KEY,
@@ -86,11 +87,22 @@ class WorldStore:
             );
             """
         )
+        self._ensure_event_columns()
         self._conn.execute(
             "INSERT OR REPLACE INTO meta(key, value) VALUES ('world_id', ?)",
             (self.world_id,),
         )
         self._conn.commit()
+
+    def _ensure_event_columns(self) -> None:
+        """Additive upgrades for logs written by older hubs."""
+        columns = {
+            str(row["name"])
+            for row in self._conn.execute("PRAGMA table_info(events)").fetchall()
+        }
+        if "actor_name" not in columns:
+            # Attribution at the time of speaking; members.display_name is only "latest self-description".
+            self._conn.execute("ALTER TABLE events ADD COLUMN actor_name TEXT NOT NULL DEFAULT ''")
 
     def get_meta(self, key: str) -> Optional[str]:
         row = self._conn.execute(
@@ -239,6 +251,7 @@ class WorldStore:
         mentions: Optional[list[str] | tuple[str, ...]] = None,
         attachments: Optional[list[Attachment] | tuple[Attachment, ...]] = None,
         ts: Optional[float] = None,
+        actor_name: str = "",
     ) -> WorldEvent:
         event_ts = float(ts if ts is not None else self.clock.now())
         mention_list = [str(m).strip() for m in (mentions or []) if str(m).strip()]
@@ -249,12 +262,13 @@ class WorldStore:
             ensure_ascii=False,
         )
         kind_value = kind.value if isinstance(kind, EventKind) else str(kind)
+        name_at_time = str(actor_name or "").strip()
         cur = self._conn.execute(
             """
-            INSERT INTO events(ts, kind, actor_id, text, mentions_json, attachments_json)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO events(ts, kind, actor_id, text, mentions_json, attachments_json, actor_name)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (event_ts, kind_value, actor_id, text, mentions_json, attachments_json),
+            (event_ts, kind_value, actor_id, text, mentions_json, attachments_json, name_at_time),
         )
         self._commit()
         seq = int(cur.lastrowid)
@@ -266,6 +280,7 @@ class WorldStore:
             text=text,
             mentions=tuple(mention_list),
             attachments=attachment_items,
+            actor_name=name_at_time,
         )
 
     def events_after(
@@ -276,7 +291,7 @@ class WorldStore:
     ) -> list[WorldEvent]:
         rows = self._conn.execute(
             """
-            SELECT seq, ts, kind, actor_id, text, mentions_json, attachments_json
+            SELECT seq, ts, kind, actor_id, text, mentions_json, attachments_json, actor_name
             FROM events
             WHERE seq > ?
             ORDER BY seq ASC
@@ -289,7 +304,7 @@ class WorldStore:
     def recent_events(self, *, limit: int = 50) -> list[WorldEvent]:
         rows = self._conn.execute(
             """
-            SELECT seq, ts, kind, actor_id, text, mentions_json, attachments_json
+            SELECT seq, ts, kind, actor_id, text, mentions_json, attachments_json, actor_name
             FROM events
             ORDER BY seq DESC
             LIMIT ?

@@ -15,6 +15,14 @@ from . import MAX_MESSAGE_BYTES
 Predicate = Callable[[dict[str, Any]], bool]
 
 
+class MemberTakenError(RuntimeError):
+    """The hub refused hello: this member_id is embodied by another live connection."""
+
+    def __init__(self, member_id: str, message: str = ""):
+        super().__init__(message or f"member_id is present from another connection: {member_id}")
+        self.member_id = member_id
+
+
 class WorldClient:
     """Minimal inhabitant: hello, join, speak, leave, sync, and an inbox of perceptions.
 
@@ -28,10 +36,13 @@ class WorldClient:
         *,
         member_id: str,
         display_name: str = "",
+        resume_token: str = "",
     ):
         self.url = url
         self.member_id = member_id
         self.display_name = display_name or member_id
+        # Set from `welcome`; pass it back on reconnect to take over the same member_id.
+        self.resume_token = str(resume_token or "")
         self.inbox: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self.welcome: Optional[dict[str, Any]] = None
         self.last_seq: int = 0
@@ -40,18 +51,27 @@ class WorldClient:
 
     async def connect(self) -> dict[str, Any]:
         self._ws = await connect(self.url, max_size=MAX_MESSAGE_BYTES)
-        await self._send(
-            {
-                "type": "hello",
-                "member_id": self.member_id,
-                "display_name": self.display_name,
-            }
-        )
+        hello: dict[str, Any] = {
+            "type": "hello",
+            "member_id": self.member_id,
+            "display_name": self.display_name,
+        }
+        if self.resume_token:
+            hello["resume_token"] = self.resume_token
+        await self._send(hello)
         self._reader = asyncio.create_task(self._read_loop(), name=f"client-{self.member_id}")
-        msg = await self.recv(timeout=10.0)
+        try:
+            msg = await self.recv(timeout=10.0)
+        except BaseException:
+            await self.close()
+            raise
         if msg.get("type") != "welcome":
+            await self.close()
+            if msg.get("type") == "error" and msg.get("code") == "member_taken":
+                raise MemberTakenError(self.member_id, str(msg.get("message") or ""))
             raise RuntimeError(f"expected welcome, got {msg}")
         self.welcome = msg
+        self.resume_token = str(msg.get("resume_token") or self.resume_token or "")
         return msg
 
     async def close(self) -> None:

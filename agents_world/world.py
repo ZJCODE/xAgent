@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+import secrets
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Optional
 
@@ -39,6 +40,14 @@ logger = logging.getLogger(__name__)
 SendFn = Callable[[str], Awaitable[None]]
 
 
+class MemberTaken(ValueError):
+    """Another live connection already embodies this member_id and no valid resume_token was shown."""
+
+    def __init__(self, member_id: str):
+        super().__init__(f"member_id is present from another connection: {member_id}")
+        self.member_id = member_id
+
+
 @dataclass
 class Session:
     member_id: str
@@ -46,6 +55,9 @@ class Session:
     connection_id: int
     send: SendFn
     present: bool = False
+    # Proof of "same body": a later hello for this member_id may replace this
+    # socket only when it presents this token.
+    resume_token: str = ""
     outbound: asyncio.Queue[Optional[str]] = field(
         default_factory=lambda: asyncio.Queue(maxsize=OUTBOUND_QUEUE_SIZE)
     )
@@ -131,6 +143,7 @@ class World:
         member_id: str,
         display_name: str,
         send: SendFn,
+        resume_token: str = "",
     ) -> Session:
         member_id = member_id.strip()
         display_name = (display_name or member_id).strip()
@@ -145,12 +158,16 @@ class World:
         if len(display_name) > MAX_DISPLAY_NAME_LENGTH:
             display_name = display_name[:MAX_DISPLAY_NAME_LENGTH].rstrip()
         display_name = "".join(ch for ch in display_name if ch.isprintable()) or member_id
+        offered_token = str(resume_token or "").strip()
 
         async with self._lock:
-            connection_id = self._next_connection_id()
             previous = self._sessions.get(member_id)
             if previous is not None:
-                # One body, one place: newer connection replaces the older socket.
+                # One body, one place — but only the same body may take the place over.
+                if not offered_token or not secrets.compare_digest(offered_token, previous.resume_token):
+                    raise MemberTaken(member_id)
+            connection_id = self._next_connection_id()
+            if previous is not None:
                 self._enqueue(
                     previous,
                     encode_error(
@@ -168,6 +185,7 @@ class World:
                 connection_id=connection_id,
                 send=send,
                 present=self.store.is_present(member_id),
+                resume_token=secrets.token_urlsafe(24),
             )
             session.pump_task = asyncio.create_task(
                 self._pump(session),
@@ -204,6 +222,7 @@ class World:
                 kind=EventKind.LEAVE,
                 actor_id=session.member_id,
                 text="",
+                actor_name=session.display_name,
             )
         self._fanout(event)
 
@@ -290,6 +309,7 @@ class World:
                 member_id=session.member_id,
                 display_name=session.display_name,
                 present=session.present,
+                resume_token=session.resume_token,
             ),
         )
 
@@ -303,6 +323,7 @@ class World:
                     kind=EventKind.JOIN,
                     actor_id=session.member_id,
                     text="",
+                    actor_name=session.display_name,
                 )
         session.present = True
         session.lagged = False
@@ -333,6 +354,7 @@ class World:
                 kind=EventKind.LEAVE,
                 actor_id=session.member_id,
                 text="",
+                actor_name=session.display_name,
             )
         session.present = False
         self._fanout(event)
@@ -381,6 +403,7 @@ class World:
             text=text.strip(),
             mentions=mentions,
             attachments=attachments,
+            actor_name=session.display_name,
         )
         self._fanout(event)
 

@@ -70,6 +70,8 @@ class WorldEvent:
     text: str
     mentions: tuple[str, ...] = ()
     attachments: tuple[Attachment, ...] = ()
+    # Display name at the time of the event. Empty for rows written by older hubs.
+    actor_name: str = ""
 
     def to_dict(self, *, world_id: str) -> dict[str, Any]:
         kind = self.kind.value if isinstance(self.kind, EventKind) else str(self.kind)
@@ -81,6 +83,8 @@ class WorldEvent:
             "text": self.text,
             "mentions": list(self.mentions),
         }
+        if self.actor_name:
+            body["actor_name"] = self.actor_name
         if self.attachments:
             body["attachments"] = [item.to_dict(world_id=world_id) for item in self.attachments]
         return body
@@ -96,6 +100,7 @@ class WorldEvent:
         text: str,
         mentions_json: str,
         attachments_json: str = "[]",
+        actor_name: str = "",
         **_extra: Any,
     ) -> "WorldEvent":
         mentions_raw = json.loads(mentions_json or "[]")
@@ -114,6 +119,7 @@ class WorldEvent:
             text=text,
             mentions=mentions,
             attachments=attachments,
+            actor_name=str(actor_name or ""),
         )
 
 

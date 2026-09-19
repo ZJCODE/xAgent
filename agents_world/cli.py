@@ -237,7 +237,7 @@ class _ChatPrinter:
 
 
 async def _cmd_join(args: argparse.Namespace) -> int:
-    from .client import WorldClient
+    from .client import MemberTakenError, WorldClient
 
     member_id = args.member_id
     name = args.name or member_id
@@ -251,6 +251,28 @@ async def _cmd_join(args: argparse.Namespace) -> int:
     )
 
     print(f"Connecting as {name} …", flush=True)
+    try:
+        return await _run_join_session(url, member_id=member_id, name=name, printer=printer, snapshot_ready=snapshot_ready)
+    except MemberTakenError:
+        print(
+            f"! '{member_id}' is already present in this world from another connection. "
+            "Pick another --member-id, or leave from where you are already present.",
+            file=sys.stderr,
+            flush=True,
+        )
+        return 1
+
+
+async def _run_join_session(
+    url: str,
+    *,
+    member_id: str,
+    name: str,
+    printer: "_ChatPrinter",
+    snapshot_ready: asyncio.Event,
+) -> int:
+    from .client import WorldClient
+
     async with WorldClient(url, member_id=member_id, display_name=name) as client:
         welcome = client.welcome or {}
         if welcome.get("type") != "welcome":

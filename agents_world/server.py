@@ -26,7 +26,7 @@ from .paths import (
     world_data_dir,
 )
 from .store import WorldStore, open_store_for_world
-from .world import World
+from .world import MemberTaken, World
 
 logger = logging.getLogger(__name__)
 
@@ -229,12 +229,24 @@ class WorldHub:
                 return
             member_id = str(hello.payload.get("member_id") or "").strip()
             display_name = str(hello.payload.get("display_name") or member_id).strip()
+            resume_token = str(hello.payload.get("resume_token") or "").strip()
             try:
                 session = await world.attach(
                     member_id=member_id,
                     display_name=display_name,
                     send=websocket.send,
+                    resume_token=resume_token,
                 )
+            except MemberTaken as exc:
+                await websocket.send(
+                    encode_error(
+                        "member_taken",
+                        str(exc),
+                        member_id=exc.member_id,
+                    )
+                )
+                await websocket.close(1008, "member taken")
+                return
             except ValueError as exc:
                 await websocket.send(encode_error("bad_payload", str(exc)))
                 return

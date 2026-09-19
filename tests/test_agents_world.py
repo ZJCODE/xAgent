@@ -212,6 +212,48 @@ class WorldPhysicsTests(unittest.IsolatedAsyncioTestCase):
         store2.close()
         self.assertTrue(any(e.kind == EventKind.UTTERANCE and e.text == "remember me" for e in events))
 
+    async def test_schema_upgrade_adds_actor_name_column(self):
+        """Logs written by hubs before actor_name existed open and keep working."""
+        import sqlite3
+
+        from agents_world.store import WorldStore
+
+        legacy_dir = world_data_dir("legacy", root=self.root)
+        legacy_dir.mkdir(parents=True, exist_ok=True)
+        db = legacy_dir / "world.sqlite3"
+        conn = sqlite3.connect(db)
+        conn.executescript(
+            """
+            CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            CREATE TABLE members (id TEXT PRIMARY KEY, display_name TEXT NOT NULL);
+            CREATE TABLE presence (member_id TEXT PRIMARY KEY, present INTEGER NOT NULL DEFAULT 0);
+            CREATE TABLE events (
+                seq INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL, kind TEXT NOT NULL,
+                actor_id TEXT NOT NULL, text TEXT NOT NULL,
+                mentions_json TEXT NOT NULL DEFAULT '[]', attachments_json TEXT NOT NULL DEFAULT '[]'
+            );
+            CREATE TABLE files (id TEXT PRIMARY KEY, name TEXT NOT NULL, mime TEXT NOT NULL, size INTEGER NOT NULL, ts REAL NOT NULL);
+            INSERT INTO members(id, display_name) VALUES ('old', 'Old Timer');
+            INSERT INTO events(ts, kind, actor_id, text) VALUES (1.0, 'utterance', 'old', 'from before');
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        store = WorldStore(db, world_id="legacy", clock=self.clock)
+        try:
+            columns = {row["name"] for row in store._conn.execute("PRAGMA table_info(events)")}
+            self.assertIn("actor_name", columns)
+            old = store.recent_events(limit=10)
+            self.assertEqual(old[0].text, "from before")
+            self.assertEqual(old[0].actor_name, "")
+            self.assertNotIn("actor_name", old[0].to_dict(world_id="legacy"))
+            new = store.append_event(kind=EventKind.UTTERANCE, actor_id="old", text="now", actor_name="Old Timer")
+            self.assertEqual(new.actor_name, "Old Timer")
+            self.assertEqual(store.recent_events(limit=1)[0].actor_name, "Old Timer")
+        finally:
+            store.close()
+
     async def test_presence_does_not_survive_restart(self):
         _, alice = await self._attach("alice")
         await self._act(alice, "join", {})
@@ -523,14 +565,16 @@ class WorldHubTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(err.get("code"), "not_present")
 
     async def test_replaced_connection_is_closed(self):
+        """Same body (resume_token) may take the place over; the old socket is told and closed."""
         await _http_get(self.port, "/worlds/create?name=hall")
         from agents_world.client import WorldClient
 
         first = WorldClient(self._ws("hall"), member_id="bob")
-        await first.connect()
+        welcome = await first.connect()
+        self.assertTrue(welcome.get("resume_token"))
         await first.join()
         await first.wait_for(lambda m: m.get("type") == "snapshot")
-        second = WorldClient(self._ws("hall"), member_id="bob")
+        second = WorldClient(self._ws("hall"), member_id="bob", resume_token=first.resume_token)
         await second.connect()
         msg = await first.wait_for(
             lambda m: m.get("type") in {"error", "_closed"}, timeout=3.0
@@ -541,6 +585,99 @@ class WorldHubTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(first._ws is None or first._ws.close_code is not None or first._ws.state.name != "OPEN")
         await second.close()
         await first.close()
+
+    async def test_same_member_without_resume_token_is_rejected(self):
+        """A stranger choosing an occupied member_id is refused; the occupant is untouched."""
+        await _http_get(self.port, "/worlds/create?name=hall")
+        from agents_world.client import MemberTakenError, WorldClient
+
+        first = WorldClient(self._ws("hall"), member_id="bob", display_name="Bob")
+        await first.connect()
+        await first.join()
+        await first.wait_for(lambda m: m.get("type") == "snapshot")
+
+        with self.assertRaises(MemberTakenError):
+            await WorldClient(self._ws("hall"), member_id="bob", display_name="Impostor").connect()
+        with self.assertRaises(MemberTakenError):
+            await WorldClient(self._ws("hall"), member_id="bob", resume_token="wrong").connect()
+
+        await first.speak("still here")
+        heard = await first.wait_for(lambda m: m.get("type") == "event" and m.get("kind") == "utterance")
+        self.assertEqual(heard.get("text"), "still here")
+        self.assertEqual(heard.get("actor_name"), "Bob")
+        await first.close()
+
+    async def test_member_id_is_free_again_after_occupant_leaves(self):
+        await _http_get(self.port, "/worlds/create?name=hall")
+        from agents_world.client import WorldClient
+
+        first = WorldClient(self._ws("hall"), member_id="bob")
+        await first.connect()
+        await first.close()
+        await asyncio.sleep(0.2)
+        second = WorldClient(self._ws("hall"), member_id="bob")
+        welcome = await second.connect()
+        self.assertEqual(welcome.get("type"), "welcome")
+        await second.close()
+
+    async def test_event_carries_actor_name_at_time_of_speaking(self):
+        """Renaming later must not rewrite who said what earlier."""
+        await _http_get(self.port, "/worlds/create?name=hall")
+        from agents_world.client import WorldClient
+
+        async with WorldClient(self._ws("hall"), member_id="alice", display_name="爱丽丝") as alice:
+            await alice.join()
+            await alice.wait_for(lambda m: m.get("type") == "snapshot")
+            await alice.speak("first")
+            await alice.wait_for(lambda m: m.get("type") == "event" and m.get("text") == "first")
+            await alice.leave()
+            await alice.wait_for(lambda m: m.get("type") == "event" and m.get("kind") == "leave")
+        await asyncio.sleep(0.1)
+        async with WorldClient(self._ws("hall"), member_id="alice", display_name="Alice") as alice:
+            await alice.join()
+            snapshot = await alice.wait_for(lambda m: m.get("type") == "snapshot")
+            by_text = {e.get("text"): e for e in snapshot["events"] if e.get("kind") == "utterance"}
+            self.assertEqual(by_text["first"].get("actor_name"), "爱丽丝")
+            roster = {p["member_id"]: p["display_name"] for p in snapshot["present"]}
+            self.assertEqual(roster["alice"], "Alice")
+            await alice.speak("second")
+            heard = await alice.wait_for(lambda m: m.get("type") == "event" and m.get("text") == "second")
+            self.assertEqual(heard.get("actor_name"), "Alice")
+
+    async def test_three_people_and_one_dummy_agent_hear_everyone(self):
+        await _http_get(self.port, "/worlds/create?name=hall")
+        from agents_world.client import WorldClient
+
+        people = [("alice", "爱丽丝"), ("bob", "Bob"), ("carol", "Carol"), ("telos", "Telos")]
+        clients = []
+        for member_id, name in people:
+            client = WorldClient(self._ws("hall"), member_id=member_id, display_name=name)
+            await client.connect()
+            await client.join()
+            await client.wait_for(lambda m: m.get("type") == "snapshot")
+            clients.append(client)
+        try:
+            for client in clients:
+                await client.speak(f"hello from {client.display_name}")
+            expected = {f"hello from {name}" for _, name in people}
+            for client in clients:
+                heard: set[str] = set()
+                while heard != expected:
+                    msg = await client.wait_for(
+                        lambda m: m.get("type") == "event" and m.get("kind") == "utterance", timeout=5.0
+                    )
+                    heard.add(str(msg.get("text")))
+                    self.assertEqual(msg.get("actor_name"), dict(people)[msg["actor_id"]])
+            snapshot_client = WorldClient(self._ws("hall"), member_id="late", display_name="Late")
+            await snapshot_client.connect()
+            await snapshot_client.join()
+            snapshot = await snapshot_client.wait_for(lambda m: m.get("type") == "snapshot")
+            present = {p["member_id"] for p in snapshot["present"]}
+            self.assertEqual(present, {"alice", "bob", "carol", "telos", "late"})
+            await snapshot_client.close()
+        finally:
+            for client in clients:
+                await client.close()
 
     async def test_http_serves_inhabitant_page(self):
         status, headers, body = await _http_get(self.port, "/")
