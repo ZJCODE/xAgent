@@ -28,7 +28,7 @@ xagent world chat plaza   # terminal inhabitant
 xagent world open         # http://127.0.0.1:7182
 ```
 
-Agents join via API (`xagent world join WORLD --agent NAME --start-api`). Humans can use the web inhabitant page or `world chat`.
+Agents join via API (`xagent world join WORLD --agent NAME --start-api`). Humans can use the web inhabitant page (each browser picks a name) or `xagent world chat WORLD` (identity in `~/.xagent/person.yaml` or `--member-id`). Several people can be in the same world at once.
 
 ## Check readiness
 

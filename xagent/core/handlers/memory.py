@@ -499,22 +499,19 @@ class MemoryHandler:
         """Collect distinct human participants (non-self) from a batch."""
         from ...components.memory import RelationshipStore, human_display_name
 
+        from ...core.config import AgentConfig
+
         participants: dict[str, dict] = {}
-        for message in messages:
-            if message.type != MessageType.MESSAGE:
-                continue
-            if message.role != RoleType.USER:
-                continue
+
+        def add_participant(message: Message) -> None:
             user_id = (message.sender_id or "").strip()
             if not user_id:
-                continue
+                return
             channel = (message.channel or "").strip()
             if not channel:
-                # Incomplete identity must not mint unknown:* parallel keys.
-                continue
+                return
             if is_scheduled_work(message.metadata):
-                # Synthetic work-order prompts are not human speech.
-                continue
+                return
             metadata = message.metadata or {}
             key = RelationshipStore.make_key(channel, user_id)
             display_name = human_display_name(
@@ -526,13 +523,26 @@ class MemoryHandler:
             if existing is not None:
                 if display_name and not existing["display_name"]:
                     existing["display_name"] = display_name
-                continue
+                return
             participants[key] = {
                 "key": key,
                 "display_name": display_name,
                 "channel": channel,
                 "user_id": user_id,
             }
+
+        for message in messages:
+            if message.type == MessageType.MESSAGE and message.role == RoleType.USER:
+                add_participant(message)
+                continue
+            if message.type != MessageType.CONTEXT_EVENT:
+                continue
+            metadata = message.metadata or {}
+            event_type = str(metadata.get("event_type") or "").lower()
+            if event_type not in AgentConfig.RELATIONSHIP_OBSERVED_UTTERANCE_TYPES:
+                continue
+            add_participant(message)
+
         return list(participants.values())
 
     async def get_relationship_context(
@@ -554,17 +564,25 @@ class MemoryHandler:
         if self.relationship_store is None:
             return ""
 
+        speaker_set = {str(key or "").strip() for key in (speaker_keys or []) if str(key or "").strip()}
         ordered_keys: list[str] = []
         seen: set[str] = set()
         for key in [*(speaker_keys or []), *(participant_keys or [])]:
             normalized = (key or "").strip()
-            if normalized and normalized not in seen:
-                seen.add(normalized)
-                ordered_keys.append(normalized)
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            ordered_keys.append(normalized)
 
-        resolved_max = max_cards if max_cards is not None else AgentConfig.RELATIONSHIP_MAX_CARDS_PER_TURN
-        resolved_max = max(1, resolved_max)
-        ordered_keys = ordered_keys[:resolved_max]
+        if compact_participants:
+            speakers = [key for key in ordered_keys if key in speaker_set]
+            audience = [key for key in ordered_keys if key not in speaker_set]
+            cap = max(0, int(AgentConfig.RELATIONSHIP_MAX_AUDIENCE_CARDS))
+            ordered_keys = speakers + audience[:cap]
+        else:
+            resolved_max = max_cards if max_cards is not None else AgentConfig.RELATIONSHIP_MAX_CARDS_PER_TURN
+            resolved_max = max(1, resolved_max)
+            ordered_keys = ordered_keys[:resolved_max]
         if not ordered_keys:
             return ""
 

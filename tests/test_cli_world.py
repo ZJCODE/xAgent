@@ -22,6 +22,7 @@ from xagent.interfaces.cli import (
     handle_world_up,
 )
 from xagent.interfaces.cli.agents import register_agent
+from xagent.interfaces.cli import world_hub
 from xagent.interfaces.cli.launcher import _launcher_options, _world_hub_actions
 from xagent.interfaces.cli.overview import build_runtime_overview
 from xagent.interfaces.cli.processes import StartResult, iter_managed_process_refs
@@ -55,6 +56,13 @@ def _write_runtime(directory: str) -> None:
 
 
 class WorldCliTests(unittest.TestCase):
+    def test_person_identity_roundtrip(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            world_hub.save_person_identity("alice", "Alice", root=root)
+            loaded = world_hub.load_person_identity(root=root)
+            self.assertEqual(loaded, {"member_id": "alice", "display_name": "Alice"})
+
     def test_parser_exposes_world_lifecycle_and_presence_commands(self):
         parser = build_parser()
         start = parser.parse_args(["world", "start"])
@@ -66,7 +74,9 @@ class WorldCliTests(unittest.TestCase):
         self.assertTrue(join.start_hub)
         chat = parser.parse_args(["world", "chat", "plaza"])
         self.assertEqual(chat.world, "plaza")
-        self.assertEqual(chat.member_id, "human")
+        self.assertIsNone(chat.member_id)
+        whoami = parser.parse_args(["world", "whoami", "--name", "Alice", "--member-id", "alice"])
+        self.assertEqual(whoami.handler, world_hub.handle_world_whoami)
         up = parser.parse_args(["world", "up", "plaza", "--agent", "telos"])
         self.assertEqual(up.handler, handle_world_up)
         self.assertEqual(up.world, "plaza")

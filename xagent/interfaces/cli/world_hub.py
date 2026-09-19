@@ -42,6 +42,7 @@ from .processes import (
 
 DEFAULT_WORLD_HOST = DEFAULT_HOST
 DEFAULT_WORLD_PORT = DEFAULT_PORT
+PERSON_IDENTITY_FILENAME = "person.yaml"
 HUB_READY_TIMEOUT = 5.0
 API_READY_TIMEOUT = 8.0
 HTTP_TIMEOUT = 2.0
@@ -807,6 +808,104 @@ def handle_world_leave(args: argparse.Namespace) -> int:
     return 0
 
 
+def person_identity_path(*, root: Optional[Path] = None) -> Path:
+    return (root or management_root()).expanduser().resolve() / PERSON_IDENTITY_FILENAME
+
+
+def load_person_identity(*, root: Optional[Path] = None) -> Optional[dict[str, str]]:
+    path = person_identity_path(root=root)
+    if not path.is_file():
+        return None
+    import yaml
+
+    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    if not isinstance(data, dict):
+        return None
+    member_id = str(data.get("member_id") or "").strip()
+    display_name = str(data.get("display_name") or "").strip()
+    if not member_id or not display_name:
+        return None
+    return {"member_id": member_id, "display_name": display_name}
+
+
+def save_person_identity(
+    member_id: str,
+    display_name: str,
+    *,
+    root: Optional[Path] = None,
+) -> Path:
+    import yaml
+
+    path = person_identity_path(root=root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    body = {
+        "member_id": str(member_id or "").strip(),
+        "display_name": str(display_name or "").strip(),
+    }
+    path.write_text(yaml.safe_dump(body, sort_keys=False, allow_unicode=True), encoding="utf-8")
+    return path
+
+
+def _resolve_terminal_person_identity(args: argparse.Namespace) -> tuple[str, str, int]:
+    """Return (member_id, display_name, exit_code). exit_code != 0 means abort."""
+    explicit_id = getattr(args, "member_id", None)
+    if explicit_id is not None and str(explicit_id).strip():
+        member_id = str(explicit_id).strip()
+        display_name = str(getattr(args, "name", None) or member_id).strip() or member_id
+        if getattr(args, "save_identity", False):
+            save_person_identity(member_id, display_name)
+        return member_id, display_name, 0
+
+    stored = load_person_identity()
+    if stored is not None:
+        member_id = stored["member_id"]
+        display_name = str(getattr(args, "name", None) or stored["display_name"]).strip() or member_id
+        return member_id, display_name, 0
+
+    if sys.stdin.isatty() and sys.stdout.isatty():
+        try:
+            display_name = input("Your display name: ").strip()
+        except EOFError:
+            display_name = ""
+        if not display_name:
+            print("Error: display name is required (or set ~/.xagent/person.yaml)", file=sys.stderr)
+            return "", "", 1
+        member_id = display_name.lower().replace(" ", "-")
+        member_id = "".join(ch for ch in member_id if ch.isalnum() or ch in "-._") or "human"
+        if getattr(args, "save_identity", True):
+            save_person_identity(member_id, display_name)
+        print(f"Saved as {display_name} ({member_id}) in {person_identity_path()}")
+        return member_id, display_name, 0
+
+    return "human", "human", 0
+
+
+def handle_world_whoami(args: argparse.Namespace) -> int:
+    if getattr(args, "clear", False):
+        path = person_identity_path()
+        if path.is_file():
+            path.unlink()
+            print(f"Removed {path}")
+        else:
+            print("No saved person identity")
+        return 0
+    member_id = str(getattr(args, "member_id", None) or "").strip()
+    display_name = str(getattr(args, "name", None) or "").strip()
+    if member_id or display_name:
+        if not member_id or not display_name:
+            print("Error: both --member-id and --name are required to set identity")
+            return 1
+        path = save_person_identity(member_id, display_name)
+        print(f"Saved {display_name} ({member_id}) → {path}")
+        return 0
+    stored = load_person_identity()
+    if stored is None:
+        print("No person identity saved. Use: xagent world whoami --name YOU --member-id you")
+        return 1
+    print(f"{stored['display_name']} ({stored['member_id']})")
+    return 0
+
+
 def handle_world_chat(args: argparse.Namespace) -> int:
     world_id = str(getattr(args, "world", "") or getattr(args, "world_id", "") or "").strip()
     if not world_id:
@@ -816,8 +915,9 @@ def handle_world_chat(args: argparse.Namespace) -> int:
     if hub_code != 0:
         return hub_code
     host, port = _resolved_hub_bind(args)
-    member_id = str(getattr(args, "member_id", None) or "human").strip() or "human"
-    display_name = str(getattr(args, "name", None) or member_id).strip() or member_id
+    member_id, display_name, code = _resolve_terminal_person_identity(args)
+    if code != 0:
+        return code
     from agents_world.cli import main as agents_world_main
 
     argv = [

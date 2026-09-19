@@ -11,10 +11,11 @@ import {
 import {
   extractMentions,
   fileToBase64,
-  resolveHumanIdentity,
+  loadPersonIdentity,
+  loadResumeToken,
+  savePersonIdentity,
+  saveResumeToken,
   validateWorldName,
-  HUMAN_DISPLAY_NAME,
-  HUMAN_MEMBER_ID,
   MAX_ATTACHMENTS,
   MAX_FILE_BYTES,
   MAX_SPEAK_TEXT_LENGTH,
@@ -22,6 +23,7 @@ import {
   worldWsUrl,
   type NeighborAgent,
   type PendingFile,
+  type PersonIdentity,
   type WorldEvent,
   type WorldMember,
   type WorldSummary,
@@ -34,6 +36,11 @@ interface WorldState {
   worldName: string;
   worlds: WorldSummary[];
   memberId: string;
+  /** Who this browser is. Null until the person names themselves. */
+  identity: PersonIdentity | null;
+  identityDialogOpen: boolean;
+  /** Why the dialog opened (e.g. member_taken), shown inside it. */
+  identityPrompt: string;
   names: Record<string, string>;
   present: WorldMember[];
   events: WorldEvent[];
@@ -70,6 +77,12 @@ interface WorldContextValue extends WorldState {
   knockAgent: (agent: NeighborAgent, action: "join" | "leave") => Promise<void>;
   displayOf: (id: string) => string;
   refreshWorlds: () => Promise<WorldSummary[]>;
+  openIdentityDialog: () => void;
+  closeIdentityDialog: () => void;
+  /** Save who this browser is; re-enters the pending/current world with the new body. */
+  setIdentity: (identity: PersonIdentity) => Promise<void>;
+  /** True when `member_id` belongs to a local agent (from /neighbors), not a person. */
+  isAgentId: (id: string) => boolean;
 }
 
 const WorldContext = createContext<WorldContextValue | null>(null);
@@ -79,6 +92,9 @@ const initialState: WorldState = {
   worldName: "Select a world",
   worlds: [],
   memberId: "",
+  identity: null,
+  identityDialogOpen: false,
+  identityPrompt: "",
   names: {},
   present: [],
   events: [],
@@ -98,7 +114,10 @@ function closeIfNarrow() {
 }
 
 export function WorldProvider({ children }: { children: ReactNode }) {
-  const [state, setState] = useState<WorldState>(initialState);
+  const [state, setState] = useState<WorldState>(() => ({
+    ...initialState,
+    identity: loadPersonIdentity(),
+  }));
   const [createName, setCreateName] = useState("");
   const [speakText, setSpeakText] = useState("");
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
@@ -114,47 +133,61 @@ export function WorldProvider({ children }: { children: ReactNode }) {
   const lastSeqRef = useRef(0);
   const stateRef = useRef(state);
   stateRef.current = state;
+  /** World the person asked to enter before they had a name; entered once they do. */
+  const pendingWorldRef = useRef("");
+  const disconnectSocketRef = useRef<() => void>(() => {});
 
   const updateSpeakText = useCallback((value: string) => {
     setComposeError("");
     setSpeakText(value);
   }, []);
 
-  const displayOf = useCallback((id: string) => {
-    if (id === HUMAN_MEMBER_ID || id.startsWith(`${HUMAN_MEMBER_ID}-`)) {
-      return HUMAN_DISPLAY_NAME;
-    }
-    return stateRef.current.names[id] || id;
-  }, []);
+  const displayOf = useCallback((id: string) => stateRef.current.names[id] || id, []);
+
+  const isAgentId = useCallback(
+    (id: string) => stateRef.current.neighbors.some((agent) => agent.name === id),
+    [],
+  );
 
   const send = useCallback((obj: Record<string, unknown>) => {
     const ws = wsRef.current;
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
   }, []);
 
-  const rememberName = useCallback((id: string, name?: string) => {
-    if (!id) return;
-    setState((prev) => {
-      if (prev.names[id] && !name) return prev;
-      return { ...prev, names: { ...prev.names, [id]: name || prev.names[id] || id } };
-    });
+  /**
+   * Learn a name for an id. Names from `present` are authoritative for people
+   * here now; an event's actor_name only fills in ids we have no name for, so a
+   * rename does not relabel someone present under their current name.
+   */
+  const rememberNames = useCallback((prev: WorldState, incoming: WorldEvent[]): Record<string, string> => {
+    let names = prev.names;
+    const presentIds = new Set(prev.present.map((item) => item.member_id));
+    for (const event of incoming) {
+      const actor = String(event.actor_id || "");
+      if (!actor) continue;
+      const atTime = String(event.actor_name || "").trim();
+      if (names[actor] && (presentIds.has(actor) || !atTime)) continue;
+      if (names === prev.names) names = { ...names };
+      names[actor] = atTime || names[actor] || actor;
+    }
+    return names;
   }, []);
 
   const appendEvents = useCallback((incoming: WorldEvent[]) => {
     setState((prev) => {
       const next = [...prev.events];
+      const fresh: WorldEvent[] = [];
       for (const event of incoming) {
         const seq = Number(event.seq || 0);
         if (seq && seenRef.current.has(seq)) continue;
         if (seq) seenRef.current.add(seq);
         if (seq > lastSeqRef.current) lastSeqRef.current = seq;
-        const actor = String(event.actor_id || "");
-        if (actor) rememberName(actor);
         next.push(event);
+        fresh.push(event);
       }
-      return { ...prev, events: next };
+      return { ...prev, events: next, names: rememberNames(prev, fresh) };
     });
-  }, [rememberName]);
+  }, [rememberNames]);
 
   const handleMessage = useCallback((msg: WorldEvent) => {
     const type = msg.type;
@@ -167,6 +200,8 @@ export function WorldProvider({ children }: { children: ReactNode }) {
           } catch {
             /* ignore quota / private mode */
           }
+          const memberId = String(msg.member_id || prev.memberId || "");
+          if (memberId) saveResumeToken(worldId, memberId, String(msg.resume_token || ""));
         }
         return {
           ...prev,
@@ -199,6 +234,7 @@ export function WorldProvider({ children }: { children: ReactNode }) {
         for (const person of roster) {
           names[person.member_id] = person.display_name || person.member_id;
         }
+        const withRoster = { ...prev, present: roster, names };
         const worldId = String(prev.worldId || "").trim();
         if (worldId) {
           try {
@@ -208,10 +244,9 @@ export function WorldProvider({ children }: { children: ReactNode }) {
           }
         }
         return {
-          ...prev,
+          ...withRoster,
           worldName: msg.name || prev.worldName,
-          present: roster,
-          names,
+          names: rememberNames(withRoster, nextEvents),
           events: nextEvents,
           joined: true,
           status: "Present",
@@ -223,13 +258,15 @@ export function WorldProvider({ children }: { children: ReactNode }) {
     if (type === "event") {
       const kind = msg.kind;
       const actor = String(msg.actor_id || "");
+      const actorName = String(msg.actor_name || "").trim();
       if (kind === "join" && actor) {
         setState((prev) => {
           if (prev.present.some((item) => item.member_id === actor)) return prev;
+          const label = actorName || prev.names[actor] || actor;
           return {
             ...prev,
-            present: [...prev.present, { member_id: actor, display_name: prev.names[actor] || actor }],
-            names: { ...prev.names, [actor]: prev.names[actor] || actor },
+            present: [...prev.present, { member_id: actor, display_name: label }],
+            names: { ...prev.names, [actor]: label },
           };
         });
       }
@@ -262,13 +299,28 @@ export function WorldProvider({ children }: { children: ReactNode }) {
         setComposeError(message);
         return;
       }
+      if (msg.code === "member_taken") {
+        disconnectSocketRef.current();
+        setState((prev) => ({
+          ...prev,
+          connected: false,
+          joined: false,
+          status: "Name taken",
+          statusKind: "bad",
+          identityDialogOpen: true,
+          identityPrompt:
+            "This handle is already present from another connection. Choose a different handle, or leave from the other place.",
+          gateError: message,
+        }));
+        return;
+      }
       if (msg.code === "replaced") {
         setState((prev) => ({
           ...prev,
           status: "Replaced elsewhere",
           statusKind: "bad",
           joined: false,
-          gateError: "This body is already present elsewhere",
+          gateError: "You opened this world in another tab or window",
         }));
         return;
       }
@@ -293,7 +345,7 @@ export function WorldProvider({ children }: { children: ReactNode }) {
         gateError: `${msg.code ? `${msg.code}: ` : ""}${msg.message || "error"}`,
       }));
     }
-  }, [appendEvents, send]);
+  }, [appendEvents, rememberNames, send]);
 
   const refreshWorlds = useCallback(async () => {
     try {
@@ -350,87 +402,147 @@ export function WorldProvider({ children }: { children: ReactNode }) {
       ws.close();
     }
   }, []);
+  disconnectSocketRef.current = disconnectSocket;
 
-  const enterWorld = useCallback(async (worldId: string) => {
-    const targetId = worldId.trim();
-    if (!targetId) return;
-    const current = stateRef.current;
-    if (current.connected && current.worldId === targetId && current.joined) return;
+  const connectWorld = useCallback(
+    async (targetId: string, identity: PersonIdentity) => {
+      const current = stateRef.current;
+      const found = current.worlds.find((item) => item.id === targetId);
+      const worldName = found?.name || current.worldName || targetId;
+      const { member_id, display_name } = identity;
+      const resumeToken = loadResumeToken(targetId, member_id);
 
-    const found = current.worlds.find((item) => item.id === targetId);
-    const worldName = found?.name || current.worldName || targetId;
-    const neighbors = await loadNeighbors();
-    const taken = new Set(neighbors.map((agent) => agent.name));
-    const identity = resolveHumanIdentity(taken);
-    const { member_id: name, display_name } = identity;
+      disconnectSocket();
+      try {
+        sessionStorage.setItem(LAST_WORLD_STORAGE_KEY, targetId);
+      } catch {
+        /* ignore */
+      }
+      setState((prev) => ({
+        ...prev,
+        worldId: targetId,
+        worldName,
+        memberId: member_id,
+        identity,
+        names: { ...prev.names, [member_id]: display_name },
+        present: [],
+        events: [],
+        joined: false,
+        connected: false,
+        status: "Connecting",
+        statusKind: "info",
+        gateError: "",
+        identityDialogOpen: false,
+        identityPrompt: "",
+      }));
+      seenRef.current = new Set();
+      lastSeqRef.current = 0;
 
-    disconnectSocket();
-    try {
-      sessionStorage.setItem(LAST_WORLD_STORAGE_KEY, targetId);
-    } catch {
-      /* ignore */
-    }
-    setState((prev) => ({
-      ...prev,
-      worldId: targetId,
-      worldName,
-      memberId: name,
-      names: { ...prev.names, [name]: display_name },
-      present: [],
-      events: [],
-      joined: false,
-      connected: false,
-      status: "Connecting",
-      statusKind: "info",
-      gateError: "",
-    }));
-    seenRef.current = new Set();
-    lastSeqRef.current = 0;
+      await new Promise<void>((resolve, reject) => {
+        const ws = new WebSocket(worldWsUrl(targetId));
+        wsRef.current = ws;
+        let opened = false;
+        ws.onopen = () => {
+          opened = true;
+          const hello: Record<string, string> = {
+            type: "hello",
+            member_id,
+            display_name,
+          };
+          if (resumeToken) hello.resume_token = resumeToken;
+          ws.send(JSON.stringify(hello));
+          setState((prev) => ({
+            ...prev,
+            connected: true,
+            status: "Connected",
+            statusKind: "ok",
+          }));
+          if (closeIfNarrow()) setSidebarOpen(false);
+          resolve();
+        };
+        ws.onmessage = (event) => {
+          try {
+            handleMessageRef.current(JSON.parse(String(event.data)) as WorldEvent);
+          } catch {
+            /* ignore malformed frames */
+          }
+        };
+        ws.onclose = () => {
+          if (wsRef.current !== ws) return;
+          wsRef.current = null;
+          setState((prev) => ({
+            ...prev,
+            connected: false,
+            joined: false,
+            status: "Disconnected",
+            statusKind: "bad",
+          }));
+          if (!opened) reject(new Error("connection closed"));
+        };
+        ws.onerror = () => {
+          if (wsRef.current !== ws) return;
+          setState((prev) => ({ ...prev, status: "Error", statusKind: "bad" }));
+          if (!opened) reject(new Error("ws error"));
+        };
+      }).catch((err: Error) => {
+        setState((prev) => ({ ...prev, gateError: err.message || "connection failed" }));
+      });
+    },
+    [disconnectSocket],
+  );
 
-    await new Promise<void>((resolve, reject) => {
-      const ws = new WebSocket(worldWsUrl(targetId));
-      wsRef.current = ws;
-      let opened = false;
-      ws.onopen = () => {
-        opened = true;
-        ws.send(JSON.stringify({ type: "hello", member_id: name, display_name }));
+  const enterWorld = useCallback(
+    async (worldId: string) => {
+      const targetId = worldId.trim();
+      if (!targetId) return;
+      const current = stateRef.current;
+      if (current.connected && current.worldId === targetId && current.joined) return;
+
+      await loadNeighbors();
+      const identity = stateRef.current.identity;
+      if (!identity) {
+        pendingWorldRef.current = targetId;
         setState((prev) => ({
           ...prev,
-          connected: true,
-          status: "Connected",
-          statusKind: "ok",
+          identityDialogOpen: true,
+          identityPrompt: "Name yourself before entering a world.",
         }));
-        if (closeIfNarrow()) setSidebarOpen(false);
-        resolve();
-      };
-      ws.onmessage = (event) => {
-        try {
-          handleMessageRef.current(JSON.parse(String(event.data)) as WorldEvent);
-        } catch {
-          /* ignore malformed frames */
-        }
-      };
-      ws.onclose = () => {
-        if (wsRef.current !== ws) return;
-        wsRef.current = null;
-        setState((prev) => ({
-          ...prev,
-          connected: false,
-          joined: false,
-          status: "Disconnected",
-          statusKind: "bad",
-        }));
-        if (!opened) reject(new Error("connection closed"));
-      };
-      ws.onerror = () => {
-        if (wsRef.current !== ws) return;
-        setState((prev) => ({ ...prev, status: "Error", statusKind: "bad" }));
-        if (!opened) reject(new Error("ws error"));
-      };
-    }).catch((err: Error) => {
-      setState((prev) => ({ ...prev, gateError: err.message || "connection failed" }));
-    });
-  }, [disconnectSocket, loadNeighbors]);
+        return;
+      }
+      pendingWorldRef.current = "";
+      await connectWorld(targetId, identity);
+    },
+    [connectWorld, loadNeighbors],
+  );
+
+  const openIdentityDialog = useCallback(() => {
+    setState((prev) => ({ ...prev, identityDialogOpen: true, identityPrompt: "" }));
+  }, []);
+
+  const closeIdentityDialog = useCallback(() => {
+    setState((prev) => ({ ...prev, identityDialogOpen: false, identityPrompt: "" }));
+    pendingWorldRef.current = "";
+  }, []);
+
+  const setIdentity = useCallback(
+    async (identity: PersonIdentity) => {
+      savePersonIdentity(identity);
+      setState((prev) => ({
+        ...prev,
+        identity,
+        memberId: identity.member_id,
+        names: { ...prev.names, [identity.member_id]: identity.display_name },
+      }));
+      const target = pendingWorldRef.current || stateRef.current.worldId;
+      pendingWorldRef.current = "";
+      if (target) {
+        await connectWorld(target, identity);
+      } else {
+        setState((prev) => ({ ...prev, identityDialogOpen: false, identityPrompt: "" }));
+      }
+    },
+    [connectWorld],
+  );
 
   const createWorld = useCallback(async () => {
     const name = createName.trim();
@@ -716,6 +828,10 @@ export function WorldProvider({ children }: { children: ReactNode }) {
       knockAgent,
       displayOf,
       refreshWorlds,
+      openIdentityDialog,
+      closeIdentityDialog,
+      setIdentity,
+      isAgentId,
     }),
     [
       state,
@@ -738,6 +854,10 @@ export function WorldProvider({ children }: { children: ReactNode }) {
       knockAgent,
       displayOf,
       refreshWorlds,
+      openIdentityDialog,
+      closeIdentityDialog,
+      setIdentity,
+      isAgentId,
     ],
   );
 

@@ -414,6 +414,28 @@ class MemoryHandlerRelationshipTests(unittest.IsolatedAsyncioTestCase):
         participants = MemoryHandler._extract_participants([human, work_order])
         self.assertEqual([p["key"] for p in participants], ["api:web_user"])
 
+    def test_extract_participants_includes_world_utterance_observations(self):
+        heard = Message.create_context_event(
+            content="anyone here?",
+            source="world",
+            event_type="utterance",
+            metadata={"sender_name": "Alice", "event_type": "utterance"},
+        )
+        heard.channel = "world"
+        heard.sender_id = "alice"
+        join = Message.create_context_event(
+            content="joined plaza",
+            source="world",
+            event_type="join",
+            metadata={"event_type": "join"},
+        )
+        join.channel = "world"
+        join.sender_id = "bob"
+
+        participants = MemoryHandler._extract_participants([heard, join])
+        self.assertEqual([p["key"] for p in participants], ["world:alice"])
+        self.assertEqual(participants[0]["display_name"], "Alice")
+
     async def test_get_relationship_context_respects_card_budget(self):
         for index in range(6):
             await self.store.write_card(

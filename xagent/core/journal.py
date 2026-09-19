@@ -252,6 +252,7 @@ Rules:
 Input markers:
 - `[speaker=Name][timestamp=Time][channel=Channel]` — Name spoke via Channel. `[speaker=ME]` — I said or did this.
 - `[ambient context][timestamp=Time][channel=Channel]` — something I noticed or received, not a direct message.
+- `[ambient context][from=Name][room=Place]` — Name said this in a shared place while I was present (overheard).
 - `[room context]` ... `[/room context]` — group transcript lines; `ME ...` inside means me.
 
 Return JSON only: an object mapping each person key to their full updated card text. Use exactly the keys provided. Omit a person only if there is genuinely nothing about how we stand worth recording. No code fences, no commentary."""

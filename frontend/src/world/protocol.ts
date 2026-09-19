@@ -40,6 +40,8 @@ export interface WorldEvent {
   ts?: number;
   kind?: EventKind;
   actor_id?: string;
+  /** Display name at the time of the event (hub >= this protocol revision). */
+  actor_name?: string;
   text?: string;
   mentions?: string[];
   attachments?: WorldAttachment[];
@@ -57,6 +59,7 @@ export interface WorldEvent {
   member_id?: string;
   display_name?: string;
   latest_seq?: number;
+  resume_token?: string;
 }
 
 export interface WorldMember {
@@ -113,27 +116,92 @@ export function worldWsUrl(worldId: string): string {
   return `${proto}//${window.location.host}/ws/${id}`;
 }
 
-/** Wire id for the human on this page. */
-export const HUMAN_MEMBER_ID = "human";
-export const HUMAN_DISPLAY_NAME = "human";
+/**
+ * The person at this browser. They pick a name once; the browser remembers it
+ * so the same person is the same member across worlds and reloads.
+ */
+export const PERSON_IDENTITY_STORAGE_KEY = "xagent.world.person";
+/** Per-world resume token (sessionStorage); lets a refresh take the same body over. */
+export const RESUME_TOKEN_STORAGE_PREFIX = "xagent.world.resumeToken:";
+/** Must match agents_world.paths._MEMBER_ID_RE. */
+export const MEMBER_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+export const MEMBER_ID_RULE =
+  "Handle must be 1-64 characters of letters, digits, dots, hyphens, or underscores, starting with a letter or digit.";
+export const MAX_DISPLAY_NAME_LENGTH = 64;
 
-export type HumanIdentity = {
+export type PersonIdentity = {
   member_id: string;
   display_name: string;
 };
 
-/** `human`; `human-2`… only if a local agent already took the id. */
-export function resolveHumanIdentity(taken: Set<string>): HumanIdentity {
-  if (!taken.has(HUMAN_MEMBER_ID)) {
-    return { member_id: HUMAN_MEMBER_ID, display_name: HUMAN_DISPLAY_NAME };
+/** A wire-safe handle derived from a display name; random when the name has no ASCII letters. */
+export function suggestMemberId(displayName: string): string {
+  const ascii = String(displayName || "")
+    .normalize("NFKD")
+    .replace(/[^A-Za-z0-9._-]+/g, "-")
+    .replace(/^[^A-Za-z0-9]+/, "")
+    .replace(/-+/g, "-")
+    .replace(/[-._]+$/, "")
+    .toLowerCase()
+    .slice(0, 64);
+  if (ascii && MEMBER_ID_RE.test(ascii)) return ascii;
+  return `p-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+export function validateMemberId(memberId: string, taken: Set<string> = new Set()): string {
+  const value = memberId.trim();
+  if (!value) return "Handle is required";
+  if (!MEMBER_ID_RE.test(value)) return MEMBER_ID_RULE;
+  if (value === "world") return "'world' is reserved";
+  if (taken.has(value)) return `'${value}' is a local agent; pick another handle`;
+  return "";
+}
+
+export function validateDisplayName(name: string): string {
+  const value = name.trim();
+  if (!value) return "Name is required";
+  if (value.length > MAX_DISPLAY_NAME_LENGTH) return `Name must be at most ${MAX_DISPLAY_NAME_LENGTH} characters`;
+  return "";
+}
+
+export function loadPersonIdentity(): PersonIdentity | null {
+  try {
+    const raw = localStorage.getItem(PERSON_IDENTITY_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<PersonIdentity>;
+    const member_id = String(parsed.member_id || "").trim();
+    const display_name = String(parsed.display_name || "").trim();
+    if (!MEMBER_ID_RE.test(member_id) || !display_name) return null;
+    return { member_id, display_name };
+  } catch {
+    return null;
   }
-  for (let n = 2; n < 100; n += 1) {
-    const member_id = `${HUMAN_MEMBER_ID}-${n}`;
-    if (!taken.has(member_id)) {
-      return { member_id, display_name: HUMAN_DISPLAY_NAME };
-    }
+}
+
+export function savePersonIdentity(identity: PersonIdentity): void {
+  try {
+    localStorage.setItem(PERSON_IDENTITY_STORAGE_KEY, JSON.stringify(identity));
+  } catch {
+    /* ignore quota / private mode */
   }
-  return { member_id: HUMAN_MEMBER_ID, display_name: HUMAN_DISPLAY_NAME };
+}
+
+export function loadResumeToken(worldId: string, memberId: string): string {
+  try {
+    return sessionStorage.getItem(`${RESUME_TOKEN_STORAGE_PREFIX}${worldId}:${memberId}`) || "";
+  } catch {
+    return "";
+  }
+}
+
+export function saveResumeToken(worldId: string, memberId: string, token: string): void {
+  try {
+    const key = `${RESUME_TOKEN_STORAGE_PREFIX}${worldId}:${memberId}`;
+    if (token) sessionStorage.setItem(key, token);
+    else sessionStorage.removeItem(key);
+  } catch {
+    /* ignore */
+  }
 }
 
 export function validateWorldName(name: string): string {

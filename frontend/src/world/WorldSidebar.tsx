@@ -1,16 +1,44 @@
-import { Bot } from "lucide-react";
+import { Bot, Pencil } from "lucide-react";
 import { classNames } from "../lib/format";
 import { DEFAULT_AGENT_WEB_URL } from "../lib/ports";
 import { initialOf } from "./protocol";
 import { useWorld } from "./WorldContext";
 import { WorldSwitcher } from "./WorldSwitcher";
-import type { NeighborAgent } from "./protocol";
+import type { NeighborAgent, WorldMember } from "./protocol";
 
 function agentStatus(agent: NeighborAgent, here: boolean): { label: string; tone: string } {
   if (here) return { label: "Present", tone: "is-here" };
   if (agent.world_ready) return { label: "Ready", tone: "is-ready" };
   if (agent.running) return { label: "Restart API", tone: "is-stale" };
   return { label: "Offline", tone: "" };
+}
+
+function RosterList({
+  people,
+  memberId,
+  displayOf,
+}: {
+  people: WorldMember[];
+  memberId: string;
+  displayOf: (id: string) => string;
+}) {
+  if (!people.length) {
+    return <p className="world-hint">(empty)</p>;
+  }
+  return (
+    <ul className="world-roster">
+      {people.map((person) => {
+        const name = person.display_name || displayOf(person.member_id);
+        const mine = person.member_id === memberId;
+        return (
+          <li key={person.member_id} className="world-roster-item">
+            <span className="world-avatar">{initialOf(name)}</span>
+            <span className="world-roster-name">{mine ? `you · ${name}` : name}</span>
+          </li>
+        );
+      })}
+    </ul>
+  );
 }
 
 export function WorldSidebar() {
@@ -20,9 +48,16 @@ export function WorldSidebar() {
     present,
     neighbors,
     memberId,
+    identity,
     sidebarOpen,
     knockAgent,
+    displayOf,
+    openIdentityDialog,
   } = useWorld();
+
+  const agentNames = new Set(neighbors.map((agent) => agent.name));
+  const peoplePresent = present.filter((item) => !agentNames.has(item.member_id));
+  const agentsPresent = present.filter((item) => agentNames.has(item.member_id));
 
   const sorted = [...neighbors].sort((left, right) => {
     const rank = (agent: NeighborAgent) => {
@@ -39,30 +74,33 @@ export function WorldSidebar() {
     <aside className={classNames("app-sidebar world-sidebar", sidebarOpen && "open")}>
       <div className="world-sidebar-top">
         <WorldSwitcher />
+        {identity ? (
+          <button type="button" className="world-hint world-identity-edit" onClick={openIdentityDialog}>
+            <Pencil size={12} aria-hidden />
+            <span>
+              You: <strong>{identity.display_name}</strong> ({identity.member_id})
+            </span>
+          </button>
+        ) : (
+          <button type="button" className="world-hint world-identity-edit" onClick={openIdentityDialog}>
+            Set your name
+          </button>
+        )}
         {gateError ? <p className="world-error">{gateError}</p> : null}
       </div>
 
       <div className="world-sidebar-scroll">
         <section className="world-section">
-          <h2>Present</h2>
-          {present.length ? (
-            <ul className="world-roster">
-              {present.map((person) => {
-                const name = person.display_name || person.member_id;
-                return (
-                  <li key={person.member_id} className="world-roster-item">
-                    <span className="world-avatar">{initialOf(name)}</span>
-                    <span className="world-roster-name">
-                      {person.member_id === memberId ? "you" : name}
-                    </span>
-                  </li>
-                );
-              })}
-            </ul>
-          ) : (
-            <p className="world-hint">(empty)</p>
-          )}
+          <h2>People</h2>
+          <RosterList people={peoplePresent} memberId={memberId} displayOf={displayOf} />
         </section>
+
+        {agentsPresent.length ? (
+          <section className="world-section">
+            <h2>Agents here</h2>
+            <RosterList people={agentsPresent} memberId={memberId} displayOf={displayOf} />
+          </section>
+        ) : null}
 
         <section className="world-section">
           <h2>Local agents</h2>

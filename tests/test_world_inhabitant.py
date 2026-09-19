@@ -118,8 +118,21 @@ class WorldInhabitantTests(unittest.IsolatedAsyncioTestCase):
         ctx_named = inhabitant._participation_decision_context(event_named)
         self.assertIn("@ you or used your name", ctx_named)
 
+    def test_person_line_without_mention_is_parallel_not_reply(self):
+        inhabitant = WorldInhabitant(self.agent, member_id="agent2", display_name="二号")
+        inhabitant._names["bob"] = "Bob"
+        trigger = {"kind": "utterance", "actor_id": "alice", "seq": 10, "text": "@agent2 hi"}
+        inhabitant._recent = [
+            trigger,
+            {"kind": "utterance", "actor_id": "bob", "seq": 11, "text": "unrelated side note"},
+        ]
+        replies, parallel = inhabitant._lines_after_trigger(trigger)
+        self.assertEqual(replies, [])
+        self.assertEqual(len(parallel), 1)
+
     def test_replies_after_trigger_lists_peer_lines(self):
         inhabitant = WorldInhabitant(self.agent, member_id="agent2", display_name="二号")
+        inhabitant._agent_ids = {"agent1"}
         inhabitant._names["agent1"] = "一号"
         trigger = {"kind": "utterance", "actor_id": "human", "seq": 10, "text": "hi"}
         inhabitant._recent = [
@@ -137,6 +150,7 @@ class WorldInhabitantTests(unittest.IsolatedAsyncioTestCase):
         trigger = {"kind": "utterance", "actor_id": "human", "seq": 1, "text": "anyone?"}
         inhabitant._recent = [trigger]
         inhabitant._names["agent2"] = "二号"
+        inhabitant._agent_ids = {"agent2"}
 
         async def add_peer_line() -> None:
             await asyncio.sleep(0.08)

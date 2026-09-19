@@ -188,8 +188,15 @@ class AgentConfig:
     # ------------------------------------------------------------------
     # Max relationship cards injected into a single turn.
     RELATIONSHIP_MAX_CARDS_PER_TURN = 4
+    # Compact audience cards in a room (speaker card is separate).
+    RELATIONSHIP_MAX_AUDIENCE_CARDS = 8
+    # Context events treated as "someone spoke" for relationship derivation.
+    RELATIONSHIP_OBSERVED_UTTERANCE_TYPES = frozenset({"utterance"})
     # Max cards summarised for the subconscious thinking layer.
     RELATIONSHIP_SUBCONSCIOUS_MAX_CARDS = 6
+    # Skip stale unaddressed participation triggers when the room moved on.
+    WORLD_BEAT_PASSED_LINES = 3
+    WORLD_BEAT_PASSED_SECONDS = 20.0
 
     # ------------------------------------------------------------------
     # Notebook memory (topic-addressed notes derived from the diary)
@@ -537,7 +544,9 @@ class AgentConfig:
         "- If two or more already answered, listen unless you were named or you must correct something.\n"
         "- Greetings: one warm hello back is often enough; a second short hi is ok; do not all "
         "give the same introduction speech.\n"
-        "- You were mid-thread: treat their next line as follow-up and continue naturally.\n\n"
+        "- You were mid-thread: treat their next line as follow-up and continue naturally.\n"
+        "- Other lines spoken meanwhile that are not replies to the trigger do not close the "
+        "beat; more than one thread can be open — answer the one that involves you.\n\n"
         "Stay silent when you would only repeat, perform, explain your role, or fill silence "
         "with no new social value.\n\n"
         "Return JSON only:\n"

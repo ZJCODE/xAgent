@@ -2,6 +2,7 @@ import { Menu, Moon, Sun, Wifi, WifiOff } from "lucide-react";
 import { IconButton, StatusBadge } from "../components/ui";
 import { useTheme } from "../context/ThemeContext";
 import { classNames } from "../lib/format";
+import { PersonIdentityDialog } from "./PersonIdentityDialog";
 import { WorldChat } from "./WorldChat";
 import { WorldProvider, useWorld } from "./WorldContext";
 import { WorldSidebar } from "./WorldSidebar";
@@ -61,6 +62,7 @@ export function WorldApp() {
   return (
     <WorldProvider>
       <WorldLayout />
+      <PersonIdentityDialog />
     </WorldProvider>
   );
 }

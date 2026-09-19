@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import logging
 import mimetypes
 import random
 import re
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
@@ -24,6 +26,7 @@ from agents_world import MAX_ATTACHMENTS, MAX_ATTACHMENTS_BYTES, MAX_FILE_BYTES
 from agents_world.client import WorldClient
 
 from ...core.agent import Agent
+from ...core.config import AgentConfig
 from ...core.formatters import RoomContextEntry, RoomSnapshot, format_room_context
 from ...core.inbox import InboxKind
 from ...core.runtime import ScheduledDeliveryContext, scheduled_delivery_context
@@ -77,6 +80,8 @@ class WorldInhabitant:
         self._mind_lock = asyncio.Lock()
         self._speech_tasks: set[asyncio.Task[None]] = set()
         self._entered = False
+        self._agent_ids: set[str] = set()
+        self._decision_log_lines = 0
 
     @property
     def connected(self) -> bool:
@@ -270,6 +275,7 @@ class WorldInhabitant:
     async def _handle(self, msg: dict[str, Any]) -> None:
         msg_type = msg.get("type")
         if msg_type == "snapshot":
+            await self._refresh_local_agent_ids()
             self._remember_present(msg.get("present") or [])
             events = list(msg.get("events") or [])
             if msg.get("sync"):
@@ -300,6 +306,7 @@ class WorldInhabitant:
         if kind != "utterance":
             await self._observe(msg, event_type=kind or "observation")
             return
+        await self._hear_utterance(msg)
         speech = asyncio.create_task(self._consider_speech(msg), name=f"world-speak-{self.member_id}")
         self._speech_tasks.add(speech)
         speech.add_done_callback(self._speech_tasks.discard)
@@ -308,7 +315,9 @@ class WorldInhabitant:
         async with self._mind_lock:
             if not self.connected or self._client is None:
                 return
-            await self._hear_utterance(event)
+            if self._beat_passed(event):
+                self._log_decision(event, should=False, reason="beat_passed", skipped=True, spoke=False)
+                return
             await self._listening_pause(event)
             if not self.connected or self._client is None:
                 return
@@ -324,7 +333,8 @@ class WorldInhabitant:
                 remaining = deadline - asyncio.get_running_loop().time()
                 if remaining <= 0:
                     return
-                if not addressed and self._replies_after_trigger(event):
+                replies, _parallel = self._lines_after_trigger(event)
+                if not addressed and replies:
                     return
                 await asyncio.sleep(min(_LISTEN_POLL_SEC, remaining))
         except asyncio.CancelledError:
@@ -488,6 +498,7 @@ class WorldInhabitant:
         }
         if attachments:
             metadata[ATTACHMENT_METADATA_KEY] = attachments
+            event["_cached_attachments"] = attachments
         seq = event.get("seq")
         source_event_id = (
             f"world:{self.world_id}:{seq}"
@@ -568,13 +579,63 @@ class WorldInhabitant:
                 return True
         return False
 
-    def _replies_after_trigger(self, event: dict[str, Any]) -> list[tuple[str, str]]:
-        """Utterances from others after this line (same social beat), for group-aware decisions."""
+    async def _refresh_local_agent_ids(self) -> None:
+        origin = _world_http_origin(self.world_url)
+        if not origin:
+            return
+        try:
+            async with httpx.AsyncClient(timeout=2.0, trust_env=False) as client:
+                response = await client.get(f"{origin}/neighbors")
+                response.raise_for_status()
+                payload = response.json()
+            names = {
+                str(item.get("name") or "").strip()
+                for item in (payload.get("agents") or [])
+                if isinstance(item, dict)
+            }
+            self._agent_ids = {name for name in names if name and name != self.member_id}
+        except Exception:
+            self.logger.debug("world neighbors refresh failed", exc_info=True)
+
+    def _is_local_agent(self, member_id: str) -> bool:
+        return member_id in self._agent_ids
+
+    def _is_reply_to_trigger(self, trigger: dict[str, Any], item: dict[str, Any]) -> bool:
+        speaker = str(trigger.get("actor_id") or "")
+        replier = str(item.get("actor_id") or "")
+        if not replier or replier == speaker:
+            return False
+        if self._is_local_agent(replier):
+            return True
+        mentions = item.get("mentions") or []
+        if speaker in {str(m).strip() for m in mentions if str(m).strip()}:
+            return True
+        trigger_mentions = trigger.get("mentions") or []
+        if replier in {str(m).strip() for m in trigger_mentions if str(m).strip()}:
+            return True
+        text = str(item.get("text") or "")
+        tokens = {speaker, str(self._names.get(speaker) or "").strip()}
+        for token in tokens:
+            if not token:
+                continue
+            pattern = re.compile(
+                rf"(?:^|\s)@{re.escape(token)}(?=$|\s|[.,!?，。！？])",
+                re.IGNORECASE,
+            )
+            if pattern.search(text):
+                return True
+        return False
+
+    def _lines_after_trigger(
+        self,
+        event: dict[str, Any],
+    ) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+        """Split later utterances into replies to the trigger vs parallel side threads."""
         trigger_seq = event.get("seq")
         if trigger_seq is None:
-            return []
-        speaker = str(event.get("actor_id") or "")
+            return [], []
         replies: list[tuple[str, str]] = []
+        parallel: list[tuple[str, str]] = []
         for item in self._recent:
             if item is event:
                 continue
@@ -584,12 +645,46 @@ class WorldInhabitant:
             if seq is None or int(seq) <= int(trigger_seq):
                 continue
             replier = str(item.get("actor_id") or "")
-            if not replier or replier == speaker:
+            if not replier or replier == str(event.get("actor_id") or ""):
                 continue
             label = str(self._names.get(replier) or replier)
             body = _utterance_body(str(item.get("text") or "").strip(), item.get("attachments"))
-            replies.append((label, body or "(attachment)"))
+            row = (label, body or "(attachment)")
+            if self._is_reply_to_trigger(event, item):
+                replies.append(row)
+            else:
+                parallel.append(row)
+        return replies, parallel
+
+    def _replies_after_trigger(self, event: dict[str, Any]) -> list[tuple[str, str]]:
+        replies, _parallel = self._lines_after_trigger(event)
         return replies
+
+    def _beat_passed(self, event: dict[str, Any]) -> bool:
+        if self._addressed_to_self(event):
+            return False
+        trigger_seq = event.get("seq")
+        if trigger_seq is None:
+            return False
+        try:
+            trigger_ts = float(event.get("ts") or 0)
+        except (TypeError, ValueError):
+            trigger_ts = 0.0
+        if trigger_ts <= 0:
+            return False
+        if time.time() - trigger_ts < AgentConfig.WORLD_BEAT_PASSED_SECONDS:
+            return False
+        others = 0
+        for item in self._recent:
+            if str(item.get("kind") or "") != "utterance":
+                continue
+            seq = item.get("seq")
+            if seq is None or int(seq) <= int(trigger_seq):
+                continue
+            if str(item.get("actor_id") or "") == str(event.get("actor_id") or ""):
+                continue
+            others += 1
+        return others >= AgentConfig.WORLD_BEAT_PASSED_LINES
 
     def _trigger_line(self, event: dict[str, Any]) -> str:
         actor = str(event.get("actor_id") or "")
@@ -605,14 +700,14 @@ class WorldInhabitant:
     def _participation_decision_context(self, event: dict[str, Any]) -> str:
         named = self._addressed_to_self(event)
         recently_spoke = self._recently_spoke(event)
-        peer_replies = self._replies_after_trigger(event)
+        peer_replies, parallel_lines = self._lines_after_trigger(event)
         situation = self._room_context()
         parts = [_DECISION_PREFACE, "", self._trigger_line(event)]
         if named:
             parts.extend(["", "They @ you or used your name."])
         elif recently_spoke:
             parts.extend(["", "You were speaking in this thread a moment ago."])
-        parts.extend(["", self._format_peer_replies(peer_replies), "", situation])
+        parts.extend(["", self._format_peer_replies(peer_replies), "", self._format_parallel_lines(parallel_lines), "", situation])
         return "\n".join(parts)
 
     @staticmethod
@@ -621,6 +716,18 @@ class WorldInhabitant:
             return "Replies to this line since you heard it: (none yet — the beat is still open.)"
         lines = ["Replies to this line since you heard it:"]
         for name, text in replies:
+            snippet = text.replace("\n", " ").strip()
+            if len(snippet) > 160:
+                snippet = snippet[:157] + "..."
+            lines.append(f"- {name}: {snippet}")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _format_parallel_lines(lines_after: list[tuple[str, str]]) -> str:
+        if not lines_after:
+            return "Other lines spoken meanwhile (not replies to it): (none)"
+        lines = ["Other lines spoken meanwhile (not replies to it):"]
+        for name, text in lines_after:
             snippet = text.replace("\n", " ").strip()
             if len(snippet) > 160:
                 snippet = snippet[:157] + "..."
@@ -644,9 +751,10 @@ class WorldInhabitant:
             return False
         named = self._addressed_to_self(event)
         recently_spoke = self._recently_spoke(event)
-        peer_replies = self._replies_after_trigger(event)
+        peer_replies, parallel_lines = self._lines_after_trigger(event)
         peer_reply_count = len(peer_replies)
         context = self._participation_decision_context(event)
+        present_people, present_agents = self._present_people_and_agents()
         try:
             decision = await decider(
                 context=context,
@@ -657,6 +765,9 @@ class WorldInhabitant:
                     "addressed_to_agent": named,
                     "recently_spoke": recently_spoke,
                     "peer_reply_count": peer_reply_count,
+                    "parallel_line_count": len(parallel_lines),
+                    "present_people": present_people,
+                    "present_agents": present_agents,
                 },
             )
         except Exception:
@@ -678,7 +789,73 @@ class WorldInhabitant:
             peer_reply_count,
             reason[:120],
         )
+        self._log_decision(
+            event,
+            should=should,
+            reason=reason,
+            skipped=False,
+            spoke=False,
+            peer_replies=peer_reply_count,
+            parallel_lines=len(parallel_lines),
+        )
         return should
+
+    def _present_people_and_agents(self) -> tuple[list[str], list[str]]:
+        people: list[str] = []
+        agents: list[str] = []
+        for member_id in self._present:
+            if member_id == self.member_id:
+                continue
+            label = self._speaker_label(member_id)
+            if self._is_local_agent(member_id):
+                agents.append(label)
+            else:
+                people.append(label)
+        return people, agents
+
+    def _log_decision(
+        self,
+        event: dict[str, Any],
+        *,
+        should: bool,
+        reason: str,
+        skipped: bool,
+        spoke: bool,
+        peer_replies: int = 0,
+        parallel_lines: int = 0,
+    ) -> None:
+        workspace = self._workspace_root()
+        if workspace is None:
+            return
+        path = workspace / "messages" / ".world_decisions.jsonl"
+        present_people, present_agents = self._present_people_and_agents()
+        row = {
+            "ts": time.time(),
+            "world_id": self.world_id,
+            "seq": event.get("seq"),
+            "trigger_actor": event.get("actor_id"),
+            "addressed": self._addressed_to_self(event),
+            "replies": peer_replies,
+            "parallel": parallel_lines,
+            "present_people": present_people,
+            "present_agents": present_agents,
+            "should_reply": should,
+            "reason": (reason or "")[:500],
+            "skipped": skipped,
+            "spoke": spoke,
+        }
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+            self._decision_log_lines += 1
+            if self._decision_log_lines > 2000:
+                text = path.read_text(encoding="utf-8")
+                lines = text.splitlines()
+                path.write_text("\n".join(lines[-2000:]) + ("\n" if lines else ""), encoding="utf-8")
+                self._decision_log_lines = min(2000, len(lines))
+        except Exception:
+            self.logger.debug("world decision log write failed", exc_info=True)
 
     async def _speak_reply(self, event: dict[str, Any]) -> bool:
         client = self._client
@@ -692,7 +869,8 @@ class WorldInhabitant:
         if not said:
             return False
         sender_name = str(self._names.get(actor) or "").strip()
-        attachments = await self._inbound_attachments(event)
+        cached = event.get("_cached_attachments")
+        attachments = cached if isinstance(cached, list) else await self._inbound_attachments(event)
         situation = self._room_snapshot()
         seq = event.get("seq")
         source_event_id = (

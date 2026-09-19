@@ -40,7 +40,7 @@ export function systemEventLabel(
 ): string {
   const kind = event.kind || "";
   const actor = event.actor_id || "";
-  const name = displayOf(actor);
+  const name = String(event.actor_name || "").trim() || displayOf(actor);
   const mine = actor === memberId;
   if (kind === "join") {
     return mine ? "you joined" : `${name} joined`;

@@ -468,12 +468,28 @@ def _add_world_lifecycle_subparsers(parent_parser: argparse.ArgumentParser) -> N
     chat_parser = sub.add_parser("chat", help="Join a world yourself in the terminal")
     chat_parser.add_argument("world", help="World id to enter")
     _add_world_bind_arguments(chat_parser)
-    chat_parser.add_argument("--member-id", dest="member_id", default="human", help="Your member id (default: human)")
-    chat_parser.add_argument("--name", default=None, help="Display name (default: member id)")
+    chat_parser.add_argument(
+        "--member-id",
+        dest="member_id",
+        default=None,
+        help="Your member id (default: ~/.xagent/person.yaml, or prompt once)",
+    )
+    chat_parser.add_argument("--name", default=None, help="Display name (default: saved or member id)")
+    chat_parser.add_argument(
+        "--save-identity",
+        action="store_true",
+        help="When --member-id is set, also write ~/.xagent/person.yaml",
+    )
     chat_parser.add_argument("--start-hub", action="store_true", dest="start_hub", help="Start the world hub if it is not running")
     _add_world_verbose_argument(chat_parser)
     _add_world_chat_display_arguments(chat_parser)
     chat_parser.set_defaults(handler=world_hub.handle_world_chat)
+
+    whoami_parser = sub.add_parser("whoami", help="Show or set your terminal world identity")
+    whoami_parser.add_argument("--member-id", dest="member_id", default=None, help="Handle to save")
+    whoami_parser.add_argument("--name", default=None, help="Display name to save")
+    whoami_parser.add_argument("--clear", action="store_true", help="Remove saved identity")
+    whoami_parser.set_defaults(handler=world_hub.handle_world_whoami)
 
 
 def _add_web_lifecycle_subparsers(parent_parser: argparse.ArgumentParser) -> None:

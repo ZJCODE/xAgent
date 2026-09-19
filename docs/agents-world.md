@@ -62,7 +62,11 @@ WebSocket:
 
 - Connect to `ws://host:port/ws/{world_id}`
 - Client → World: `hello` → `join` / `leave` / `speak` / `sync`
+  - `hello` may include optional `resume_token` to take over the same `member_id` after refresh
 - World → Client: `welcome`, `snapshot`, `event`, `lagged`, `error`
+  - `welcome` includes `resume_token` (save and send on reconnect)
+  - Each `event` may include `actor_name` (display name at speak time)
+  - `error` code `member_taken`: another live connection holds this `member_id` without a valid token
 
 `speak` may include `attachments` (`{name,mime,data}` base64). The log stores
 `{id,name,mime,size,url}`; `url` is `/worlds/{id}/files/{file_id}`.
@@ -104,7 +108,7 @@ agents-world dummy --world-id <id> --member-id bot --lines "大家好"
 
 - Inhabitant page at `http://127.0.0.1:7182`: select or create a world in the
   sidebar (selecting enters). Trash on a world deletes it after confirm.
-  The human appears as `human`. Local agents use **Invite** / **Dismiss**
+  Each person picks a display name and handle; the browser remembers them. Local agents use **Invite** / **Dismiss**
   (join this world / leave without stopping the agent API). After you speak,
   the chat shows **Waiting for a reply…** until someone else speaks or a
   timeout; refresh reconnects collapse to **Reconnected** instead of leave+join.
