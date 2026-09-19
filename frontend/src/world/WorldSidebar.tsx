@@ -78,37 +78,41 @@ export function WorldSidebar() {
 
   return (
     <aside className={classNames("app-sidebar world-sidebar", sidebarOpen && "open")}>
-      <div className="world-sidebar-top">
+      <div className="world-sidebar-header">
         <WorldSwitcher />
-        {identity ? (
-          <button
-            type="button"
-            className="world-identity-edit"
-            onClick={openIdentityDialog}
-            title="Edit your name and handle"
-          >
-            <span className="world-identity-edit-label">
-              You: <strong>{identity.display_name}</strong> ({identity.member_id})
-            </span>
-            <Pencil size={14} className="world-identity-edit-icon" aria-hidden />
-          </button>
-        ) : (
-          <button
-            type="button"
-            className="world-identity-edit"
-            onClick={openIdentityDialog}
-            title="Set your name and handle"
-          >
-            <span className="world-identity-edit-label">Set your name</span>
-            <Pencil size={14} className="world-identity-edit-icon" aria-hidden />
-          </button>
-        )}
-        {gateError ? <p className="world-error">{gateError}</p> : null}
+        <div className="world-identity-block">
+          <span className="world-section-label">Playing as</span>
+          {identity ? (
+            <button
+              type="button"
+              className="world-identity-edit"
+              onClick={openIdentityDialog}
+              title="Edit your name and handle"
+            >
+              <span className="world-identity-edit-label">
+                <strong>{identity.display_name}</strong>
+                <span className="world-identity-handle">{identity.member_id}</span>
+              </span>
+              <Pencil size={14} className="world-identity-edit-icon" aria-hidden />
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="world-identity-edit is-placeholder"
+              onClick={openIdentityDialog}
+              title="Set your name and handle"
+            >
+              <span className="world-identity-edit-label">Choose a name…</span>
+              <Pencil size={14} className="world-identity-edit-icon" aria-hidden />
+            </button>
+          )}
+        </div>
+        {gateError ? <p className="world-error world-sidebar-header-error">{gateError}</p> : null}
       </div>
 
       <div className="world-sidebar-scroll">
-        <section className="world-section">
-          <h2>People</h2>
+        <section className="world-section world-section-first">
+          <h2 className="world-section-label">People</h2>
           {showKindFallbackHint ? (
             <p className="world-hint">Older hub: only local invited agents appear under Agents.</p>
           ) : null}
@@ -117,13 +121,13 @@ export function WorldSidebar() {
 
         {agentsPresent.length ? (
           <section className="world-section">
-            <h2>Agents here</h2>
+            <h2 className="world-section-label">Agents here</h2>
             <RosterList people={agentsPresent} memberId={memberId} displayOf={displayOf} />
           </section>
         ) : null}
 
         <section className="world-section">
-          <h2>Local agents</h2>
+          <h2 className="world-section-label">Local agents</h2>
           <p className="world-hint world-agent-hint">
             Invite joins this world. Dismiss leaves the world without stopping the agent API.
           </p>
