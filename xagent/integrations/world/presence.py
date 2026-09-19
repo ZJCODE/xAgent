@@ -52,6 +52,7 @@ def write_world_presence(config_dir: Path | str, payload: dict[str, Any]) -> Non
         "member_id": str(body.get("member_id") or "").strip(),
         "display_name": str(body.get("display_name") or "").strip(),
         "want_present": bool(body.get("want_present")),
+        "resume_token": str(body.get("resume_token") or "").strip(),
     }
     path.write_text(json.dumps(recorded, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
@@ -74,6 +75,31 @@ def mark_world_presence(
     }
     write_world_presence(config_dir, payload)
     return payload
+
+
+def resume_token_for_world(config_dir: Path | str, *, world_url: str) -> str:
+    current = read_world_presence(config_dir)
+    if not current:
+        return ""
+    if str(current.get("world_url") or "").strip() != str(world_url or "").strip():
+        return ""
+    return str(current.get("resume_token") or "").strip()
+
+
+def save_world_resume_token(
+    config_dir: Path | str,
+    *,
+    world_url: str,
+    resume_token: str,
+) -> None:
+    token = str(resume_token or "").strip()
+    if not token:
+        return
+    current = read_world_presence(config_dir) or {}
+    if str(current.get("world_url") or "").strip() != str(world_url or "").strip():
+        return
+    current["resume_token"] = token
+    write_world_presence(config_dir, current)
 
 
 def mark_world_left(config_dir: Path | str) -> Optional[dict[str, Any]]:

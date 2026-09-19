@@ -11,6 +11,7 @@ from typing import Any, Awaitable, Callable, Optional
 
 from . import (
     MAX_ATTACHMENTS,
+    PROTOCOL_CAPABILITIES,
     MAX_ATTACHMENTS_BYTES,
     MAX_DISPLAY_NAME_LENGTH,
     MAX_FILE_BYTES,
@@ -31,6 +32,7 @@ from .models import (
     WorldEvent,
     encode_error,
     encode_server_message,
+    normalize_member_kind,
 )
 from .paths import validate_member_id
 from .store import WorldStore
@@ -54,6 +56,7 @@ class Session:
     display_name: str
     connection_id: int
     send: SendFn
+    member_kind: str = "human"
     present: bool = False
     # Proof of "same body": a later hello for this member_id may replace this
     # socket only when it presents this token.
@@ -89,12 +92,24 @@ class World:
 
     def list_live_present(self) -> list[dict[str, str]]:
         rows = [
-            {"member_id": session.member_id, "display_name": session.display_name}
+            {
+                "member_id": session.member_id,
+                "display_name": session.display_name,
+                "kind": normalize_member_kind(session.member_kind),
+            }
             for session in self._sessions.values()
             if session.present
         ]
         rows.sort(key=lambda item: (item["display_name"].lower(), item["member_id"]))
         return rows
+
+    @staticmethod
+    def present_by_kind(present: list[dict[str, Any]]) -> dict[str, int]:
+        counts = {"human": 0, "agent": 0, "script": 0}
+        for item in present:
+            key = normalize_member_kind(item.get("kind"))
+            counts[key] = counts.get(key, 0) + 1
+        return counts
 
     def disconnect_all(self, *, code: str = "world_gone", message: str = "world deleted") -> None:
         """Kick every connected session. Does not close the store."""
@@ -144,6 +159,7 @@ class World:
         display_name: str,
         send: SendFn,
         resume_token: str = "",
+        kind: str = "human",
     ) -> Session:
         member_id = member_id.strip()
         display_name = (display_name or member_id).strip()
@@ -178,10 +194,12 @@ class World:
                 previous.replaced.set()
                 self._stop_pump(previous)
 
-            member = self.store.upsert_member(member_id, display_name)
+            member_kind = normalize_member_kind(kind)
+            member = self.store.upsert_member(member_id, display_name, kind=member_kind)
             session = Session(
                 member_id=member.id,
                 display_name=member.display_name,
+                member_kind=member_kind,
                 connection_id=connection_id,
                 send=send,
                 present=self.store.is_present(member_id),
@@ -223,6 +241,7 @@ class World:
                 actor_id=session.member_id,
                 text="",
                 actor_name=session.display_name,
+                actor_kind=session.member_kind,
             )
         self._fanout(event)
 
@@ -310,6 +329,8 @@ class World:
                 display_name=session.display_name,
                 present=session.present,
                 resume_token=session.resume_token,
+                member_kind=session.member_kind,
+                capabilities=list(PROTOCOL_CAPABILITIES),
             ),
         )
 
@@ -324,6 +345,7 @@ class World:
                     actor_id=session.member_id,
                     text="",
                     actor_name=session.display_name,
+                    actor_kind=session.member_kind,
                 )
         session.present = True
         session.lagged = False
@@ -355,6 +377,7 @@ class World:
                 actor_id=session.member_id,
                 text="",
                 actor_name=session.display_name,
+                actor_kind=session.member_kind,
             )
         session.present = False
         self._fanout(event)
@@ -383,6 +406,7 @@ class World:
             self._enqueue(session, encode_error("bad_payload", "mentions must be a list"))
             return
         mentions = [str(m).strip() for m in mentions_raw if str(m).strip()]
+        mentions = self._normalize_mentions(text, mentions)
         if len(mentions) > MAX_MENTIONS:
             self._enqueue(
                 session,
@@ -404,8 +428,55 @@ class World:
             mentions=mentions,
             attachments=attachments,
             actor_name=session.display_name,
+            actor_kind=session.member_kind,
         )
         self._fanout(event)
+
+    def _normalize_mentions(self, text: str, mentions: list[str]) -> list[str]:
+        """Map @display_name to member_id when the match is unique among the live roster."""
+        import re
+
+        present = self.list_live_present()
+        by_id = {p["member_id"]: p for p in present}
+        by_name: dict[str, str] = {}
+        for item in present:
+            name = str(item.get("display_name") or "").strip()
+            mid = str(item.get("member_id") or "").strip()
+            if not name or not mid:
+                continue
+            key = name.casefold()
+            if key in by_name and by_name[key] != mid:
+                by_name[key] = ""
+            elif key not in by_name:
+                by_name[key] = mid
+
+        out: list[str] = []
+        seen: set[str] = set()
+
+        def add(member_id: str) -> None:
+            mid = str(member_id or "").strip()
+            if not mid or mid in seen:
+                return
+            if mid not in by_id:
+                return
+            seen.add(mid)
+            out.append(mid)
+
+        for raw in mentions:
+            add(raw)
+
+        for match in re.finditer(r"@([^\s@.,!?，。！？]+)", text):
+            token = match.group(1).strip()
+            if not token:
+                continue
+            if token in by_id:
+                add(token)
+                continue
+            mapped = by_name.get(token.casefold())
+            if mapped:
+                add(mapped)
+
+        return out
 
     def _ingest_attachments(self, raw: Any) -> tuple[list[Attachment], Optional[str]]:
         if raw is None:

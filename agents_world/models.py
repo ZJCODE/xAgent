@@ -8,6 +8,8 @@ from enum import Enum
 from typing import Any, Optional
 from urllib.parse import quote
 
+from . import DEFAULT_MEMBER_KIND, MEMBER_KINDS
+
 
 class EventKind(str, Enum):
     UTTERANCE = "utterance"
@@ -23,10 +25,18 @@ class EventKind(str, Enum):
             return str(value or "")
 
 
+def normalize_member_kind(raw: Any) -> str:
+    kind = str(raw or "").strip().lower()
+    if kind in MEMBER_KINDS:
+        return kind
+    return DEFAULT_MEMBER_KIND
+
+
 @dataclass(frozen=True)
 class Member:
     id: str
     display_name: str
+    kind: str = DEFAULT_MEMBER_KIND
 
 
 @dataclass(frozen=True)
@@ -72,6 +82,8 @@ class WorldEvent:
     attachments: tuple[Attachment, ...] = ()
     # Display name at the time of the event. Empty for rows written by older hubs.
     actor_name: str = ""
+    # Subject kind at event time (human/agent/script). Empty for older rows.
+    actor_kind: str = ""
 
     def to_dict(self, *, world_id: str) -> dict[str, Any]:
         kind = self.kind.value if isinstance(self.kind, EventKind) else str(self.kind)
@@ -85,6 +97,8 @@ class WorldEvent:
         }
         if self.actor_name:
             body["actor_name"] = self.actor_name
+        if str(self.actor_kind or "").strip():
+            body["actor_kind"] = normalize_member_kind(self.actor_kind)
         if self.attachments:
             body["attachments"] = [item.to_dict(world_id=world_id) for item in self.attachments]
         return body
@@ -101,6 +115,7 @@ class WorldEvent:
         mentions_json: str,
         attachments_json: str = "[]",
         actor_name: str = "",
+        actor_kind: str = "",
         **_extra: Any,
     ) -> "WorldEvent":
         mentions_raw = json.loads(mentions_json or "[]")
@@ -120,6 +135,7 @@ class WorldEvent:
             mentions=mentions,
             attachments=attachments,
             actor_name=str(actor_name or ""),
+            actor_kind=str(actor_kind or ""),
         )
 
 
@@ -128,6 +144,7 @@ class PresenceRecord:
     member_id: str
     display_name: str
     present: bool = True
+    kind: str = DEFAULT_MEMBER_KIND
 
 
 @dataclass

@@ -23,7 +23,10 @@ from urllib.parse import quote
 
 import httpx
 from agents_world import MAX_ATTACHMENTS, MAX_ATTACHMENTS_BYTES, MAX_FILE_BYTES
-from agents_world.client import WorldClient
+from agents_world.client import MemberTakenError, WorldClient
+from agents_world.models import normalize_member_kind
+
+from .presence import resume_token_for_world, save_world_resume_token
 
 from ...core.agent import Agent
 from ...core.config import AgentConfig
@@ -63,11 +66,13 @@ class WorldInhabitant:
         member_id: str,
         display_name: str = "",
         logger: Optional[logging.Logger] = None,
+        presence_dir: Optional[Path] = None,
     ):
         self.agent = agent
         self.member_id = member_id
         self.display_name = display_name or member_id
         self.logger = logger or logging.getLogger(self.__class__.__name__)
+        self._presence_dir = Path(presence_dir).expanduser().resolve() if presence_dir else None
         self.world_url = ""
         self.world_id = ""
         self.world_name = ""
@@ -76,6 +81,7 @@ class WorldInhabitant:
         self._recent: list[dict[str, Any]] = []
         self._names: dict[str, str] = {}
         self._present: dict[str, str] = {}
+        self._present_kinds: dict[str, str] = {}
         self._join_lock = asyncio.Lock()
         self._mind_lock = asyncio.Lock()
         self._speech_tasks: set[asyncio.Task[None]] = set()
@@ -250,20 +256,36 @@ class WorldInhabitant:
             return str(reply or "").strip()
 
     async def _run(self) -> None:
+        resume_token = ""
+        if self._presence_dir is not None:
+            resume_token = resume_token_for_world(self._presence_dir, world_url=self.world_url)
         try:
             async with WorldClient(
                 self.world_url,
                 member_id=self.member_id,
                 display_name=self.display_name,
+                resume_token=resume_token,
+                kind="agent",
             ) as client:
                 self._client = client
                 welcome = client.welcome or {}
                 self.world_id = str(welcome.get("world_id") or "")
                 self.world_name = str(welcome.get("name") or self.world_id)
                 self._names[self.member_id] = self.display_name
+                if self._presence_dir is not None and client.resume_token:
+                    save_world_resume_token(
+                        self._presence_dir,
+                        world_url=self.world_url,
+                        resume_token=client.resume_token,
+                    )
                 await client.join()
                 async for msg in client.events():
                     await self._handle(msg)
+        except MemberTakenError:
+            self.logger.error(
+                "world member_id=%s is already present without a valid resume token",
+                self.member_id,
+            )
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -346,7 +368,7 @@ class WorldInhabitant:
             return random.uniform(0.12, 0.48)
         text = str(event.get("text") or "").strip()
         others = max(0, len(self._present) - 1)
-        low = 0.32 + 0.04 * min(others, 5)
+        low = 0.32 + 0.04 * min(others, 5) + 0.25 * self._agent_reply_rank()
         span = 1.35 if _OPEN_ROOM_LINE_RE.search(text) else 0.72
         if len(text) < 14 and not _OPEN_ROOM_LINE_RE.search(text):
             span = min(span, 0.5)
@@ -366,6 +388,7 @@ class WorldInhabitant:
 
     def _remember_present(self, present: list[Any]) -> None:
         self._present = {}
+        self._present_kinds = {}
         for item in present:
             if not isinstance(item, dict):
                 continue
@@ -375,6 +398,7 @@ class WorldInhabitant:
                 label = name or member_id
                 self._names[member_id] = label
                 self._present[member_id] = label
+                self._present_kinds[member_id] = normalize_member_kind(item.get("kind"))
 
     def _apply_presence_event(self, event: dict[str, Any]) -> None:
         actor = str(event.get("actor_id") or "").strip()
@@ -486,6 +510,7 @@ class WorldInhabitant:
         speaker = self._speaker_label(actor)
         sender_name = str(self._names.get(actor) or actor).strip()
         attachments = await self._inbound_attachments(event)
+        mentions = {str(m).strip() for m in (event.get("mentions") or []) if str(m).strip()}
         metadata = {
             "world_id": self.world_id,
             "world_name": self.world_name or self.world_id,
@@ -495,6 +520,9 @@ class WorldInhabitant:
             "seq": event.get("seq"),
             "kind": event.get("kind"),
             "event_type": "utterance",
+            "actor_kind": str(event.get("actor_kind") or self._present_kinds.get(actor, "human")),
+            "addressed_to_me": self.member_id in mentions,
+            "audience_size": max(0, len(self._present) - 1),
         }
         if attachments:
             metadata[ATTACHMENT_METADATA_KEY] = attachments
@@ -600,12 +628,28 @@ class WorldInhabitant:
     def _is_local_agent(self, member_id: str) -> bool:
         return member_id in self._agent_ids
 
+    def _is_agent(self, member_id: str) -> bool:
+        if member_id in self._present_kinds:
+            kind = normalize_member_kind(self._present_kinds[member_id])
+            if kind in {"agent", "script"}:
+                return True
+            if kind == "human":
+                return False
+        return self._is_local_agent(member_id)
+
+    def _agent_reply_rank(self) -> int:
+        agent_ids = sorted(mid for mid in self._present if self._is_agent(mid))
+        try:
+            return agent_ids.index(self.member_id)
+        except ValueError:
+            return 0
+
     def _is_reply_to_trigger(self, trigger: dict[str, Any], item: dict[str, Any]) -> bool:
         speaker = str(trigger.get("actor_id") or "")
         replier = str(item.get("actor_id") or "")
         if not replier or replier == speaker:
             return False
-        if self._is_local_agent(replier):
+        if self._is_agent(replier):
             return True
         mentions = item.get("mentions") or []
         if speaker in {str(m).strip() for m in mentions if str(m).strip()}:
@@ -807,7 +851,7 @@ class WorldInhabitant:
             if member_id == self.member_id:
                 continue
             label = self._speaker_label(member_id)
-            if self._is_local_agent(member_id):
+            if self._is_agent(member_id):
                 agents.append(label)
             else:
                 people.append(label)

@@ -37,10 +37,12 @@ class WorldClient:
         member_id: str,
         display_name: str = "",
         resume_token: str = "",
+        kind: str = "human",
     ):
         self.url = url
         self.member_id = member_id
         self.display_name = display_name or member_id
+        self.kind = str(kind or "human").strip() or "human"
         # Set from `welcome`; pass it back on reconnect to take over the same member_id.
         self.resume_token = str(resume_token or "")
         self.inbox: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
@@ -55,6 +57,7 @@ class WorldClient:
             "type": "hello",
             "member_id": self.member_id,
             "display_name": self.display_name,
+            "kind": self.kind,
         }
         if self.resume_token:
             hello["resume_token"] = self.resume_token

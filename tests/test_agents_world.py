@@ -679,6 +679,90 @@ class WorldHubTests(unittest.IsolatedAsyncioTestCase):
             for client in clients:
                 await client.close()
 
+    async def test_member_kind_and_actor_kind_on_wire(self):
+        await _http_get(self.port, "/worlds/create?name=hall")
+        from agents_world.client import WorldClient
+
+        async with WorldClient(
+            self._ws("hall"), member_id="telos", display_name="Telos", kind="agent"
+        ) as telos:
+            await telos.join()
+            welcome_caps = telos.welcome.get("capabilities") or []
+            self.assertIn("kind", welcome_caps)
+            snap = await telos.wait_for(lambda m: m.get("type") == "snapshot")
+            self.assertEqual(snap["present"][0]["kind"], "agent")
+            await telos.speak("hi room")
+            event = await telos.wait_for(
+                lambda m: m.get("type") == "event" and m.get("kind") == "utterance"
+            )
+            self.assertEqual(event.get("actor_kind"), "agent")
+
+        telos = WorldClient(self._ws("hall"), member_id="telos", display_name="Telos", kind="agent")
+        await telos.connect()
+        await telos.join()
+        await telos.wait_for(lambda m: m.get("type") == "snapshot")
+        alice = WorldClient(self._ws("hall"), member_id="alice", display_name="Alice")
+        await alice.connect()
+        await alice.join()
+        snap = await alice.wait_for(lambda m: m.get("type") == "snapshot")
+        kinds = {p["member_id"]: p.get("kind") for p in snap["present"]}
+        self.assertEqual(kinds.get("telos"), "agent")
+        self.assertEqual(kinds.get("alice"), "human")
+        await alice.close()
+        await telos.close()
+
+    async def test_mention_display_name_maps_to_member_id(self):
+        await _http_get(self.port, "/worlds/create?name=hall")
+        from agents_world.client import WorldClient
+
+        async with WorldClient(self._ws("hall"), member_id="ben", display_name="Ben") as ben:
+            await ben.join()
+            await ben.wait_for(lambda m: m.get("type") == "snapshot")
+            async with WorldClient(self._ws("hall"), member_id="amy", display_name="Amy") as amy:
+                await amy.join()
+                await amy.wait_for(lambda m: m.get("type") == "snapshot")
+                await amy.speak("hey @Ben")
+                heard = await ben.wait_for(
+                    lambda m: m.get("type") == "event" and m.get("kind") == "utterance"
+                )
+                self.assertIn("ben", heard.get("mentions") or [])
+
+    async def test_many_humans_and_agents_join_and_fanout(self):
+        await _http_get(self.port, "/worlds/create?name=arena")
+        from agents_world.client import WorldClient
+
+        humans = [("amy", "Amy"), ("ben", "Ben"), ("chris", "Chris")]
+        agents = [("telos", "Telos"), ("mira", "Mira")]
+        roster = humans + agents
+        clients = []
+        for mid, name in roster:
+            kind = "agent" if (mid, name) in agents else "human"
+            client = WorldClient(self._ws("arena"), member_id=mid, display_name=name, kind=kind)
+            await client.connect()
+            await client.join()
+            await client.wait_for(lambda m: m.get("type") == "snapshot")
+            clients.append(client)
+        try:
+            _, _, body = await _http_get(self.port, "/worlds")
+            worlds = json.loads(body.decode())
+            summary = next(item for item in worlds["worlds"] if item["id"] == "arena")
+            self.assertEqual(summary["present_count"], len(roster))
+            self.assertEqual(summary["present_by_kind"]["human"], len(humans))
+            self.assertEqual(summary["present_by_kind"]["agent"], len(agents))
+            for client in clients:
+                await client.speak(f"ping-{client.member_id}")
+            for client in clients:
+                heard = await client.wait_for(
+                    lambda m, c=client: m.get("type") == "event"
+                    and m.get("kind") == "utterance"
+                    and m.get("text") == f"ping-{c.member_id}",
+                    timeout=5,
+                )
+                self.assertEqual(heard.get("actor_kind"), "agent" if client.kind == "agent" else "human")
+        finally:
+            for client in clients:
+                await client.close()
+
     async def test_http_serves_inhabitant_page(self):
         status, headers, body = await _http_get(self.port, "/")
         self.assertEqual(status, 200)

@@ -4,7 +4,7 @@ import { DEFAULT_AGENT_WEB_URL } from "../lib/ports";
 import { initialOf } from "./protocol";
 import { useWorld } from "./WorldContext";
 import { WorldSwitcher } from "./WorldSwitcher";
-import type { NeighborAgent, WorldMember } from "./protocol";
+import { isAgentKind, memberKind, type NeighborAgent, type WorldMember } from "./protocol";
 
 function agentStatus(agent: NeighborAgent, here: boolean): { label: string; tone: string } {
   if (here) return { label: "Present", tone: "is-here" };
@@ -55,9 +55,15 @@ export function WorldSidebar() {
     openIdentityDialog,
   } = useWorld();
 
+  const hubKinds = present.some((item) => item.kind);
   const agentNames = new Set(neighbors.map((agent) => agent.name));
-  const peoplePresent = present.filter((item) => !agentNames.has(item.member_id));
-  const agentsPresent = present.filter((item) => agentNames.has(item.member_id));
+  const peoplePresent = hubKinds
+    ? present.filter((item) => !isAgentKind(memberKind(item)))
+    : present.filter((item) => !agentNames.has(item.member_id));
+  const agentsPresent = hubKinds
+    ? present.filter((item) => isAgentKind(memberKind(item)))
+    : present.filter((item) => agentNames.has(item.member_id));
+  const showKindFallbackHint = !hubKinds && present.length > 0;
 
   const sorted = [...neighbors].sort((left, right) => {
     const rank = (agent: NeighborAgent) => {
@@ -92,6 +98,9 @@ export function WorldSidebar() {
       <div className="world-sidebar-scroll">
         <section className="world-section">
           <h2>People</h2>
+          {showKindFallbackHint ? (
+            <p className="world-hint">Older hub: only local invited agents appear under Agents.</p>
+          ) : null}
           <RosterList people={peoplePresent} memberId={memberId} displayOf={displayOf} />
         </section>
 

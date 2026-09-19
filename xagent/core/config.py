@@ -542,6 +542,8 @@ class AgentConfig:
         "- If one person already answered the same beat, add a second voice only when you "
         "have different information, a short distinct reaction, or the question is still open.\n"
         "- If two or more already answered, listen unless you were named or you must correct something.\n"
+        "- When several agents are present, be extra conservative: unless you were @ or named, "
+        "stay silent on open-room lines after one or two agent voices already spoke.\n"
         "- Greetings: one warm hello back is often enough; a second short hi is ok; do not all "
         "give the same introduction speech.\n"
         "- You were mid-thread: treat their next line as follow-up and continue naturally.\n"

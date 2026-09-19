@@ -4,6 +4,7 @@ import { useTheme } from "../context/ThemeContext";
 import { classNames } from "../lib/format";
 import { PersonIdentityDialog } from "./PersonIdentityDialog";
 import { WorldChat } from "./WorldChat";
+import { isAgentKind, memberKind } from "./protocol";
 import { WorldProvider, useWorld } from "./WorldContext";
 import { WorldSidebar } from "./WorldSidebar";
 
@@ -11,8 +12,12 @@ function WorldLayout() {
   const { dark, toggleTheme } = useTheme();
   const { worldName, present, joined, status, statusKind, sidebarOpen, setSidebarOpen } = useWorld();
   const count = present.length;
+  const peopleCount = present.filter((p) => !isAgentKind(memberKind(p))).length;
+  const agentCount = present.filter((p) => isAgentKind(memberKind(p))).length;
   const subtitle = joined
-    ? `${count} present`
+    ? agentCount > 0 || present.some((p) => p.kind)
+      ? `${peopleCount} people · ${agentCount} agents (${count} present)`
+      : `${count} present`
     : "Select or create a world";
   const tone = statusKind === "ok" ? "good" : statusKind === "bad" ? "danger" : statusKind === "info" ? "info" : "muted";
 

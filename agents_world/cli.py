@@ -60,6 +60,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     join_p.add_argument("--member-id", required=True)
     join_p.add_argument("--name", default="", help="Display name (default: member-id)")
     join_p.add_argument(
+        "--kind",
+        default="human",
+        choices=("human", "agent", "script"),
+        help="Subject kind self-description (default: human)",
+    )
+    join_p.add_argument(
         "--full-history",
         action="store_true",
         help="Print the full event log when joining (default: summary only)",
@@ -252,7 +258,14 @@ async def _cmd_join(args: argparse.Namespace) -> int:
 
     print(f"Connecting as {name} …", flush=True)
     try:
-        return await _run_join_session(url, member_id=member_id, name=name, printer=printer, snapshot_ready=snapshot_ready)
+        return await _run_join_session(
+            url,
+            member_id=member_id,
+            name=name,
+            kind=str(getattr(args, "kind", "human") or "human"),
+            printer=printer,
+            snapshot_ready=snapshot_ready,
+        )
     except MemberTakenError:
         print(
             f"! '{member_id}' is already present in this world from another connection. "
@@ -268,12 +281,13 @@ async def _run_join_session(
     *,
     member_id: str,
     name: str,
+    kind: str = "human",
     printer: "_ChatPrinter",
     snapshot_ready: asyncio.Event,
 ) -> int:
     from .client import WorldClient
 
-    async with WorldClient(url, member_id=member_id, display_name=name) as client:
+    async with WorldClient(url, member_id=member_id, display_name=name, kind=kind) as client:
         welcome = client.welcome or {}
         if welcome.get("type") != "welcome":
             print(f"unexpected: {welcome}", file=sys.stderr)

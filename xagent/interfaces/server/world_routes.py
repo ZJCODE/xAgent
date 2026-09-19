@@ -45,6 +45,7 @@ def register_world_routes(app: FastAPI, server: "AgentHTTPServer") -> None:
                 member_id=member_id,
                 display_name=display_name,
                 logger=server.logger,
+                presence_dir=Path(server.config_dir),
             )
             server.world_inhabitant = inhabitant
         else:

@@ -25,6 +25,8 @@ import {
   type PendingFile,
   type PersonIdentity,
   type WorldEvent,
+  isAgentKind,
+  memberKind,
   type WorldMember,
   type WorldSummary,
 } from "./protocol";
@@ -144,10 +146,11 @@ export function WorldProvider({ children }: { children: ReactNode }) {
 
   const displayOf = useCallback((id: string) => stateRef.current.names[id] || id, []);
 
-  const isAgentId = useCallback(
-    (id: string) => stateRef.current.neighbors.some((agent) => agent.name === id),
-    [],
-  );
+  const isAgentId = useCallback((id: string) => {
+    const member = stateRef.current.present.find((item) => item.member_id === id);
+    if (member?.kind) return isAgentKind(memberKind(member));
+    return stateRef.current.neighbors.some((agent) => agent.name === id);
+  }, []);
 
   const send = useCallback((obj: Record<string, unknown>) => {
     const ws = wsRef.current;
@@ -448,6 +451,7 @@ export function WorldProvider({ children }: { children: ReactNode }) {
             type: "hello",
             member_id,
             display_name,
+            kind: "human",
           };
           if (resumeToken) hello.resume_token = resumeToken;
           ws.send(JSON.stringify(hello));

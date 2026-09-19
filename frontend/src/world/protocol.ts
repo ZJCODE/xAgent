@@ -27,11 +27,14 @@ export interface PendingFile {
   previewUrl: string;
 }
 
+export type MemberKind = "human" | "agent" | "script";
+
 export interface WorldSummary {
   id: string;
   name: string;
   latest_seq?: number;
   present_count?: number;
+  present_by_kind?: Partial<Record<MemberKind, number>>;
 }
 
 export interface WorldEvent {
@@ -42,6 +45,10 @@ export interface WorldEvent {
   actor_id?: string;
   /** Display name at the time of the event (hub >= this protocol revision). */
   actor_name?: string;
+  actor_kind?: MemberKind;
+  /** Subject kind on welcome (not event kind). */
+  member_kind?: MemberKind;
+  capabilities?: string[];
   text?: string;
   mentions?: string[];
   attachments?: WorldAttachment[];
@@ -65,6 +72,17 @@ export interface WorldEvent {
 export interface WorldMember {
   member_id: string;
   display_name?: string;
+  kind?: MemberKind;
+}
+
+export function memberKind(item: WorldMember): MemberKind {
+  const k = String(item.kind || "human").toLowerCase();
+  if (k === "agent" || k === "script") return k;
+  return "human";
+}
+
+export function isAgentKind(kind: MemberKind): boolean {
+  return kind === "agent" || kind === "script";
 }
 
 export interface NeighborAgent {

@@ -414,6 +414,31 @@ class MemoryHandlerRelationshipTests(unittest.IsolatedAsyncioTestCase):
         participants = MemoryHandler._extract_participants([human, work_order])
         self.assertEqual([p["key"] for p in participants], ["api:web_user"])
 
+    def test_extract_participants_skips_agent_utterances(self):
+        agent_line = Message.create_context_event(
+            content="bots talking",
+            source="world",
+            event_type="utterance",
+            metadata={
+                "sender_name": "Telos",
+                "event_type": "utterance",
+                "actor_kind": "agent",
+            },
+        )
+        agent_line.channel = "world"
+        agent_line.sender_id = "telos"
+        human_line = Message.create_context_event(
+            content="hi",
+            source="world",
+            event_type="utterance",
+            metadata={"sender_name": "Amy", "event_type": "utterance", "actor_kind": "human"},
+        )
+        human_line.channel = "world"
+        human_line.sender_id = "amy"
+
+        participants = MemoryHandler._extract_participants([agent_line, human_line])
+        self.assertEqual([p["key"] for p in participants], ["world:amy"])
+
     def test_extract_participants_includes_world_utterance_observations(self):
         heard = Message.create_context_event(
             content="anyone here?",

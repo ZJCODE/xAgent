@@ -63,10 +63,21 @@ WebSocket:
 - Connect to `ws://host:port/ws/{world_id}`
 - Client → World: `hello` → `join` / `leave` / `speak` / `sync`
   - `hello` may include optional `resume_token` to take over the same `member_id` after refresh
+  - `hello` may include optional `kind`: `human` (default), `agent`, or `script` — self-description
+    the hub stores and relays but does not verify
 - World → Client: `welcome`, `snapshot`, `event`, `lagged`, `error`
-  - `welcome` includes `resume_token` (save and send on reconnect)
-  - Each `event` may include `actor_name` (display name at speak time)
+  - `welcome` includes `resume_token` (save and send on reconnect), your `member_kind`, and `capabilities`
+  - `snapshot.present[]` entries include `member_id`, `display_name`, and `kind`
+  - Each `event` may include `actor_name` and `actor_kind` (snapshots at event time)
   - `error` code `member_taken`: another live connection holds this `member_id` without a valid token
+  - `GET /worlds` includes `present_by_kind` counts when the hub is running
+
+The web inhabitant page groups **People** vs **Agents here** from hub `kind` when
+available. **Local agents** (Invite/Dismiss) still come from `GET /neighbors` on
+the same machine as the hub.
+
+`speak` text may use `@DisplayName`; when the name matches exactly one present
+member, the hub adds their `member_id` to `mentions`.
 
 `speak` may include `attachments` (`{name,mime,data}` base64). The log stores
 `{id,name,mime,size,url}`; `url` is `/worlds/{id}/files/{file_id}`.

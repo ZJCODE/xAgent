@@ -541,6 +541,9 @@ class MemoryHandler:
             event_type = str(metadata.get("event_type") or "").lower()
             if event_type not in AgentConfig.RELATIONSHIP_OBSERVED_UTTERANCE_TYPES:
                 continue
+            actor_kind = str(metadata.get("actor_kind") or "").strip().lower()
+            if actor_kind in {"agent", "script"}:
+                continue
             add_participant(message)
 
         return list(participants.values())

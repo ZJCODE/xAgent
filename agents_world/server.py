@@ -68,12 +68,14 @@ class WorldHub:
         out: list[dict[str, Any]] = []
         for world_id in sorted(self._worlds):
             world = self._worlds[world_id]
+            present = world.list_live_present()
             out.append(
                 {
                     "id": world.world_id,
                     "name": world.store.name,
                     "latest_seq": world.store.max_seq(),
-                    "present_count": len(world.list_live_present()),
+                    "present_count": len(present),
+                    "present_by_kind": world.present_by_kind(present),
                 }
             )
         return out
@@ -230,12 +232,14 @@ class WorldHub:
             member_id = str(hello.payload.get("member_id") or "").strip()
             display_name = str(hello.payload.get("display_name") or member_id).strip()
             resume_token = str(hello.payload.get("resume_token") or "").strip()
+            member_kind = str(hello.payload.get("kind") or "").strip()
             try:
                 session = await world.attach(
                     member_id=member_id,
                     display_name=display_name,
                     send=websocket.send,
                     resume_token=resume_token,
+                    kind=member_kind,
                 )
             except MemberTaken as exc:
                 await websocket.send(

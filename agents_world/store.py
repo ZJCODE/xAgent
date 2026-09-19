@@ -61,7 +61,8 @@ class WorldStore:
             );
             CREATE TABLE IF NOT EXISTS members (
                 id TEXT PRIMARY KEY,
-                display_name TEXT NOT NULL
+                display_name TEXT NOT NULL,
+                kind TEXT NOT NULL DEFAULT 'human'
             );
             CREATE TABLE IF NOT EXISTS presence (
                 member_id TEXT PRIMARY KEY,
@@ -88,6 +89,7 @@ class WorldStore:
             """
         )
         self._ensure_event_columns()
+        self._ensure_member_columns()
         self._conn.execute(
             "INSERT OR REPLACE INTO meta(key, value) VALUES ('world_id', ?)",
             (self.world_id,),
@@ -103,6 +105,18 @@ class WorldStore:
         if "actor_name" not in columns:
             # Attribution at the time of speaking; members.display_name is only "latest self-description".
             self._conn.execute("ALTER TABLE events ADD COLUMN actor_name TEXT NOT NULL DEFAULT ''")
+        if "actor_kind" not in columns:
+            self._conn.execute("ALTER TABLE events ADD COLUMN actor_kind TEXT NOT NULL DEFAULT ''")
+
+    def _ensure_member_columns(self) -> None:
+        columns = {
+            str(row["name"])
+            for row in self._conn.execute("PRAGMA table_info(members)").fetchall()
+        }
+        if "kind" not in columns:
+            self._conn.execute(
+                "ALTER TABLE members ADD COLUMN kind TEXT NOT NULL DEFAULT 'human'"
+            )
 
     def get_meta(self, key: str) -> Optional[str]:
         row = self._conn.execute(
@@ -132,26 +146,37 @@ class WorldStore:
     def name(self) -> str:
         return self.get_meta("name") or self.world_id
 
-    def upsert_member(self, member_id: str, display_name: str) -> Member:
+    def upsert_member(self, member_id: str, display_name: str, *, kind: str = "human") -> Member:
+        from .models import normalize_member_kind
+
         name = display_name.strip() or member_id
+        member_kind = normalize_member_kind(kind)
         self._conn.execute(
             """
-            INSERT INTO members(id, display_name) VALUES (?, ?)
-            ON CONFLICT(id) DO UPDATE SET display_name=excluded.display_name
+            INSERT INTO members(id, display_name, kind) VALUES (?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                display_name=excluded.display_name,
+                kind=excluded.kind
             """,
-            (member_id, name),
+            (member_id, name, member_kind),
         )
         self._commit()
-        return Member(id=member_id, display_name=name)
+        return Member(id=member_id, display_name=name, kind=member_kind)
 
     def get_member(self, member_id: str) -> Optional[Member]:
         row = self._conn.execute(
-            "SELECT id, display_name FROM members WHERE id = ?",
+            "SELECT id, display_name, kind FROM members WHERE id = ?",
             (member_id,),
         ).fetchone()
         if row is None:
             return None
-        return Member(id=row["id"], display_name=row["display_name"])
+        from .models import normalize_member_kind
+
+        return Member(
+            id=row["id"],
+            display_name=row["display_name"],
+            kind=normalize_member_kind(row["kind"] if "kind" in row.keys() else "human"),
+        )
 
     def set_presence(self, member_id: str, present: bool) -> None:
         self._conn.execute(
@@ -166,18 +191,21 @@ class WorldStore:
     def list_present(self) -> list[PresenceRecord]:
         rows = self._conn.execute(
             """
-            SELECT p.member_id, m.display_name, p.present
+            SELECT p.member_id, m.display_name, m.kind, p.present
             FROM presence p
             JOIN members m ON m.id = p.member_id
             WHERE p.present = 1
             ORDER BY m.display_name, p.member_id
             """
         ).fetchall()
+        from .models import normalize_member_kind
+
         return [
             PresenceRecord(
                 member_id=r["member_id"],
                 display_name=r["display_name"],
                 present=bool(r["present"]),
+                kind=normalize_member_kind(r["kind"] if "kind" in r.keys() else "human"),
             )
             for r in rows
         ]
@@ -252,6 +280,7 @@ class WorldStore:
         attachments: Optional[list[Attachment] | tuple[Attachment, ...]] = None,
         ts: Optional[float] = None,
         actor_name: str = "",
+        actor_kind: str = "",
     ) -> WorldEvent:
         event_ts = float(ts if ts is not None else self.clock.now())
         mention_list = [str(m).strip() for m in (mentions or []) if str(m).strip()]
@@ -263,12 +292,22 @@ class WorldStore:
         )
         kind_value = kind.value if isinstance(kind, EventKind) else str(kind)
         name_at_time = str(actor_name or "").strip()
+        kind_at_time = str(actor_kind or "").strip()
         cur = self._conn.execute(
             """
-            INSERT INTO events(ts, kind, actor_id, text, mentions_json, attachments_json, actor_name)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO events(ts, kind, actor_id, text, mentions_json, attachments_json, actor_name, actor_kind)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (event_ts, kind_value, actor_id, text, mentions_json, attachments_json, name_at_time),
+            (
+                event_ts,
+                kind_value,
+                actor_id,
+                text,
+                mentions_json,
+                attachments_json,
+                name_at_time,
+                kind_at_time,
+            ),
         )
         self._commit()
         seq = int(cur.lastrowid)
@@ -281,6 +320,7 @@ class WorldStore:
             mentions=tuple(mention_list),
             attachments=attachment_items,
             actor_name=name_at_time,
+            actor_kind=kind_at_time,
         )
 
     def events_after(
@@ -291,7 +331,7 @@ class WorldStore:
     ) -> list[WorldEvent]:
         rows = self._conn.execute(
             """
-            SELECT seq, ts, kind, actor_id, text, mentions_json, attachments_json, actor_name
+            SELECT seq, ts, kind, actor_id, text, mentions_json, attachments_json, actor_name, actor_kind
             FROM events
             WHERE seq > ?
             ORDER BY seq ASC
@@ -304,7 +344,7 @@ class WorldStore:
     def recent_events(self, *, limit: int = 50) -> list[WorldEvent]:
         rows = self._conn.execute(
             """
-            SELECT seq, ts, kind, actor_id, text, mentions_json, attachments_json, actor_name
+            SELECT seq, ts, kind, actor_id, text, mentions_json, attachments_json, actor_name, actor_kind
             FROM events
             ORDER BY seq DESC
             LIMIT ?
