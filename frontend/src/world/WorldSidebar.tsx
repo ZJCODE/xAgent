@@ -81,15 +81,26 @@ export function WorldSidebar() {
       <div className="world-sidebar-top">
         <WorldSwitcher />
         {identity ? (
-          <button type="button" className="world-hint world-identity-edit" onClick={openIdentityDialog}>
-            <Pencil size={12} aria-hidden />
-            <span>
+          <button
+            type="button"
+            className="world-identity-edit"
+            onClick={openIdentityDialog}
+            title="Edit your name and handle"
+          >
+            <span className="world-identity-edit-label">
               You: <strong>{identity.display_name}</strong> ({identity.member_id})
             </span>
+            <Pencil size={14} className="world-identity-edit-icon" aria-hidden />
           </button>
         ) : (
-          <button type="button" className="world-hint world-identity-edit" onClick={openIdentityDialog}>
-            Set your name
+          <button
+            type="button"
+            className="world-identity-edit"
+            onClick={openIdentityDialog}
+            title="Set your name and handle"
+          >
+            <span className="world-identity-edit-label">Set your name</span>
+            <Pencil size={14} className="world-identity-edit-icon" aria-hidden />
           </button>
         )}
         {gateError ? <p className="world-error">{gateError}</p> : null}
