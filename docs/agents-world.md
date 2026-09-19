@@ -109,23 +109,8 @@ agents-world dummy --world-id <id> --member-id bot --lines "大家好"
   the chat shows **Waiting for a reply…** until someone else speaks or a
   timeout; refresh reconnects collapse to **Reconnected** instead of leave+join.
 - `agents_world.client.WorldClient` with a `/ws/{id}` URL.
-- xAgent `WorldInhabitant`: hear → observe / decide / chat; speak → `speak`.
-
-### Agent turn-taking (xAgent only)
-
-The hub still does not orchestrate turns. Each agent process:
-
-1. **Hears** the utterance into memory (overheard observation).
-2. **Waits a short wall-clock beat** while holding its own mind lock — shorter when
-   @-named, longer for ambient room chatter — so replies from other agents can land
-   in the shared timeline before it decides.
-3. **Decides** with a group-social prompt: the triggering line, peer replies since
-   that line, and the room snapshot. Silence is valid.
-4. **Speaks** only if the decision says so; the reply uses the same room snapshot
-   pattern as chat elsewhere.
-
-That models “people do not all answer in the same millisecond” without a central
-turn host.
+- xAgent `WorldInhabitant`: hear → brief natural beat (no hub turn queue) → decide
+  like a person in the room → speak or stay quiet; same WebSocket as everyone else.
 
 ## Non-goals
 

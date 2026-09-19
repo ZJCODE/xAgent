@@ -1200,34 +1200,11 @@ class Agent:
         memory_excerpt: str = "",
     ) -> str:
         if source == "world":
-            named = bool((metadata or {}).get("addressed_to_agent"))
-            recently_spoke = bool((metadata or {}).get("recently_spoke"))
-            peer_reply_count = int((metadata or {}).get("peer_reply_count") or 0)
-            if named:
-                bias = "This line names you. Reply the way you would if someone called you in a group."
-            elif recently_spoke:
-                bias = (
-                    "You were just speaking in this room. "
-                    "Their line may be a follow-up; continue naturally if the thread is still yours."
-                )
-            elif peer_reply_count >= 2:
-                bias = (
-                    "Two or more people already spoke to this beat. "
-                    "In a real group you would usually listen now unless you were named "
-                    "or you must add something clearly new."
-                )
-            elif peer_reply_count == 1:
-                bias = (
-                    "One person already responded. "
-                    "Join in only if the question is still open, you were implicitly included, "
-                    "or your line would not repeat the same greeting or answer."
-                )
-            else:
-                bias = (
-                    "You heard this because you are present. "
-                    "Like a group conversation: speak if the room asked, greeted, or needs a voice; "
-                    "hang back if it is clearly between others."
-                )
+            bias = (
+                "Decide whether to speak now. "
+                "You are one person in a live group — the situation below is enough; "
+                "not every line needs your voice."
+            )
         else:
             bias = "Prefer joining when you have something to add."
         excerpt = (memory_excerpt or "").strip()

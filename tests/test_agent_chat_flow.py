@@ -1561,7 +1561,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(decision.should_reply)
         self.assertEqual(decision.reason, "others talking")
         content = model_client.calls[0][0]["content"]
-        self.assertIn("because you are present", content)
+        self.assertIn("not every line needs your voice", content)
         self.assertNotIn("Prefer joining when you have something to add", content)
         instruction_text = "\n".join(
             str(item.get("content", "")) if isinstance(item, dict) else str(item)
@@ -1578,7 +1578,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
 
         decision = await Agent.decide_participation(
             agent,
-            context="Jun: aaac are you there",
+            context="They @ you or used your name.\n\nJun: @aaac are you there",
             source="world",
             event_type="group_message",
             metadata={"room_id": "hall", "addressed_to_agent": True},
@@ -1586,7 +1586,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(decision.should_reply)
         content = model_client.calls[0][0]["content"]
-        self.assertIn("names you", content)
+        self.assertIn("@aaac are you there", content)
 
     async def test_decide_participation_world_recent_speech_is_followup(self):
         storage = InMemoryMessageStorage()
@@ -1597,7 +1597,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
 
         decision = await Agent.decide_participation(
             agent,
-            context="Jun: keep going",
+            context="You were speaking in this thread a moment ago.\n\nJun: keep going",
             source="world",
             event_type="group_message",
             metadata={"room_id": "hall", "addressed_to_agent": False, "recently_spoke": True},
@@ -1605,7 +1605,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(decision.should_reply)
         content = model_client.calls[0][0]["content"]
-        self.assertIn("just speaking", content)
+        self.assertIn("keep going", content)
 
     async def test_decide_participation_defaults_to_silence_on_invalid_model_output(self):
         storage = InMemoryMessageStorage()

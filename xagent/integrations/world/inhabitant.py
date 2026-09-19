@@ -37,9 +37,11 @@ from ...utils.image_utils import workspace_blob_relative_path
 
 CHANNEL_WORLD = "world"
 _ROOM_CONTEXT_LIMIT = 20
-# Wall-clock beat before decide/speak: humans do not all jump in the same instant.
-_PAUSE_NAMED_SEC = (0.15, 0.55)
-_PAUSE_AMBIENT_SEC = (0.55, 2.25)
+_OPEN_ROOM_LINE_RE = re.compile(
+    r"(?:\?|？|anyone|anybody|someone|有人|吗\b|呢\b|么\b)",
+    re.IGNORECASE,
+)
+_LISTEN_POLL_SEC = 0.1
 _MARKDOWN_REF_RE = re.compile(r"!?\[(?:[^\]]*)\]\(([^)]+)\)")
 _BACKTICK_FILE_RE = re.compile(r"`([^`]+)`")
 _DECISION_PREFACE = (
@@ -314,20 +316,33 @@ class WorldInhabitant:
                 await self._speak_reply(event)
 
     async def _listening_pause(self, event: dict[str, Any]) -> None:
-        """Hold the mind lock through a short beat so peer lines can land first."""
-        seconds = self._listening_pause_seconds(event)
-        if seconds <= 0:
-            return
+        """Hold the mind lock through a brief beat; stop early once the room answered."""
+        deadline = asyncio.get_running_loop().time() + self._listening_pause_seconds(event)
+        addressed = self._addressed_to_self(event)
         try:
-            await asyncio.sleep(seconds)
+            while True:
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    return
+                if not addressed and self._replies_after_trigger(event):
+                    return
+                await asyncio.sleep(min(_LISTEN_POLL_SEC, remaining))
         except asyncio.CancelledError:
             raise
 
     def _listening_pause_seconds(self, event: dict[str, Any]) -> float:
+        """Scatter reply timing from the line and who is present — not user settings."""
         if self._addressed_to_self(event):
-            low, high = _PAUSE_NAMED_SEC
-        else:
-            low, high = _PAUSE_AMBIENT_SEC
+            return random.uniform(0.12, 0.48)
+        text = str(event.get("text") or "").strip()
+        others = max(0, len(self._present) - 1)
+        low = 0.32 + 0.04 * min(others, 5)
+        span = 1.35 if _OPEN_ROOM_LINE_RE.search(text) else 0.72
+        if len(text) < 14 and not _OPEN_ROOM_LINE_RE.search(text):
+            span = min(span, 0.5)
+        high = low + span
+        if self._recently_spoke(event):
+            high = low + (high - low) * 0.6
         return random.uniform(low, high)
 
     def _remember(self, events: list[dict[str, Any]]) -> None:
@@ -592,15 +607,13 @@ class WorldInhabitant:
         recently_spoke = self._recently_spoke(event)
         peer_replies = self._replies_after_trigger(event)
         situation = self._room_context()
-        return (
-            f"{_DECISION_PREFACE}\n\n"
-            f"The line you heard:\n{self._trigger_line(event)}\n\n"
-            f"Your social read:\n"
-            f"Named you: {'yes' if named else 'no'}\n"
-            f"You were just speaking: {'yes' if recently_spoke else 'no'}\n"
-            f"{self._format_peer_replies(peer_replies)}\n\n"
-            f"Recent room (timeline):\n{situation}"
-        )
+        parts = [_DECISION_PREFACE, "", self._trigger_line(event)]
+        if named:
+            parts.extend(["", "They @ you or used your name."])
+        elif recently_spoke:
+            parts.extend(["", "You were speaking in this thread a moment ago."])
+        parts.extend(["", self._format_peer_replies(peer_replies), "", situation])
+        return "\n".join(parts)
 
     @staticmethod
     def _format_peer_replies(replies: list[tuple[str, str]]) -> str:

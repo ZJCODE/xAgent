@@ -111,12 +111,12 @@ class WorldInhabitantTests(unittest.IsolatedAsyncioTestCase):
         event = {"kind": "utterance", "actor_id": "alice", "seq": 5, "text": "有人吗"}
         inhabitant._recent = [event]
         ctx = inhabitant._participation_decision_context(event)
-        self.assertIn("The line you heard:", ctx)
         self.assertIn("爱丽丝: 有人吗", ctx)
-        self.assertIn("Recent room (timeline):", ctx)
-        trigger_idx = ctx.index("The line you heard:")
-        room_idx = ctx.index("Recent room (timeline):")
-        self.assertLess(trigger_idx, room_idx)
+        self.assertIn("beat is still open", ctx)
+        self.assertNotIn("Named you:", ctx)
+        event_named = {**event, "text": "@agent1 有人吗"}
+        ctx_named = inhabitant._participation_decision_context(event_named)
+        self.assertIn("@ you or used your name", ctx_named)
 
     def test_replies_after_trigger_lists_peer_lines(self):
         inhabitant = WorldInhabitant(self.agent, member_id="agent2", display_name="二号")
@@ -131,6 +131,26 @@ class WorldInhabitantTests(unittest.IsolatedAsyncioTestCase):
         formatted = inhabitant._format_peer_replies(replies)
         self.assertIn("一号", formatted)
         self.assertIn("hello back", formatted)
+
+    async def test_listening_pause_stops_when_peer_answered(self):
+        inhabitant = WorldInhabitant(self.agent, member_id="agent1", display_name="一号")
+        trigger = {"kind": "utterance", "actor_id": "human", "seq": 1, "text": "anyone?"}
+        inhabitant._recent = [trigger]
+        inhabitant._names["agent2"] = "二号"
+
+        async def add_peer_line() -> None:
+            await asyncio.sleep(0.08)
+            inhabitant._recent.append(
+                {"kind": "utterance", "actor_id": "agent2", "seq": 2, "text": "here"},
+            )
+
+        with patch.object(inhabitant, "_listening_pause_seconds", return_value=3.0):
+            started = asyncio.get_running_loop().time()
+            peer = asyncio.create_task(add_peer_line())
+            await inhabitant._listening_pause(trigger)
+            await peer
+            elapsed = asyncio.get_running_loop().time() - started
+        self.assertLess(elapsed, 1.0)
 
     async def test_hears_utterance_and_speaks(self):
         inhabitant = WorldInhabitant(self.agent, member_id="agent1", display_name="一号")
@@ -181,7 +201,7 @@ class WorldInhabitantTests(unittest.IsolatedAsyncioTestCase):
                 await inhabitant.leave()
 
         decision_context = str(self.agent.decisions[0].get("context") or "")
-        self.assertIn("The line you heard:", decision_context)
+        self.assertIn("有人吗", decision_context)
         chat = self.agent.chats[0]
         room_block = _room_context_text(chat.get("room_context"))
         self.assertEqual(chat["user_message"], "有人吗")
@@ -403,15 +423,11 @@ class WorldAddressTests(unittest.TestCase):
 
     def test_listening_pause_shorter_when_named(self):
         inhabitant = WorldInhabitant(StubAgent(), member_id="agent2", display_name="二号")
-        ambient = [
-            inhabitant._listening_pause_seconds({"text": "anyone here?"})
-            for _ in range(30)
-        ]
-        named = [
-            inhabitant._listening_pause_seconds({"text": "@agent2 hi"})
-            for _ in range(30)
-        ]
-        self.assertLess(max(named), min(ambient))
+        inhabitant._present = {"human": "Human", "agent2": "二号", "a": "A", "b": "B"}
+        with patch("xagent.integrations.world.inhabitant.random.uniform", side_effect=lambda lo, hi: hi):
+            named_hi = inhabitant._listening_pause_seconds({"text": "@agent2 hi"})
+            ambient_hi = inhabitant._listening_pause_seconds({"text": "anyone here?"})
+        self.assertLess(named_hi, ambient_hi)
 
     def test_only_mentions_and_at_names_count_as_self(self):
         self.assertTrue(self.inhabitant._addressed_to_self({"text": "@aaac are you there"}))
