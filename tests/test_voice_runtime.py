@@ -712,3 +712,50 @@ class VoiceRuntimeTests(unittest.TestCase):
         self.assertEqual(resolve.call_args.kwargs["output_sample_rate"], 24000)
         microphone.assert_called_once()
         player.assert_called_once()
+
+    def test_factory_settles_profile_and_speech_before_the_adapters_exist(self):
+        selection = SimpleNamespace(
+            device_index=1,
+            device_name="AirPods Pro",
+            stream_sample_rate=16000,
+            stream_channels=1,
+        )
+        audio_profile = SimpleNamespace(
+            input_selection=selection,
+            output_selection=selection,
+            topology=AudioTopology(
+                near_field=True, echo_managed=True, reason="device name contains 'airpod'"
+            ),
+        )
+        config = VoiceChannelConfig.from_dict({"api_key": "key"})
+        agent = FakeAgent()
+        agent.voice = "Ava"
+        seen: dict[str, object] = {}
+
+        def _adapters(cfg, **kwargs):
+            del kwargs
+            seen["profile"] = cfg.profile
+            seen["diarization"] = cfg.enable_diarization
+            seen["voice"] = cfg.voice
+            seen["speed"] = cfg.speed
+            return object(), object()
+
+        with patch(
+            "xagent.interfaces.voice.factory.create_soniox_adapters", side_effect=_adapters
+        ), patch(
+            "xagent.interfaces.voice.factory.resolve_audio_io_profile", return_value=audio_profile
+        ), patch("xagent.interfaces.voice.factory.SoundDeviceMicrophone"), patch(
+            "xagent.interfaces.voice.factory.SoundDevicePlayer"
+        ):
+            create_local_voice_runtime(
+                agent=agent,
+                config=config,
+                options=VoiceRuntimeOptions(),
+                speed_override=1.1,
+            )
+
+        self.assertEqual(
+            seen,
+            {"profile": "headset", "diarization": False, "voice": "Ava", "speed": 1.1},
+        )
+        self.assertTrue(config.enable_interruptions)

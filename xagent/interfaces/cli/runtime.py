@@ -168,6 +168,16 @@ def _channel_command(channel: str, args: argparse.Namespace) -> list[str]:
         output_device = getattr(args, "output_device", None)
         if output_device is not None:
             command.extend(["--output-device", str(output_device)])
+        for flag, attr in (
+            ("--profile", "voice_profile"),
+            ("--interruptions", "interruptions"),
+        ):
+            value = getattr(args, attr, None)
+            if value not in (None, "auto"):
+                command.extend([flag, str(value)])
+        speed = getattr(args, "speech_speed", None)
+        if speed is not None:
+            command.extend(["--speed", str(speed)])
     return command
 
 
