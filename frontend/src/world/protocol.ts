@@ -146,13 +146,16 @@ export const MEMBER_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 export const MEMBER_ID_RULE =
   "Handle must be 1-64 characters of letters, digits, dots, hyphens, or underscores, starting with a letter or digit.";
 export const MAX_DISPLAY_NAME_LENGTH = 64;
+export const DISPLAY_NAME_RE = /^[A-Za-z][A-Za-z0-9 .'_-]{0,63}$/;
+export const DISPLAY_NAME_RULE =
+  "Use an English name: letters, numbers, spaces, hyphens, or dots, starting with a letter.";
 
 export type PersonIdentity = {
   member_id: string;
   display_name: string;
 };
 
-/** A wire-safe handle derived from a display name; random when the name has no ASCII letters. */
+/** A wire-safe handle derived from an English display name. */
 export function suggestMemberId(displayName: string): string {
   const ascii = String(displayName || "")
     .normalize("NFKD")
@@ -162,8 +165,35 @@ export function suggestMemberId(displayName: string): string {
     .replace(/[-._]+$/, "")
     .toLowerCase()
     .slice(0, 64);
-  if (ascii && MEMBER_ID_RE.test(ascii)) return ascii;
-  return `p-${Math.random().toString(36).slice(2, 8)}`;
+  return ascii && MEMBER_ID_RE.test(ascii) ? ascii : "";
+}
+
+function memberIdUsable(memberId: string, taken: Set<string>): boolean {
+  return Boolean(memberId) && MEMBER_ID_RE.test(memberId) && memberId !== "world" && !taken.has(memberId);
+}
+
+/** Pick a protocol id from an English name. Keeps `previous` when it still matches this name. */
+export function allocateMemberId(
+  displayName: string,
+  taken: Set<string> = new Set(),
+  previous?: string,
+): string {
+  const suggested = suggestMemberId(displayName);
+  if (
+    previous &&
+    suggested &&
+    (previous === suggested || previous.startsWith(`${suggested}-`)) &&
+    memberIdUsable(previous, taken)
+  ) {
+    return previous;
+  }
+  if (memberIdUsable(suggested, taken)) return suggested;
+  const stem = (suggested || "p").replace(/-+$/, "").slice(0, 56) || "p";
+  for (let n = 2; n < 100; n += 1) {
+    const next = `${stem}-${n}`;
+    if (memberIdUsable(next, taken)) return next;
+  }
+  return `${stem}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 export function validateMemberId(memberId: string, taken: Set<string> = new Set()): string {
@@ -179,6 +209,7 @@ export function validateDisplayName(name: string): string {
   const value = name.trim();
   if (!value) return "Name is required";
   if (value.length > MAX_DISPLAY_NAME_LENGTH) return `Name must be at most ${MAX_DISPLAY_NAME_LENGTH} characters`;
+  if (!DISPLAY_NAME_RE.test(value)) return DISPLAY_NAME_RULE;
   return "";
 }
 

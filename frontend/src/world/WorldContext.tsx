@@ -312,7 +312,7 @@ export function WorldProvider({ children }: { children: ReactNode }) {
           statusKind: "bad",
           identityDialogOpen: true,
           identityPrompt:
-            "This handle is already present from another connection. Choose a different handle, or leave from the other place.",
+            "This name is already in the room from another connection. Leave there first, or enter again to join as a new presence.",
           gateError: message,
         }));
         return;

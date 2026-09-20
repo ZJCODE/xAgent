@@ -83,11 +83,10 @@ export function WorldSidebar() {
               type="button"
               className="world-identity-edit"
               onClick={openIdentityDialog}
-              title="Edit your name and handle"
+              title="Edit your name"
             >
               <span className="world-identity-edit-label">
                 <strong>{identity.display_name}</strong>
-                <span className="world-identity-handle">{identity.member_id}</span>
               </span>
               <Pencil size={14} className="world-identity-edit-icon" aria-hidden />
             </button>
@@ -96,7 +95,7 @@ export function WorldSidebar() {
               type="button"
               className="world-identity-edit is-placeholder"
               onClick={openIdentityDialog}
-              title="Set your name and handle"
+              title="Set your name"
             >
               <span className="world-identity-edit-label">Choose a name…</span>
               <Pencil size={14} className="world-identity-edit-icon" aria-hidden />

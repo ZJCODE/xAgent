@@ -1,13 +1,7 @@
 import { X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Button, IconButton } from "../components/ui";
-import {
-  MEMBER_ID_RULE,
-  suggestMemberId,
-  validateDisplayName,
-  validateMemberId,
-  type PersonIdentity,
-} from "./protocol";
+import { allocateMemberId, validateDisplayName, type PersonIdentity } from "./protocol";
 import { useWorld } from "./WorldContext";
 
 export function PersonIdentityDialog() {
@@ -21,31 +15,20 @@ export function PersonIdentityDialog() {
   } = useWorld();
   const taken = useMemo(() => new Set(neighbors.map((agent) => agent.name)), [neighbors]);
   const [displayName, setDisplayName] = useState("");
-  const [memberId, setMemberId] = useState("");
-  const [memberIdTouched, setMemberIdTouched] = useState(false);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const nameRef = useRef<HTMLInputElement>(null);
+  const nameTaken = identityPrompt.toLowerCase().includes("already");
 
   useEffect(() => {
     if (!identityDialogOpen) return;
     setError("");
-    setMemberIdTouched(false);
     setDisplayName(identity?.display_name || "");
-    setMemberId(identity?.member_id || "");
     const timer = window.setTimeout(() => nameRef.current?.focus(), 0);
     return () => window.clearTimeout(timer);
   }, [identity, identityDialogOpen]);
 
   if (!identityDialogOpen) return null;
-
-  const onDisplayNameChange = (value: string) => {
-    setDisplayName(value);
-    setError("");
-    if (!memberIdTouched) {
-      setMemberId(suggestMemberId(value));
-    }
-  };
 
   const submit = async () => {
     const nameErr = validateDisplayName(displayName);
@@ -53,14 +36,14 @@ export function PersonIdentityDialog() {
       setError(nameErr);
       return;
     }
-    const handle = memberId.trim() || suggestMemberId(displayName);
-    const idErr = validateMemberId(handle, taken);
-    if (idErr) {
-      setError(idErr);
-      return;
-    }
+    const reserved = new Set(taken);
+    if (nameTaken && identity?.member_id) reserved.add(identity.member_id);
     const next: PersonIdentity = {
-      member_id: handle,
+      member_id: allocateMemberId(
+        displayName,
+        reserved,
+        nameTaken ? undefined : identity?.member_id,
+      ),
       display_name: displayName.trim(),
     };
     setSaving(true);
@@ -85,7 +68,7 @@ export function PersonIdentityDialog() {
             <div>
               <h3 id="person-identity-title">Who are you?</h3>
               <p className="wizard-subtitle">
-                Your name is how others see you in the room. The handle is a stable id across reloads.
+                Your English name is how others see you in the room. This browser remembers it.
               </p>
             </div>
             <IconButton
@@ -109,31 +92,19 @@ export function PersonIdentityDialog() {
           {identityPrompt ? <p className="world-hint">{identityPrompt}</p> : null}
           {error ? <div className="error-strip">{error}</div> : null}
           <label className="world-field">
-            <span>Display name</span>
+            <span>Name</span>
             <input
               ref={nameRef}
               className="world-input"
               value={displayName}
               autoComplete="nickname"
+              autoCapitalize="words"
               spellCheck={false}
+              lang="en"
               placeholder="Alice"
               disabled={saving}
-              onChange={(event) => onDisplayNameChange(event.target.value)}
-            />
-          </label>
-          <label className="world-field">
-            <span>Handle (member id)</span>
-            <small>{MEMBER_ID_RULE}</small>
-            <input
-              className="world-input"
-              value={memberId}
-              autoComplete="off"
-              spellCheck={false}
-              placeholder="alice"
-              disabled={saving}
               onChange={(event) => {
-                setMemberIdTouched(true);
-                setMemberId(event.target.value);
+                setDisplayName(event.target.value);
                 setError("");
               }}
             />

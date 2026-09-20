@@ -125,19 +125,6 @@
   font-weight: 640;
 }
 
-.world-identity-handle {
-  flex: 0 0 auto;
-  color: var(--text-muted);
-  font-size: 12px;
-}
-
-.world-identity-handle::before {
-  content: "·";
-  margin-right: 6px;
-  color: var(--text-muted);
-  opacity: 0.65;
-}
-
 .world-identity-edit-icon {
   flex: 0 0 auto;
   opacity: 0.45;
