@@ -737,6 +737,7 @@ class SoundDevicePlayer:
         device_name: str = "default",
         stream_sample_rate: int | None = None,
         stream_channels: int | None = None,
+        keep_warm: bool = False,
     ) -> None:
         self.sample_rate = int(sample_rate)
         self.channels = int(channels)
@@ -745,15 +746,76 @@ class SoundDevicePlayer:
         self.device_name = device_name
         self.stream_sample_rate = int(stream_sample_rate or sample_rate)
         self.stream_channels = int(stream_channels or channels)
+        self.keep_warm = bool(keep_warm)
+        self._stream_lock = threading.Lock()
+        self._stream: Any | None = None
+        self._converter: _PCMOutputConverter | None = None
+
+    def close(self) -> None:
+        with self._stream_lock:
+            stream = self._stream
+            self._stream = None
+            self._converter = None
+        if stream is not None:
+            try:
+                stream.stop()
+                stream.close()
+            except Exception:
+                pass
+
+    def _output_converter(self) -> _PCMOutputConverter:
+        if self._converter is None:
+            self._converter = _PCMOutputConverter(
+                source_channels=self.channels,
+                source_rate=self.sample_rate,
+                target_channels=self.stream_channels,
+                target_rate=self.stream_sample_rate,
+            )
+        return self._converter
+
+    def _ensure_stream(self, sd: Any) -> Any:
+        with self._stream_lock:
+            if self._stream is not None:
+                return self._stream
+            logger.info(
+                "Opening warm speaker stream: device=%s stream=%sch@%sHz source=%sch@%sHz",
+                self.device_name,
+                self.stream_channels,
+                self.stream_sample_rate,
+                self.channels,
+                self.sample_rate,
+            )
+            self._stream = sd.RawOutputStream(
+                device=self.device_index,
+                samplerate=self.stream_sample_rate,
+                channels=self.stream_channels,
+                dtype=self.dtype,
+            )
+            self._stream.start()
+            return self._stream
 
     def play_chunks(self, chunks: Iterator[bytes], *, stop_event: threading.Event) -> None:
         sd = _import_sounddevice()
-        converter = _PCMOutputConverter(
-            source_channels=self.channels,
-            source_rate=self.sample_rate,
-            target_channels=self.stream_channels,
-            target_rate=self.stream_sample_rate,
-        )
+        converter = self._output_converter()
+        if self.keep_warm:
+            stream = self._ensure_stream(sd)
+            for chunk in chunks:
+                if stop_event.is_set():
+                    try:
+                        stream.abort()
+                    except Exception:
+                        pass
+                    break
+                if chunk:
+                    stream.write(converter.convert(chunk))
+                    if stop_event.is_set():
+                        try:
+                            stream.abort()
+                        except Exception:
+                            pass
+                        break
+            return
+
         logger.info(
             "Opening speaker stream: device=%s stream=%sch@%sHz source=%sch@%sHz",
             self.device_name,

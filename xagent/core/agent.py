@@ -564,6 +564,7 @@ class Agent:
         inbox_kind: Optional[Union[str, InboxKind]] = None,
         sender_name: str = "",
         extra_message_metadata: Optional[Dict[str, Any]] = None,
+        max_agent_loops: Optional[int] = None,
     ) -> AsyncGenerator[dict, None]:
         """Emit one agent turn as structured message/tool events.
 
@@ -606,6 +607,7 @@ class Agent:
                 inbox_item=inbox_item,
                 user_metadata=user_metadata,
                 stream=stream,
+                max_agent_loops=max_agent_loops,
             ):
                 yield event
         finally:
@@ -617,6 +619,7 @@ class Agent:
         inbox_item: InboxItem,
         user_metadata: Dict[str, Any],
         stream: bool,
+        max_agent_loops: Optional[int] = None,
     ) -> AsyncGenerator[dict, None]:
         """Run one claimed waking turn. Caller must hold the inbox turn lock."""
         user_message = inbox_item.content
@@ -680,7 +683,8 @@ class Agent:
                     already_visible=MessageHandler.count_current_task_images(iteration_messages),
                 )
 
-            for iteration_index in range(self.max_agent_loops):
+            loop_cap = max_agent_loops if max_agent_loops is not None else self.max_agent_loops
+            for iteration_index in range(loop_cap):
                 if self.inbox.abort_requested():
                     yield self._aborted_event()
                     yield {"type": "done"}
@@ -861,7 +865,7 @@ class Agent:
 
             payload = build_public_error(
                 code=ERROR_TURN_EXHAUSTED,
-                cause=f"Failed to generate response after {self.max_agent_loops} attempts",
+                cause=f"Failed to generate response after {loop_cap} attempts",
             )
             turn_obs.set_error(
                 error_id=payload["error_id"],

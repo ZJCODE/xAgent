@@ -97,6 +97,7 @@ def create_local_voice_runtime(
         device_name=audio_profile.output_selection.device_name,
         stream_sample_rate=audio_profile.output_selection.stream_sample_rate,
         stream_channels=audio_profile.output_selection.stream_channels,
+        keep_warm=config.performance.warm_output_device,
     )
     wake_terms = normalize_terms(list(config.attention.wake_terms) + extra_terms)
     attention_gate = VoiceAttentionGate(

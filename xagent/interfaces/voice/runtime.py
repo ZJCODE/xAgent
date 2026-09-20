@@ -24,6 +24,7 @@ from xagent.core.runtime import (
     upsert_contact,
 )
 
+from .ack import InstantAckConfig, InstantAckSpeaker
 from .aggregator import iter_aggregated_utterances
 from .attention import VoiceAttentionConfig, VoiceAttentionGate
 from .barge_in import BargeInConfig, BargeInEvaluator
@@ -40,6 +41,7 @@ from .speech_text import (
     sanitize_spoken_text,
 )
 from .notices import VoiceNoticeCache, VoiceNoticeCatalog, VoiceNoticeSpeaker
+from .preemptive import PreemptiveGenerationConfig, PreemptiveGenerationController
 from .spoken_ledger import SpokenLedger
 from .turn_metrics import VoiceTurnMetrics, VoiceTurnMetricsWriter
 
@@ -202,6 +204,32 @@ class VoiceRuntime:
         self._speaker_bindings = speaker_bindings or SpeakerBindingStore(bindings_path)
         self._stt_lifecycle = stt_lifecycle
         self._proactive_limiter = ProactiveSpeechLimiter(self.config.proactive.max_per_hour)
+        performance = self.config.performance
+        self._instant_ack = InstantAckSpeaker(
+            InstantAckConfig(
+                enabled=performance.instant_ack,
+                delay_ms=performance.ack_delay_ms,
+                cooldown_seconds=performance.ack_cooldown_seconds,
+            )
+        )
+        abort_turn = getattr(agent, "abort", None)
+        self._preemptive = PreemptiveGenerationController(
+            PreemptiveGenerationConfig(
+                enabled=performance.preemptive_generation,
+                min_chars=performance.preemptive_min_chars,
+            ),
+            on_abort=abort_turn if callable(abort_turn) else None,
+        )
+        self._preemptive.configure(
+            self.agent.chat_events,
+            stream=self.options.stream,
+            channel="voice",
+            inbox_kind="user_turn",
+            channel_instructions=VOICE_CHANNEL_INSTRUCTIONS,
+            room_name=self.config.room_name,
+            max_agent_loops=performance.max_agent_loops,
+        )
+        self._last_preemptive_partial = ""
 
     async def run_forever(self) -> None:
         """Run until stopped or a non-recoverable STT error is raised."""
@@ -225,6 +253,7 @@ class VoiceRuntime:
             utterances = raw_utterances
         self._utterance_queue = asyncio.Queue()
         utterance_worker = asyncio.create_task(self._utterance_worker(utterances))
+        preemptive_worker = asyncio.create_task(self._preemptive_partial_loop())
         try:
             if self.task_scheduler is not None:
                 await self.task_scheduler.start()
@@ -260,10 +289,15 @@ class VoiceRuntime:
             close = getattr(self.synthesizer, "close", None)
             if callable(close):
                 close()
+            close_player = getattr(self.player, "close", None)
+            if callable(close_player):
+                close_player()
+            await self._preemptive.cancel()
             if self.task_scheduler is not None:
                 await self.task_scheduler.stop()
+            preemptive_worker.cancel()
             utterance_worker.cancel()
-            await asyncio.gather(utterance_worker, return_exceptions=True)
+            await asyncio.gather(preemptive_worker, utterance_worker, return_exceptions=True)
 
     async def _utterance_worker(self, utterances: Iterable[VoiceUtterance]) -> None:
         assert self._utterance_queue is not None
@@ -328,6 +362,10 @@ class VoiceRuntime:
                 steer_task = asyncio.create_task(self._steer_during_think(transcript, steer_event))
             still_working = asyncio.create_task(self._still_working_guard(timing))
             interrupted = {"value": False}
+            adopted_events = await self._preemptive.adopt_events(transcript)
+            if adopted_events is None:
+                await self._preemptive.cancel()
+            self._last_preemptive_partial = ""
             try:
                 await self._speak(
                     self._agent_text_chunks(
@@ -335,6 +373,7 @@ class VoiceRuntime:
                         reply_buffer=reply_buffer,
                         user_id=resolved_user,
                         voice_metadata=voice_metadata,
+                        event_source=adopted_events,
                     ),
                     speak_language=speak_language,
                     reply_buffer=reply_buffer,
@@ -438,6 +477,70 @@ class VoiceRuntime:
                 evaluator.reset()
             await asyncio.sleep(0.05)
 
+    async def _preemptive_partial_loop(self) -> None:
+        relay = getattr(self.recognizer, "partial_relay", None)
+        if relay is None or not self.config.performance.preemptive_generation:
+            return
+        try:
+            while not self.stop_event.is_set():
+                if self._floor.state != FloorState.IDLE:
+                    self._last_preemptive_partial = ""
+                    await self._preemptive.cancel()
+                else:
+                    partial = relay.snapshot().strip()
+                    if partial and partial != self._last_preemptive_partial:
+                        self._last_preemptive_partial = partial
+                        await self._preemptive.note_partial(partial)
+                await asyncio.sleep(0.1)
+        except asyncio.CancelledError:
+            return
+
+    async def _maybe_play_instant_ack(
+        self,
+        first_text: asyncio.Future[None],
+        speak_language: dict[str, str],
+        timing: _TurnTiming | None,
+    ) -> None:
+        performance = self.config.performance
+        if not performance.instant_ack or performance.ack_delay_ms <= 0:
+            return
+        if not self._instant_ack.should_play():
+            return
+        try:
+            await asyncio.sleep(performance.ack_delay_ms / 1000.0)
+            if first_text.done():
+                return
+            phrase = self._instant_ack.pick_phrase()
+            stop = threading.Event()
+            await asyncio.to_thread(
+                self._play_ack_phrase,
+                phrase,
+                speak_language["value"],
+                stop,
+                timing,
+            )
+        except asyncio.CancelledError:
+            return
+
+    def _play_ack_phrase(
+        self,
+        phrase: str,
+        language: str,
+        stop_event: threading.Event,
+        timing: _TurnTiming | None,
+    ) -> None:
+        audio = self.synthesizer.synthesize_chunks([phrase], language=language, stop_event=stop_event)
+
+        def timed_audio() -> Iterator[bytes]:
+            first = True
+            for chunk in audio:
+                if first and chunk and timing is not None:
+                    first = False
+                    timing.mark_first_audio(self.logger)
+                yield chunk
+
+        self.player.play_chunks(timed_audio(), stop_event=stop_event)
+
     async def _annotate_spoken_metadata(self, full_text: str, spoken_ledger: SpokenLedger) -> None:
         if not full_text:
             return
@@ -480,6 +583,9 @@ class VoiceRuntime:
             first_text = asyncio.get_running_loop().create_future()
             playback_task: asyncio.Task[None] | None = None
             barge_task: asyncio.Task[None] | None = None
+            ack_task = asyncio.create_task(
+                self._maybe_play_instant_ack(first_text, speak_language, timing)
+            )
             producer_task = asyncio.create_task(
                 self._feed_text_stream(
                     text_chunks,
@@ -552,6 +658,8 @@ class VoiceRuntime:
                         pass
                 raise
             finally:
+                ack_task.cancel()
+                await asyncio.gather(ack_task, return_exceptions=True)
                 if barge_task is not None:
                     barge_task.cancel()
                     await asyncio.gather(barge_task, return_exceptions=True)
@@ -803,6 +911,7 @@ class VoiceRuntime:
         reply_buffer: list[str] | None = None,
         user_id: str | None = None,
         voice_metadata: dict[str, Any] | None = None,
+        event_source: AsyncIterator[dict[str, Any]] | None = None,
     ) -> AsyncIterator[str]:
         resolved_user = user_id or self.options.user_id
         if self._contacts_file is not None:
@@ -821,7 +930,10 @@ class VoiceRuntime:
         message_delta_seen: set[str] = set()
         sanitizer = StreamingTTSSanitizer()
         raw_reply_parts: list[str] = []
-        with scheduled_delivery_context(self._delivery_context()):
+        tool_progress_spoken = False
+        performance = self.config.performance
+
+        async def _live_events() -> AsyncIterator[dict[str, Any]]:
             extra_metadata = dict(voice_metadata or {})
             sender_name = str(extra_metadata.pop("sender_name", "") or "")
             async for event in self.agent.chat_events(
@@ -834,9 +946,19 @@ class VoiceRuntime:
                 room_name=self.config.room_name,
                 sender_name=sender_name,
                 extra_message_metadata=extra_metadata or None,
+                max_agent_loops=performance.max_agent_loops,
             ):
+                yield event
+
+        with scheduled_delivery_context(self._delivery_context()):
+            source = event_source if event_source is not None else _live_events()
+            async for event in source:
                 event_type = event.get("type")
                 message_id = str(event.get("message_id") or uuid.uuid4().hex)
+                if event_type == "tool_call" and performance.speak_tool_progress and not tool_progress_spoken:
+                    tool_progress_spoken = True
+                    for spoken in sanitizer.feed("One moment."):
+                        yield spoken
                 if event_type == "message_delta":
                     delta = str(event.get("delta") or "")
                     if not delta:

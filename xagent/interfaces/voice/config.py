@@ -130,6 +130,19 @@ class VoicePresenceConfigModel(BaseModel):
     recent_speech_hours: float = Field(default=6.0, ge=0.0, le=168.0)
 
 
+class VoicePerformanceConfigModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    preemptive_generation: bool = True
+    preemptive_min_chars: int = Field(default=8, ge=3, le=500)
+    instant_ack: bool = True
+    ack_delay_ms: float = Field(default=400.0, ge=0.0, le=5_000.0)
+    ack_cooldown_seconds: float = Field(default=45.0, ge=0.0, le=600.0)
+    warm_output_device: bool = True
+    max_agent_loops: int = Field(default=12, ge=1, le=50)
+    speak_tool_progress: bool = True
+
+
 class VoiceProactiveConfigModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -196,6 +209,7 @@ class VoiceChannelConfig(BaseModel):
     attention: VoiceAttentionConfigModel = Field(default_factory=VoiceAttentionConfigModel)
     presence: VoicePresenceConfigModel = Field(default_factory=VoicePresenceConfigModel)
     proactive: VoiceProactiveConfigModel = Field(default_factory=VoiceProactiveConfigModel)
+    performance: VoicePerformanceConfigModel = Field(default_factory=VoicePerformanceConfigModel)
     context: SonioxSTTContextConfig = Field(default_factory=SonioxSTTContextConfig)
     audio: VoiceAudioConfig = Field(default_factory=VoiceAudioConfig)
 

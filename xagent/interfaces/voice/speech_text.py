@@ -15,7 +15,10 @@ VOICE_CHANNEL_INSTRUCTIONS = (
     "- Speak numbers, dates, times, and units the way a person says them.\n"
     "- Do not announce structure (for example \"three things:\"); the listener cannot see numbering.\n"
     "- End with a question only when you actually want the floor back.\n"
-    "- Never mention the channel, the microphone, or that you cannot show files."
+    "- Never mention the channel, the microphone, or that you cannot show files.\n"
+    "- When a tool call will take more than a moment, say one short spoken line of progress "
+    "before going quiet (for example that you are checking), then give the answer when ready.\n"
+    "- Prefer a direct conversational answer; avoid long multi-step reasoning on voice unless asked."
 )
 
 _STREAM_HOLD_CHARS = 8
