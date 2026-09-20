@@ -276,6 +276,7 @@ class SonioxRealtimeTTS:
             audio_format=SONIOX_AUDIO_FORMAT,
             sample_rate=SONIOX_TTS_SAMPLE_RATE,
             speed=self.config.speed,
+            return_timestamps=self.config.return_timestamps,
         )
         connection = self._client.realtime.tts.connect(config=sdk_config)
         send_errors: queue.Queue[BaseException] = queue.Queue()

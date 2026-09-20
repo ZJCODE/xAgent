@@ -17,7 +17,7 @@ SONIOX_KEY_PLACEHOLDER = "your_soniox_api_key_here"
 SONIOX_STT_MODEL = "stt-rt-v5"
 SONIOX_STT_SAMPLE_RATE = 16_000
 SONIOX_STT_CHANNELS = 1
-SONIOX_TTS_MODEL = "tts-rt-v1"
+SONIOX_TTS_MODEL = "tts-rt-v2"
 SONIOX_TTS_SAMPLE_RATE = 24_000
 SONIOX_TTS_CHANNELS = 1
 SONIOX_AUDIO_FORMAT = "pcm_s16le"
@@ -37,9 +37,6 @@ _LEGACY_VOICE_KEYS = {
     "stt",
     "tts",
     "websocket_base_url",
-    "enable_interruptions",
-    "wake",
-    "return_timestamps",
 }
 
 VOICE_CONFIG_EXAMPLE = """channels:
@@ -142,6 +139,8 @@ class VoiceChannelConfig(BaseModel):
     language_hints: list[str] = Field(default_factory=lambda: ["zh", "en"])
     fallback_language: str = "zh"
     speed: float = Field(default=1.0, ge=0.7, le=1.3)
+    return_timestamps: bool = True
+    enable_interruptions: bool = False
     context: SonioxSTTContextConfig = Field(default_factory=SonioxSTTContextConfig)
     audio: VoiceAudioConfig = Field(default_factory=VoiceAudioConfig)
 
@@ -201,4 +200,5 @@ class VoiceChannelConfig(BaseModel):
         )
 
     def tts_language_for(self, stt_language: str | None) -> str:
+        """Deprecated: prefer reply-based ``ConversationLanguageTracker``."""
         return (stt_language or "").strip() or self.fallback_language

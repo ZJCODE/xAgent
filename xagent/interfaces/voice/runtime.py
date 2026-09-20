@@ -23,6 +23,13 @@ from xagent.core.runtime import (
 )
 
 from .config import VoiceChannelConfig
+from .speech_text import (
+    ConversationLanguageTracker,
+    StreamingTTSSanitizer,
+    VOICE_CHANNEL_INSTRUCTIONS,
+    sanitize_spoken_text,
+)
+from .turn_metrics import VoiceTurnMetrics, VoiceTurnMetricsWriter
 
 _PLAYBACK_MICROPHONE_COOLDOWN_SECONDS = 0.5
 
@@ -42,6 +49,7 @@ class VoiceRuntimeOptions:
     user_id: str = "local_voice"
     stream: bool = True
     tasks_dir: Optional[Path | str] = None
+    metrics_path: Optional[Path | str] = None
 
 
 @dataclass
@@ -143,6 +151,14 @@ class VoiceRuntime:
         self.pause_event = threading.Event()
         self.stop_event = threading.Event()
         self._playback_lock = asyncio.Lock()
+        self._language_tracker = ConversationLanguageTracker(
+            fallback=self.config.fallback_language,
+            hints=list(self.config.language_hints),
+        )
+        metrics_path = self.options.metrics_path
+        if metrics_path is None and self.options.tasks_dir is not None:
+            metrics_path = Path(self.options.tasks_dir).parent / "voice_turn_metrics.jsonl"
+        self._metrics_writer = VoiceTurnMetricsWriter(metrics_path)
         self.task_scheduler: AsyncTaskScheduler | None = None
         self._contacts_file: Optional[Path] = None
         if self.options.tasks_dir is not None:
@@ -197,26 +213,49 @@ class VoiceRuntime:
         endpoint_at: float,
     ) -> None:
         timing = _TurnTiming(endpoint_at=endpoint_at)
+        metrics = VoiceTurnMetrics(
+            transcript=utterance.text.strip(),
+            tts_language=self._language_tracker.language_before_turn(),
+            endpoint_at=endpoint_at,
+        )
+        reply_buffer: list[str] = []
+        speak_language = {"value": self._language_tracker.language_before_turn()}
         try:
             await self._speak(
-                self._agent_text_chunks(utterance.text),
-                language=self.config.tts_language_for(utterance.language),
+                self._agent_text_chunks(utterance.text, reply_buffer=reply_buffer),
+                speak_language=speak_language,
+                reply_buffer=reply_buffer,
                 timing=timing,
+                metrics=metrics,
             )
+        except Exception as exc:
+            metrics.error_class = type(exc).__name__
+            raise
         finally:
+            metrics.turn_end_at = time.monotonic()
+            metrics.reply_char_count = sum(len(part) for part in reply_buffer)
+            metrics.tts_language = speak_language["value"]
+            self._metrics_writer.write(metrics)
             self.logger.info(
                 "Voice latency turn_total_ms=%.1f",
-                (time.monotonic() - endpoint_at) * 1000,
+                (metrics.turn_end_at - endpoint_at) * 1000,
             )
 
     async def _speak(
         self,
         text_chunks: AsyncIterator[str],
         *,
-        language: str,
+        language: str | None = None,
+        speak_language: dict[str, str] | None = None,
+        reply_buffer: list[str] | None = None,
         timing: _TurnTiming | None = None,
+        metrics: VoiceTurnMetrics | None = None,
     ) -> None:
         """Speak one stream while capture remains paused, then apply echo cooldown."""
+        if speak_language is None:
+            speak_language = {
+                "value": language or self._language_tracker.language_before_turn(),
+            }
         async with self._playback_lock:
             self.pause_event.set()
             text_queue = _TextChunkQueue()
@@ -224,7 +263,14 @@ class VoiceRuntime:
             first_text = asyncio.get_running_loop().create_future()
             playback_task: asyncio.Task[None] | None = None
             producer_task = asyncio.create_task(
-                self._feed_text_stream(text_chunks, text_queue, first_text, timing)
+                self._feed_text_stream(
+                    text_chunks,
+                    text_queue,
+                    first_text,
+                    timing,
+                    speak_language=speak_language,
+                    reply_buffer=reply_buffer,
+                )
             )
             failed = False
             try:
@@ -237,9 +283,10 @@ class VoiceRuntime:
                         asyncio.to_thread(
                             self._play_text_queue,
                             text_queue,
-                            language,
+                            speak_language,
                             playback_stop_event,
                             timing,
+                            metrics,
                         )
                     )
                     pipeline_done, _pipeline_pending = await asyncio.wait(
@@ -288,12 +335,19 @@ class VoiceRuntime:
         text_queue: "_TextChunkQueue",
         first_text: "asyncio.Future[None]",
         timing: _TurnTiming | None,
+        *,
+        speak_language: dict[str, str],
+        reply_buffer: list[str] | None,
     ) -> None:
         try:
             async for text in source:
                 if not text:
                     continue
                 if not first_text.done():
+                    if reply_buffer:
+                        speak_language["value"] = self._language_tracker.language_for_streaming(
+                            "".join(reply_buffer)
+                        )
                     if timing is not None:
                         timing.mark_first_text(self.logger)
                     first_text.set_result(None)
@@ -304,10 +358,12 @@ class VoiceRuntime:
     def _play_text_queue(
         self,
         text_queue: "_TextChunkQueue",
-        language: str,
+        speak_language: dict[str, str],
         playback_stop_event: threading.Event,
         timing: _TurnTiming | None,
+        metrics: VoiceTurnMetrics | None,
     ) -> None:
+        language = speak_language["value"]
         audio_chunks = self.synthesizer.synthesize_chunks(
             text_queue,
             language=language,
@@ -321,6 +377,8 @@ class VoiceRuntime:
                     first = False
                     if timing is not None:
                         timing.mark_first_audio(self.logger)
+                if metrics is not None and chunk:
+                    metrics.playback_audio_bytes += len(chunk)
                 yield chunk
 
         self.player.play_chunks(timed_audio(), stop_event=playback_stop_event)
@@ -334,7 +392,12 @@ class VoiceRuntime:
         finally:
             self.pause_event.clear()
 
-    async def _agent_text_chunks(self, transcript: str) -> AsyncIterator[str]:
+    async def _agent_text_chunks(
+        self,
+        transcript: str,
+        *,
+        reply_buffer: list[str] | None = None,
+    ) -> AsyncIterator[str]:
         if self._contacts_file is not None:
             try:
                 upsert_contact(
@@ -349,6 +412,8 @@ class VoiceRuntime:
         self.output("Agent: ", end="")
         started = False
         message_delta_seen: set[str] = set()
+        sanitizer = StreamingTTSSanitizer()
+        raw_reply_parts: list[str] = []
         with scheduled_delivery_context(self._delivery_context()):
             async for event in self.agent.chat_events(
                 user_message=transcript,
@@ -356,6 +421,7 @@ class VoiceRuntime:
                 stream=self.options.stream,
                 channel="voice",
                 inbox_kind="user_turn",
+                channel_instructions=VOICE_CHANNEL_INSTRUCTIONS,
             ):
                 event_type = event.get("type")
                 message_id = str(event.get("message_id") or uuid.uuid4().hex)
@@ -364,20 +430,32 @@ class VoiceRuntime:
                     if not delta:
                         continue
                     message_delta_seen.add(message_id)
+                    raw_reply_parts.append(delta)
+                    if reply_buffer is not None:
+                        reply_buffer.append(delta)
                     self.output(delta, end="")
                     started = True
-                    yield delta
+                    for spoken in sanitizer.feed(delta):
+                        yield spoken
                 elif event_type == "message_done":
                     content = str(event.get("content") or "")
                     if content and message_id not in message_delta_seen:
+                        raw_reply_parts.append(content)
+                        if reply_buffer is not None:
+                            reply_buffer.append(content)
                         self.output(content, end="")
                         started = True
-                        yield content
+                        for spoken in sanitizer.feed(content):
+                            yield spoken
                 elif event_type == "error":
                     error = str(event.get("error") or "Agent processing error.")
                     if started:
                         self.output("")
                     raise RuntimeError(f"Agent error: {error}")
+        for spoken in sanitizer.flush():
+            yield spoken
+        if raw_reply_parts:
+            self._language_tracker.observe_reply("".join(raw_reply_parts))
         if started:
             self.output("")
 
@@ -409,9 +487,11 @@ class VoiceRuntime:
         if not text:
             raise ValueError("scheduled voice task produced no content")
         self.output(f"\nScheduled task: {task.title or task.task_type or 'Reminder'}")
+        spoken = sanitize_spoken_text(text)
+        self._language_tracker.observe_reply(spoken)
         await self._speak(
-            _single_text_stream(text),
-            language=self.config.tts_language_for(""),
+            _single_text_stream(spoken),
+            language=self._language_tracker.language_before_turn(),
         )
 
     async def deliver_subconscious_message(self, delivery: SubconsciousDelivery) -> None:
@@ -421,9 +501,11 @@ class VoiceRuntime:
         if not text:
             raise ValueError("subconscious voice delivery produced no content")
         self.output("\nSubconscious message")
+        spoken = sanitize_spoken_text(text)
+        self._language_tracker.observe_reply(spoken)
         await self._speak(
-            _single_text_stream(text),
-            language=self.config.tts_language_for(""),
+            _single_text_stream(spoken),
+            language=self._language_tracker.language_before_turn(),
         )
         message_handler = getattr(self.agent, "message_handler", None)
         store_model_reply = getattr(message_handler, "store_model_reply", None)
@@ -470,6 +552,7 @@ class VoiceRuntime:
                 stream=self.options.stream,
                 channel="voice",
                 inbox_kind="scheduled_turn",
+                channel_instructions=VOICE_CHANNEL_INSTRUCTIONS,
             ):
                 event_type = event.get("type")
                 message_id = str(event.get("message_id") or uuid.uuid4().hex)

@@ -168,6 +168,13 @@ class VoiceConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "language_hints"):
             VoiceChannelConfig.from_dict({"language_hints": [" "]})
 
+    def test_accepts_voice_interruption_and_timestamp_flags(self):
+        config = VoiceChannelConfig.from_dict(
+            {"api_key": "key", "return_timestamps": False, "enable_interruptions": True}
+        )
+        self.assertFalse(config.return_timestamps)
+        self.assertTrue(config.enable_interruptions)
+
     def test_rejects_legacy_nested_and_qwen_configuration_with_example(self):
         with self.assertRaisesRegex(ValueError, "Voice is now Soniox-only") as context:
             VoiceChannelConfig.from_dict(
@@ -425,7 +432,7 @@ class SonioxSDKAdapterTests(unittest.TestCase):
         sdk_config = client.realtime.tts.configs[0]
         self.assertEqual(sdk_config.model, SONIOX_TTS_MODEL)
         self.assertEqual(sdk_config.sample_rate, 24000)
-        self.assertIsNone(sdk_config.return_timestamps)
+        self.assertTrue(sdk_config.return_timestamps)
 
     def test_tts_cancels_when_stopped(self):
         stop_event = threading.Event()
@@ -479,7 +486,8 @@ class VoiceRuntimeTests(unittest.TestCase):
             asyncio.run(runtime.run_forever())
 
         self.assertEqual(agent.kwargs["user_message"], "你好")
-        self.assertEqual(synth.calls[0], {"language": "zh", "chunks": ["hello ", "there."]})
+        self.assertIn("voice channel", agent.kwargs["channel_instructions"].lower())
+        self.assertEqual(synth.calls[0], {"language": "en", "chunks": ["hello ", "there."]})
         self.assertEqual(player.played, [b"hello ", b"there."])
         self.assertTrue(player.pause_was_set)
         combined = "\n".join(logs.output)
@@ -495,7 +503,7 @@ class VoiceRuntimeTests(unittest.TestCase):
             synthesizer=synth,
         )
         asyncio.run(runtime.run_forever())
-        self.assertEqual(synth.calls[0]["language"], "zh")
+        self.assertEqual(synth.calls[0]["language"], "en")
 
     def test_agent_failure_releases_microphone_and_continues(self):
         agent = FailingFirstAgent()
