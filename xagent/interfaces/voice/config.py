@@ -15,6 +15,8 @@ from pydantic import (
     model_validator,
 )
 
+from .presence import VOICE_STT_IDLE_SHUTDOWN_SECONDS
+
 SONIOX_KEY_PLACEHOLDER = "your_soniox_api_key_here"
 SONIOX_STT_MODEL = "stt-rt-v5"
 SONIOX_STT_SAMPLE_RATE = 16_000
@@ -47,7 +49,6 @@ _VOICE_TOP_LEVEL_KEYS = frozenset(
         "names",
         "interruptions",
         "quiet_hours",
-        "idle_shutdown_minutes",
         "audio",
     }
 )
@@ -63,7 +64,6 @@ VOICE_CONFIG_EXAMPLE = """channels:
     names: []
     interruptions: false
     quiet_hours: "22:00-07:00"
-    idle_shutdown_minutes: 0
     audio:
       input: auto
       output: auto"""
@@ -133,7 +133,9 @@ class VoiceAttentionConfigModel(BaseModel):
 class VoicePresenceConfigModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    close_stt_after_idle_seconds: float = Field(default=0.0, ge=0.0, le=86_400.0)
+    close_stt_after_idle_seconds: float = Field(
+        default=VOICE_STT_IDLE_SHUTDOWN_SECONDS, ge=0.0, le=86_400.0
+    )
     wake_energy_rms: float = Field(default=450.0, ge=50.0, le=20_000.0)
     recent_speech_hours: float = Field(default=6.0, ge=0.0, le=168.0)
 
@@ -206,7 +208,6 @@ class VoiceChannelConfig(BaseModel):
     names: list[str] = Field(default_factory=list)
     interruptions: bool = False
     quiet_hours: str = "22:00-07:00"
-    idle_shutdown_minutes: float = Field(default=0.0, ge=0.0, le=1_440.0)
     audio: VoiceAudioConfig = Field(default_factory=VoiceAudioConfig)
 
     @field_validator("api_key")
@@ -270,7 +271,6 @@ class VoiceChannelConfig(BaseModel):
             "names": list(self.names),
             "interruptions": self.interruptions,
             "quiet_hours": self.quiet_hours,
-            "idle_shutdown_minutes": int(self.idle_shutdown_minutes),
             "audio": {
                 "input": self.audio.input,
                 "output": self.audio.output,
@@ -340,7 +340,7 @@ class VoiceChannelConfig(BaseModel):
     @property
     def presence(self) -> VoicePresenceConfigModel:
         return VoicePresenceConfigModel(
-            close_stt_after_idle_seconds=self.idle_shutdown_minutes * 60.0,
+            close_stt_after_idle_seconds=VOICE_STT_IDLE_SHUTDOWN_SECONDS,
             wake_energy_rms=_PRESENCE_WAKE_RMS,
             recent_speech_hours=_PRESENCE_RECENT_SPEECH_HOURS,
         )

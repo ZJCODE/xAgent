@@ -26,9 +26,15 @@ def pcm16_rms(chunk: bytes) -> float:
         return mean_sq**0.5
 
 
+# The recognizer socket bills for as long as it is open and streams the room
+# while it does. Local energy reopens it, so there is no reason to hold it
+# through silence.
+VOICE_STT_IDLE_SHUTDOWN_SECONDS = 120.0
+
+
 @dataclass
 class VoicePresenceConfig:
-    close_stt_after_idle_seconds: float = 0.0
+    close_stt_after_idle_seconds: float = VOICE_STT_IDLE_SHUTDOWN_SECONDS
     wake_energy_rms: float = 450.0
     recent_speech_hours: float = 6.0
 
@@ -45,10 +51,6 @@ class SttLifecycleController:
         self._last_activity = time.monotonic()
         self._last_heard_endpoint = time.monotonic()
 
-    @property
-    def enabled(self) -> bool:
-        return self.config.close_stt_after_idle_seconds > 0
-
     def note_endpoint(self) -> None:
         now = time.monotonic()
         with self._lock:
@@ -58,7 +60,7 @@ class SttLifecycleController:
         self._wake.set()
 
     def observe_audio(self, chunk: bytes) -> None:
-        if not self.enabled or not chunk:
+        if not chunk:
             return
         if pcm16_rms(chunk) >= self.config.wake_energy_rms:
             now = time.monotonic()
@@ -68,7 +70,7 @@ class SttLifecycleController:
             self._wake.set()
 
     def should_close_session(self) -> bool:
-        if not self.enabled:
+        if self.config.close_stt_after_idle_seconds <= 0:
             return False
         with self._lock:
             idle_for = time.monotonic() - self._last_activity
