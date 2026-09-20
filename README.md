@@ -32,6 +32,30 @@ curl -fsSL https://raw.githubusercontent.com/ZJCODE/xagent/main/install.sh | bas
 pip install myxagent
 ```
 
+Feishu/Lark support needs an extra SDK that is large on slow links:
+
+```bash
+pip install 'myxagent[feishu]'
+```
+
+### Raspberry Pi
+
+Raspberry Pi OS often points pip at [piwheels](https://www.piwheels.org/). That index still lists old invalid `pytz` / `regex` wheels (harmless pip 25.3 deprecation warnings) and can download large packages such as `lark-oapi` very slowly.
+
+Use the official installer above (uv + PyPI), or force PyPI / a nearby mirror:
+
+```bash
+pip install myxagent -i https://pypi.org/simple
+# China:
+pip install myxagent -i https://pypi.tuna.tsinghua.edu.cn/simple
+```
+
+Skip the Feishu SDK on a slow link:
+
+```bash
+XAGENT_EXTRAS= curl -fsSL https://raw.githubusercontent.com/ZJCODE/xagent/main/install.sh | bash
+```
+
 ## Getting Started
 
 After installation, launch xAgent with:

@@ -32,7 +32,7 @@ official SDK already provides:
 ## Install
 
 ```bash
-pip install myxagent
+pip install 'myxagent[feishu]'
 ```
 
 Configure your Feishu bot

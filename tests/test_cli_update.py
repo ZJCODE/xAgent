@@ -83,7 +83,7 @@ class UpdateDetectionTests(unittest.TestCase):
                             installation = updater.detect_installation()
 
         self.assertEqual(installation.kind, updater.INSTALLATION_UV_TOOL)
-        self.assertEqual(installation.update_command, (str(uv), "tool", "upgrade", "myxagent"))
+        self.assertEqual(installation.update_command, (str(uv), "tool", "upgrade", "myxagent[feishu]"))
 
     def test_uv_installed_elsewhere_does_not_override_current_pip_environment(self):
         prefix = Path("/tmp/current-python")
@@ -108,7 +108,7 @@ class UpdateDetectionTests(unittest.TestCase):
         self.assertEqual(installation.kind, updater.INSTALLATION_PIP)
         self.assertEqual(
             installation.update_command,
-            (str(prefix / "bin/python"), "-m", "pip", "install", "--upgrade", "myxagent"),
+            (str(prefix / "bin/python"), "-m", "pip", "install", "--upgrade", "myxagent[feishu]"),
         )
 
     def test_pip_user_install_preserves_user_scope(self):
@@ -159,7 +159,7 @@ class UpdateCommandTests(unittest.TestCase):
             version="1.2.3",
             package_root=Path("/tmp/python/site-packages"),
             python=Path("/tmp/python/bin/python"),
-            update_command=("/tmp/python/bin/python", "-m", "pip", "install", "--upgrade", "myxagent"),
+            update_command=("/tmp/python/bin/python", "-m", "pip", "install", "--upgrade", "myxagent[feishu]"),
         )
 
     def test_parser_registers_update_restart_modes(self):

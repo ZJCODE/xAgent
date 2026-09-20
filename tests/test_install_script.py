@@ -59,8 +59,47 @@ class InstallScriptTests(unittest.TestCase):
             subprocess.run(["bash", str(INSTALL_SCRIPT)], check=True, env=env, capture_output=True, text=True)
 
             self.assertFalse((home / "python_calls.log").exists())
-            self.assertIn("tool install --force myxagent --python 3.12", uv_log.read_text(encoding="utf-8"))
+            self.assertIn("tool install --force myxagent[feishu] --python 3.12", uv_log.read_text(encoding="utf-8"))
             self.assertFalse((home / ".xagent" / "cli.json").exists())
+
+    def test_installer_skips_optional_extras_when_xagent_extras_is_empty(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home = Path(tmpdir)
+            fake_bin = home / "bin"
+            fake_bin.mkdir()
+
+            uv_log = home / "uv_calls.log"
+            fake_uv = fake_bin / "uv"
+            fake_uv.write_text(
+                "\n".join(
+                    [
+                        "#!/usr/bin/env bash",
+                        "set -euo pipefail",
+                        "printf '%s\\n' \"$*\" >> \"$HOME/uv_calls.log\"",
+                        "if [ \"${1:-}\" = \"tool\" ] && [ \"${2:-}\" = \"install\" ]; then",
+                        "  mkdir -p \"$HOME/.local/bin\"",
+                        "  printf '#!/usr/bin/env sh\\nexit 0\\n' > \"$HOME/.local/bin/xagent\"",
+                        "  chmod +x \"$HOME/.local/bin/xagent\"",
+                        "fi",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            fake_uv.chmod(0o755)
+
+            env = {
+                **os.environ,
+                "HOME": str(home),
+                "PATH": f"{fake_bin}:/usr/bin:/bin:/usr/sbin:/sbin",
+                "XAGENT_NO_PATH_MODIFY": "1",
+                "XAGENT_EXTRAS": "",
+            }
+            subprocess.run(["bash", str(INSTALL_SCRIPT)], check=True, env=env, capture_output=True, text=True)
+
+            log = uv_log.read_text(encoding="utf-8")
+            self.assertIn("tool install --force myxagent --python 3.12", log)
+            self.assertNotIn("myxagent[feishu]", log)
 
     def test_installer_adds_bindir_to_shell_profile(self):
         with tempfile.TemporaryDirectory() as tmpdir:

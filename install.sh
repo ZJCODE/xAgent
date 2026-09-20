@@ -20,6 +20,8 @@ else
 fi
 
 PACKAGE_NAME="${XAGENT_PACKAGE:-myxagent}"
+# Default extra: Feishu SDK. Set XAGENT_EXTRAS= to skip optional extras (lighter ARM installs).
+XAGENT_EXTRAS="${XAGENT_EXTRAS-feishu}"
 COMMAND_NAME="${XAGENT_COMMAND:-xagent}"
 PYTHON_VERSION="${XAGENT_PYTHON_VERSION:-3.12}"
 BINDIR="${XAGENT_BINDIR:-$HOME/.local/bin}"
@@ -170,19 +172,44 @@ get_remote_version() {
         || error "Failed to fetch latest version from PyPI."
 }
 
+package_spec() {
+    local suffix="${1:-}"
+    if [ -n "$XAGENT_EXTRAS" ]; then
+        echo "${PACKAGE_NAME}[${XAGENT_EXTRAS}]${suffix}"
+    else
+        echo "${PACKAGE_NAME}${suffix}"
+    fi
+}
+
+is_raspberry_pi() {
+    grep -qi raspberry /proc/device-tree/model 2>/dev/null && return 0
+    grep -qi raspberry /proc/cpuinfo 2>/dev/null && return 0
+    return 1
+}
+
 run_uv_tool_install() {
-    local package_spec="$1"
+    local spec="$1"
 
     install_uv_if_needed
     mkdir -p "$BINDIR"
-    UV_TOOL_BIN_DIR="$BINDIR" uv tool install --force "$package_spec" \
+    UV_TOOL_BIN_DIR="$BINDIR" uv tool install --force "$spec" \
         --python "$PYTHON_VERSION" \
         --default-index "$PYPI_INDEX"
 }
 
 install_via_uv() {
-    step "Installing $PACKAGE_NAME via uv using Python $PYTHON_VERSION..."
-    run_uv_tool_install "$PACKAGE_NAME"
+    local spec
+    spec=$(package_spec)
+
+    if is_raspberry_pi; then
+        info "Raspberry Pi detected. Using $PYPI_INDEX (not piwheels) for more reliable wheels."
+        if [ -n "$XAGENT_EXTRAS" ]; then
+            info "Skip the Feishu SDK for a lighter install: XAGENT_EXTRAS= curl -fsSL ... | bash"
+        fi
+    fi
+
+    step "Installing $spec via uv using Python $PYTHON_VERSION..."
+    run_uv_tool_install "$spec"
     ensure_path
 }
 
@@ -201,7 +228,7 @@ upgrade_xagent() {
         info "Installed: $local_ver | Latest: $remote_ver"
     else
         warn "Could not detect the local version; reinstalling latest ($remote_ver)..."
-        run_uv_tool_install "${PACKAGE_NAME}@latest"
+        run_uv_tool_install "$(package_spec "@latest")"
         ensure_path
         UPGRADED=1
         return 0
@@ -214,7 +241,7 @@ upgrade_xagent() {
     fi
 
     step "Upgrading $PACKAGE_NAME $local_ver → $remote_ver..."
-    run_uv_tool_install "${PACKAGE_NAME}@latest"
+    run_uv_tool_install "$(package_spec "@latest")"
     ensure_path
     UPGRADED=1
 
