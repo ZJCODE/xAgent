@@ -807,7 +807,7 @@ wheels = [
 
 [[package]]
 name = "myxagent"
-version = "0.3.23"
+version = "0.3.33"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
@@ -815,7 +815,6 @@ dependencies = [
     { name = "fastapi" },
     { name = "httpx" },
     { name = "langfuse" },
-    { name = "lark-oapi" },
     { name = "lxml", extra = ["html-clean"] },
     { name = "openai" },
     { name = "pillow" },
@@ -837,6 +836,11 @@ dependencies = [
     { name = "websockets" },
 ]
 
+[package.optional-dependencies]
+feishu = [
+    { name = "lark-oapi" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "anthropic", specifier = ">=0.116.0" },
@@ -844,7 +848,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.116.1" },
     { name = "httpx", specifier = ">=0.28.0" },
     { name = "langfuse", specifier = ">=4.14.2,<5" },
-    { name = "lark-oapi", specifier = ">=1.5.5" },
+    { name = "lark-oapi", marker = "extra == 'feishu'", specifier = ">=1.5.5" },
     { name = "lxml", extras = ["html-clean"], specifier = ">=5.0.0" },
     { name = "openai", specifier = ">=1.98.0" },
     { name = "pillow", specifier = ">=10.0.0" },
@@ -865,6 +869,7 @@ requires-dist = [
     { name = "watchdog", specifier = ">=6.0.0" },
     { name = "websockets", specifier = ">=14.0" },
 ]
+provides-extras = ["feishu"]
 
 [[package]]
 name = "openai"

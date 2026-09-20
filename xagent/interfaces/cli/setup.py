@@ -1746,7 +1746,7 @@ def _register_feishu_app_via_qr(
         message = "One-click registration requires lark-oapi>=1.5.5."
         if on_status is None:
             print(message)
-            print("Upgrade with: pip install -U 'lark-oapi>=1.5.5'")
+            print("Install with: pip install -U 'myxagent[feishu]'")
             print("Or rerun with --manual to enter the App ID/Secret yourself.")
         else:
             on_status("error")

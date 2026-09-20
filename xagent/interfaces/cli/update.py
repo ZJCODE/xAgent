@@ -21,6 +21,7 @@ from .processes_status import handle_processes_restart
 
 
 PACKAGE_NAME = "myxagent"
+PACKAGE_SPEC = "myxagent[feishu]"
 COMMAND_NAME = "xagent"
 INSTALLATION_UV_TOOL = "uv-tool"
 INSTALLATION_PIP = "pip"
@@ -193,7 +194,7 @@ def _detect_uv_tool(snapshot: DistributionSnapshot) -> InstallationInfo | None:
         version=snapshot.version,
         package_root=snapshot.package_root,
         python=_resolved(sys.executable),
-        update_command=(str(uv), "tool", "upgrade", PACKAGE_NAME),
+        update_command=(str(uv), "tool", "upgrade", PACKAGE_SPEC),
     )
 
 
@@ -231,7 +232,7 @@ def _detect_pip(snapshot: DistributionSnapshot) -> InstallationInfo | None:
     command = [sys.executable, "-m", "pip", "install", "--upgrade"]
     if user_install and not in_current_prefix:
         command.append("--user")
-    command.append(PACKAGE_NAME)
+    command.append(PACKAGE_SPEC)
     return InstallationInfo(
         kind=INSTALLATION_PIP,
         version=snapshot.version,

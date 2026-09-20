@@ -1547,17 +1547,26 @@ channels:
         pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
 
         dependencies = "\n".join(pyproject["project"]["dependencies"])
-        self.assertNotIn("optional-dependencies", pyproject["project"])
         self.assertIn("sounddevice", dependencies)
         self.assertIn("python-socks", dependencies)
         self.assertIn("websockets", dependencies)
         self.assertIn("soniox>=2.8,<3", dependencies)
+        self.assertNotIn("lark-oapi", dependencies)
+        self.assertEqual(
+            pyproject["project"]["optional-dependencies"]["feishu"],
+            ["lark-oapi>=1.5.5"],
+        )
 
     def test_readme_voice_usage_uses_single_install_path(self):
         readme = Path("README.md").read_text(encoding="utf-8")
 
         self.assertIn("install.sh", readme)
         self.assertIn("xagent", readme)
+        self.assertIn("myxagent[feishu]", readme)
+        self.assertIn("Raspberry Pi", readme)
+        self.assertIn("piwheels", readme)
+        self.assertIn("PIP_CONFIG_FILE", readme)
+        self.assertIn("--isolated", readme)
         self.assertNotIn("myxagent[voice]", readme)
         self.assertNotIn("SONIOX_API_KEY", readme)
 
