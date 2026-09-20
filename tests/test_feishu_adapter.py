@@ -18,6 +18,8 @@ from xagent.integrations.feishu import adapter as feishu_adapter_module
 from xagent.integrations.feishu.adapter import FeishuAdapter, _FeishuOutboundAttachment
 from xagent.integrations.feishu.config import FeishuAdapterConfig
 from xagent.core.runtime import ContactEntry, SubconsciousDelivery, enqueue_scheduled_task, list_task_records
+from xagent.core.attention import AttentionLoop
+from xagent.schemas import ParticipationDecision
 
 
 class _FakeAgent:
@@ -27,6 +29,18 @@ class _FakeAgent:
         self.chat_calls = []
         self.observe_calls = []
         self.flush_count = 0
+        self.attention = AttentionLoop(
+            addressed_grace=0,
+            quiet_window=0,
+            max_wait=0,
+            decide=self._attention_decide,
+        )
+
+    async def _attention_decide(self, **kwargs):
+        decider = getattr(self, "decide_participation", None)
+        if callable(decider):
+            return await decider(**kwargs)
+        return ParticipationDecision(should_reply=False, reason="no decider")
 
     async def chat(self, **kwargs):
         self.chat_calls.append(kwargs)
@@ -94,6 +108,16 @@ class _SlowChatAgent(_FakeAgent):
         await self.release.wait()
         yield {"type": "message_done", "message_id": "m1", "phase": "final", "content": "agent reply"}
         yield {"type": "done"}
+
+
+def _dispatch_until_idle(adapter, msg):
+    async def scenario():
+        await adapter._dispatch(msg)
+        attention = getattr(adapter.agent, "attention", None)
+        if attention is not None:
+            await attention.idle()
+
+    asyncio.run(scenario())
 
 
 class _FakeChannel:
@@ -552,7 +576,7 @@ class FeishuAdapterTests(unittest.TestCase):
             content_text="hello",
         )
 
-        asyncio.run(adapter._dispatch(msg))
+        _dispatch_until_idle(adapter, msg)
 
         self.assertEqual(len(agent.chat_calls), 1)
         self.assertEqual(agent.chat_calls[0]["user_message"], "hello")
@@ -575,7 +599,7 @@ class FeishuAdapterTests(unittest.TestCase):
             content_text="hello",
         )
 
-        asyncio.run(adapter._dispatch(msg))
+        _dispatch_until_idle(adapter, msg)
 
         self.assertEqual(agent.chat_calls[0]["user_id"], "ou_57abefd441c9b068703fa7b18543047e")
         self.assertEqual(agent.chat_calls[0]["sender_name"], "Alice")
@@ -589,20 +613,20 @@ class FeishuAdapterTests(unittest.TestCase):
             "ou_alice_two": "Alice",
         })
 
-        asyncio.run(adapter._dispatch(SimpleNamespace(
+        _dispatch_until_idle(adapter, SimpleNamespace(
             chat_type="p2p",
             chat_id="oc_one",
             message_id="om_one",
             sender_id="ou_alice_one",
             content_text="hello",
-        )))
-        asyncio.run(adapter._dispatch(SimpleNamespace(
+        ))
+        _dispatch_until_idle(adapter, SimpleNamespace(
             chat_type="p2p",
             chat_id="oc_two",
             message_id="om_two",
             sender_id="ou_alice_two",
             content_text="hello",
-        )))
+        ))
 
         self.assertEqual(
             [call["user_id"] for call in agent.chat_calls],
@@ -627,7 +651,7 @@ class FeishuAdapterTests(unittest.TestCase):
                 content='{"image_key":"img_test"}',
             )
 
-            asyncio.run(adapter._dispatch(msg))
+            _dispatch_until_idle(adapter, msg)
 
             saved_images = list((workspace_dir / "assets" / "inbound" / "feishu" / "images").glob("*.png"))
             self.assertEqual(resource_api.requests[0].message_id, "om_image")
@@ -674,7 +698,7 @@ class FeishuAdapterTests(unittest.TestCase):
                     content='{"image_key":"img_large"}',
                 )
 
-                asyncio.run(adapter._dispatch(msg))
+                _dispatch_until_idle(adapter, msg)
 
                 saved_images = list((workspace_dir / "assets" / "inbound" / "feishu" / "images").glob("*.jpg"))
                 self.assertEqual(len(saved_images), 1)
@@ -703,7 +727,7 @@ class FeishuAdapterTests(unittest.TestCase):
                 content='{"image_key":"img_test"}',
             )
 
-            asyncio.run(adapter._dispatch(msg))
+            _dispatch_until_idle(adapter, msg)
 
             saved_images = list((workspace_dir / "assets" / "inbound" / "feishu" / "images").glob("*.png"))
             self.assertEqual(adapter._channel.download_calls[0]["file_key"], "img_test")
@@ -733,7 +757,7 @@ class FeishuAdapterTests(unittest.TestCase):
                 content='{"file_key":"file_test","file_name":"report.pdf"}',
             )
 
-            asyncio.run(adapter._dispatch(msg))
+            _dispatch_until_idle(adapter, msg)
 
             saved_files = list((workspace_dir / "assets" / "inbound" / "feishu" / "files").glob("*.pdf"))
             self.assertEqual(resource_api.requests[0].message_id, "om_file")
@@ -764,7 +788,7 @@ class FeishuAdapterTests(unittest.TestCase):
                 content_text="![image](img_test)",
             )
 
-            asyncio.run(adapter._dispatch(msg))
+            _dispatch_until_idle(adapter, msg)
 
             user_message = agent.chat_calls[0]["user_message"]
             self.assertNotIn("![image](img_test)", user_message)
@@ -789,7 +813,7 @@ class FeishuAdapterTests(unittest.TestCase):
                 content='{"image_key":"img_test"}',
             )
 
-            asyncio.run(adapter._dispatch(msg))
+            _dispatch_until_idle(adapter, msg)
 
             saved_images = list((workspace_dir / "assets" / "inbound" / "feishu" / "images").glob("*.png"))
             self.assertEqual(len(agent.chat_calls), 1)
@@ -823,7 +847,7 @@ class FeishuAdapterTests(unittest.TestCase):
                 content='{"image_key":"img_test"}',
             )
 
-            asyncio.run(adapter._dispatch(msg))
+            _dispatch_until_idle(adapter, msg)
 
             self.assertEqual(agent.chat_calls, [])
             self.assertEqual(adapter._channel.sent[0][1], {"markdown": "图片下载失败，请重试或重新发送。"})
@@ -852,7 +876,7 @@ class FeishuAdapterTests(unittest.TestCase):
                 mentions=[SimpleNamespace(open_id="ou_bot")],
             )
 
-            asyncio.run(adapter._dispatch(msg))
+            _dispatch_until_idle(adapter, msg)
 
             user_message = agent.chat_calls[0]["user_message"]
             self.assertIn("[room context]", user_message)
@@ -878,7 +902,7 @@ class FeishuAdapterTests(unittest.TestCase):
             "content": SimpleNamespace(text="hello"),
         }
 
-        asyncio.run(adapter._dispatch(SimpleNamespace(**msg)))
+        _dispatch_until_idle(adapter, SimpleNamespace(**msg))
 
         self.assertEqual(agent.chat_calls[0]["user_id"], "user_123")
         self.assertEqual(resolver.calls[0], ("user_123", None, "user_id", "user"))
@@ -931,7 +955,7 @@ class FeishuAdapterTests(unittest.TestCase):
             }
         }
 
-        asyncio.run(adapter._dispatch(msg))
+        _dispatch_until_idle(adapter, msg)
 
         self.assertEqual(len(agent.chat_calls), 1)
         self.assertEqual(resolver.calls[0], ("ou_sender", None, "open_id", "user"))
@@ -961,7 +985,7 @@ class FeishuAdapterTests(unittest.TestCase):
             mentions=[SimpleNamespace(open_id="ou_bot", name="Mono")],
         )
 
-        asyncio.run(adapter._dispatch(msg))
+        _dispatch_until_idle(adapter, msg)
 
         self.assertEqual(len(agent.chat_calls), 1)
         self.assertIn("Helper Bot(ou_helper_bot)", agent.chat_calls[0]["user_message"])
@@ -979,7 +1003,7 @@ class FeishuAdapterTests(unittest.TestCase):
             content_text="hello",
         )
 
-        asyncio.run(adapter._dispatch(msg))
+        _dispatch_until_idle(adapter, msg)
 
         self.assertEqual(agent.chat_calls[0]["user_id"], "ou_user")
         self.assertNotIn("sender_name", agent.chat_calls[0])
@@ -998,7 +1022,7 @@ class FeishuAdapterTests(unittest.TestCase):
             mentions=[SimpleNamespace(open_id="ou_bot")],
         )
 
-        asyncio.run(adapter._dispatch(msg))
+        _dispatch_until_idle(adapter, msg)
 
         self.assertEqual(len(agent.chat_calls), 1)
         self.assertEqual(agent.chat_calls[0]["user_id"], "ou_user")
@@ -1020,7 +1044,7 @@ class FeishuAdapterTests(unittest.TestCase):
             mentions=[SimpleNamespace(open_id="ou_unknown_bot", name="Mono")],
         )
 
-        asyncio.run(adapter._dispatch(msg))
+        _dispatch_until_idle(adapter, msg)
 
         self.assertEqual(len(agent.chat_calls), 1)
 
@@ -1038,7 +1062,7 @@ class FeishuAdapterTests(unittest.TestCase):
             mentions=[],
         )
 
-        asyncio.run(adapter._dispatch(msg))
+        _dispatch_until_idle(adapter, msg)
 
         self.assertIn("[room context]", agent.chat_calls[0]["user_message"])
         self.assertIn("room_id: oc_group", agent.chat_calls[0]["user_message"])
@@ -1060,7 +1084,7 @@ class FeishuAdapterTests(unittest.TestCase):
             mentions=[{"id": {"open_id": "ou_bot"}, "name": "Mono"}],
         )
 
-        asyncio.run(adapter._dispatch(msg))
+        _dispatch_until_idle(adapter, msg)
 
         self.assertEqual(len(agent.chat_calls), 1)
 
@@ -1079,7 +1103,7 @@ class FeishuAdapterTests(unittest.TestCase):
             mentions=[],
         )
 
-        asyncio.run(adapter._dispatch(msg))
+        _dispatch_until_idle(adapter, msg)
 
         self.assertEqual(agent.chat_calls, [])
         self.assertEqual(len(agent.decide_calls), 1)
@@ -1088,7 +1112,7 @@ class FeishuAdapterTests(unittest.TestCase):
         self.assertEqual(len(agent.observe_calls), 1)
         self.assertIn("[room context]", agent.observe_calls[0]["context"])
         self.assertIn("ambient group message", agent.observe_calls[0]["context"])
-        self.assertEqual(agent.observe_calls[0]["metadata"]["silence_reason"], "room is flowing")
+        self.assertNotIn("silence_reason", agent.observe_calls[0]["metadata"])
         self.assertEqual(agent.observe_calls[0]["user_id"], "ou_user")
         self.assertEqual(adapter._channel.sent, [])
 
@@ -1110,11 +1134,11 @@ class FeishuAdapterTests(unittest.TestCase):
             mentions=[],
         )
 
-        asyncio.run(adapter._dispatch(msg))
+        _dispatch_until_idle(adapter, msg)
 
         self.assertEqual(len(agent.decide_calls), 1)
         self.assertEqual(len(agent.chat_calls), 1)
-        self.assertEqual(agent.observe_calls, [])
+        self.assertEqual(len(agent.observe_calls), 1)
         self.assertIn("ambient group message", agent.chat_calls[0]["user_message"])
         self.assertEqual(agent.chat_calls[0]["user_id"], "ou_user")
         self.assertEqual(adapter._channel.sent[0][2], {"uuid": "om_ambient"})
@@ -1141,12 +1165,43 @@ class FeishuAdapterTests(unittest.TestCase):
             mentions=[],
         )
 
-        asyncio.run(adapter._dispatch(msg))
+        _dispatch_until_idle(adapter, msg)
 
         self.assertEqual(agent.decide_calls, [])
         self.assertEqual(agent.chat_calls, [])
         self.assertEqual(len(agent.observe_calls), 1)
         self.assertEqual(adapter._channel.sent, [])
+
+    def test_unmentioned_group_burst_decides_once(self):
+        agent = _DecidingFakeAgent(should_reply=False, reason="wait")
+        adapter = FeishuAdapter(
+            agent=agent,
+            config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret", group_fetch_limit=0),
+        )
+        adapter._channel = _FakeChannel(bot_open_id="ou_bot")
+        agent.attention.quiet_window = 0.05
+
+        async def scenario():
+            for index in range(5):
+                await adapter._dispatch(SimpleNamespace(
+                    chat_type="group",
+                    chat_id="oc_group",
+                    message_id=f"om_burst_{index}",
+                    sender_id="ou_user",
+                    sender_name="Alice",
+                    content_text=f"line {index}",
+                    mentioned_bot=False,
+                    mentions=[],
+                ))
+            await agent.attention.idle()
+
+        asyncio.run(scenario())
+
+        self.assertEqual(len(agent.observe_calls), 5)
+        self.assertEqual(len(agent.decide_calls), 1)
+        self.assertIn("line 0", agent.decide_calls[0]["context"])
+        self.assertIn("line 4", agent.decide_calls[0]["context"])
+        self.assertEqual(agent.chat_calls, [])
 
     def test_unmentioned_topic_message_is_observed(self):
         agent = _DecidingFakeAgent(should_reply=False, reason="ambient topic")
@@ -1163,7 +1218,7 @@ class FeishuAdapterTests(unittest.TestCase):
             mentions=[],
         )
 
-        asyncio.run(adapter._dispatch(msg))
+        _dispatch_until_idle(adapter, msg)
 
         self.assertEqual(agent.chat_calls, [])
         self.assertEqual(len(agent.decide_calls), 1)
@@ -1184,7 +1239,7 @@ class FeishuAdapterTests(unittest.TestCase):
             content_text="loop?",
         )
 
-        asyncio.run(adapter._dispatch(msg))
+        _dispatch_until_idle(adapter, msg)
 
         self.assertEqual(agent.chat_calls, [])
         self.assertEqual(adapter._channel.sent, [])
@@ -1230,7 +1285,7 @@ class FeishuAdapterTests(unittest.TestCase):
             root_id="om_topic_root",
         )
 
-        asyncio.run(adapter._dispatch(msg))
+        _dispatch_until_idle(adapter, msg)
 
         self.assertEqual(adapter._channel.sent[0][2], {"reply_to": "om_topic_root", "uuid": "om_inside_thread"})
 
@@ -1355,13 +1410,13 @@ class FeishuAdapterTests(unittest.TestCase):
             adapter = FeishuAdapter(agent=agent, config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret"))
             adapter._channel = _FakeChannel()
 
-            asyncio.run(adapter._dispatch(SimpleNamespace(
+            _dispatch_until_idle(adapter, SimpleNamespace(
                 chat_type="p2p",
                 chat_id="oc_dm",
                 message_id="om_user",
                 sender_id="ou_user",
                 content_text="send it",
-            )))
+            ))
 
         self.assertEqual(len(adapter._channel.sent), 2)
         self.assertEqual(adapter._channel.sent[0][1], {"markdown": "Here is the processed image."})
@@ -1440,10 +1495,8 @@ class FeishuAdapterTests(unittest.TestCase):
 
             await asyncio.wait_for(adapter._on_message(msg), timeout=0.05)
             await asyncio.wait_for(started.wait(), timeout=1.0)
-            self.assertEqual(len(adapter._processing_tasks), 1)
             release.set()
-            while adapter._processing_tasks:
-                await asyncio.sleep(0.01)
+            await agent.attention.idle()
             self.assertEqual(len(agent.chat_calls), 1)
 
         asyncio.run(scenario())
@@ -1492,7 +1545,7 @@ class FeishuGroupHistoryTests(unittest.TestCase):
             conversation=SimpleNamespace(thread_id=None),
         )
 
-        asyncio.run(adapter._dispatch(msg))
+        _dispatch_until_idle(adapter, msg)
 
         self.assertEqual(agent.observe_calls, [])
         user_message = agent.chat_calls[0]["user_message"]
@@ -1533,7 +1586,7 @@ class FeishuGroupHistoryTests(unittest.TestCase):
             mentions=[SimpleNamespace(open_id="ou_bot")],
         )
 
-        asyncio.run(adapter._dispatch(msg))
+        _dispatch_until_idle(adapter, msg)
 
         self.assertIn(
             f"Telos(ou_user) {format_feishu_timestamp(1700000000000)}: @Mono hey",
@@ -1558,7 +1611,7 @@ class FeishuGroupHistoryTests(unittest.TestCase):
             conversation=SimpleNamespace(thread_id="omt_thread_1"),
         )
 
-        asyncio.run(adapter._dispatch(msg))
+        _dispatch_until_idle(adapter, msg)
 
         self.assertEqual(captured["kwargs"]["thread_id"], "omt_thread_1")
         self.assertEqual(len(agent.chat_calls), 1)
@@ -1581,7 +1634,7 @@ class FeishuGroupHistoryTests(unittest.TestCase):
             mentions=[SimpleNamespace(open_id="ou_bot"), SimpleNamespace(key="@_user_1", name="Tom")],
         )
 
-        asyncio.run(adapter._dispatch(msg))
+        _dispatch_until_idle(adapter, msg)
 
         self.assertNotIn("kwargs", captured)
         self.assertIn("[room context]", agent.chat_calls[0]["user_message"])
@@ -1620,7 +1673,7 @@ class FeishuGroupHistoryTests(unittest.TestCase):
             mentions=[SimpleNamespace(open_id="ou_bot")],
         )
 
-        asyncio.run(adapter._dispatch(msg))
+        _dispatch_until_idle(adapter, msg)
 
         self.assertEqual(chat_api.requests[0].chat_id, "oc_group")
         self.assertEqual(chat_api.requests[0].user_id_type, "open_id")
@@ -1644,7 +1697,7 @@ class FeishuGroupHistoryTests(unittest.TestCase):
             mentions=[SimpleNamespace(open_id="ou_bot")],
         )
 
-        asyncio.run(adapter._dispatch(msg))
+        _dispatch_until_idle(adapter, msg)
 
         self.assertIn("[room context]", agent.chat_calls[0]["user_message"])
         self.assertIn("room_id: oc_group", agent.chat_calls[0]["user_message"])

@@ -52,9 +52,23 @@ class AgentConfig:
     MESSAGE_DB_FILENAME = "messages.sqlite3"
     WORKING_CONTEXT_FILENAME = ".working_context.json"
     WORKING_CONTEXT_LOCK_FILENAME = ".working_context.lock"
+    ATTENTION_FILENAME = ".attention.json"
     # Attached by MessageStorage when loading rows; used so prompt budgeting
     # never drops messages that the working summary has not covered yet.
     MESSAGE_STORAGE_CURSOR_KEY = "storage_cursor"
+    ROOM_KEY_METADATA_KEY = "room_key"
+    ADDRESSED_METADATA_KEY = "addressed_to_agent"
+
+    # Attention loop: when to look at a room's unattended interval.
+    # Addressed messages (1:1, @, reply-to-me) use a short grace so a
+    # follow-up like "oh, and one more thing" can still join the same turn.
+    # Ambient group traffic waits for a quiet window, or until the burst is
+    # large / old enough that waiting further is worse than speaking over it.
+    ATTENTION_ADDRESSED_GRACE_SECONDS = 1.0
+    ATTENTION_QUIET_WINDOW_SECONDS = 3.0
+    ATTENTION_MAX_BURST_MESSAGES = 12
+    ATTENTION_MAX_WAIT_SECONDS = 20.0
+    ATTENTION_HISTORY_MESSAGES = 20
 
     # ============================================================
     # 3. Model & Agent Defaults
@@ -495,7 +509,7 @@ class AgentConfig:
         "- Another reply from you would only repeat what was just said or spam the room\n\n"
         "When unsure, prefer speaking briefly over staying silent.\n\n"
         "Return JSON only:\n"
-        '{"should_reply": true|false, "reason": "brief reason"}'
+        '{"should_reply": true|false, "reason": "brief reason", "addressing": ["optional message refs"]}'
     )
 
     # ============================================================

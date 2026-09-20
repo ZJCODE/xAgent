@@ -140,10 +140,10 @@ The adapter behaves like a real human teammate:
 
 | Message | Routed to | Notes |
 |---|---|---|
-| Direct chat (`p2p`) | `agent.chat` | Always reply, sent as a fresh message (no quoting). |
-| Group, bot @mentioned | `agent.chat` | Pulls recent Feishu history first, then replies as a plain message — no quote/@ of the sender, since the context is already obvious. |
-| Topic group (话题群) | `agent.chat` | Anchored to the topic `root` message via `reply_to`; this is a Feishu structural requirement so the reply renders in the main view instead of a hidden sub-thread. |
-| Group / topic, not @mentioned | `agent.decide_participation` then `agent.chat` or `agent.observe` | The agent hears the room by default, decides whether speaking would help, and records silence as experience when it stays quiet. |
+| Direct chat (`p2p`) | `attention.notice` then `agent.respond` | Recorded immediately, then one reply after a short grace so a follow-up can join the same turn. Sent as a fresh message (no quoting). |
+| Group, bot @mentioned | `attention.notice` then `agent.respond` | Addressed; same short grace. Pulls recent Feishu history when local room history is thin. Replies as a plain message — no quote/@ of the sender. |
+| Topic group (话题群) | `attention.notice` then `agent.respond` | Same as group. Anchored to the topic `root` message via `reply_to`. |
+| Group / topic, not @mentioned | `observe`/`perceive` then `attention.notice` | Heard immediately. After a quiet window the agent decides once for the whole burst. Conservative `group_reply_only_when_mentioned` records but never arms attention. |
 | Scheduled delivery | `agent.chat` / message | Sent as a plain message; never quotes or @mentions the person who created the reminder. |
 | Image content | `agent.chat` | Feishu image resources are downloaded into workspace attachments. Providers with vision also receive current-turn image input; providers without vision still get workspace file references for file-level tools. |
 | File content | `agent.chat` | Feishu file resources are downloaded into `workspace/assets/inbound/feishu/files` and passed as workspace attachments. The model sees a file manifest and workspace blob link, not raw file bytes. |

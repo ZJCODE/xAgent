@@ -47,6 +47,7 @@ from .inbox import (
     is_scheduled_work,
     normalize_inbox_kind,
 )
+from .attention import AttentionLoop, ADDRESSED_METADATA_KEY, ROOM_KEY_METADATA_KEY
 from .handlers import MemoryHandler, MessageHandler, ModelClient
 from .journal import JournalLLMService
 from .providers import (
@@ -226,6 +227,10 @@ class Agent:
             workspace_dir=self.workspace_dir,
         )
         self._inbox = AgentInbox()
+        self._attention = AttentionLoop(
+            agent=self,
+            store_path=self._message_storage_path(runtime_root).parent / AgentConfig.ATTENTION_FILENAME,
+        )
 
     @property
     def identity(self) -> str:
@@ -250,6 +255,14 @@ class Agent:
         if current is None:
             current = AgentInbox()
             self._inbox = current
+        return current
+
+    @property
+    def attention(self) -> AttentionLoop:
+        current = getattr(self, "_attention", None)
+        if current is None:
+            current = AttentionLoop(agent=self)
+            self._attention = current
         return current
 
     def abort(self) -> bool:
@@ -609,12 +622,73 @@ class Agent:
         finally:
             self.inbox.release_turn()
 
+    async def respond(
+        self,
+        room_key: str,
+        through_cursor: int,
+        *,
+        stream: bool = False,
+        channel_instructions: str = "",
+    ) -> AsyncGenerator[dict, None]:
+        """Run one turn whose input is the unattended interval in *room_key*.
+
+        Inbound messages must already be in the message table. This does not
+        store a new user message.
+        """
+        from .attention import events_from_messages, format_interval_context
+
+        self._record_last_interaction()
+        storage = self.message_storage
+        get_for_room = getattr(storage, "get_messages_for_room", None)
+        if not callable(get_for_room):
+            return
+        state = self.attention.cursors(room_key)
+        interval = await get_for_room(
+            room_key,
+            start_exclusive=state.attended_through,
+            end_inclusive=through_cursor,
+        )
+        if not interval:
+            return
+        last_user = next(
+            (msg for msg in reversed(interval) if msg.role == RoleType.USER),
+            interval[-1],
+        )
+        content = format_interval_context(
+            room_key,
+            events_from_messages(interval, room_key),
+            room_name=next((msg.room_name for msg in interval if msg.room_name), None),
+        )
+        user_msg = last_user.model_copy(update={"content": content})
+        inbox_item = InboxItem(
+            kind=InboxKind.USER_TURN,
+            content=content,
+            user_id=str(last_user.sender_id or AgentConfig.DEFAULT_USER_ID),
+            channel=last_user.channel,
+            room_name=last_user.room_name,
+            channel_instructions=channel_instructions,
+            metadata=dict(last_user.metadata or {}),
+            stream=stream,
+        )
+        await self.inbox.acquire_turn()
+        try:
+            async for event in self._drive_claimed_turn(
+                inbox_item=inbox_item,
+                user_metadata=inbox_item.message_metadata(),
+                stream=stream,
+                existing_user_msg=user_msg,
+            ):
+                yield event
+        finally:
+            self.inbox.release_turn()
+
     async def _drive_claimed_turn(
         self,
         *,
         inbox_item: InboxItem,
         user_metadata: Dict[str, Any],
         stream: bool,
+        existing_user_msg: Optional[Message] = None,
     ) -> AsyncGenerator[dict, None]:
         """Run one claimed waking turn. Caller must hold the inbox turn lock."""
         user_message = inbox_item.content
@@ -641,15 +715,18 @@ class Agent:
         )
         with turn_ctx as turn_obs:
             try:
-                user_msg = await msg_handler.store_user_message(
-                    user_message,
-                    user_id,
-                    image_source,
-                    attachments=attachments,
-                    room_name=room_name,
-                    channel=channel,
-                    metadata=user_metadata,
-                )
+                if existing_user_msg is not None:
+                    user_msg = existing_user_msg
+                else:
+                    user_msg = await msg_handler.store_user_message(
+                        user_message,
+                        user_id,
+                        image_source,
+                        attachments=attachments,
+                        room_name=room_name,
+                        channel=channel,
+                        metadata=user_metadata,
+                    )
             except ValueError as exc:
                 payload = build_public_error(
                     code=ERROR_INVALID_INPUT,
@@ -986,6 +1063,37 @@ class Agent:
             source=event_metadata.get("source"),
         )
 
+    async def perceive(
+        self,
+        content: str,
+        *,
+        user_id: str,
+        room_key: str,
+        addressed: bool = False,
+        channel: Optional[str] = None,
+        room_name: Optional[str] = None,
+        sender_name: str = "",
+        metadata: Optional[Dict[str, Any]] = None,
+        image_source: Optional[Union[str, List[str]]] = None,
+        attachments: Optional[List[Dict[str, Any]]] = None,
+    ) -> Message:
+        """Persist an inbound utterance without starting a turn."""
+        payload = dict(metadata or {})
+        payload[ROOM_KEY_METADATA_KEY] = room_key
+        payload[ADDRESSED_METADATA_KEY] = bool(addressed)
+        if sender_name:
+            payload.setdefault("sender_name", sender_name)
+        channel_name = str(channel or payload.get("source") or "").strip() or None
+        return await self.message_handler.store_user_message(
+            content,
+            user_id,
+            image_source=image_source,
+            attachments=attachments,
+            room_name=room_name,
+            channel=channel_name,
+            metadata=payload,
+        )
+
     async def record_subconscious_thought(
         self,
         content: str,
@@ -1074,9 +1182,9 @@ class Agent:
             f"Event type: {event_type}\n\n"
             "Recent group conversation:\n"
             f"{context.strip()}\n\n"
-            "Decide whether to reply now. Prefer joining when you have something to add. "
+            "Decide whether to reply now to this unattended interval. Prefer joining when you have something to add. "
             "Return JSON only:\n"
-            '{"should_reply": true|false, "reason": "brief reason"}\n'
+            '{"should_reply": true|false, "reason": "brief reason", "addressing": ["optional message refs"]}\n'
             "</participation_decision>"
         )
 
@@ -1106,9 +1214,13 @@ class Agent:
 
         if not isinstance(data, dict):
             data = {}
+        addressing = data.get("addressing") or []
+        if not isinstance(addressing, list):
+            addressing = [addressing]
         return ParticipationDecision(
             should_reply=bool(data.get("should_reply")),
             reason=str(data.get("reason") or "").strip() or None,
+            addressing=[str(item).strip() for item in addressing if str(item).strip()],
         )
 
     def _observability_runtime(self) -> ObservabilityRuntime:
