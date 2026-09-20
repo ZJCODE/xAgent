@@ -8,6 +8,9 @@ from unittest.mock import AsyncMock
 
 from xagent.core.runtime import ContactEntry, SubconsciousDelivery, enqueue_scheduled_task, list_task_records
 from xagent.core.attention import AttentionLoop
+from xagent.core.config import AgentConfig
+from xagent.schemas import Message, RoleType
+from tests.fake_message_storage import InMemoryRoomMessageStorage
 from xagent.integrations.weixin.adapter import WeixinAdapter
 from xagent.integrations.weixin.config import WeixinAdapterConfig
 from xagent.integrations.weixin.state import WeixinCredentials, WeixinStateStore
@@ -21,11 +24,29 @@ class _FakeAgent:
         self.chat_calls = []
         self.maintenance_count = 0
         self.workspace_dir = None
-        self.attention = AttentionLoop(
-            addressed_grace=0,
-            quiet_window=0,
-            max_wait=0,
+        self.message_storage = InMemoryRoomMessageStorage()
+        self.attention = AttentionLoop(quiet_window=0, max_wait=0)
+
+    async def perceive(self, content, *, user_id, room_key, addressed=False, **kwargs):
+        message = Message.create(content, role=RoleType.USER, sender_id=user_id)
+        message.channel = kwargs.get("channel")
+        message.metadata = dict(kwargs.get("metadata") or {})
+        message.metadata[AgentConfig.ROOM_KEY_METADATA_KEY] = room_key
+        message.metadata[AgentConfig.ADDRESSED_METADATA_KEY] = addressed
+        stored = await self.message_storage.add_messages(message)
+        return stored[0]
+
+    async def respond(self, room_key, through_cursor, **kwargs):
+        interval = await self.message_storage.get_messages_for_room(
+            room_key,
+            start_exclusive=0,
+            end_inclusive=through_cursor,
         )
+        last = interval[-1] if interval else None
+        text = last.content if last else "interval"
+        user_id = last.sender_id if last else "owner@im.wechat"
+        async for event in self.chat_events(user_message=text, user_id=user_id, channel="weixin"):
+            yield event
 
     async def chat_events(self, **kwargs):
         self.chat_calls.append(kwargs)
@@ -94,15 +115,14 @@ class WeixinAdapterTests(unittest.TestCase):
         adapter._context_tokens = state.load_context_tokens(credentials.account_id)
         return adapter, agent, client, state
 
+    def _process_until_idle(self, adapter, message):
+        async def scenario():
+            await adapter._process_message(message)
+            attention = getattr(adapter.agent, "attention", None)
+            if attention is not None:
+                await attention.idle()
 
-def _process_until_idle(adapter, message):
-    async def scenario():
-        await adapter._process_message(message)
-        attention = getattr(adapter.agent, "attention", None)
-        if attention is not None:
-            await attention.idle()
-
-    asyncio.run(scenario())
+        asyncio.run(scenario())
 
     def test_owner_direct_message_routes_to_agent_and_replies(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -116,11 +136,10 @@ def _process_until_idle(adapter, message):
                 "item_list": [{"type": 1, "text_item": {"text": "hello"}}],
             }
 
-            _process_until_idle(adapter, message)
+            self._process_until_idle(adapter, message)
 
             self.assertEqual(agent.chat_calls[0]["user_message"], "hello")
             self.assertEqual(agent.chat_calls[0]["user_id"], "owner@im.wechat")
-            self.assertEqual(agent.chat_calls[0]["inbox_kind"], "user_turn")
             self.assertEqual(agent.chat_calls[0]["channel"], "weixin")
             self.assertEqual(client.sent_text[0]["to_user_id"], "owner@im.wechat")
             self.assertEqual(client.sent_text[0]["context_token"], "ctx-owner")
@@ -138,7 +157,7 @@ def _process_until_idle(adapter, message):
                 "item_list": [{"type": 1, "text_item": {"text": "hello"}}],
             }
 
-            _process_until_idle(adapter, message)
+            self._process_until_idle(adapter, message)
 
             self.assertEqual(agent.chat_calls, [])
             self.assertEqual(client.sent_text, [])
@@ -156,7 +175,7 @@ def _process_until_idle(adapter, message):
                 "item_list": [{"type": 1, "text_item": {"text": "hello"}}],
             }
 
-            _process_until_idle(adapter, message)
+            self._process_until_idle(adapter, message)
 
             self.assertEqual(agent.chat_calls, [])
             self.assertEqual(client.sent_text, [])
@@ -177,7 +196,7 @@ def _process_until_idle(adapter, message):
                 "item_list": [{"type": 1, "text_item": {"text": "go"}}],
             }
 
-            _process_until_idle(adapter, message)
+            self._process_until_idle(adapter, message)
 
             self.assertGreater(len(client.sent_text), 1)
             self.assertEqual([item["text"] for item in client.sent_text], ["first line", "second line", "third line"])

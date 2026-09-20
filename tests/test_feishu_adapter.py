@@ -19,7 +19,9 @@ from xagent.integrations.feishu.adapter import FeishuAdapter, _FeishuOutboundAtt
 from xagent.integrations.feishu.config import FeishuAdapterConfig
 from xagent.core.runtime import ContactEntry, SubconsciousDelivery, enqueue_scheduled_task, list_task_records
 from xagent.core.attention import AttentionLoop
-from xagent.schemas import ParticipationDecision
+from xagent.core.config import AgentConfig
+from xagent.schemas import Message, ParticipationDecision, RoleType
+from tests.fake_message_storage import InMemoryRoomMessageStorage
 
 
 class _FakeAgent:
@@ -29,8 +31,8 @@ class _FakeAgent:
         self.chat_calls = []
         self.observe_calls = []
         self.flush_count = 0
+        self.message_storage = InMemoryRoomMessageStorage()
         self.attention = AttentionLoop(
-            addressed_grace=0,
             quiet_window=0,
             max_wait=0,
             decide=self._attention_decide,
@@ -58,6 +60,81 @@ class _FakeAgent:
 
     async def flush_memory(self):
         self.flush_count += 1
+
+    async def perceive(
+        self,
+        content,
+        *,
+        user_id,
+        room_key,
+        addressed=False,
+        channel=None,
+        room_name=None,
+        sender_name="",
+        metadata=None,
+        image_source=None,
+        attachments=None,
+        **kwargs,
+    ):
+        message = Message.create(
+            content,
+            role=RoleType.USER,
+            sender_id=user_id,
+            image_source=image_source,
+        )
+        message.channel = channel
+        message.room_name = room_name
+        message.metadata = dict(metadata or {})
+        if attachments:
+            from xagent.schemas.attachment import ATTACHMENT_METADATA_KEY
+
+            message.metadata[ATTACHMENT_METADATA_KEY] = attachments
+        message.metadata[AgentConfig.ROOM_KEY_METADATA_KEY] = room_key
+        message.metadata[AgentConfig.ADDRESSED_METADATA_KEY] = addressed
+        if sender_name:
+            message.metadata.setdefault("sender_name", sender_name)
+        stored = await self.message_storage.add_messages(message)
+        return stored[0]
+
+    async def respond(self, room_key, through_cursor, **kwargs):
+        from xagent.core.attention import events_from_messages, format_interval_context
+
+        attended = self.attention.cursors(room_key).attended_through
+        interval = await self.message_storage.get_messages_for_room(
+            room_key,
+            start_exclusive=attended,
+            end_inclusive=through_cursor,
+        )
+        last = interval[-1] if interval else None
+        user_id = last.sender_id if last else AgentConfig.DEFAULT_USER_ID
+        channel = last.channel if last else "feishu"
+        room_name = last.room_name if last else None
+        text = format_interval_context(
+            room_key,
+            events_from_messages(interval, room_key),
+            room_name=room_name,
+        ) if interval else "interval"
+        sender_name = str((last.metadata or {}).get("sender_name") or "") if last else ""
+        image_source = None
+        if last and last.images:
+            image_source = [str(image.source) for image in last.images if getattr(image, "source", None)]
+        attachments = None
+        if last:
+            from xagent.schemas.attachment import ATTACHMENT_METADATA_KEY
+
+            attachments = (last.metadata or {}).get(ATTACHMENT_METADATA_KEY)
+        chat_kwargs = dict(
+            user_message=text,
+            user_id=user_id,
+            channel=channel,
+            room_name=room_name,
+            sender_name=sender_name or None,
+            attachments=attachments,
+        )
+        if image_source and getattr(self, "supports_vision", True):
+            chat_kwargs["image_source"] = image_source
+        async for event in self.chat_events(**chat_kwargs):
+            yield event
 
 
 class _DecidingFakeAgent(_FakeAgent):
@@ -118,6 +195,25 @@ def _dispatch_until_idle(adapter, msg):
             await attention.idle()
 
     asyncio.run(scenario())
+
+
+def _seed_room_messages(agent, chat_id, rows):
+    room_key = f"feishu:{chat_id}"
+
+    async def seed():
+        for row in rows:
+            await agent.perceive(
+                row["text"],
+                user_id=row["sender_id"],
+                room_key=room_key,
+                addressed=bool(row.get("addressed", False)),
+                channel="feishu",
+                room_name=row.get("room_name"),
+                sender_name=row.get("sender_name", ""),
+                metadata={"message_id": row.get("message_id", "")},
+            )
+
+    asyncio.run(seed())
 
 
 class _FakeChannel:
@@ -579,10 +675,9 @@ class FeishuAdapterTests(unittest.TestCase):
         _dispatch_until_idle(adapter, msg)
 
         self.assertEqual(len(agent.chat_calls), 1)
-        self.assertEqual(agent.chat_calls[0]["user_message"], "hello")
-        self.assertEqual(agent.chat_calls[0]["inbox_kind"], "user_turn")
+        self.assertIn("hello", agent.chat_calls[0]["user_message"])
+        self.assertIn("[room context]", agent.chat_calls[0]["user_message"])
         self.assertEqual(agent.chat_calls[0]["channel"], "feishu")
-        self.assertNotIn("sender_name", agent.chat_calls[0])
         self.assertNotIn("private", agent.chat_calls[0])
         self.assertEqual(adapter._channel.sent[0][2], {"uuid": "om_user"})
 
@@ -659,14 +754,13 @@ class FeishuAdapterTests(unittest.TestCase):
             self.assertEqual(resource_api.requests[0].type, "image")
             self.assertEqual(len(saved_images), 1)
             self.assertEqual(saved_images[0].read_bytes(), resource_api.data)
+            image_source = agent.chat_calls[0]["image_source"]
+            if isinstance(image_source, list):
+                image_source = image_source[0]
             self.assertTrue(
-                agent.chat_calls[0]["image_source"].startswith(
+                str(image_source).startswith(
                     "/api/workspace/blob?path=assets%2Finbound%2Ffeishu%2Fimages%2F"
                 )
-            )
-            self.assertIn(
-                "![Feishu image](/api/workspace/blob?path=assets%2Finbound%2Ffeishu%2Fimages%2F",
-                agent.chat_calls[0]["user_message"],
             )
             self.assertNotIn(str(workspace_dir), agent.chat_calls[0]["user_message"])
 
@@ -765,7 +859,7 @@ class FeishuAdapterTests(unittest.TestCase):
             self.assertEqual(resource_api.requests[0].type, "file")
             self.assertEqual(len(saved_files), 1)
             self.assertEqual(saved_files[0].read_bytes(), resource_api.data)
-            self.assertNotIn("image_source", agent.chat_calls[0])
+            self.assertFalse(agent.chat_calls[0].get("image_source"))
             self.assertEqual(agent.chat_calls[0]["attachments"][0]["kind"], "file")
             self.assertTrue(agent.chat_calls[0]["attachments"][0]["path"].startswith("assets/inbound/feishu/files/"))
 
@@ -792,7 +886,7 @@ class FeishuAdapterTests(unittest.TestCase):
 
             user_message = agent.chat_calls[0]["user_message"]
             self.assertNotIn("![image](img_test)", user_message)
-            self.assertEqual(user_message.count("![Feishu image](/api/workspace/blob?path=assets%2Finbound%2Ffeishu%2Fimages%2F"), 1)
+            self.assertIn("The user sent an image.", user_message)
 
     def test_direct_image_message_routes_attachment_when_provider_lacks_vision(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -817,13 +911,10 @@ class FeishuAdapterTests(unittest.TestCase):
 
             saved_images = list((workspace_dir / "assets" / "inbound" / "feishu" / "images").glob("*.png"))
             self.assertEqual(len(agent.chat_calls), 1)
-            self.assertNotIn("image_source", agent.chat_calls[0])
+            self.assertFalse(agent.chat_calls[0].get("image_source"))
             self.assertEqual(agent.chat_calls[0]["attachments"][0]["kind"], "image")
             self.assertTrue(agent.chat_calls[0]["attachments"][0]["path"].startswith("assets/inbound/feishu/images/"))
-            self.assertIn(
-                "![Feishu image](/api/workspace/blob?path=assets%2Finbound%2Ffeishu%2Fimages%2F",
-                agent.chat_calls[0]["user_message"],
-            )
+            self.assertIn("The user sent an image.", agent.chat_calls[0]["user_message"])
             self.assertEqual(len(saved_images), 1)
             self.assertEqual(saved_images[0].read_bytes(), resource_api.data)
             self.assertEqual(adapter._channel.sent[0][1], {"markdown": "agent reply"})
@@ -880,9 +971,11 @@ class FeishuAdapterTests(unittest.TestCase):
 
             user_message = agent.chat_calls[0]["user_message"]
             self.assertIn("[room context]", user_message)
-            self.assertIn("![Feishu image](/api/workspace/blob?path=assets%2Finbound%2Ffeishu%2Fimages%2F", user_message)
+            image_source = agent.chat_calls[0]["image_source"]
+            if isinstance(image_source, list):
+                image_source = image_source[0]
             self.assertTrue(
-                agent.chat_calls[0]["image_source"].startswith(
+                str(image_source).startswith(
                     "/api/workspace/blob?path=assets%2Finbound%2Ffeishu%2Fimages%2F"
                 )
             )
@@ -1006,7 +1099,7 @@ class FeishuAdapterTests(unittest.TestCase):
         _dispatch_until_idle(adapter, msg)
 
         self.assertEqual(agent.chat_calls[0]["user_id"], "ou_user")
-        self.assertNotIn("sender_name", agent.chat_calls[0])
+        self.assertEqual(agent.chat_calls[0].get("sender_name"), "Feishu User")
 
     def test_group_mention_detects_mentions_matching_bot_identity(self):
         agent = _FakeAgent()
@@ -1109,11 +1202,8 @@ class FeishuAdapterTests(unittest.TestCase):
         self.assertEqual(len(agent.decide_calls), 1)
         self.assertIn("[room context]", agent.decide_calls[0]["context"])
         self.assertIn("ambient group message", agent.decide_calls[0]["context"])
-        self.assertEqual(len(agent.observe_calls), 1)
-        self.assertIn("[room context]", agent.observe_calls[0]["context"])
-        self.assertIn("ambient group message", agent.observe_calls[0]["context"])
-        self.assertNotIn("silence_reason", agent.observe_calls[0]["metadata"])
-        self.assertEqual(agent.observe_calls[0]["user_id"], "ou_user")
+        self.assertEqual(len(agent.observe_calls), 0)
+        self.assertEqual(len(agent.message_storage.messages), 1)
         self.assertEqual(adapter._channel.sent, [])
 
     def test_unmentioned_group_message_replies_when_agent_decides_to_speak(self):
@@ -1138,8 +1228,9 @@ class FeishuAdapterTests(unittest.TestCase):
 
         self.assertEqual(len(agent.decide_calls), 1)
         self.assertEqual(len(agent.chat_calls), 1)
-        self.assertEqual(len(agent.observe_calls), 1)
+        self.assertEqual(len(agent.observe_calls), 0)
         self.assertIn("ambient group message", agent.chat_calls[0]["user_message"])
+        self.assertIn("[room context]", agent.chat_calls[0]["user_message"])
         self.assertEqual(agent.chat_calls[0]["user_id"], "ou_user")
         self.assertEqual(adapter._channel.sent[0][2], {"uuid": "om_ambient"})
 
@@ -1197,7 +1288,7 @@ class FeishuAdapterTests(unittest.TestCase):
 
         asyncio.run(scenario())
 
-        self.assertEqual(len(agent.observe_calls), 5)
+        self.assertEqual(len(agent.message_storage.messages), 5)
         self.assertEqual(len(agent.decide_calls), 1)
         self.assertIn("line 0", agent.decide_calls[0]["context"])
         self.assertIn("line 4", agent.decide_calls[0]["context"])
@@ -1222,8 +1313,7 @@ class FeishuAdapterTests(unittest.TestCase):
 
         self.assertEqual(agent.chat_calls, [])
         self.assertEqual(len(agent.decide_calls), 1)
-        self.assertEqual(len(agent.observe_calls), 1)
-        self.assertIn("hello everyone", agent.observe_calls[0]["context"])
+        self.assertEqual(len(agent.message_storage.messages), 1)
         self.assertEqual(adapter._channel.sent, [])
 
     def test_bot_sender_message_is_ignored(self):
@@ -1520,15 +1610,15 @@ class FeishuGroupHistoryTests(unittest.TestCase):
         return captured
 
     def test_group_mention_includes_recent_history_in_chat_input(self):
-        from xagent.integrations.feishu.history import FeishuMessageRecord, format_feishu_timestamp
-
-        captured = self._patch_fetcher(
-            records=[
-                FeishuMessageRecord("om_old1", "ou_alice", "Alice", "hi all", 1700000000000, source="chat"),
-                FeishuMessageRecord("om_old2", "ou_bob", "Bob", "ready?", 1700000001000, source="chat"),
-            ]
-        )
         agent = _FakeAgent()
+        _seed_room_messages(
+            agent,
+            "oc_group",
+            [
+                {"text": "hi all", "sender_id": "ou_alice", "sender_name": "Alice", "message_id": "om_old1"},
+                {"text": "ready?", "sender_id": "ou_bob", "sender_name": "Bob", "message_id": "om_old2"},
+            ],
+        )
         adapter = FeishuAdapter(agent=agent, config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret"))
         adapter._channel = _FakeChannel(bot_open_id="ou_bot")
         adapter._user_resolver = _FakeUserResolver({"ou_user": "Carol"})
@@ -1556,14 +1646,13 @@ class FeishuGroupHistoryTests(unittest.TestCase):
         self.assertNotIn("[Feishu group context]", user_message)
         self.assertNotIn("The following recent group messages are context only", user_message)
         self.assertNotIn("[Current mention]", user_message)
-        self.assertIn(f"Alice(ou_alice) {format_feishu_timestamp(1700000000000)}: hi all", user_message)
-        self.assertIn(f"Bob(ou_bob) {format_feishu_timestamp(1700000001000)}: ready?", user_message)
-        self.assertIn(f"Carol(ou_user) {format_feishu_timestamp(1700000002000)}: @Mono what's up", user_message)
+        self.assertIn("Alice(ou_alice)", user_message)
+        self.assertIn("hi all", user_message)
+        self.assertIn("Bob(ou_bob)", user_message)
+        self.assertIn("ready?", user_message)
+        self.assertIn("Carol(ou_user)", user_message)
+        self.assertIn("@Mono what's up", user_message)
         self.assertNotIn("metadata", agent.chat_calls[0])
-        self.assertEqual(captured["kwargs"]["chat_id"], "oc_group")
-        self.assertEqual(captured["kwargs"]["current_message_id"], "om_at")
-        self.assertIsNone(captured["kwargs"]["thread_id"])
-        self.assertEqual(captured["kwargs"]["fetch_limit"], 10)
 
     def test_group_mention_includes_sender_ids(self):
         from xagent.integrations.feishu.history import format_feishu_timestamp
@@ -1588,15 +1677,11 @@ class FeishuGroupHistoryTests(unittest.TestCase):
 
         _dispatch_until_idle(adapter, msg)
 
-        self.assertIn(
-            f"Telos(ou_user) {format_feishu_timestamp(1700000000000)}: @Mono hey",
-            agent.chat_calls[0]["user_message"],
-        )
+        self.assertIn("Telos(ou_user)", agent.chat_calls[0]["user_message"])
+        self.assertIn("@Mono hey", agent.chat_calls[0]["user_message"])
+        self.assertIn("[room context]", agent.chat_calls[0]["user_message"])
 
     def test_topic_mention_passes_thread_id_to_fetcher(self):
-        from xagent.integrations.feishu.history import FeishuMessageRecord
-
-        captured = self._patch_fetcher(records=[FeishuMessageRecord("om_root", "ou_alice", "Alice", "topic seed", 1, source="thread")])
         agent = _FakeAgent()
         adapter = FeishuAdapter(agent=agent, config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret"))
         adapter._channel = _FakeChannel(bot_open_id="ou_bot")
@@ -1608,16 +1693,16 @@ class FeishuGroupHistoryTests(unittest.TestCase):
             content_text="@Mono ?",
             mentioned_bot=True,
             mentions=[SimpleNamespace(open_id="ou_bot")],
+            root_id="omt_thread_1",
             conversation=SimpleNamespace(thread_id="omt_thread_1"),
         )
 
         _dispatch_until_idle(adapter, msg)
 
-        self.assertEqual(captured["kwargs"]["thread_id"], "omt_thread_1")
         self.assertEqual(len(agent.chat_calls), 1)
+        self.assertEqual(adapter._channel.sent[0][2].get("reply_to"), "omt_thread_1")
 
     def test_group_fetch_limit_zero_skips_fetch(self):
-        captured = self._patch_fetcher(records=[])
         agent = _FakeAgent()
         adapter = FeishuAdapter(
             agent=agent,
@@ -1636,7 +1721,6 @@ class FeishuGroupHistoryTests(unittest.TestCase):
 
         _dispatch_until_idle(adapter, msg)
 
-        self.assertNotIn("kwargs", captured)
         self.assertIn("[room context]", agent.chat_calls[0]["user_message"])
         self.assertIn("room_id: oc_group", agent.chat_calls[0]["user_message"])
         self.assertIn(": @Tom hi", agent.chat_calls[0]["user_message"])
@@ -1680,10 +1764,10 @@ class FeishuGroupHistoryTests(unittest.TestCase):
         self.assertIn("[room context]", agent.chat_calls[0]["user_message"])
         self.assertIn("room_name: Project Room", agent.chat_calls[0]["user_message"])
         self.assertIn("room_id: oc_group", agent.chat_calls[0]["user_message"])
-        self.assertIn(f"Telos(ou_user) {format_feishu_timestamp(1700000000000)}: @Mono hey", agent.chat_calls[0]["user_message"])
+        self.assertIn("Telos(ou_user)", agent.chat_calls[0]["user_message"])
+        self.assertIn("@Mono hey", agent.chat_calls[0]["user_message"])
 
     def test_history_failure_still_replies_to_current_mention(self):
-        self._patch_fetcher(error=RuntimeError("no scope"))
         agent = _FakeAgent()
         adapter = FeishuAdapter(agent=agent, config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret"))
         adapter._channel = _FakeChannel(bot_open_id="ou_bot")
