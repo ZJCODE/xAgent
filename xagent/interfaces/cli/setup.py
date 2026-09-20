@@ -103,11 +103,9 @@ class VoiceInitSelection:
 
     voice_enabled: bool = True
     voice_api_key: str = ""
-    voice_profile: str = "room"
     voice_name: str = "Owen"
     language_hints: tuple[str, ...] = ("zh", "en")
     fallback_language: str = "zh"
-    interruptions: bool = False
     names: tuple[str, ...] = ()
 
 
@@ -322,11 +320,9 @@ def build_voice_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
     defaults = {
         "voice_enabled": True,
         "voice_api_key": "",
-        "voice_profile": "room",
         "voice_name": "Owen",
         "language_hints": ["zh", "en"],
         "fallback_language": "zh",
-        "interruptions": False,
         "names": [],
     }
     channels_cfg = config.get("channels")
@@ -338,11 +334,9 @@ def build_voice_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
                 public = parsed.to_public_dict()
                 defaults.update(
                     {
-                        "voice_profile": public.get("profile", "room"),
                         "voice_name": public.get("voice", "Owen"),
                         "language_hints": list(public.get("language_hints") or ["zh", "en"]),
                         "fallback_language": public.get("fallback_language", "zh"),
-                        "interruptions": bool(public.get("interruptions", False)),
                         "names": list(public.get("names") or []),
                     }
                 )
@@ -351,10 +345,6 @@ def build_voice_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
     return {
         "defaults": defaults,
         "placeholders": {"soniox_api_key": SONIOX_KEY_PLACEHOLDER},
-        "profile_options": [
-            {"id": "room", "label": "Room device", "description": "Far-field speaker, several people."},
-            {"id": "headset", "label": "Headset", "description": "Near-field mic, usually one person."},
-        ],
         "configured": _channel_configured(config, "voice"),
         "can_force": True,
     }
@@ -427,9 +417,6 @@ def voice_init_selection_from_mapping(
 ) -> VoiceInitSelection:
     """Build a ``VoiceInitSelection`` from API/JSON input."""
     schema_defaults = build_voice_setup_schema(config).get("defaults") or {}
-    profile = str(data.get("voice_profile") or schema_defaults.get("voice_profile") or "room").strip().lower()
-    if profile not in {"room", "headset"}:
-        raise ChannelSetupError('voice_profile must be "room" or "headset"')
     hints_raw = data.get("language_hints")
     if hints_raw is None:
         hints = list(schema_defaults.get("language_hints") or ["zh", "en"])
@@ -451,21 +438,14 @@ def voice_init_selection_from_mapping(
             raise ChannelSetupError("names must be a list or comma-separated string")
     else:
         names = tuple(schema_defaults.get("names") or ())
-    interruptions = (
-        bool(data["interruptions"])
-        if "interruptions" in data
-        else bool(schema_defaults.get("interruptions", False))
-    )
     return VoiceInitSelection(
         voice_enabled=bool(data.get("voice_enabled", True)),
         voice_api_key=str(data.get("voice_api_key") or "").strip(),
-        voice_profile=profile,
         voice_name=str(data.get("voice_name") or schema_defaults.get("voice_name") or "Owen").strip()
         or "Owen",
         language_hints=tuple(hints),
         fallback_language=str(data.get("fallback_language") or schema_defaults.get("fallback_language") or "zh").strip()
         or "zh",
-        interruptions=interruptions,
         names=names,
     )
 
@@ -613,11 +593,9 @@ def _voice_channel_config(
     if existing:
         merged = dict(existing)
         merged["api_key"] = api_key
-        merged["profile"] = selection.voice_profile
         merged["voice"] = selection.voice_name
         merged["language_hints"] = list(selection.language_hints)
         merged["fallback_language"] = selection.fallback_language
-        merged["interruptions"] = selection.interruptions
         if selection.names:
             merged["names"] = list(selection.names)
         elif isinstance(existing.get("names"), list):
@@ -625,11 +603,9 @@ def _voice_channel_config(
         return VoiceChannelConfig.from_dict(merged).to_public_dict()
     payload = {
         "api_key": api_key,
-        "profile": selection.voice_profile,
         "voice": selection.voice_name,
         "language_hints": list(selection.language_hints),
         "fallback_language": selection.fallback_language,
-        "interruptions": selection.interruptions,
         "names": list(selection.names),
     }
     return VoiceChannelConfig.from_dict(payload).to_public_dict()

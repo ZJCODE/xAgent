@@ -52,12 +52,110 @@ class AudioStreamSelection:
 
 
 @dataclass(frozen=True)
+class AudioTopology:
+    """What the selected devices say about the room and about echo.
+
+    ``near_field`` separates a mic worn or held by one person from one sitting
+    across the room; it drives diarization, attention and endpointing.
+    ``echo_managed`` is a different question: whether playback is prevented from
+    reaching the microphone, which is the precondition for barge-in.
+    """
+
+    near_field: bool
+    echo_managed: bool
+    reason: str
+
+
+@dataclass(frozen=True)
 class AudioIOProfile:
     input_selection: AudioStreamSelection
     output_selection: AudioStreamSelection
+    topology: AudioTopology
 
 
 AudioDevicePreference = str | int | None
+
+# Devices that carry their own echo cancellation: anything worn on the head,
+# plus conference speakerphones, which are built around an AEC chip.
+_NEAR_FIELD_NAME_HINTS = (
+    "headset",
+    "headphone",
+    "earphone",
+    "earbud",
+    "earpod",
+    "airpod",
+    "buds",
+    "耳机",
+    "耳麦",
+)
+_ECHO_MANAGED_NAME_HINTS = _NEAR_FIELD_NAME_HINTS + (
+    "speakerphone",
+    "conference",
+    "jabra",
+    "poly ",
+    "plantronics",
+    "echo cancel",
+    "aec",
+    "会议",
+)
+
+
+def detect_audio_topology(
+    input_selection: AudioStreamSelection,
+    output_selection: AudioStreamSelection,
+) -> AudioTopology:
+    """Infer near-field and echo handling from the devices actually selected."""
+    input_name = _normalize_device_name(input_selection.device_name)
+    output_name = _normalize_device_name(output_selection.device_name)
+    same_device = (
+        input_selection.device_index is not None
+        and input_selection.device_index == output_selection.device_index
+    ) or (bool(input_name) and input_name == output_name)
+
+    near_field_hit = _first_name_hint(input_name, _NEAR_FIELD_NAME_HINTS) or _first_name_hint(
+        output_name, _NEAR_FIELD_NAME_HINTS
+    )
+    if near_field_hit:
+        return AudioTopology(
+            near_field=True,
+            echo_managed=True,
+            reason=f"device name contains {near_field_hit!r}",
+        )
+
+    echo_hit = _first_name_hint(input_name, _ECHO_MANAGED_NAME_HINTS) or _first_name_hint(
+        output_name, _ECHO_MANAGED_NAME_HINTS
+    )
+    if echo_hit:
+        return AudioTopology(
+            near_field=False,
+            echo_managed=True,
+            reason=f"device name contains {echo_hit!r}",
+        )
+
+    if same_device:
+        # One device owning both directions is a headset or a speakerphone;
+        # either way the vendor, not us, is responsible for the echo path.
+        return AudioTopology(
+            near_field=False,
+            echo_managed=True,
+            reason=f"capture and playback share device {input_selection.device_name!r}",
+        )
+
+    return AudioTopology(
+        near_field=False,
+        echo_managed=False,
+        reason=(
+            f"separate capture {input_selection.device_name!r} and playback "
+            f"{output_selection.device_name!r} devices"
+        ),
+    )
+
+
+def _first_name_hint(name: str, hints: tuple[str, ...]) -> str:
+    for hint in hints:
+        if hint in name:
+            return hint.strip()
+    return ""
 
 
 def resolve_audio_io_profile(
@@ -108,9 +206,17 @@ def resolve_audio_io_profile(
         output_selection.target_channels,
         output_selection.target_sample_rate,
     )
+    topology = detect_audio_topology(input_selection, output_selection)
+    logger.info(
+        "Voice audio topology: near_field=%s echo_managed=%s (%s)",
+        topology.near_field,
+        topology.echo_managed,
+        topology.reason,
+    )
     return AudioIOProfile(
         input_selection=input_selection,
         output_selection=output_selection,
+        topology=topology,
     )
 
 

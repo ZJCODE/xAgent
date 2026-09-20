@@ -324,5 +324,56 @@ class VoiceAudioTests(unittest.TestCase):
         self.assertEqual(len(converted) % 4, 0)
 
 
+def _selection(index, name):
+    return voice_audio.AudioStreamSelection(
+        device_index=index,
+        device_name=name,
+        hostapi_name="Core Audio",
+        stream_channels=1,
+        stream_sample_rate=16000,
+        target_channels=1,
+        target_sample_rate=16000,
+    )
+
+
+class AudioTopologyTests(unittest.TestCase):
+    def test_headset_name_is_near_field_and_echo_managed(self):
+        topology = voice_audio.detect_audio_topology(
+            _selection(1, "Jane's AirPods Pro"),
+            _selection(1, "Jane's AirPods Pro"),
+        )
+
+        self.assertTrue(topology.near_field)
+        self.assertTrue(topology.echo_managed)
+
+    def test_speakerphone_is_far_field_but_echo_managed(self):
+        topology = voice_audio.detect_audio_topology(
+            _selection(3, "Jabra Speak 510"),
+            _selection(3, "Jabra Speak 510"),
+        )
+
+        self.assertFalse(topology.near_field)
+        self.assertTrue(topology.echo_managed)
+
+    def test_shared_device_is_echo_managed(self):
+        topology = voice_audio.detect_audio_topology(
+            _selection(2, "UGREEN Camera 2K"),
+            _selection(2, "UGREEN Camera 2K"),
+        )
+
+        self.assertFalse(topology.near_field)
+        self.assertTrue(topology.echo_managed)
+
+    def test_separate_mic_and_speaker_is_not_echo_managed(self):
+        topology = voice_audio.detect_audio_topology(
+            _selection(2, "iMac麦克风"),
+            _selection(3, "iMac扬声器"),
+        )
+
+        self.assertFalse(topology.near_field)
+        self.assertFalse(topology.echo_managed)
+        self.assertIn("separate", topology.reason)
+
+
 if __name__ == "__main__":
     unittest.main()

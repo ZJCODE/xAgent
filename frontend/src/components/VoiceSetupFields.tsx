@@ -31,21 +31,6 @@ export function VoiceSetupFields({ schema, selection, onChange }: VoiceSetupFiel
             />
           </WizardField>
 
-          <WizardField label="Device profile" hint="Room = shared speaker; headset = near-field mic.">
-            <select
-              value={selection.voice_profile}
-              onChange={(event) =>
-                onChange({ voice_profile: event.target.value as VoiceSelectionInput["voice_profile"] })
-              }
-            >
-              {schema.profile_options.map((option) => (
-                <option key={option.id} value={option.id}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </WizardField>
-
           <WizardField label="TTS voice name">
             <input
               value={selection.voice_name}
@@ -87,15 +72,6 @@ export function VoiceSetupFields({ schema, selection, onChange }: VoiceSetupFiel
               }
             />
           </WizardField>
-
-          <label className="wizard-checkbox">
-            <input
-              type="checkbox"
-              checked={selection.interruptions}
-              onChange={(event) => onChange({ interruptions: event.target.checked })}
-            />
-            <span>Allow barge-in (needs echo-cancelling speakerphone)</span>
-          </label>
         </>
       ) : null}
     </div>

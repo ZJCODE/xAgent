@@ -456,6 +456,18 @@ def _run_weixin_channel(args: argparse.Namespace, config: dict[str, Any]) -> int
     return 0
 
 
+def _voice_profile_override(args: argparse.Namespace) -> str | None:
+    value = str(getattr(args, "voice_profile", "auto") or "auto").strip().lower()
+    return None if value == "auto" else value
+
+
+def _voice_interruptions_override(args: argparse.Namespace) -> bool | None:
+    value = str(getattr(args, "interruptions", "auto") or "auto").strip().lower()
+    if value == "auto":
+        return None
+    return value == "on"
+
+
 def _run_voice_channel(args: argparse.Namespace, config: dict[str, Any]) -> int:
     log_level = logging.INFO if getattr(args, "verbose", False) else logging.INFO
     logging.basicConfig(
@@ -484,6 +496,8 @@ def _run_voice_channel(args: argparse.Namespace, config: dict[str, Any]) -> int:
             ),
             input_device=getattr(args, "input_device", None),
             output_device=getattr(args, "output_device", None),
+            profile_override=_voice_profile_override(args),
+            interruptions_override=_voice_interruptions_override(args),
         )
     except Exception as exc:
         print(f"Failed to start voice channel: {exc}")
