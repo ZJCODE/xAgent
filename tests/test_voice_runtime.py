@@ -221,6 +221,7 @@ class FakeTTSConnection:
         self.finished = threading.Event()
         self.cancelled = 0
         self.closed = False
+        self.keepalive = 0
 
     def __enter__(self):
         return self
@@ -248,6 +249,64 @@ class FakeTTSConnection:
         self.finished.set()
 
 
+class FakeTTSEvent:
+    def __init__(self, *, audio=None, error_code=None, terminated=False):
+        self.audio = None
+        self._audio_bytes = audio
+        self.error_code = error_code
+        self.terminated = terminated
+
+    def audio_bytes(self):
+        return self._audio_bytes
+
+
+class FakeTTSStream:
+    def __init__(self, connection, config):
+        self.connection = connection
+        self.config = config
+
+    def send_text_chunk(self, text, *, text_end=False):
+        self.connection.send_text_chunk(text, text_end=text_end)
+
+    def finish(self):
+        self.connection.finish()
+
+    def cancel(self):
+        self.connection.cancel()
+
+    def keep_alive(self):
+        self.connection.keepalive += 1
+
+    def receive_events(self):
+        self.connection.finished.wait(1.0)
+        if not self.connection.cancelled:
+            for chunk in self.connection.audio:
+                yield FakeTTSEvent(audio=chunk, terminated=False)
+        yield FakeTTSEvent(terminated=True)
+
+
+class FakeTTSMux:
+    def __init__(self, connection):
+        self.connection = connection
+        self.configs = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.close()
+
+    def open_stream(self, *, config):
+        self.configs.append(config)
+        return FakeTTSStream(self.connection, config)
+
+    def keep_alive(self):
+        self.connection.keepalive += 1
+
+    def close(self):
+        self.connection.close()
+
+
 class FakeRealtimeEndpoint:
     def __init__(self, session):
         self.session = session
@@ -258,11 +317,28 @@ class FakeRealtimeEndpoint:
         return self.session
 
 
+class FakeTTSEndpoint:
+    def __init__(self, connection):
+        self.connection = connection
+        self.configs = []
+        self.muxes = []
+
+    def connect(self, *, config):
+        self.configs.append(config)
+        return self.connection
+
+    def connect_multi_stream(self, **kwargs):
+        del kwargs
+        mux = FakeTTSMux(self.connection)
+        self.muxes.append(mux)
+        return mux
+
+
 class FakeClient:
     def __init__(self, *, stt_session=None, tts_connection=None):
         self.realtime = SimpleNamespace(
             stt=FakeRealtimeEndpoint(stt_session),
-            tts=FakeRealtimeEndpoint(tts_connection),
+            tts=FakeTTSEndpoint(tts_connection or FakeTTSConnection()),
         )
 
 
@@ -407,7 +483,7 @@ class SonioxSDKAdapterTests(unittest.TestCase):
         tts = SonioxRealtimeTTS(api_key="key", config=voice_config(), client=client)
 
         self.assertEqual(list(tts.synthesize_chunks([], language="zh", stop_event=threading.Event())), [])
-        self.assertEqual(client.realtime.tts.configs, [])
+        self.assertEqual(client.realtime.tts.muxes, [])
 
     def test_tts_sends_deltas_immediately_and_splits_only_at_api_limit(self):
         connection = FakeTTSConnection()
@@ -427,7 +503,7 @@ class SonioxSDKAdapterTests(unittest.TestCase):
         self.assertEqual(connection.sent[0:2], [("one", False), ("two", False)])
         self.assertEqual(len(connection.sent[2][0]), SONIOX_TTS_MAX_TEXT_CHARS)
         self.assertEqual(connection.sent[3], ("aaa", False))
-        sdk_config = client.realtime.tts.configs[0]
+        sdk_config = client.realtime.tts.muxes[0].configs[0]
         self.assertEqual(sdk_config.model, SONIOX_TTS_MODEL)
         self.assertEqual(sdk_config.sample_rate, 24000)
         self.assertTrue(sdk_config.return_timestamps)
@@ -443,7 +519,7 @@ class SonioxSDKAdapterTests(unittest.TestCase):
         )
 
         self.assertEqual(list(tts.synthesize_chunks(["hello"], language="en", stop_event=stop_event)), [])
-        self.assertGreaterEqual(connection.cancelled, 1)
+        self.assertEqual(connection.cancelled, 0)
 
     def test_text_split_has_no_small_delta_buffering(self):
         self.assertEqual(list(_split_text_chunk("abc")), ["abc"])
@@ -527,7 +603,7 @@ class VoiceRuntimeTests(unittest.TestCase):
 
         asyncio.run(runtime.run_forever())
 
-        self.assertEqual(len(synth.calls), 2)
+        self.assertGreaterEqual(len(synth.calls), 2)
         self.assertFalse(runtime.pause_event.is_set())
 
     def test_scheduled_message_uses_shared_speak_path(self):

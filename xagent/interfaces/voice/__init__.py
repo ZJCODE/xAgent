@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 from .config import SonioxSTTContextConfig, VoiceAudioConfig, VoiceChannelConfig
-from .runtime import VoiceRuntime, VoiceRuntimeOptions, VoiceUtterance
+from .runtime import VoiceRuntime, VoiceRuntimeOptions
+from .types import VoiceUtterance
 
 __all__ = [
     "SonioxSTTContextConfig",

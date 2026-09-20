@@ -7,8 +7,7 @@ import threading
 import uuid
 from collections import Counter
 from dataclasses import dataclass
-from itertools import chain
-from typing import Any, Iterable, Iterator
+from typing import Any, Callable, Iterable, Iterator
 
 from soniox import SonioxClient
 from soniox.types import RealtimeSTTConfig, RealtimeTTSConfig
@@ -32,6 +31,8 @@ _logger = logging.getLogger(__name__)
 
 STT_RECONNECT_BASE_SECONDS = 0.5
 STT_RECONNECT_MAX_SECONDS = 30.0
+TTS_KEEPALIVE_IDLE_SECONDS = 20.0
+TTS_MAX_AUDIO_DURATION_ERROR = 413
 _RETRYABLE_ERROR_TYPES = frozenset(
     {
         "service_unavailable",
@@ -47,6 +48,17 @@ _RETRY_BACKOFF_SECONDS = {
     "internal_error": 1.0,
 }
 _NON_RETRYABLE_STATUS_CODES = frozenset({400, 401, 402, 403, 404, 409, 422})
+
+_STT_RECOVERED = Callable[[], None]
+_STT_RECONNECTING = Callable[[], None]
+
+
+@dataclass(frozen=True)
+class SonioxSTTCallbacks:
+    """Optional hooks for audible STT lifecycle feedback."""
+
+    on_reconnecting: _STT_RECONNECTING | None = None
+    on_recovered: _STT_RECOVERED | None = None
 
 
 class SonioxVoiceError(RuntimeError):
@@ -89,10 +101,12 @@ class SonioxRealtimeSTT:
         api_key: str,
         config: VoiceChannelConfig,
         client: Any | None = None,
+        callbacks: SonioxSTTCallbacks | None = None,
     ) -> None:
         self.api_key = api_key
         self.config = config
         self._client = client or SonioxClient(api_key=api_key)
+        self._callbacks = callbacks or SonioxSTTCallbacks()
 
     def iter_utterances(
         self,
@@ -103,6 +117,7 @@ class SonioxRealtimeSTT:
     ) -> Iterator[VoiceUtterance]:
         """Yield turns across recoverable session failures until stopped."""
         backoff = STT_RECONNECT_BASE_SECONDS
+        awaiting_recovery_notice = False
         while not stop_event.is_set():
             session_stop = threading.Event()
             produced_utterance = False
@@ -115,6 +130,11 @@ class SonioxRealtimeSTT:
                 ):
                     produced_utterance = True
                     backoff = STT_RECONNECT_BASE_SECONDS
+                    if awaiting_recovery_notice:
+                        awaiting_recovery_notice = False
+                        recovered = self._callbacks.on_recovered
+                        if recovered is not None:
+                            recovered()
                     yield utterance
             except Exception as exc:
                 if stop_event.is_set():
@@ -123,6 +143,10 @@ class SonioxRealtimeSTT:
                     raise
                 if isinstance(exc, SonioxVoiceError) and exc.retry_backoff_seconds:
                     backoff = max(backoff, exc.retry_backoff_seconds)
+                reconnecting = self._callbacks.on_reconnecting
+                if reconnecting is not None and not awaiting_recovery_notice:
+                    reconnecting()
+                awaiting_recovery_notice = True
                 _logger.warning(
                     "Soniox STT session failed (%s); reconnecting in %.1fs",
                     exc,
@@ -131,6 +155,10 @@ class SonioxRealtimeSTT:
             else:
                 if stop_event.is_set():
                     return
+                reconnecting = self._callbacks.on_reconnecting
+                if reconnecting is not None and not awaiting_recovery_notice:
+                    reconnecting()
+                awaiting_recovery_notice = True
                 _logger.warning("Soniox STT session ended; reconnecting in %.1fs", backoff)
             finally:
                 session_stop.set()
@@ -250,7 +278,7 @@ class SonioxRealtimeSTT:
 
 
 class SonioxRealtimeTTS:
-    """Generate one short Soniox realtime TTS stream per assistant turn."""
+    """Generate Soniox TTS audio using a warm multiplexed websocket connection."""
 
     def __init__(
         self,
@@ -263,16 +291,37 @@ class SonioxRealtimeTTS:
         self.config = config
         self._client = client or SonioxClient(api_key=api_key)
         self._cancel_event = threading.Event()
-        self._connection_lock = threading.Lock()
-        self._active_connection: Any | None = None
+        self._mux_lock = threading.Lock()
+        self._mux: Any | None = None
+        self._active_stream: Any | None = None
+
+    def keep_alive(self) -> None:
+        with self._mux_lock:
+            mux = self._mux
+        if mux is not None:
+            try:
+                mux.keep_alive()
+            except Exception:
+                pass
 
     def cancel(self) -> None:
         self._cancel_event.set()
-        with self._connection_lock:
-            connection = self._active_connection
-        if connection is not None:
+        with self._mux_lock:
+            stream = self._active_stream
+        if stream is not None:
             try:
-                connection.cancel()
+                stream.cancel()
+            except Exception:
+                pass
+
+    def close(self) -> None:
+        with self._mux_lock:
+            mux = self._mux
+            self._mux = None
+            self._active_stream = None
+        if mux is not None:
+            try:
+                mux.close()
             except Exception:
                 pass
 
@@ -283,90 +332,175 @@ class SonioxRealtimeTTS:
         language: str,
         stop_event: threading.Event,
     ) -> Iterator[bytes]:
-        self._cancel_event.clear()
-        source = iter(text_chunks)
-        first_text = next((chunk for chunk in source if chunk), None)
-        if first_text is None:
+        if stop_event.is_set() or self._cancel_event.is_set():
             return
-        stream_id = f"xagent-tts-{uuid.uuid4().hex}"
-        sdk_config = RealtimeTTSConfig(
-            stream_id=stream_id,
-            model=SONIOX_TTS_MODEL,
-            language=language,
-            voice=self.config.voice,
-            audio_format=SONIOX_AUDIO_FORMAT,
-            sample_rate=SONIOX_TTS_SAMPLE_RATE,
-            speed=self.config.speed,
-            return_timestamps=self.config.return_timestamps,
-        )
-        connection = self._client.realtime.tts.connect(config=sdk_config)
-        send_errors: queue.Queue[BaseException] = queue.Queue()
-        with connection:
-            with self._connection_lock:
-                self._active_connection = connection
+        self._cancel_event.clear()
+        pending = _TextChunkFeeder(text_chunks)
+        pending.join(timeout=1.0)
+        first = pending.take(timeout=0.0)
+        if first is None:
+            return
+        pending.requeue_front(first)
+
+        while pending.has_data() and not self._cancel_event.is_set() and not stop_event.is_set():
+            stream_id = f"xagent-tts-{uuid.uuid4().hex}"
+            sdk_config = RealtimeTTSConfig(
+                stream_id=stream_id,
+                model=SONIOX_TTS_MODEL,
+                language=language,
+                voice=self.config.voice,
+                audio_format=SONIOX_AUDIO_FORMAT,
+                sample_rate=SONIOX_TTS_SAMPLE_RATE,
+                speed=self.config.speed,
+                return_timestamps=self.config.return_timestamps,
+            )
+            send_errors: queue.Queue[BaseException] = queue.Queue()
+            max_duration_hit = threading.Event()
+            mux = self._ensure_mux()
+            stream = mux.open_stream(config=sdk_config)
+            with self._mux_lock:
+                self._active_stream = stream
             sender = threading.Thread(
                 target=self._send_text_loop,
-                args=(connection, chain((first_text,), source), stop_event, send_errors),
+                args=(stream, pending, stop_event, send_errors, max_duration_hit),
                 daemon=True,
                 name="xagent-soniox-tts-send",
             )
             sender.start()
             try:
-                for audio in connection.receive_audio_chunks():
+                for event in stream.receive_events():
                     if not send_errors.empty():
                         raise send_errors.get()
-                    if audio:
-                        yield audio
+                    if max_duration_hit.is_set():
+                        break
+                    try:
+                        chunk = event.audio_bytes()
+                    except ValueError as exc:
+                        raise SonioxVoiceError(str(exc)) from exc
+                    if chunk:
+                        yield chunk
+                    if event.error_code == TTS_MAX_AUDIO_DURATION_ERROR:
+                        max_duration_hit.set()
+                        break
+                    if event.terminated:
+                        break
                 if not send_errors.empty():
                     raise send_errors.get()
             finally:
-                if self._cancel_event.is_set() or stop_event.is_set():
-                    try:
-                        connection.cancel()
-                    except Exception:
-                        pass
-                try:
-                    connection.close()
-                except Exception:
-                    pass
                 sender.join(timeout=1.0)
-                with self._connection_lock:
-                    if self._active_connection is connection:
-                        self._active_connection = None
+                with self._mux_lock:
+                    if self._active_stream is stream:
+                        self._active_stream = None
+                if max_duration_hit.is_set() and pending.has_data():
+                    _logger.info("Soniox TTS stream hit max audio duration; continuing on a new stream")
+                    continue
+                return
+
+    def _ensure_mux(self) -> Any:
+        with self._mux_lock:
+            if self._mux is None:
+                mux = self._client.realtime.tts.connect_multi_stream()
+                mux.__enter__()
+                self._mux = mux
+            return self._mux
 
     def _send_text_loop(
         self,
-        connection: Any,
-        text_chunks: Iterable[str],
+        stream: Any,
+        pending: "_TextChunkFeeder",
         stop_event: threading.Event,
         send_errors: queue.Queue[BaseException],
+        max_duration_hit: threading.Event,
     ) -> None:
         try:
-            for chunk in text_chunks:
-                if self._cancel_event.is_set() or stop_event.is_set():
-                    connection.cancel()
+            while pending.has_data():
+                if self._cancel_event.is_set() or stop_event.is_set() or max_duration_hit.is_set():
+                    stream.cancel()
                     return
+                chunk = pending.take(timeout=TTS_KEEPALIVE_IDLE_SECONDS)
+                if chunk is None:
+                    try:
+                        stream.keep_alive()
+                    except Exception:
+                        pass
+                    continue
                 for part in _split_text_chunk(chunk):
-                    connection.send_text_chunk(part, text_end=False)
+                    if self._cancel_event.is_set() or stop_event.is_set():
+                        stream.cancel()
+                        return
+                    stream.send_text_chunk(part, text_end=False)
             if self._cancel_event.is_set() or stop_event.is_set():
-                connection.cancel()
+                stream.cancel()
                 return
-            connection.finish()
+            stream.finish()
         except Exception as exc:
             send_errors.put(exc)
             try:
-                connection.close()
+                stream.cancel()
             except Exception:
                 pass
 
 
+class _TextChunkFeeder:
+    """Bridge a blocking text iterator into timed reads with keepalive gaps."""
+
+    _sentinel = object()
+
+    def __init__(self, source: Iterable[str]) -> None:
+        self._queue: queue.Queue[str | object] = queue.Queue()
+        self._done = threading.Event()
+        self._pushback: str | None = None
+        self._thread = threading.Thread(target=self._run, args=(source,), daemon=True)
+        self._thread.start()
+
+    def _run(self, source: Iterable[str]) -> None:
+        try:
+            for chunk in source:
+                if chunk:
+                    self._queue.put(chunk)
+        finally:
+            self._done.set()
+            self._queue.put(self._sentinel)
+
+    def has_data(self) -> bool:
+        return not (self._done.is_set() and self._queue.empty())
+
+    def join(self, *, timeout: float = 1.0) -> None:
+        self._thread.join(timeout=timeout)
+
+    def requeue_front(self, chunk: str) -> None:
+        self._pushback = chunk
+
+    def take(self, *, timeout: float) -> str | None:
+        if self._pushback is not None:
+            chunk = self._pushback
+            self._pushback = None
+            return chunk
+        if self._done.is_set() and self._queue.empty():
+            return None
+        try:
+            item = self._queue.get(timeout=timeout)
+        except queue.Empty:
+            return None
+        if item is self._sentinel:
+            return None
+        return str(item)
+
+
 def create_soniox_adapters(
     config: VoiceChannelConfig,
+    *,
+    stt_callbacks: SonioxSTTCallbacks | None = None,
 ) -> tuple[SonioxRealtimeSTT, SonioxRealtimeTTS]:
     api_key = config.resolved_api_key()
     client = SonioxClient(api_key=api_key)
     return (
-        SonioxRealtimeSTT(api_key=api_key, config=config, client=client),
+        SonioxRealtimeSTT(
+            api_key=api_key,
+            config=config,
+            client=client,
+            callbacks=stt_callbacks,
+        ),
         SonioxRealtimeTTS(api_key=api_key, config=config, client=client),
     )
 

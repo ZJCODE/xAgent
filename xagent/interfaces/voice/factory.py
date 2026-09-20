@@ -17,7 +17,7 @@ from .config import (
     VoiceChannelConfig,
 )
 from .runtime import VoiceRuntime, VoiceRuntimeOptions
-from .soniox import create_soniox_adapters
+from .soniox import SonioxSTTCallbacks, create_soniox_adapters
 
 
 def create_local_voice_runtime(
@@ -28,7 +28,25 @@ def create_local_voice_runtime(
     input_device: AudioDevicePreference = None,
     output_device: AudioDevicePreference = None,
 ) -> VoiceRuntime:
-    recognizer, synthesizer = create_soniox_adapters(config)
+    runtime_holder: list[VoiceRuntime | None] = [None]
+
+    def _on_stt_reconnecting() -> None:
+        runtime = runtime_holder[0]
+        if runtime is not None:
+            runtime._schedule_notice("ears_offline")
+
+    def _on_stt_recovered() -> None:
+        runtime = runtime_holder[0]
+        if runtime is not None:
+            runtime._schedule_notice("back_online")
+
+    recognizer, synthesizer = create_soniox_adapters(
+        config,
+        stt_callbacks=SonioxSTTCallbacks(
+            on_reconnecting=_on_stt_reconnecting,
+            on_recovered=_on_stt_recovered,
+        ),
+    )
     audio_profile = resolve_audio_io_profile(
         input_sample_rate=SONIOX_STT_SAMPLE_RATE,
         input_channels=SONIOX_STT_CHANNELS,
@@ -53,7 +71,7 @@ def create_local_voice_runtime(
         stream_sample_rate=audio_profile.output_selection.stream_sample_rate,
         stream_channels=audio_profile.output_selection.stream_channels,
     )
-    return VoiceRuntime(
+    runtime = VoiceRuntime(
         agent=agent,
         config=config,
         microphone=microphone,
@@ -62,3 +80,5 @@ def create_local_voice_runtime(
         player=player,
         options=options,
     )
+    runtime_holder[0] = runtime
+    return runtime

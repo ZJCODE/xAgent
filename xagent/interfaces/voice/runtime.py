@@ -31,6 +31,7 @@ from .speech_text import (
     VOICE_CHANNEL_INSTRUCTIONS,
     sanitize_spoken_text,
 )
+from .notices import VoiceNoticeCache, VoiceNoticeCatalog, VoiceNoticeSpeaker
 from .turn_metrics import VoiceTurnMetrics, VoiceTurnMetricsWriter
 
 _PLAYBACK_MICROPHONE_COOLDOWN_SECONDS = 0.5
@@ -153,6 +154,17 @@ class VoiceRuntime:
         if metrics_path is None and self.options.tasks_dir is not None:
             metrics_path = Path(self.options.tasks_dir).parent / "voice_turn_metrics.jsonl"
         self._metrics_writer = VoiceTurnMetricsWriter(metrics_path)
+        notice_cache_root = None
+        if self.options.tasks_dir is not None:
+            notice_cache_root = Path(self.options.tasks_dir).parent / "voice_notice_cache"
+        self._notice_speaker = VoiceNoticeSpeaker(
+            catalog=VoiceNoticeCatalog.default(),
+            cache=VoiceNoticeCache(notice_cache_root),
+            synthesize=self._synthesize_notice_text,
+            play=self._play_notice_audio,
+            language_for=self._language_tracker.language_before_turn,
+        )
+        self._event_loop: asyncio.AbstractEventLoop | None = None
         self.task_scheduler: AsyncTaskScheduler | None = None
         self._contacts_file: Optional[Path] = None
         if self.options.tasks_dir is not None:
@@ -166,6 +178,7 @@ class VoiceRuntime:
 
     async def run_forever(self) -> None:
         """Run until stopped or a non-recoverable STT error is raised."""
+        self._event_loop = asyncio.get_running_loop()
         self.output("xAgent voice ready. Speak to the microphone; press Ctrl+C to stop.")
         audio_chunks = self.microphone.iter_chunks(
             pause_event=self.pause_event,
@@ -192,6 +205,7 @@ class VoiceRuntime:
                     break
                 transcript = utterance.text.strip()
                 if not transcript:
+                    await self._speak_notice("not_understood")
                     continue
                 endpoint_at = time.monotonic()
                 self.output(f"User: {transcript}")
@@ -200,10 +214,14 @@ class VoiceRuntime:
                 except Exception as exc:
                     self.logger.exception("Voice turn failed")
                     self.output(f"Voice turn failed: {exc}")
+                    await self._speak_notice("error")
         finally:
             self.stop_event.set()
             self.pause_event.clear()
             self.synthesizer.cancel()
+            close = getattr(self.synthesizer, "close", None)
+            if callable(close):
+                close()
             if self.task_scheduler is not None:
                 await self.task_scheduler.stop()
 
@@ -221,6 +239,7 @@ class VoiceRuntime:
         )
         reply_buffer: list[str] = []
         speak_language = {"value": self._language_tracker.language_before_turn()}
+        still_working = asyncio.create_task(self._still_working_guard(timing))
         try:
             await self._speak(
                 self._agent_text_chunks(utterance.text, reply_buffer=reply_buffer),
@@ -233,6 +252,8 @@ class VoiceRuntime:
             metrics.error_class = type(exc).__name__
             raise
         finally:
+            still_working.cancel()
+            await asyncio.gather(still_working, return_exceptions=True)
             metrics.turn_end_at = time.monotonic()
             metrics.reply_char_count = sum(len(part) for part in reply_buffer)
             metrics.tts_language = speak_language["value"]
@@ -536,6 +557,46 @@ class VoiceRuntime:
                 )
             except Exception:
                 self.logger.debug("Failed to persist voice subconscious delivery", exc_info=True)
+
+    def _schedule_notice(self, category: str) -> None:
+        loop = self._event_loop
+        if loop is None or not loop.is_running():
+            return
+        asyncio.run_coroutine_threadsafe(self._speak_notice(category), loop)
+
+    async def _speak_notice(self, category: str) -> None:
+        if self.stop_event.is_set():
+            return
+        async with self._playback_lock:
+            previous_pause = self.pause_event.is_set()
+            self.pause_event.set()
+            playback_stop = threading.Event()
+            try:
+                await asyncio.to_thread(
+                    self._notice_speaker.speak,
+                    category,
+                )
+            finally:
+                if not previous_pause:
+                    self.pause_event.clear()
+                playback_stop.set()
+
+    def _synthesize_notice_text(self, text: str, language: str) -> Iterator[bytes]:
+        stop = threading.Event()
+        return self.synthesizer.synthesize_chunks([text], language=language, stop_event=stop)
+
+    def _play_notice_audio(self, chunks: Iterable[bytes]) -> None:
+        stop = threading.Event()
+        self.player.play_chunks(iter(chunks), stop_event=stop)
+
+    async def _still_working_guard(self, timing: _TurnTiming) -> None:
+        try:
+            await asyncio.sleep(25.0)
+            while timing.first_text_at is None and not self.stop_event.is_set():
+                await self._speak_notice("still_working")
+                await asyncio.sleep(25.0)
+        except asyncio.CancelledError:
+            return
 
     async def _scheduled_task_text(self, task: ScheduledTaskRecord) -> str:
         if task.task_type == "message":
