@@ -93,14 +93,13 @@ class ObservingAgent(FakeAgent):
 class VoiceAttentionRuntimeTests(unittest.TestCase):
     def test_tier_three_observes_without_chat(self):
         agent = ObservingAgent()
-        config = voice_config(
-            {
-                "attention": {
-                    "open_window_seconds": 0.0,
-                    "wake_terms": [],
-                    "use_decide_participation": False,
-                }
-            }
+        config = voice_config()
+        attention_gate = VoiceAttentionGate(
+            config=VoiceAttentionConfig(
+                open_window_seconds=0.0,
+                wake_terms=[],
+                use_decide_participation=False,
+            )
         )
         runtime = VoiceRuntime(
             agent=agent,
@@ -111,6 +110,7 @@ class VoiceAttentionRuntimeTests(unittest.TestCase):
             player=FakePlayer(),
             options=VoiceRuntimeOptions(user_id="alice"),
             output=lambda *args, **kwargs: None,
+            attention_gate=attention_gate,
         )
         asyncio.run(runtime.run_forever())
         self.assertFalse(hasattr(agent, "kwargs"))
@@ -118,15 +118,19 @@ class VoiceAttentionRuntimeTests(unittest.TestCase):
 
     def test_tier_one_dispatches(self):
         agent = FakeAgent()
+        attention_gate = VoiceAttentionGate(
+            config=VoiceAttentionConfig(open_window_seconds=60.0),
+        )
         runtime = VoiceRuntime(
             agent=agent,
-            config=voice_config({"attention": {"open_window_seconds": 60.0}}),
+            config=voice_config(),
             microphone=FakeMicrophone(),
             recognizer=FakeRecognizer([VoiceUtterance("hello")]),
             synthesizer=FakeSynthesizer(),
             player=FakePlayer(),
             options=VoiceRuntimeOptions(user_id="alice"),
             output=lambda *args, **kwargs: None,
+            attention_gate=attention_gate,
         )
         with patch("xagent.interfaces.voice.runtime._PLAYBACK_MICROPHONE_COOLDOWN_SECONDS", 0.0):
             asyncio.run(runtime.run_forever())

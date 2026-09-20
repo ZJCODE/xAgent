@@ -177,20 +177,13 @@ These are real tuning for a specific room, which is exactly the plan's own test:
 "defaults good enough that an untouched config gives a good room experience;
 these knobs are for tuning a specific room, not for making the thing work."
 
-## 7. Renames and compatibility
+## 7. Schema shape (no legacy paths)
 
-Four Tier 1 names differ from today's schema paths: `names` (`context.terms`),
-`quiet_hours` (`proactive.quiet_hours_start`/`_end`), `idle_shutdown_minutes`
-(`presence.close_stt_after_idle_seconds`), `interruptions`
-(`enable_interruptions`). The config file is user-facing copy, and the current
-names read as internals. Recommendation: accept both via pydantic
-`AliasChoices`, keep the nested paths as the canonical advanced form, and write
-only the short names in generated files. Nothing hand-written breaks, and
-`extra="forbid"` keeps doing its job.
-
-The same eleven Tier 1 keys should drive the web `VoiceSetupFields` (two fields
-today) and `build_voice_setup_schema`, so the wizard and the file agree on what
-the supported surface is.
+`channels.voice` accepts **only** the Tier 1 keys listed in §3. Nested blocks
+such as `context`, `attention`, `performance`, `enable_interruptions`, and
+`return_timestamps` are rejected with a close-match hint. Profile-derived
+behaviour (diarization, endpointing, barge-in thresholds, participation gate)
+is computed internally, not configured separately.
 
 ## 8. Goal check (GOAL.md mandatory review)
 

@@ -75,16 +75,14 @@ class PreemptiveRuntimeTests(unittest.TestCase):
                     yield event
 
         async def run_case():
-            agent = CountingAgent()
-            config = voice_config(
-                {
-                    "performance": {
-                        "preemptive_generation": True,
-                        "instant_ack": False,
-                        "preemptive_min_chars": 3,
-                    }
-                }
+            from xagent.interfaces.voice.ack import InstantAckConfig, InstantAckSpeaker
+            from xagent.interfaces.voice.preemptive import (
+                PreemptiveGenerationConfig,
+                PreemptiveGenerationController,
             )
+
+            agent = CountingAgent()
+            config = voice_config()
             runtime = VoiceRuntime(
                 agent=agent,
                 config=config,
@@ -94,6 +92,23 @@ class PreemptiveRuntimeTests(unittest.TestCase):
                 player=FakePlayer(),
                 options=VoiceRuntimeOptions(user_id="alice"),
                 output=lambda *args, **kwargs: None,
+            )
+            runtime._instant_ack = InstantAckSpeaker(InstantAckConfig(enabled=False))
+            abort_turn = getattr(agent, "abort", None)
+            runtime._preemptive = PreemptiveGenerationController(
+                PreemptiveGenerationConfig(enabled=True, min_chars=3),
+                on_abort=abort_turn if callable(abort_turn) else None,
+            )
+            from xagent.interfaces.voice.speech_text import VOICE_CHANNEL_INSTRUCTIONS
+
+            runtime._preemptive.configure(
+                agent.chat_events,
+                stream=True,
+                channel="voice",
+                inbox_kind="user_turn",
+                channel_instructions=VOICE_CHANNEL_INSTRUCTIONS,
+                room_name=config.room_name,
+                max_agent_loops=config.performance.max_agent_loops,
             )
             await runtime._preemptive.note_partial("hello")
             await asyncio.sleep(0.05)

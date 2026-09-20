@@ -171,7 +171,7 @@ class WebChannelRouteTests(unittest.IsolatedAsyncioTestCase):
             "api_key": "old-key",
             "voice": "Ava",
             "language_hints": ["en", "zh"],
-            "context": {"terms": ["xAgent"]},
+            "names": ["xAgent"],
             "audio": {"input": "Mic", "output": "Speaker"},
         }
         config_path.write_text(yaml.safe_dump(config), encoding="utf-8")

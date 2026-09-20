@@ -310,7 +310,7 @@ class VoiceRuntime:
 
     @property
     def _duplex_capture_enabled(self) -> bool:
-        return bool(self.config.enable_interruptions)
+        return bool(self.config.interruptions)
 
     async def _execute_floor_commands(self, commands) -> None:
         for command in commands:

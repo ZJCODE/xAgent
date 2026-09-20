@@ -264,7 +264,7 @@ class SonioxRealtimeSTT:
             sample_rate=SONIOX_STT_SAMPLE_RATE,
             num_channels=SONIOX_STT_CHANNELS,
             language_hints=self.config.language_hints,
-            context=self.config.merged_stt_context(self._extra_context_terms).to_soniox_payload(),
+            context=self.config.merged_stt_context_payload(self._extra_context_terms),
             enable_endpoint_detection=True,
             endpoint_latency_adjustment_level=self.config.stt_endpoint_latency_level,
             endpoint_sensitivity=self.config.stt_endpoint_sensitivity,

@@ -630,38 +630,6 @@ def _default_init_selection() -> InitSelection:
     )
 
 
-_VOICE_ADVANCED_CONFIG_KEYS = (
-    "attention",
-    "presence",
-    "proactive",
-    "performance",
-    "interruption",
-    "context",
-    "room_name",
-    "enable_diarization",
-)
-
-
-def _attach_advanced_voice_keys(public: dict[str, Any], existing: dict[str, Any]) -> dict[str, Any]:
-    merged = dict(public)
-    for key in _VOICE_ADVANCED_CONFIG_KEYS:
-        if key not in existing:
-            continue
-        if key == "context":
-            ctx = existing.get("context")
-            if isinstance(ctx, dict) and (ctx.get("general") or ctx.get("text")):
-                merged["context"] = ctx
-            continue
-        merged[key] = existing[key]
-    audio = existing.get("audio")
-    if isinstance(audio, dict):
-        inp = audio.get("input")
-        out = audio.get("output")
-        if inp not in (None, "auto") or out not in (None, "auto"):
-            merged["audio"] = dict(audio)
-    return merged
-
-
 def _voice_channel_config(
     selection: VoiceInitSelection,
     *,
@@ -680,9 +648,11 @@ def _voice_channel_config(
         merged["fallback_language"] = selection.fallback_language
         merged["interruptions"] = selection.interruptions
         merged["idle_shutdown_minutes"] = selection.idle_shutdown_minutes
-        merged["names"] = list(selection.names)
-        public = VoiceChannelConfig.from_dict(merged).to_public_dict()
-        return _attach_advanced_voice_keys(public, existing) | {"api_key": api_key}
+        if selection.names:
+            merged["names"] = list(selection.names)
+        elif isinstance(existing.get("names"), list):
+            merged["names"] = list(existing["names"])
+        return VoiceChannelConfig.from_dict(merged).to_public_dict()
     payload = {
         "api_key": api_key,
         "profile": selection.voice_profile,

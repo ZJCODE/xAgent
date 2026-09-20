@@ -35,15 +35,8 @@ _VOICE_KEY_PLACEHOLDERS = {
     "your_qwen_api_key_here",
     "your_api_key_here",
 }
-_LEGACY_VOICE_KEYS = {
-    "enabled",
-    "provider",
-    "stt",
-    "tts",
-    "websocket_base_url",
-}
 
-_VOICE_PUBLIC_KEYS = frozenset(
+_VOICE_TOP_LEVEL_KEYS = frozenset(
     {
         "api_key",
         "profile",
@@ -56,23 +49,6 @@ _VOICE_PUBLIC_KEYS = frozenset(
         "quiet_hours",
         "idle_shutdown_minutes",
         "audio",
-    }
-)
-
-_VOICE_KNOWN_TOP_LEVEL_KEYS = frozenset(
-    {
-        *_VOICE_PUBLIC_KEYS,
-        "enable_interruptions",
-        "context",
-        "attention",
-        "presence",
-        "proactive",
-        "performance",
-        "interruption",
-        "enable_diarization",
-        "room_name",
-        "return_timestamps",
-        "aggregate_utterances",
     }
 )
 
@@ -93,64 +69,17 @@ VOICE_CONFIG_EXAMPLE = """channels:
       output: auto"""
 
 
-def _migration_error(keys: set[str]) -> ValueError:
-    fields = ", ".join(sorted(keys))
-    return ValueError(
-        "Legacy or Qwen voice configuration is no longer supported "
-        f"(found: {fields}). Voice is now Soniox-only and uses a flat configuration. "
-        "Replace channels.voice with:\n\n"
-        f"{VOICE_CONFIG_EXAMPLE}"
-    )
-
-
-def _deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
-    merged = dict(base)
-    for key, value in overlay.items():
-        if (
-            key in merged
-            and isinstance(merged[key], dict)
-            and isinstance(value, dict)
-        ):
-            merged[key] = _deep_merge(merged[key], value)
-        else:
-            merged[key] = value
-    return merged
-
-
-def _profile_preset(profile: str) -> dict[str, Any]:
-    normalized = (profile or "room").strip().lower()
-    if normalized == "headset":
-        return {
-            "enable_diarization": False,
-            "attention": {
-                "open_window_seconds": 120.0,
-                "use_decide_participation": False,
-            },
-            "interruption": {"min_words": 1, "min_speech_ms": 150},
-        }
-    return {
-        "enable_diarization": True,
-        "attention": {
-            "open_window_seconds": 25.0,
-            "use_decide_participation": True,
-        },
-        "interruption": {"min_words": 2, "min_speech_ms": 250},
-    }
-
-
 def parse_quiet_hours(value: str | None) -> tuple[int, int]:
-    """Parse ``HH:MM-HH:MM`` or return (22, 7) for empty/disabled."""
+    """Parse ``HH:MM-HH:MM``. Empty string means no quiet window."""
     raw = (value or "").strip()
     if not raw:
-        return 22, 7
+        return 0, 0
     match = re.match(
         r"^(\d{1,2})(?::(\d{2}))?\s*-\s*(\d{1,2})(?::(\d{2}))?$",
         raw,
     )
     if not match:
-        raise ValueError(
-            'voice.quiet_hours must look like "22:00-07:00" or "" to use defaults'
-        )
+        raise ValueError('voice.quiet_hours must look like "22:00-07:00" or ""')
     start_h = int(match.group(1))
     end_h = int(match.group(3))
     if not (0 <= start_h <= 23 and 0 <= end_h <= 23):
@@ -164,80 +93,10 @@ def format_quiet_hours(start: int, end: int) -> str:
     return f"{start:02d}:00-{end:02d}:00"
 
 
-def _normalize_voice_dict(data: dict[str, Any]) -> dict[str, Any]:
-    out = dict(data)
-    profile = str(out.get("profile") or "room").strip().lower()
-    if profile not in {"room", "headset"}:
-        raise ValueError('voice.profile must be "room" or "headset"')
-    out["profile"] = profile
-
-    preset = _profile_preset(profile)
-    out = _deep_merge(preset, out)
-
-    if "names" in out:
-        names = out.pop("names")
-        if names is None:
-            names = []
-        if not isinstance(names, list):
-            raise ValueError("voice.names must be a list of strings")
-        ctx = out.setdefault("context", {})
-        if not isinstance(ctx, dict):
-            raise ValueError("voice.context must be a dictionary")
-        existing = ctx.get("terms") if isinstance(ctx.get("terms"), list) else []
-        merged_terms = list(
-            dict.fromkeys(
-                [term.strip() for term in existing if str(term).strip()]
-                + [str(term).strip() for term in names if str(term).strip()]
-            )
-        )
-        ctx["terms"] = merged_terms
-
-    if "interruptions" in out:
-        out.pop("enable_interruptions", None)
-        out["enable_interruptions"] = bool(out.pop("interruptions"))
-    elif "enable_interruptions" in out:
-        out["enable_interruptions"] = bool(out["enable_interruptions"])
-
-    if "quiet_hours" in out:
-        quiet = out.pop("quiet_hours")
-        if quiet is None:
-            quiet = ""
-        start, end = parse_quiet_hours(str(quiet))
-        proactive = out.setdefault("proactive", {})
-        if not isinstance(proactive, dict):
-            raise ValueError("voice.proactive must be a dictionary")
-        proactive["quiet_hours_start"] = start
-        proactive["quiet_hours_end"] = end
-
-    if "idle_shutdown_minutes" in out:
-        raw_minutes = out.pop("idle_shutdown_minutes")
-        try:
-            minutes = float(raw_minutes)
-        except (TypeError, ValueError) as exc:
-            raise ValueError("voice.idle_shutdown_minutes must be a number") from exc
-        if minutes < 0:
-            raise ValueError("voice.idle_shutdown_minutes must be >= 0")
-        presence = out.setdefault("presence", {})
-        if not isinstance(presence, dict):
-            raise ValueError("voice.presence must be a dictionary")
-        presence["close_stt_after_idle_seconds"] = minutes * 60.0
-
-    audio = out.get("audio")
-    if isinstance(audio, dict):
-        audio = dict(audio)
-        audio.pop("echo_cancellation", None)
-        out["audio"] = audio
-
-    out.pop("return_timestamps", None)
-    out["return_timestamps"] = True
-    out["aggregate_utterances"] = True
-    return out
-
-
 def _suggest_voice_key(bad_key: str) -> str:
     matches = difflib.get_close_matches(
         bad_key,
-        sorted(_VOICE_KNOWN_TOP_LEVEL_KEYS),
+        sorted(_VOICE_TOP_LEVEL_KEYS),
         n=1,
         cutoff=0.6,
     )
@@ -263,61 +122,12 @@ def _format_validation_error(exc: ValidationError) -> str:
     return "; ".join(parts) if parts else str(exc)
 
 
-class SonioxSTTContextConfig(BaseModel):
-    """Structured context passed directly to Soniox realtime STT."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    general: list[dict[str, str]] = Field(default_factory=list)
-    text: str | None = None
-    terms: list[str] = Field(default_factory=list)
-
-    @field_validator("text")
-    @classmethod
-    def _validate_text(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        return value.strip() or None
-
-    @field_validator("general")
-    @classmethod
-    def _validate_general(cls, value: list[dict[str, str]]) -> list[dict[str, str]]:
-        cleaned: list[dict[str, str]] = []
-        for item in value:
-            key = str(item.get("key") or "").strip()
-            item_value = str(item.get("value") or "").strip()
-            if not key or not item_value:
-                raise ValueError("voice.context.general entries require non-empty key and value")
-            cleaned.append({"key": key, "value": item_value})
-        return cleaned
-
-    @field_validator("terms")
-    @classmethod
-    def _validate_terms(cls, value: list[str]) -> list[str]:
-        return [term.strip() for term in value if term.strip()]
-
-    def to_soniox_payload(self) -> dict[str, Any] | None:
-        payload: dict[str, Any] = {}
-        if self.general:
-            payload["general"] = list(self.general)
-        if self.text:
-            payload["text"] = self.text
-        if self.terms:
-            payload["terms"] = list(self.terms)
-        return payload or None
-
-
 class VoiceAttentionConfigModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     open_window_seconds: float = Field(default=25.0, ge=0.0, le=120.0)
     wake_terms: list[str] = Field(default_factory=list)
     use_decide_participation: bool = True
-
-    @field_validator("wake_terms")
-    @classmethod
-    def _clean_terms(cls, value: list[str]) -> list[str]:
-        return [term.strip() for term in value if term.strip()]
 
 
 class VoicePresenceConfigModel(BaseModel):
@@ -351,8 +161,6 @@ class VoiceProactiveConfigModel(BaseModel):
 
 
 class VoiceInterruptionConfig(BaseModel):
-    """Barge-in thresholds when ``enable_interruptions`` is true."""
-
     model_config = ConfigDict(extra="forbid")
 
     min_speech_ms: int = Field(default=250, ge=50, le=2_000)
@@ -360,8 +168,6 @@ class VoiceInterruptionConfig(BaseModel):
 
 
 class VoiceAudioConfig(BaseModel):
-    """Local audio-device preferences."""
-
     model_config = ConfigDict(extra="forbid")
 
     input: str | int | None = "auto"
@@ -379,8 +185,15 @@ class VoiceAudioConfig(BaseModel):
         return value.strip() or "auto"
 
 
+_DEFAULT_PERFORMANCE = VoicePerformanceConfigModel()
+_DEFAULT_PROACTIVE_TAIL = VoiceProactiveConfigModel()
+_PRESENCE_WAKE_RMS = 450.0
+_PRESENCE_RECENT_SPEECH_HOURS = 6.0
+_ROOM_NAME = "local_room"
+
+
 class VoiceChannelConfig(BaseModel):
-    """Configuration for ``channels.voice``."""
+    """User-facing ``channels.voice`` configuration."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -390,28 +203,11 @@ class VoiceChannelConfig(BaseModel):
     language_hints: list[str] = Field(default_factory=lambda: ["zh", "en"])
     fallback_language: str = "zh"
     speed: float = Field(default=1.0, ge=0.7, le=1.3)
-    return_timestamps: bool = True
-    enable_interruptions: bool = False
-    interruption: VoiceInterruptionConfig = Field(default_factory=VoiceInterruptionConfig)
-    aggregate_utterances: bool = True
-    enable_diarization: bool = True
-    room_name: str = "local_room"
-    attention: VoiceAttentionConfigModel = Field(default_factory=VoiceAttentionConfigModel)
-    presence: VoicePresenceConfigModel = Field(default_factory=VoicePresenceConfigModel)
-    proactive: VoiceProactiveConfigModel = Field(default_factory=VoiceProactiveConfigModel)
-    performance: VoicePerformanceConfigModel = Field(default_factory=VoicePerformanceConfigModel)
-    context: SonioxSTTContextConfig = Field(default_factory=SonioxSTTContextConfig)
+    names: list[str] = Field(default_factory=list)
+    interruptions: bool = False
+    quiet_hours: str = "22:00-07:00"
+    idle_shutdown_minutes: float = Field(default=0.0, ge=0.0, le=1_440.0)
     audio: VoiceAudioConfig = Field(default_factory=VoiceAudioConfig)
-
-    @model_validator(mode="before")
-    @classmethod
-    def _prepare_configuration(cls, value: Any) -> Any:
-        if not isinstance(value, dict):
-            return value
-        legacy_keys = _LEGACY_VOICE_KEYS.intersection(value)
-        if legacy_keys:
-            raise _migration_error(legacy_keys)
-        return _normalize_voice_dict(value)
 
     @field_validator("api_key")
     @classmethod
@@ -436,6 +232,17 @@ class VoiceChannelConfig(BaseModel):
             raise ValueError("voice.language_hints must include at least one language")
         return hints
 
+    @field_validator("names")
+    @classmethod
+    def _validate_names(cls, value: list[str]) -> list[str]:
+        return list(dict.fromkeys(term.strip() for term in value if term.strip()))
+
+    @field_validator("quiet_hours")
+    @classmethod
+    def _validate_quiet_hours(cls, value: str) -> str:
+        parse_quiet_hours(value)
+        return value.strip()
+
     @classmethod
     def from_dict(cls, data: Any) -> "VoiceChannelConfig":
         if data is None:
@@ -449,35 +256,26 @@ class VoiceChannelConfig(BaseModel):
 
     @classmethod
     def default_public_dict(cls, *, api_key: str | None = None) -> dict[str, Any]:
-        """Tier-1 keys written into config.yaml for a new voice channel."""
         config = cls.from_dict({"api_key": api_key or SONIOX_KEY_PLACEHOLDER})
         return config.to_public_dict()
 
     def to_public_dict(self) -> dict[str, Any]:
-        """Serialize the supported user-facing surface (Tier 1)."""
-        idle_minutes = int(round(self.presence.close_stt_after_idle_seconds / 60.0))
-        payload: dict[str, Any] = {
+        return {
             "api_key": self.api_key or SONIOX_KEY_PLACEHOLDER,
             "profile": self.profile,
             "voice": self.voice,
             "speed": self.speed,
             "language_hints": list(self.language_hints),
             "fallback_language": self.fallback_language,
-            "names": list(self.context.terms),
-            "interruptions": self.enable_interruptions,
-            "quiet_hours": format_quiet_hours(
-                self.proactive.quiet_hours_start,
-                self.proactive.quiet_hours_end,
-            ),
-            "idle_shutdown_minutes": idle_minutes,
+            "names": list(self.names),
+            "interruptions": self.interruptions,
+            "quiet_hours": self.quiet_hours,
+            "idle_shutdown_minutes": int(self.idle_shutdown_minutes),
             "audio": {
                 "input": self.audio.input,
                 "output": self.audio.output,
             },
         }
-        if not payload["quiet_hours"]:
-            payload["quiet_hours"] = format_quiet_hours(22, 7)
-        return payload
 
     def resolved_api_key(self) -> str:
         configured = str(self.api_key or "").strip()
@@ -490,6 +288,66 @@ class VoiceChannelConfig(BaseModel):
             "Soniox voice API key is required. Set channels.voice.api_key in config.yaml "
             "or the SONIOX_API_KEY environment variable."
         )
+
+    @property
+    def room_name(self) -> str:
+        return _ROOM_NAME
+
+    @property
+    def enable_diarization(self) -> bool:
+        return self.profile == "room"
+
+    @property
+    def return_timestamps(self) -> bool:
+        return True
+
+    @property
+    def aggregate_utterances(self) -> bool:
+        return True
+
+    @property
+    def enable_interruptions(self) -> bool:
+        return self.interruptions
+
+    @property
+    def attention(self) -> VoiceAttentionConfigModel:
+        if self.profile == "headset":
+            return VoiceAttentionConfigModel(
+                open_window_seconds=120.0,
+                use_decide_participation=False,
+            )
+        return VoiceAttentionConfigModel(
+            open_window_seconds=25.0,
+            use_decide_participation=True,
+        )
+
+    @property
+    def interruption(self) -> VoiceInterruptionConfig:
+        if self.profile == "headset":
+            return VoiceInterruptionConfig(min_words=1, min_speech_ms=150)
+        return VoiceInterruptionConfig(min_words=2, min_speech_ms=250)
+
+    @property
+    def proactive(self) -> VoiceProactiveConfigModel:
+        start, end = parse_quiet_hours(self.quiet_hours)
+        return VoiceProactiveConfigModel(
+            quiet_hours_start=start,
+            quiet_hours_end=end,
+            max_per_hour=_DEFAULT_PROACTIVE_TAIL.max_per_hour,
+            require_recent_speech=_DEFAULT_PROACTIVE_TAIL.require_recent_speech,
+        )
+
+    @property
+    def presence(self) -> VoicePresenceConfigModel:
+        return VoicePresenceConfigModel(
+            close_stt_after_idle_seconds=self.idle_shutdown_minutes * 60.0,
+            wake_energy_rms=_PRESENCE_WAKE_RMS,
+            recent_speech_hours=_PRESENCE_RECENT_SPEECH_HOURS,
+        )
+
+    @property
+    def performance(self) -> VoicePerformanceConfigModel:
+        return _DEFAULT_PERFORMANCE
 
     @property
     def stt_endpoint_sensitivity(self) -> float:
@@ -512,11 +370,10 @@ class VoiceChannelConfig(BaseModel):
         return 0.85 if self.profile == "headset" else 1.0
 
     def tts_language_for(self, stt_language: str | None) -> str:
-        """Deprecated: prefer reply-based ``ConversationLanguageTracker``."""
         return (stt_language or "").strip() or self.fallback_language
 
-    def merged_stt_context(self, extra_terms: list[str] | None = None) -> SonioxSTTContextConfig:
-        terms = list(self.context.terms)
+    def merged_stt_context_terms(self, extra_terms: list[str] | None = None) -> list[str]:
+        terms = list(self.names)
         for term in extra_terms or []:
             cleaned = term.strip()
             if cleaned and cleaned not in terms:
@@ -524,10 +381,10 @@ class VoiceChannelConfig(BaseModel):
         for term in self.attention.wake_terms:
             if term not in terms:
                 terms.append(term)
-        if terms == self.context.terms:
-            return self.context
-        return SonioxSTTContextConfig(
-            general=list(self.context.general),
-            text=self.context.text,
-            terms=terms,
-        )
+        return terms
+
+    def merged_stt_context_payload(self, extra_terms: list[str] | None = None) -> dict[str, Any] | None:
+        terms = self.merged_stt_context_terms(extra_terms)
+        if not terms:
+            return None
+        return {"terms": terms}

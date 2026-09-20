@@ -109,12 +109,7 @@ class FailingFirstAgent:
 
 
 def voice_config(data=None):
-    payload = {
-        "api_key": "test-key",
-        "aggregate_utterances": False,
-        "enable_diarization": False,
-        **(data or {}),
-    }
+    payload = {"api_key": "test-key", "profile": "headset", **(data or {})}
     return VoiceChannelConfig.from_dict(payload)
 
 
@@ -136,19 +131,14 @@ class VoiceConfigTests(unittest.TestCase):
                 "language_hints": ["en", "zh", "en"],
                 "fallback_language": "en",
                 "speed": 1.2,
-                "context": {
-                    "general": [{"key": "domain", "value": "medicine"}],
-                    "text": " cardiology ",
-                    "terms": [" xAgent ", ""],
-                },
+                "names": [" xAgent ", ""],
                 "audio": {"input": "Mic", "output": 2},
             }
         )
 
         self.assertEqual(config.api_key, "key")
         self.assertEqual(config.language_hints, ["en", "zh"])
-        self.assertEqual(config.context.text, "cardiology")
-        self.assertEqual(config.context.terms, ["xAgent"])
+        self.assertEqual(config.names, ["xAgent"])
         self.assertEqual(config.audio.output, 2)
 
     def test_api_key_falls_back_to_environment(self):
@@ -172,19 +162,14 @@ class VoiceConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "language_hints"):
             VoiceChannelConfig.from_dict({"language_hints": [" "]})
 
-    def test_accepts_interruption_aliases_and_forces_timestamps(self):
-        config = VoiceChannelConfig.from_dict(
-            {"api_key": "key", "interruptions": True, "enable_interruptions": False}
-        )
+    def test_interruptions_flag(self):
+        config = VoiceChannelConfig.from_dict({"api_key": "key", "interruptions": True})
+        self.assertTrue(config.interruptions)
         self.assertTrue(config.return_timestamps)
-        self.assertTrue(config.enable_interruptions)
 
-    def test_rejects_legacy_nested_and_qwen_configuration_with_example(self):
-        with self.assertRaisesRegex(ValueError, "Voice is now Soniox-only") as context:
-            VoiceChannelConfig.from_dict(
-                {"provider": "qwen", "stt": {"api_key": "q"}, "tts": {"api_key": "q"}}
-            )
-        self.assertIn("language_hints: [zh, en]", str(context.exception))
+    def test_rejects_unknown_voice_keys(self):
+        with self.assertRaisesRegex(ValueError, "Unknown voice setting"):
+            VoiceChannelConfig.from_dict({"api_key": "key", "enable_interruptions": True})
 
 
 class FakeSTTSession:
@@ -376,8 +361,8 @@ class SonioxSDKAdapterTests(unittest.TestCase):
         self.assertEqual(config.num_channels, 1)
         self.assertTrue(config.enable_endpoint_detection)
         self.assertEqual(config.endpoint_latency_adjustment_level, SONIOX_ENDPOINT_LATENCY_LEVEL)
-        self.assertEqual(config.endpoint_sensitivity, SONIOX_ENDPOINT_SENSITIVITY)
-        self.assertEqual(config.max_endpoint_delay_ms, SONIOX_MAX_ENDPOINT_DELAY_MS)
+        self.assertEqual(config.endpoint_sensitivity, 0.4)
+        self.assertEqual(config.max_endpoint_delay_ms, 1_000)
         self.assertTrue(config.enable_language_identification)
         self.assertFalse(config.enable_speaker_diarization)
 
@@ -594,7 +579,15 @@ class VoiceRuntimeTests(unittest.TestCase):
             synthesizer=synth,
         )
 
-        asyncio.run(runtime.run_forever())
+        def _no_aggregate(utterances, *, stop_event, grace_scale=1.0):
+            del stop_event, grace_scale
+            yield from utterances
+
+        with patch(
+            "xagent.interfaces.voice.runtime.iter_aggregated_utterances",
+            side_effect=_no_aggregate,
+        ):
+            asyncio.run(runtime.run_forever())
 
         self.assertEqual(agent.calls, 2)
         self.assertEqual(synth.calls[-1]["chunks"], ["recovered"])
@@ -607,7 +600,15 @@ class VoiceRuntimeTests(unittest.TestCase):
             synthesizer=synth,
         )
 
-        asyncio.run(runtime.run_forever())
+        def _no_aggregate(utterances, *, stop_event, grace_scale=1.0):
+            del stop_event, grace_scale
+            yield from utterances
+
+        with patch(
+            "xagent.interfaces.voice.runtime.iter_aggregated_utterances",
+            side_effect=_no_aggregate,
+        ):
+            asyncio.run(runtime.run_forever())
 
         self.assertGreaterEqual(len(synth.calls), 2)
         self.assertFalse(runtime.pause_event.is_set())
