@@ -59,16 +59,14 @@ class AgentConfig:
     ROOM_KEY_METADATA_KEY = "room_key"
     ADDRESSED_METADATA_KEY = "addressed_to_agent"
 
-    # Attention loop: when to look at a room's unattended interval.
-    # Addressed messages (1:1, @, reply-to-me) use a short grace so a
-    # follow-up like "oh, and one more thing" can still join the same turn.
-    # Ambient group traffic waits for a quiet window, or until the burst is
-    # large / old enough that waiting further is worse than speaking over it.
-    ATTENTION_ADDRESSED_GRACE_SECONDS = 1.0
-    ATTENTION_QUIET_WINDOW_SECONDS = 3.0
-    ATTENTION_MAX_BURST_MESSAGES = 12
+    # Attention loop: ambient group traffic waits for quiet, then judges once
+    # per interval. Direct requests (1:1, @) evaluate immediately.
+    ATTENTION_QUIET_WINDOW_SECONDS = 2.0
     ATTENTION_MAX_WAIT_SECONDS = 20.0
     ATTENTION_HISTORY_MESSAGES = 20
+    ATTENTION_SPEAK_MAX_FAILURES = 5
+    ATTENTION_REPLAY_ADDRESSED_SECONDS = 600
+    AMBIENT_TRANSCRIPT_BUDGET = 12
 
     # ============================================================
     # 3. Model & Agent Defaults
