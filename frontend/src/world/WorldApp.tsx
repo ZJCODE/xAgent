@@ -1,6 +1,5 @@
-import { Menu, Moon, Sun, Wifi, WifiOff } from "lucide-react";
+import { Menu, Wifi, WifiOff } from "lucide-react";
 import { IconButton, StatusBadge } from "../components/ui";
-import { useTheme } from "../context/ThemeContext";
 import { classNames } from "../lib/format";
 import { PersonIdentityDialog } from "./PersonIdentityDialog";
 import { WorldChat } from "./WorldChat";
@@ -9,7 +8,6 @@ import { WorldProvider, useWorld } from "./WorldContext";
 import { WorldSidebar } from "./WorldSidebar";
 
 function WorldLayout() {
-  const { dark, toggleTheme } = useTheme();
   const { worldName, present, joined, status, statusKind, sidebarOpen, setSidebarOpen } = useWorld();
   const count = present.length;
   const peopleCount = present.filter((p) => !isAgentKind(memberKind(p))).length;
@@ -52,9 +50,6 @@ function WorldLayout() {
               {statusKind === "ok" || statusKind === "info" ? <Wifi size={14} /> : <WifiOff size={14} />}
               <span className="status-badge-label">{joined ? "Present" : status}</span>
             </StatusBadge>
-            <IconButton type="button" onClick={toggleTheme} title="Toggle theme" aria-label="Toggle theme">
-              {dark ? <Sun size={16} /> : <Moon size={16} />}
-            </IconButton>
           </div>
         </header>
         <WorldChat />

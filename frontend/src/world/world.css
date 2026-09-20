@@ -16,6 +16,30 @@
   border: 0;
 }
 
+.world-modal-header {
+  display: block;
+}
+
+.world-modal-header-copy {
+  min-width: 0;
+}
+
+.world-modal-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.world-modal-title-row h3 {
+  min-width: 0;
+}
+
+.world-modal-title-row .ui-icon-button {
+  flex: 0 0 auto;
+  margin: -8px -8px -8px 0;
+}
+
 .world-shell .composer-upload-button {
   position: relative;
   display: inline-flex;

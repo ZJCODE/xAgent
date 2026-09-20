@@ -148,14 +148,14 @@ export const MEMBER_ID_RULE =
 export const MAX_DISPLAY_NAME_LENGTH = 64;
 export const DISPLAY_NAME_RE = /^[A-Za-z][A-Za-z0-9 .'_-]{0,63}$/;
 export const DISPLAY_NAME_RULE =
-  "Use an English name: letters, numbers, spaces, hyphens, or dots, starting with a letter.";
+  "Names support letters, numbers, spaces, hyphens, or dots, starting with a letter.";
 
 export type PersonIdentity = {
   member_id: string;
   display_name: string;
 };
 
-/** A wire-safe handle derived from an English display name. */
+/** A wire-safe handle derived from a display name. */
 export function suggestMemberId(displayName: string): string {
   const ascii = String(displayName || "")
     .normalize("NFKD")
@@ -172,7 +172,7 @@ function memberIdUsable(memberId: string, taken: Set<string>): boolean {
   return Boolean(memberId) && MEMBER_ID_RE.test(memberId) && memberId !== "world" && !taken.has(memberId);
 }
 
-/** Pick a protocol id from an English name. Keeps `previous` when it still matches this name. */
+/** Pick a protocol id from a name. Keeps `previous` when it still matches this name. */
 export function allocateMemberId(
   displayName: string,
   taken: Set<string> = new Set(),

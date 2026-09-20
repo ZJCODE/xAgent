@@ -1,4 +1,6 @@
-import { Bot, Pencil } from "lucide-react";
+import { Bot, Moon, Pencil, Sun } from "lucide-react";
+import { IconButton } from "../components/ui";
+import { useTheme } from "../context/ThemeContext";
 import { classNames } from "../lib/format";
 import { DEFAULT_AGENT_WEB_URL } from "../lib/ports";
 import { initialOf } from "./protocol";
@@ -42,6 +44,7 @@ function RosterList({
 }
 
 export function WorldSidebar() {
+  const { dark, toggleTheme } = useTheme();
   const {
     gateError,
     agentError,
@@ -174,6 +177,9 @@ export function WorldSidebar() {
         >
           <Bot size={16} />
         </a>
+        <IconButton type="button" onClick={toggleTheme} title="Toggle theme" aria-label="Toggle theme">
+          {dark ? <Sun size={16} /> : <Moon size={16} />}
+        </IconButton>
       </div>
     </aside>
   );

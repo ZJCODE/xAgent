@@ -795,7 +795,8 @@ class WorldHubTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("world-mention-menu", blob)
         self.assertNotIn("world-mention-away", blob)
         self.assertNotIn("Handle (member id)", blob)
-        self.assertIn("Use an English name", blob)
+        self.assertIn("Names support letters, numbers, spaces, hyphens, or dots", blob)
+        self.assertNotIn("Use an English name", blob)
         self.assertIn("Open agent web", blob)
         self.assertIn("127.0.0.1:1415", blob)
 

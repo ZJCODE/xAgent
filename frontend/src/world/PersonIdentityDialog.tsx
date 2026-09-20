@@ -63,23 +63,23 @@ export function PersonIdentityDialog() {
         aria-labelledby="person-identity-title"
         onMouseDown={(event) => event.stopPropagation()}
       >
-        <div className="modal-header">
-          <div className="wizard-header-heading">
-            <div>
+        <div className="modal-header world-modal-header">
+          <div className="world-modal-header-copy">
+            <div className="world-modal-title-row">
               <h3 id="person-identity-title">Who are you?</h3>
-              <p className="wizard-subtitle">
-                Your English name is how others see you in the room. This browser remembers it.
-              </p>
+              <IconButton
+                type="button"
+                onClick={closeIdentityDialog}
+                disabled={saving}
+                title="Close"
+                aria-label="Close"
+              >
+                <X size={16} />
+              </IconButton>
             </div>
-            <IconButton
-              type="button"
-              onClick={closeIdentityDialog}
-              disabled={saving}
-              title="Close"
-              aria-label="Close"
-            >
-              <X size={16} />
-            </IconButton>
+              <p className="wizard-subtitle">
+                Your name is how others see you in the room. This browser remembers it.
+              </p>
           </div>
         </div>
         <form

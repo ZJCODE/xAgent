@@ -39,15 +39,15 @@ export function CreateWorldDialog({ open, onClose }: CreateWorldDialogProps) {
         aria-labelledby="create-world-title"
         onMouseDown={(event) => event.stopPropagation()}
       >
-        <div className="modal-header">
-          <div className="wizard-header-heading">
-            <div>
+        <div className="modal-header world-modal-header">
+          <div className="world-modal-header-copy">
+            <div className="world-modal-title-row">
               <h3 id="create-world-title">New world</h3>
-              <p className="wizard-subtitle">{WORLD_NAME_RULE}</p>
+              <IconButton type="button" onClick={close} disabled={creating} title="Close" aria-label="Close">
+                <X size={16} />
+              </IconButton>
             </div>
-            <IconButton type="button" onClick={close} disabled={creating} title="Close" aria-label="Close">
-              <X size={16} />
-            </IconButton>
+            <p className="wizard-subtitle">{WORLD_NAME_RULE}</p>
           </div>
         </div>
         <form
