@@ -1553,6 +1553,22 @@ channels:
         self.assertIn("websockets", dependencies)
         self.assertIn("soniox>=2.8,<3", dependencies)
 
+    def test_packaging_ships_only_xagent_entrypoint(self):
+        pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+
+        self.assertEqual(
+            pyproject["project"]["scripts"],
+            {"xagent": "xagent.interfaces.cli:main"},
+        )
+        self.assertEqual(
+            pyproject["tool"]["setuptools"]["packages"]["find"]["include"],
+            ["xagent*"],
+        )
+        self.assertNotIn("agents_env", pyproject["tool"]["setuptools"].get("package-data", {}))
+        self.assertFalse(Path("agents_env").exists())
+        self.assertFalse(Path("docs/agents-env.md").exists())
+        self.assertFalse(Path("tests/test_agents_env.py").exists())
+
     def test_readme_voice_usage_uses_single_install_path(self):
         readme = Path("README.md").read_text(encoding="utf-8")
 
