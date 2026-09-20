@@ -12,6 +12,7 @@ from .audio import (
     resolve_audio_io_profile,
 )
 from .attention import VoiceAttentionConfig, VoiceAttentionGate, normalize_terms
+from .context_terms import agent_identity_terms, startup_context_terms
 from .config import (
     SONIOX_STT_CHANNELS,
     SONIOX_STT_SAMPLE_RATE,
@@ -26,20 +27,6 @@ from .runtime import VoiceRuntime, VoiceRuntimeOptions
 from .soniox import SonioxSTTCallbacks, create_soniox_adapters
 
 logger = logging.getLogger(__name__)
-
-
-def _agent_context_terms(agent: Any) -> list[str]:
-    terms: list[str] = []
-    for attr in ("display_name", "name"):
-        value = getattr(agent, attr, None)
-        if isinstance(value, str) and value.strip():
-            terms.append(value.strip())
-    identity = getattr(agent, "identity", None) or getattr(agent, "system_prompt", None)
-    if isinstance(identity, str):
-        first_line = identity.strip().splitlines()[0] if identity.strip() else ""
-        if first_line and len(first_line) <= 64:
-            terms.append(first_line)
-    return normalize_terms(terms)
 
 
 def resolve_runtime_profile(
@@ -121,7 +108,7 @@ def create_local_voice_runtime(
         ),
         lifecycle=lifecycle,
     )
-    extra_terms = _agent_context_terms(agent)
+    extra_terms = startup_context_terms(agent)
     set_terms = getattr(recognizer, "set_extra_context_terms", None)
     if callable(set_terms):
         set_terms(extra_terms)
@@ -142,7 +129,9 @@ def create_local_voice_runtime(
         stream_channels=audio_profile.output_selection.stream_channels,
         keep_warm=config.performance.warm_output_device,
     )
-    wake_terms = normalize_terms(list(config.attention.wake_terms) + extra_terms)
+    # Only the agent's own name wakes it; the other context terms are there so
+    # the recognizer spells people correctly, not so any mention grabs the floor.
+    wake_terms = normalize_terms(list(config.attention.wake_terms) + agent_identity_terms(agent))
     attention_gate = VoiceAttentionGate(
         config=VoiceAttentionConfig(
             open_window_seconds=config.attention.open_window_seconds,

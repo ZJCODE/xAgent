@@ -137,14 +137,12 @@ class VoiceConfigTests(unittest.TestCase):
                 "language_hints": ["en", "zh", "en"],
                 "fallback_language": "en",
                 "speed": 1.2,
-                "names": [" xAgent ", ""],
                 "audio": {"input": "Mic", "output": 2},
             }
         )
 
         self.assertEqual(config.api_key, "key")
         self.assertEqual(config.language_hints, ["en", "zh"])
-        self.assertEqual(config.names, ["xAgent"])
         self.assertEqual(config.audio.output, 2)
 
     def test_api_key_falls_back_to_environment(self):

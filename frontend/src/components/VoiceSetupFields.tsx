@@ -58,20 +58,6 @@ export function VoiceSetupFields({ schema, selection, onChange }: VoiceSetupFiel
               onChange={(event) => onChange({ fallback_language: event.target.value })}
             />
           </WizardField>
-
-          <WizardField label="Recognised names" hint="People, places, or product names (comma-separated).">
-            <input
-              value={selection.names.join(", ")}
-              onChange={(event) =>
-                onChange({
-                  names: event.target.value
-                    .split(",")
-                    .map((part) => part.trim())
-                    .filter(Boolean),
-                })
-              }
-            />
-          </WizardField>
         </>
       ) : null}
     </div>

@@ -62,7 +62,6 @@ _VOICE_TOP_LEVEL_KEYS = frozenset(
         "speed",
         "language_hints",
         "fallback_language",
-        "names",
         "quiet_hours",
         "audio",
     }
@@ -75,7 +74,6 @@ VOICE_CONFIG_EXAMPLE = """channels:
     speed: 1.0
     language_hints: [zh, en]
     fallback_language: zh
-    names: []
     quiet_hours: "22:00-07:00"
     audio:
       input: auto
@@ -217,7 +215,6 @@ class VoiceChannelConfig(BaseModel):
     language_hints: list[str] = Field(default_factory=lambda: ["zh", "en"])
     fallback_language: str = "zh"
     speed: float = Field(default=1.0, ge=0.7, le=1.3)
-    names: list[str] = Field(default_factory=list)
     quiet_hours: str = "22:00-07:00"
     audio: VoiceAudioConfig = Field(default_factory=VoiceAudioConfig)
 
@@ -245,11 +242,6 @@ class VoiceChannelConfig(BaseModel):
         if not hints:
             raise ValueError("voice.language_hints must include at least one language")
         return hints
-
-    @field_validator("names")
-    @classmethod
-    def _validate_names(cls, value: list[str]) -> list[str]:
-        return list(dict.fromkeys(term.strip() for term in value if term.strip()))
 
     @field_validator("quiet_hours")
     @classmethod
@@ -280,7 +272,6 @@ class VoiceChannelConfig(BaseModel):
             "speed": self.speed,
             "language_hints": list(self.language_hints),
             "fallback_language": self.fallback_language,
-            "names": list(self.names),
             "quiet_hours": self.quiet_hours,
             "audio": {
                 "input": self.audio.input,
@@ -395,7 +386,7 @@ class VoiceChannelConfig(BaseModel):
         return (stt_language or "").strip() or self.fallback_language
 
     def merged_stt_context_terms(self, extra_terms: list[str] | None = None) -> list[str]:
-        terms = list(self.names)
+        terms: list[str] = []
         for term in extra_terms or []:
             cleaned = term.strip()
             if cleaned and cleaned not in terms:

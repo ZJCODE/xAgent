@@ -39,9 +39,9 @@ class VoiceConfigSurfaceTests(unittest.TestCase):
         self.assertFalse(config.attention.use_decide_participation)
         self.assertEqual(config.interruption.min_words, 1)
 
-    def test_names_list(self):
-        config = VoiceChannelConfig.from_dict({"api_key": "k", "names": ["Alice", "Bob", "Alice"]})
-        self.assertEqual(config.names, ["Alice", "Bob"])
+    def test_rejects_names_key(self):
+        with self.assertRaisesRegex(ValueError, "Unknown voice setting"):
+            VoiceChannelConfig.from_dict({"api_key": "k", "names": ["Alice"]})
 
     def test_quiet_hours(self):
         config = VoiceChannelConfig.from_dict({"api_key": "k", "quiet_hours": "23:00-06:00"})
@@ -72,27 +72,25 @@ class VoiceConfigSurfaceTests(unittest.TestCase):
         original = VoiceChannelConfig.from_dict(
             {
                 "api_key": "secret",
-                "names": ["Telos"],
                 "voice": "Ava",
+                "quiet_hours": "23:00-06:00",
             }
         )
         public = original.to_public_dict()
         again = VoiceChannelConfig.from_dict(public)
-        self.assertEqual(again.names, ["Telos"])
         self.assertEqual(again.voice, "Ava")
+        self.assertEqual(again.quiet_hours, "23:00-06:00")
 
     def test_voice_setup_preserves_tier1_when_rotating_key(self):
         existing = {
             "api_key": "old",
             "voice": "Ava",
-            "names": ["Telos"],
             "audio": {"input": "Mic", "output": "Speaker"},
         }
         selection = VoiceInitSelection(voice_enabled=True, voice_api_key="new-key", voice_name="Ava")
         merged = _voice_channel_config(selection, existing=existing)
         self.assertEqual(merged["api_key"], "new-key")
         self.assertEqual(merged["voice"], "Ava")
-        self.assertEqual(merged["names"], ["Telos"])
         self.assertEqual(merged["audio"]["input"], "Mic")
 
     def test_prepare_voice_preset_update_preserves_block(self):
@@ -102,7 +100,7 @@ class VoiceConfigSurfaceTests(unittest.TestCase):
                 "voice": {
                     "api_key": "old",
                     "voice": "Ava",
-                    "names": ["Telos"],
+                    "audio": {"input": "Mic", "output": "Speaker"},
                 }
             },
         }
@@ -110,7 +108,7 @@ class VoiceConfigSurfaceTests(unittest.TestCase):
         voice = update.data["channels"]["voice"]
         self.assertEqual(voice["api_key"], "new")
         self.assertEqual(voice["voice"], "Ava")
-        self.assertEqual(voice["names"], ["Telos"])
+        self.assertEqual(voice["audio"]["input"], "Mic")
 
     def test_runtime_profile_follows_detected_topology(self):
         room = resolve_runtime_profile(_audio_profile(near_field=False, echo_managed=False))

@@ -106,7 +106,6 @@ class VoiceInitSelection:
     voice_name: str = "Owen"
     language_hints: tuple[str, ...] = ("zh", "en")
     fallback_language: str = "zh"
-    names: tuple[str, ...] = ()
 
 
 OPENAI_BASE_URL = provider_base_url(PROVIDER_OPENAI)
@@ -323,7 +322,6 @@ def build_voice_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
         "voice_name": "Owen",
         "language_hints": ["zh", "en"],
         "fallback_language": "zh",
-        "names": [],
     }
     channels_cfg = config.get("channels")
     if isinstance(channels_cfg, dict):
@@ -337,7 +335,6 @@ def build_voice_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
                         "voice_name": public.get("voice", "Owen"),
                         "language_hints": list(public.get("language_hints") or ["zh", "en"]),
                         "fallback_language": public.get("fallback_language", "zh"),
-                        "names": list(public.get("names") or []),
                     }
                 )
             except ValueError:
@@ -428,16 +425,6 @@ def voice_init_selection_from_mapping(
         raise ChannelSetupError("language_hints must be a list or comma-separated string")
     if not hints:
         raise ChannelSetupError("language_hints must include at least one language")
-    if "names" in data:
-        names_raw = data.get("names") or []
-        if isinstance(names_raw, str):
-            names = tuple(part.strip() for part in names_raw.split(",") if part.strip())
-        elif isinstance(names_raw, (list, tuple)):
-            names = tuple(str(part).strip() for part in names_raw if str(part).strip())
-        else:
-            raise ChannelSetupError("names must be a list or comma-separated string")
-    else:
-        names = tuple(schema_defaults.get("names") or ())
     return VoiceInitSelection(
         voice_enabled=bool(data.get("voice_enabled", True)),
         voice_api_key=str(data.get("voice_api_key") or "").strip(),
@@ -446,7 +433,6 @@ def voice_init_selection_from_mapping(
         language_hints=tuple(hints),
         fallback_language=str(data.get("fallback_language") or schema_defaults.get("fallback_language") or "zh").strip()
         or "zh",
-        names=names,
     )
 
 
@@ -596,17 +582,12 @@ def _voice_channel_config(
         merged["voice"] = selection.voice_name
         merged["language_hints"] = list(selection.language_hints)
         merged["fallback_language"] = selection.fallback_language
-        if selection.names:
-            merged["names"] = list(selection.names)
-        elif isinstance(existing.get("names"), list):
-            merged["names"] = list(existing["names"])
         return VoiceChannelConfig.from_dict(merged).to_public_dict()
     payload = {
         "api_key": api_key,
         "voice": selection.voice_name,
         "language_hints": list(selection.language_hints),
         "fallback_language": selection.fallback_language,
-        "names": list(selection.names),
     }
     return VoiceChannelConfig.from_dict(payload).to_public_dict()
 
