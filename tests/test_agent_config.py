@@ -1531,7 +1531,7 @@ channels:
         port: 8010
     voice:
         api_key: test-soniox-key
-        language_hints: [zh, en]
+        languages: [zh, en]
 """,
                 encoding="utf-8",
             )

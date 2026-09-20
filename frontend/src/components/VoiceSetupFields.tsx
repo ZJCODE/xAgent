@@ -31,24 +31,20 @@ export function VoiceSetupFields({ schema, selection, onChange }: VoiceSetupFiel
             />
           </WizardField>
 
-          <WizardField label="Spoken languages" hint="Comma-separated language codes, e.g. zh, en">
+          <WizardField
+            label="Spoken languages"
+            hint="Comma-separated language codes, e.g. zh, en. The first is used when the reply language is unclear."
+          >
             <input
-              value={selection.language_hints.join(", ")}
+              value={selection.languages.join(", ")}
               onChange={(event) =>
                 onChange({
-                  language_hints: event.target.value
+                  languages: event.target.value
                     .split(",")
                     .map((part) => part.trim())
                     .filter(Boolean),
                 })
               }
-            />
-          </WizardField>
-
-          <WizardField label="Fallback TTS language">
-            <input
-              value={selection.fallback_language}
-              onChange={(event) => onChange({ fallback_language: event.target.value })}
             />
           </WizardField>
         </>

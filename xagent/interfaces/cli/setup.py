@@ -103,8 +103,7 @@ class VoiceInitSelection:
 
     voice_enabled: bool = True
     voice_api_key: str = ""
-    language_hints: tuple[str, ...] = ("zh", "en")
-    fallback_language: str = "zh"
+    languages: tuple[str, ...] = ("zh", "en")
 
 
 OPENAI_BASE_URL = provider_base_url(PROVIDER_OPENAI)
@@ -318,8 +317,7 @@ def build_voice_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
     defaults = {
         "voice_enabled": True,
         "voice_api_key": "",
-        "language_hints": ["zh", "en"],
-        "fallback_language": "zh",
+        "languages": ["zh", "en"],
     }
     channels_cfg = config.get("channels")
     if isinstance(channels_cfg, dict):
@@ -327,13 +325,7 @@ def build_voice_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
         if isinstance(voice_raw, dict) and voice_raw:
             try:
                 parsed = VoiceChannelConfig.from_dict(voice_raw)
-                public = parsed.to_public_dict()
-                defaults.update(
-                    {
-                        "language_hints": list(public.get("language_hints") or ["zh", "en"]),
-                        "fallback_language": public.get("fallback_language", "zh"),
-                    }
-                )
+                defaults.update({"languages": list(parsed.languages)})
             except ValueError:
                 pass
     return {
@@ -411,23 +403,23 @@ def voice_init_selection_from_mapping(
 ) -> VoiceInitSelection:
     """Build a ``VoiceInitSelection`` from API/JSON input."""
     schema_defaults = build_voice_setup_schema(config).get("defaults") or {}
-    hints_raw = data.get("language_hints")
-    if hints_raw is None:
-        hints = list(schema_defaults.get("language_hints") or ["zh", "en"])
-    elif isinstance(hints_raw, str):
-        hints = [part.strip() for part in hints_raw.replace(",", " ").split() if part.strip()]
-    elif isinstance(hints_raw, (list, tuple)):
-        hints = [str(part).strip() for part in hints_raw if str(part).strip()]
+    languages_raw = data.get("languages")
+    if languages_raw is None:
+        languages = list(schema_defaults.get("languages") or ["zh", "en"])
+    elif isinstance(languages_raw, str):
+        languages = [
+            part.strip() for part in languages_raw.replace(",", " ").split() if part.strip()
+        ]
+    elif isinstance(languages_raw, (list, tuple)):
+        languages = [str(part).strip() for part in languages_raw if str(part).strip()]
     else:
-        raise ChannelSetupError("language_hints must be a list or comma-separated string")
-    if not hints:
-        raise ChannelSetupError("language_hints must include at least one language")
+        raise ChannelSetupError("languages must be a list or comma-separated string")
+    if not languages:
+        raise ChannelSetupError("languages must include at least one language")
     return VoiceInitSelection(
         voice_enabled=bool(data.get("voice_enabled", True)),
         voice_api_key=str(data.get("voice_api_key") or "").strip(),
-        language_hints=tuple(hints),
-        fallback_language=str(data.get("fallback_language") or schema_defaults.get("fallback_language") or "zh").strip()
-        or "zh",
+        languages=tuple(languages),
     )
 
 
@@ -574,13 +566,11 @@ def _voice_channel_config(
     if existing:
         merged = dict(existing)
         merged["api_key"] = api_key
-        merged["language_hints"] = list(selection.language_hints)
-        merged["fallback_language"] = selection.fallback_language
+        merged["languages"] = list(selection.languages)
         return VoiceChannelConfig.from_dict(merged).to_public_dict()
     payload = {
         "api_key": api_key,
-        "language_hints": list(selection.language_hints),
-        "fallback_language": selection.fallback_language,
+        "languages": list(selection.languages),
     }
     return VoiceChannelConfig.from_dict(payload).to_public_dict()
 

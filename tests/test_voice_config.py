@@ -45,8 +45,17 @@ class VoiceConfigSurfaceTests(unittest.TestCase):
 
     def test_quiet_hours(self):
         config = VoiceChannelConfig.from_dict({"api_key": "k", "quiet_hours": "23:00-06:00"})
-        self.assertEqual(config.proactive.quiet_hours_start, 23)
-        self.assertEqual(config.proactive.quiet_hours_end, 6)
+        self.assertEqual(config.proactive.quiet_start_minute, 23 * 60)
+        self.assertEqual(config.proactive.quiet_end_minute, 6 * 60)
+
+    def test_quiet_hours_honors_minutes(self):
+        config = VoiceChannelConfig.from_dict({"api_key": "k", "quiet_hours": "22:30-07:15"})
+        self.assertEqual(config.proactive.quiet_start_minute, 22 * 60 + 30)
+        self.assertEqual(config.proactive.quiet_end_minute, 7 * 60 + 15)
+
+    def test_quiet_hours_rejects_impossible_minutes(self):
+        with self.assertRaisesRegex(ValueError, "minutes"):
+            VoiceChannelConfig.from_dict({"api_key": "k", "quiet_hours": "22:70-07:00"})
 
     def test_idle_shutdown_is_always_on(self):
         config = VoiceChannelConfig.from_dict({"api_key": "k"})
@@ -73,13 +82,18 @@ class VoiceConfigSurfaceTests(unittest.TestCase):
             {
                 "api_key": "secret",
                 "quiet_hours": "23:00-06:00",
-                "language_hints": ["en"],
+                "languages": ["en"],
             }
         )
         public = original.to_public_dict()
         again = VoiceChannelConfig.from_dict(public)
         self.assertEqual(again.quiet_hours, "23:00-06:00")
-        self.assertEqual(again.language_hints, ["en"])
+        self.assertEqual(again.languages, ["en"])
+
+    def test_public_dict_omits_untouched_defaults(self):
+        public = VoiceChannelConfig.from_dict({"api_key": "secret"}).to_public_dict()
+
+        self.assertEqual(public, {"api_key": "secret"})
 
     def test_voice_setup_preserves_tier1_when_rotating_key(self):
         existing = {
@@ -128,7 +142,8 @@ class VoiceConfigSurfaceTests(unittest.TestCase):
         self.assertIn("override", profile.source)
 
     def test_parse_quiet_hours(self):
-        self.assertEqual(parse_quiet_hours("22:00-07:00"), (22, 7))
+        self.assertEqual(parse_quiet_hours("22:00-07:00"), (22 * 60, 7 * 60))
+        self.assertEqual(parse_quiet_hours("22:30-07:15"), (22 * 60 + 30, 7 * 60 + 15))
         self.assertEqual(parse_quiet_hours(""), (0, 0))
 
 
