@@ -2584,7 +2584,10 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(after_identity, before_identity)
         self.assertEqual(config["provider"]["model"], "gpt-5.4-mini")
         self.assertEqual(config["channels"]["feishu"]["app_id"], "cli_test")
-        self.assertEqual(config["channels"]["voice"], {"api_key": "voice-key"})
+        self.assertEqual(
+            config["channels"]["voice"],
+            {"api_key": "voice-key", "languages": ["zh", "en"], "quiet_hours": "22:00-07:00"},
+        )
         output = stdout.getvalue()
         self.assertIn("xagent voice start --agent work", output)
         self.assertIn("xagent voice logs -f --agent work", output)

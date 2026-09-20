@@ -90,10 +90,20 @@ class VoiceConfigSurfaceTests(unittest.TestCase):
         self.assertEqual(again.quiet_hours, "23:00-06:00")
         self.assertEqual(again.languages, ["en"])
 
-    def test_public_dict_omits_untouched_defaults(self):
+    def test_public_dict_is_the_curated_surface(self):
         public = VoiceChannelConfig.from_dict({"api_key": "secret"}).to_public_dict()
 
-        self.assertEqual(public, {"api_key": "secret"})
+        self.assertEqual(
+            public,
+            {"api_key": "secret", "languages": ["zh", "en"], "quiet_hours": "22:00-07:00"},
+        )
+
+    def test_public_dict_writes_audio_only_once_pinned(self):
+        public = VoiceChannelConfig.from_dict(
+            {"api_key": "secret", "audio": {"input": "Mic"}}
+        ).to_public_dict()
+
+        self.assertEqual(public["audio"], {"input": "Mic"})
 
     def test_voice_setup_preserves_tier1_when_rotating_key(self):
         existing = {
