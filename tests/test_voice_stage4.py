@@ -69,10 +69,29 @@ class PresenceTests(unittest.TestCase):
 class ProactivePolicyTests(unittest.TestCase):
     def test_quiet_hours_wraps_midnight(self):
         self.assertTrue(
-            in_quiet_hours(quiet_start=22, quiet_end=7, now=datetime(2026, 1, 1, 23, 0))
+            in_quiet_hours(
+                quiet_start=22 * 60, quiet_end=7 * 60, now=datetime(2026, 1, 1, 23, 0)
+            )
         )
         self.assertFalse(
-            in_quiet_hours(quiet_start=22, quiet_end=7, now=datetime(2026, 1, 1, 12, 0))
+            in_quiet_hours(
+                quiet_start=22 * 60, quiet_end=7 * 60, now=datetime(2026, 1, 1, 12, 0)
+            )
+        )
+
+    def test_quiet_hours_respect_minutes(self):
+        start, end = 22 * 60 + 30, 7 * 60 + 15
+        self.assertFalse(
+            in_quiet_hours(quiet_start=start, quiet_end=end, now=datetime(2026, 1, 1, 22, 15))
+        )
+        self.assertTrue(
+            in_quiet_hours(quiet_start=start, quiet_end=end, now=datetime(2026, 1, 1, 22, 45))
+        )
+        self.assertTrue(
+            in_quiet_hours(quiet_start=start, quiet_end=end, now=datetime(2026, 1, 1, 7, 10))
+        )
+        self.assertFalse(
+            in_quiet_hours(quiet_start=start, quiet_end=end, now=datetime(2026, 1, 1, 7, 20))
         )
 
     def test_rate_limiter(self):
@@ -82,6 +101,37 @@ class ProactivePolicyTests(unittest.TestCase):
         self.assertTrue(limiter.allow())
         limiter.record()
         self.assertFalse(limiter.allow())
+
+
+class ProactiveGateTests(unittest.TestCase):
+    def _runtime(self, lifecycle):
+        return VoiceRuntime(
+            agent=FakeAgent(),
+            config=voice_config(),
+            microphone=FakeMicrophone(),
+            recognizer=FakeRecognizer([]),
+            synthesizer=FakeSynthesizer(),
+            player=FakePlayer(),
+            options=VoiceRuntimeOptions(user_id="alice"),
+            output=lambda *args, **kwargs: None,
+            stt_lifecycle=lifecycle,
+        )
+
+    def test_silent_room_blocks_proactive_speech(self):
+        lifecycle = SttLifecycleController(VoicePresenceConfig(recent_speech_hours=6.0))
+        runtime = self._runtime(lifecycle)
+        with patch("xagent.interfaces.voice.presence.time.monotonic", return_value=100_000.0):
+            self.assertFalse(runtime._proactive_speech_allowed())
+
+    def test_recent_speech_allows_proactive_speech(self):
+        lifecycle = SttLifecycleController(VoicePresenceConfig(recent_speech_hours=6.0))
+        runtime = self._runtime(lifecycle)
+        lifecycle.note_endpoint()
+        with patch(
+            "xagent.interfaces.voice.runtime.in_quiet_hours",
+            return_value=False,
+        ):
+            self.assertTrue(runtime._proactive_speech_allowed())
 
 
 class ObservingAgent(FakeAgent):

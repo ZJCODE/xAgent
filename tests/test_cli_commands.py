@@ -1601,9 +1601,7 @@ class CLICommandTests(unittest.TestCase):
             config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
             config["channels"]["voice"] = {
                 "api_key": "old-key",
-                "voice": "Ava",
-                "language_hints": ["en", "zh"],
-                "context": {"terms": ["xAgent"]},
+                "languages": ["en", "zh"],
                 "audio": {"input": "Mic", "output": "Speaker"},
             }
 
@@ -1612,8 +1610,8 @@ class CLICommandTests(unittest.TestCase):
             saved = yaml.safe_load(config_path.read_text(encoding="utf-8"))
 
         self.assertEqual(saved["channels"]["voice"]["api_key"], "new-key")
-        self.assertEqual(saved["channels"]["voice"]["voice"], "Ava")
-        self.assertEqual(saved["channels"]["voice"]["context"]["terms"], ["xAgent"])
+        self.assertEqual(saved["channels"]["voice"]["languages"], ["en", "zh"])
+        self.assertEqual(saved["channels"]["voice"]["audio"]["input"], "Mic")
         self.assertNotIn("provider", saved["channels"]["voice"])
 
     def test_partial_update_launcher_includes_observability_and_routes(self):
@@ -2586,7 +2584,10 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(after_identity, before_identity)
         self.assertEqual(config["provider"]["model"], "gpt-5.4-mini")
         self.assertEqual(config["channels"]["feishu"]["app_id"], "cli_test")
-        self.assertEqual(config["channels"]["voice"], {"api_key": "voice-key"})
+        self.assertEqual(
+            config["channels"]["voice"],
+            {"api_key": "voice-key", "languages": ["zh", "en"], "quiet_hours": "22:00-07:00"},
+        )
         output = stdout.getvalue()
         self.assertIn("xagent voice start --agent work", output)
         self.assertIn("xagent voice logs -f --agent work", output)

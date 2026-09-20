@@ -21,7 +21,10 @@ from xagent.interfaces.voice.config import (
     SONIOX_TTS_MAX_TEXT_CHARS,
     SONIOX_TTS_MODEL,
     VoiceChannelConfig,
+    VoiceRuntimeProfile,
+    VoiceSpeechStyle,
 )
+from xagent.interfaces.voice.audio import AudioTopology
 from xagent.interfaces.voice.factory import create_local_voice_runtime
 from xagent.interfaces.voice.runtime import VoiceRuntime, VoiceRuntimeOptions
 from xagent.interfaces.voice.types import VoiceUtterance
@@ -108,9 +111,13 @@ class FailingFirstAgent:
         yield {"type": "message_done", "message_id": str(self.calls), "content": "recovered"}
 
 
-def voice_config(data=None):
-    payload = {"api_key": "test-key", "profile": "headset", **(data or {})}
-    return VoiceChannelConfig.from_dict(payload)
+def voice_config(data=None, *, profile="headset", echo_managed=False):
+    payload = {"api_key": "test-key", **(data or {})}
+    config = VoiceChannelConfig.from_dict(payload)
+    config.apply_runtime_profile(
+        VoiceRuntimeProfile(name=profile, echo_managed=echo_managed, source="test")
+    )
+    return config
 
 
 class VoiceConfigTests(unittest.TestCase):
@@ -118,27 +125,36 @@ class VoiceConfigTests(unittest.TestCase):
         config = VoiceChannelConfig.from_dict({"api_key": "key"})
 
         self.assertEqual(config.voice, "Owen")
-        self.assertEqual(config.language_hints, ["zh", "en"])
+        self.assertEqual(config.languages, ["zh", "en"])
         self.assertEqual(config.fallback_language, "zh")
         self.assertEqual(config.speed, 1.0)
         self.assertEqual(config.audio.input, "auto")
+
+    def test_speech_style_comes_from_the_agent_not_the_channel(self):
+        config = VoiceChannelConfig.from_dict({"api_key": "key"})
+        config.apply_speech_style(VoiceSpeechStyle(voice="Ava", speed=1.2))
+
+        self.assertEqual(config.voice, "Ava")
+        self.assertEqual(config.speed, 1.2)
+
+    def test_rejects_voice_and_speed_keys(self):
+        with self.assertRaisesRegex(ValueError, "Unknown voice setting"):
+            VoiceChannelConfig.from_dict({"api_key": "key", "voice": "Ava"})
+        with self.assertRaisesRegex(ValueError, "Unknown voice setting"):
+            VoiceChannelConfig.from_dict({"api_key": "key", "speed": 1.2})
 
     def test_full_flat_configuration(self):
         config = VoiceChannelConfig.from_dict(
             {
                 "api_key": " key ",
-                "voice": "Ava",
-                "language_hints": ["en", "zh", "en"],
-                "fallback_language": "en",
-                "speed": 1.2,
-                "names": [" xAgent ", ""],
+                "languages": ["en", "zh", "en"],
                 "audio": {"input": "Mic", "output": 2},
             }
         )
 
         self.assertEqual(config.api_key, "key")
-        self.assertEqual(config.language_hints, ["en", "zh"])
-        self.assertEqual(config.names, ["xAgent"])
+        self.assertEqual(config.languages, ["en", "zh"])
+        self.assertEqual(config.fallback_language, "en")
         self.assertEqual(config.audio.output, 2)
 
     def test_api_key_falls_back_to_environment(self):
@@ -156,16 +172,24 @@ class VoiceConfigTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "SONIOX_API_KEY"):
                 VoiceChannelConfig.from_dict({}).resolved_api_key()
 
-    def test_rejects_invalid_speed_and_empty_languages(self):
-        with self.assertRaises(ValueError):
-            VoiceChannelConfig.from_dict({"speed": 1.31})
-        with self.assertRaisesRegex(ValueError, "language_hints"):
-            VoiceChannelConfig.from_dict({"language_hints": [" "]})
+    def test_rejects_empty_languages(self):
+        with self.assertRaisesRegex(ValueError, "languages"):
+            VoiceChannelConfig.from_dict({"languages": [" "]})
 
-    def test_interruptions_flag(self):
-        config = VoiceChannelConfig.from_dict({"api_key": "key", "interruptions": True})
-        self.assertTrue(config.interruptions)
+    def test_interruptions_follow_the_detected_devices(self):
+        config = VoiceChannelConfig.from_dict({"api_key": "key"})
+        self.assertFalse(config.enable_interruptions)
+        config.apply_runtime_profile(
+            VoiceRuntimeProfile(name="room", echo_managed=True, source="test")
+        )
+        self.assertTrue(config.enable_interruptions)
         self.assertTrue(config.return_timestamps)
+
+    def test_rejects_profile_and_interruptions_keys(self):
+        with self.assertRaisesRegex(ValueError, "Unknown voice setting"):
+            VoiceChannelConfig.from_dict({"api_key": "key", "profile": "headset"})
+        with self.assertRaisesRegex(ValueError, "Unknown voice setting"):
+            VoiceChannelConfig.from_dict({"api_key": "key", "interruptions": True})
 
     def test_rejects_unknown_voice_keys(self):
         with self.assertRaisesRegex(ValueError, "Unknown voice setting"):
@@ -668,7 +692,11 @@ class VoiceRuntimeTests(unittest.TestCase):
             stream_sample_rate=24000,
             stream_channels=1,
         )
-        profile = SimpleNamespace(input_selection=input_selection, output_selection=output_selection)
+        profile = SimpleNamespace(
+            input_selection=input_selection,
+            output_selection=output_selection,
+            topology=AudioTopology(near_field=False, echo_managed=False, reason="test"),
+        )
         with patch("xagent.interfaces.voice.factory.create_soniox_adapters", return_value=(object(), object())), patch(
             "xagent.interfaces.voice.factory.resolve_audio_io_profile", return_value=profile
         ) as resolve, patch("xagent.interfaces.voice.factory.SoundDeviceMicrophone") as microphone, patch(
@@ -684,3 +712,50 @@ class VoiceRuntimeTests(unittest.TestCase):
         self.assertEqual(resolve.call_args.kwargs["output_sample_rate"], 24000)
         microphone.assert_called_once()
         player.assert_called_once()
+
+    def test_factory_settles_profile_and_speech_before_the_adapters_exist(self):
+        selection = SimpleNamespace(
+            device_index=1,
+            device_name="AirPods Pro",
+            stream_sample_rate=16000,
+            stream_channels=1,
+        )
+        audio_profile = SimpleNamespace(
+            input_selection=selection,
+            output_selection=selection,
+            topology=AudioTopology(
+                near_field=True, echo_managed=True, reason="device name contains 'airpod'"
+            ),
+        )
+        config = VoiceChannelConfig.from_dict({"api_key": "key"})
+        agent = FakeAgent()
+        agent.voice = "Ava"
+        seen: dict[str, object] = {}
+
+        def _adapters(cfg, **kwargs):
+            del kwargs
+            seen["profile"] = cfg.profile
+            seen["diarization"] = cfg.enable_diarization
+            seen["voice"] = cfg.voice
+            seen["speed"] = cfg.speed
+            return object(), object()
+
+        with patch(
+            "xagent.interfaces.voice.factory.create_soniox_adapters", side_effect=_adapters
+        ), patch(
+            "xagent.interfaces.voice.factory.resolve_audio_io_profile", return_value=audio_profile
+        ), patch("xagent.interfaces.voice.factory.SoundDeviceMicrophone"), patch(
+            "xagent.interfaces.voice.factory.SoundDevicePlayer"
+        ):
+            create_local_voice_runtime(
+                agent=agent,
+                config=config,
+                options=VoiceRuntimeOptions(),
+                speed_override=1.1,
+            )
+
+        self.assertEqual(
+            seen,
+            {"profile": "headset", "diarization": False, "voice": "Ava", "speed": 1.1},
+        )
+        self.assertTrue(config.enable_interruptions)

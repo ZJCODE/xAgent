@@ -137,7 +137,7 @@ class WebChannelRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(payload["configured"])
         self.assertTrue(payload["defaults"]["voice_enabled"])
         self.assertEqual(payload["defaults"]["voice_api_key"], "")
-        self.assertEqual(payload["defaults"]["voice_profile"], "room")
+        self.assertEqual(payload["defaults"]["languages"], ["zh", "en"])
         self.assertNotIn("voice_providers", payload)
         self.assertNotIn("qwen_voice_api_key", payload["placeholders"])
 
@@ -162,16 +162,14 @@ class WebChannelRouteTests(unittest.IsolatedAsyncioTestCase):
         config = yaml.safe_load((self.agent_a_path / "config.yaml").read_text(encoding="utf-8"))
         voice_cfg = config["channels"]["voice"]
         self.assertEqual(voice_cfg["api_key"], "voice-test-key")
-        self.assertEqual(voice_cfg["profile"], "room")
+        self.assertNotIn("profile", voice_cfg)
 
     async def test_voice_setup_edit_preserves_flat_advanced_options(self):
         config_path = self.agent_a_path / "config.yaml"
         config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
         config["channels"]["voice"] = {
             "api_key": "old-key",
-            "voice": "Ava",
-            "language_hints": ["en", "zh"],
-            "names": ["xAgent"],
+            "languages": ["en", "zh"],
             "audio": {"input": "Mic", "output": "Speaker"},
         }
         config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
@@ -188,8 +186,7 @@ class WebChannelRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
         saved = yaml.safe_load(config_path.read_text(encoding="utf-8"))["channels"]["voice"]
         self.assertEqual(saved["api_key"], "new-key")
-        self.assertEqual(saved["voice"], "Ava")
-        self.assertIn("xAgent", saved.get("names", []))
+        self.assertEqual(saved["languages"], ["en", "zh"])
         self.assertEqual(saved["audio"]["input"], "Mic")
 
     async def test_voice_setup_can_disable_channel(self):

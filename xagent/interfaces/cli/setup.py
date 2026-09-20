@@ -103,13 +103,7 @@ class VoiceInitSelection:
 
     voice_enabled: bool = True
     voice_api_key: str = ""
-    voice_profile: str = "room"
-    voice_name: str = "Owen"
-    language_hints: tuple[str, ...] = ("zh", "en")
-    fallback_language: str = "zh"
-    interruptions: bool = False
-    idle_shutdown_minutes: int = 0
-    names: tuple[str, ...] = ()
+    languages: tuple[str, ...] = ("zh", "en")
 
 
 OPENAI_BASE_URL = provider_base_url(PROVIDER_OPENAI)
@@ -323,13 +317,7 @@ def build_voice_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
     defaults = {
         "voice_enabled": True,
         "voice_api_key": "",
-        "voice_profile": "room",
-        "voice_name": "Owen",
-        "language_hints": ["zh", "en"],
-        "fallback_language": "zh",
-        "interruptions": False,
-        "idle_shutdown_minutes": 0,
-        "names": [],
+        "languages": ["zh", "en"],
     }
     channels_cfg = config.get("channels")
     if isinstance(channels_cfg, dict):
@@ -337,27 +325,12 @@ def build_voice_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
         if isinstance(voice_raw, dict) and voice_raw:
             try:
                 parsed = VoiceChannelConfig.from_dict(voice_raw)
-                public = parsed.to_public_dict()
-                defaults.update(
-                    {
-                        "voice_profile": public.get("profile", "room"),
-                        "voice_name": public.get("voice", "Owen"),
-                        "language_hints": list(public.get("language_hints") or ["zh", "en"]),
-                        "fallback_language": public.get("fallback_language", "zh"),
-                        "interruptions": bool(public.get("interruptions", False)),
-                        "idle_shutdown_minutes": int(public.get("idle_shutdown_minutes") or 0),
-                        "names": list(public.get("names") or []),
-                    }
-                )
+                defaults.update({"languages": list(parsed.languages)})
             except ValueError:
                 pass
     return {
         "defaults": defaults,
         "placeholders": {"soniox_api_key": SONIOX_KEY_PLACEHOLDER},
-        "profile_options": [
-            {"id": "room", "label": "Room device", "description": "Far-field speaker, several people."},
-            {"id": "headset", "label": "Headset", "description": "Near-field mic, usually one person."},
-        ],
         "configured": _channel_configured(config, "voice"),
         "can_force": True,
     }
@@ -430,56 +403,23 @@ def voice_init_selection_from_mapping(
 ) -> VoiceInitSelection:
     """Build a ``VoiceInitSelection`` from API/JSON input."""
     schema_defaults = build_voice_setup_schema(config).get("defaults") or {}
-    profile = str(data.get("voice_profile") or schema_defaults.get("voice_profile") or "room").strip().lower()
-    if profile not in {"room", "headset"}:
-        raise ChannelSetupError('voice_profile must be "room" or "headset"')
-    hints_raw = data.get("language_hints")
-    if hints_raw is None:
-        hints = list(schema_defaults.get("language_hints") or ["zh", "en"])
-    elif isinstance(hints_raw, str):
-        hints = [part.strip() for part in hints_raw.replace(",", " ").split() if part.strip()]
-    elif isinstance(hints_raw, (list, tuple)):
-        hints = [str(part).strip() for part in hints_raw if str(part).strip()]
+    languages_raw = data.get("languages")
+    if languages_raw is None:
+        languages = list(schema_defaults.get("languages") or ["zh", "en"])
+    elif isinstance(languages_raw, str):
+        languages = [
+            part.strip() for part in languages_raw.replace(",", " ").split() if part.strip()
+        ]
+    elif isinstance(languages_raw, (list, tuple)):
+        languages = [str(part).strip() for part in languages_raw if str(part).strip()]
     else:
-        raise ChannelSetupError("language_hints must be a list or comma-separated string")
-    if not hints:
-        raise ChannelSetupError("language_hints must include at least one language")
-    if "names" in data:
-        names_raw = data.get("names") or []
-        if isinstance(names_raw, str):
-            names = tuple(part.strip() for part in names_raw.split(",") if part.strip())
-        elif isinstance(names_raw, (list, tuple)):
-            names = tuple(str(part).strip() for part in names_raw if str(part).strip())
-        else:
-            raise ChannelSetupError("names must be a list or comma-separated string")
-    else:
-        names = tuple(schema_defaults.get("names") or ())
-    if "idle_shutdown_minutes" in data:
-        try:
-            idle_minutes = int(data.get("idle_shutdown_minutes", 0))
-        except (TypeError, ValueError) as exc:
-            raise ChannelSetupError("idle_shutdown_minutes must be an integer") from exc
-    else:
-        idle_minutes = int(schema_defaults.get("idle_shutdown_minutes") or 0)
-    if idle_minutes < 0:
-        raise ChannelSetupError("idle_shutdown_minutes must be >= 0")
-    interruptions = (
-        bool(data["interruptions"])
-        if "interruptions" in data
-        else bool(schema_defaults.get("interruptions", False))
-    )
+        raise ChannelSetupError("languages must be a list or comma-separated string")
+    if not languages:
+        raise ChannelSetupError("languages must include at least one language")
     return VoiceInitSelection(
         voice_enabled=bool(data.get("voice_enabled", True)),
         voice_api_key=str(data.get("voice_api_key") or "").strip(),
-        voice_profile=profile,
-        voice_name=str(data.get("voice_name") or schema_defaults.get("voice_name") or "Owen").strip()
-        or "Owen",
-        language_hints=tuple(hints),
-        fallback_language=str(data.get("fallback_language") or schema_defaults.get("fallback_language") or "zh").strip()
-        or "zh",
-        interruptions=interruptions,
-        idle_shutdown_minutes=idle_minutes,
-        names=names,
+        languages=tuple(languages),
     )
 
 
@@ -626,26 +566,11 @@ def _voice_channel_config(
     if existing:
         merged = dict(existing)
         merged["api_key"] = api_key
-        merged["profile"] = selection.voice_profile
-        merged["voice"] = selection.voice_name
-        merged["language_hints"] = list(selection.language_hints)
-        merged["fallback_language"] = selection.fallback_language
-        merged["interruptions"] = selection.interruptions
-        merged["idle_shutdown_minutes"] = selection.idle_shutdown_minutes
-        if selection.names:
-            merged["names"] = list(selection.names)
-        elif isinstance(existing.get("names"), list):
-            merged["names"] = list(existing["names"])
+        merged["languages"] = list(selection.languages)
         return VoiceChannelConfig.from_dict(merged).to_public_dict()
     payload = {
         "api_key": api_key,
-        "profile": selection.voice_profile,
-        "voice": selection.voice_name,
-        "language_hints": list(selection.language_hints),
-        "fallback_language": selection.fallback_language,
-        "interruptions": selection.interruptions,
-        "idle_shutdown_minutes": selection.idle_shutdown_minutes,
-        "names": list(selection.names),
+        "languages": list(selection.languages),
     }
     return VoiceChannelConfig.from_dict(payload).to_public_dict()
 
@@ -674,6 +599,7 @@ def _config_yaml(selection: InitSelection, port: int) -> str:
             "notes_enabled": AgentConfig.NOTES_ENABLED,
             "notes_auto_distill": AgentConfig.NOTES_AUTO_DISTILL,
             "subconscious_activity": AgentConfig.SUBCONSCIOUS_ACTIVITY,
+            "voice": AgentConfig.DEFAULT_VOICE,
         },
         "channels": {
             "api": {
@@ -716,6 +642,10 @@ def _config_yaml(selection: InitSelection, port: int) -> str:
     yaml_str = yaml_str.replace(
         "notes_auto_distill: true\n",
         "notes_auto_distill: true  # Distil notes after weekly summaries.\n",
+    )
+    yaml_str = yaml_str.replace(
+        f"voice: {AgentConfig.DEFAULT_VOICE}\n",
+        f"voice: {AgentConfig.DEFAULT_VOICE}  # Speaking voice, used wherever the agent is heard aloud.\n",
     )
     return yaml_str
 

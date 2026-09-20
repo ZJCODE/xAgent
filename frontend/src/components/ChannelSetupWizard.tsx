@@ -31,13 +31,7 @@ function defaultVoiceSelection(schema: VoiceSetupSchema): VoiceSelectionInput {
   return {
     voice_enabled: defaults.voice_enabled,
     voice_api_key: defaults.voice_api_key,
-    voice_profile: defaults.voice_profile,
-    voice_name: defaults.voice_name,
-    language_hints: [...defaults.language_hints],
-    fallback_language: defaults.fallback_language,
-    interruptions: defaults.interruptions,
-    idle_shutdown_minutes: defaults.idle_shutdown_minutes,
-    names: [...defaults.names],
+    languages: [...defaults.languages],
   };
 }
 

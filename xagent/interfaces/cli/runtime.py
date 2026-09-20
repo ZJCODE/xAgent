@@ -168,6 +168,16 @@ def _channel_command(channel: str, args: argparse.Namespace) -> list[str]:
         output_device = getattr(args, "output_device", None)
         if output_device is not None:
             command.extend(["--output-device", str(output_device)])
+        for flag, attr in (
+            ("--profile", "voice_profile"),
+            ("--interruptions", "interruptions"),
+        ):
+            value = getattr(args, attr, None)
+            if value not in (None, "auto"):
+                command.extend([flag, str(value)])
+        speed = getattr(args, "speech_speed", None)
+        if speed is not None:
+            command.extend(["--speed", str(speed)])
     return command
 
 
@@ -456,6 +466,28 @@ def _run_weixin_channel(args: argparse.Namespace, config: dict[str, Any]) -> int
     return 0
 
 
+def _voice_profile_override(args: argparse.Namespace) -> str | None:
+    value = str(getattr(args, "voice_profile", "auto") or "auto").strip().lower()
+    return None if value == "auto" else value
+
+
+def _voice_interruptions_override(args: argparse.Namespace) -> bool | None:
+    value = str(getattr(args, "interruptions", "auto") or "auto").strip().lower()
+    if value == "auto":
+        return None
+    return value == "on"
+
+
+def _voice_speed_override(args: argparse.Namespace) -> float | None:
+    value = getattr(args, "speech_speed", None)
+    if value is None:
+        return None
+    speed = float(value)
+    if not 0.7 <= speed <= 1.3:
+        raise ValueError("--speed must be between 0.7 and 1.3")
+    return speed
+
+
 def _run_voice_channel(args: argparse.Namespace, config: dict[str, Any]) -> int:
     log_level = logging.INFO if getattr(args, "verbose", False) else logging.INFO
     logging.basicConfig(
@@ -484,6 +516,9 @@ def _run_voice_channel(args: argparse.Namespace, config: dict[str, Any]) -> int:
             ),
             input_device=getattr(args, "input_device", None),
             output_device=getattr(args, "output_device", None),
+            profile_override=_voice_profile_override(args),
+            interruptions_override=_voice_interruptions_override(args),
+            speed_override=_voice_speed_override(args),
         )
     except Exception as exc:
         print(f"Failed to start voice channel: {exc}")

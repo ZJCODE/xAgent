@@ -688,7 +688,7 @@ provider:
             config_text = result.config_path.read_text(encoding="utf-8")
             identity_text = result.identity_path.read_text(encoding="utf-8")
             config = yaml.safe_load(config_text)
-            self.assertEqual(config["agent"], {"recent_messages": 12, "max_agent_loops": 50, "max_concurrent_tools": 4, "diary_write_batch": 32, "diary_context_days": 2, "notes_enabled": True, "notes_auto_distill": True, "subconscious_activity": 0.02})
+            self.assertEqual(config["agent"], {"recent_messages": 12, "max_agent_loops": 50, "max_concurrent_tools": 4, "diary_write_batch": 32, "diary_context_days": 2, "notes_enabled": True, "notes_auto_distill": True, "subconscious_activity": 0.02, "voice": "Owen"})
             self.assertEqual(config["provider"]["base_url"], "https://api.openai.com/v1")
             self.assertEqual(config["provider"]["api_key"], "your_api_key_here")
             self.assertEqual(config["provider"]["model"], "gpt-5.6-terra")
@@ -738,7 +738,7 @@ provider:
 
             self.assertTrue(forced.wrote_files)
             config = yaml.safe_load(forced.config_path.read_text(encoding="utf-8"))
-            self.assertEqual(config["agent"], {"recent_messages": 12, "max_agent_loops": 50, "max_concurrent_tools": 4, "diary_write_batch": 32, "diary_context_days": 2, "notes_enabled": True, "notes_auto_distill": True, "subconscious_activity": 0.02})
+            self.assertEqual(config["agent"], {"recent_messages": 12, "max_agent_loops": 50, "max_concurrent_tools": 4, "diary_write_batch": 32, "diary_context_days": 2, "notes_enabled": True, "notes_auto_distill": True, "subconscious_activity": 0.02, "voice": "Owen"})
             identity_text = forced.identity_path.read_text(encoding="utf-8")
             self.assertIn("practical collaborator", identity_text)
             self.assertIn("own continuing identity", identity_text)
@@ -800,7 +800,7 @@ provider:
             result = init_agent_directory(tmpdir, selection=selection)
             config = yaml.safe_load(result.config_path.read_text(encoding="utf-8"))
 
-            self.assertEqual(config["agent"], {"recent_messages": 12, "max_agent_loops": 50, "max_concurrent_tools": 4, "diary_write_batch": 32, "diary_context_days": 2, "notes_enabled": True, "notes_auto_distill": True, "subconscious_activity": 0.02})
+            self.assertEqual(config["agent"], {"recent_messages": 12, "max_agent_loops": 50, "max_concurrent_tools": 4, "diary_write_batch": 32, "diary_context_days": 2, "notes_enabled": True, "notes_auto_distill": True, "subconscious_activity": 0.02, "voice": "Owen"})
             self.assertEqual(config["provider"]["base_url"], "https://api.deepseek.com")
             self.assertEqual(config["provider"]["api_key"], "secret-key")
             self.assertEqual(config["provider"]["model"], "deepseek-v4-pro")
@@ -1531,8 +1531,7 @@ channels:
         port: 8010
     voice:
         api_key: test-soniox-key
-        voice: Owen
-        language_hints: [zh, en]
+        languages: [zh, en]
 """,
                 encoding="utf-8",
             )
@@ -1540,7 +1539,7 @@ channels:
 
             runner = BaseAgentRunner(config_dir=tmpdir)
 
-            self.assertEqual(runner.config["channels"]["voice"]["voice"], "Owen")
+            self.assertEqual(runner.config["channels"]["voice"]["api_key"], "test-soniox-key")
             self.assertEqual(enabled_channels_from_config(runner.config), ["api", "voice"])
 
     def test_voice_dependencies_are_main_project_dependencies(self):

@@ -31,81 +31,20 @@ export function VoiceSetupFields({ schema, selection, onChange }: VoiceSetupFiel
             />
           </WizardField>
 
-          <WizardField label="Device profile" hint="Room = shared speaker; headset = near-field mic.">
-            <select
-              value={selection.voice_profile}
-              onChange={(event) =>
-                onChange({ voice_profile: event.target.value as VoiceSelectionInput["voice_profile"] })
-              }
-            >
-              {schema.profile_options.map((option) => (
-                <option key={option.id} value={option.id}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </WizardField>
-
-          <WizardField label="TTS voice name">
-            <input
-              value={selection.voice_name}
-              onChange={(event) => onChange({ voice_name: event.target.value })}
-            />
-          </WizardField>
-
-          <WizardField label="Spoken languages" hint="Comma-separated language codes, e.g. zh, en">
-            <input
-              value={selection.language_hints.join(", ")}
-              onChange={(event) =>
-                onChange({
-                  language_hints: event.target.value
-                    .split(",")
-                    .map((part) => part.trim())
-                    .filter(Boolean),
-                })
-              }
-            />
-          </WizardField>
-
-          <WizardField label="Fallback TTS language">
-            <input
-              value={selection.fallback_language}
-              onChange={(event) => onChange({ fallback_language: event.target.value })}
-            />
-          </WizardField>
-
-          <WizardField label="Recognised names" hint="People, places, or product names (comma-separated).">
-            <input
-              value={selection.names.join(", ")}
-              onChange={(event) =>
-                onChange({
-                  names: event.target.value
-                    .split(",")
-                    .map((part) => part.trim())
-                    .filter(Boolean),
-                })
-              }
-            />
-          </WizardField>
-
-          <label className="wizard-checkbox">
-            <input
-              type="checkbox"
-              checked={selection.interruptions}
-              onChange={(event) => onChange({ interruptions: event.target.checked })}
-            />
-            <span>Allow barge-in (needs echo-cancelling speakerphone)</span>
-          </label>
-
           <WizardField
-            label="Idle mic shutdown (minutes)"
-            hint="0 = always listening. Higher values save cost and stop streaming quiet rooms."
+            label="Spoken languages"
+            hint="Comma-separated language codes, e.g. zh, en. The first is used when the reply language is unclear."
           >
             <input
-              type="number"
-              min={0}
-              value={selection.idle_shutdown_minutes}
-              onChange={(event) => onChange({ idle_shutdown_minutes: Number(event.target.value) || 0 })}
+              value={selection.languages.join(", ")}
+              onChange={(event) =>
+                onChange({
+                  languages: event.target.value
+                    .split(",")
+                    .map((part) => part.trim())
+                    .filter(Boolean),
+                })
+              }
             />
           </WizardField>
         </>

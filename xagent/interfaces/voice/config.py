@@ -4,16 +4,20 @@ from __future__ import annotations
 import difflib
 import os
 import re
+from dataclasses import dataclass
 from typing import Any, Literal
 
 from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    PrivateAttr,
     ValidationError,
     field_validator,
     model_validator,
 )
+
+from .presence import VOICE_STT_IDLE_SHUTDOWN_SECONDS
 
 SONIOX_KEY_PLACEHOLDER = "your_soniox_api_key_here"
 SONIOX_STT_MODEL = "stt-rt-v5"
@@ -30,6 +34,30 @@ SONIOX_TTS_MAX_TEXT_CHARS = 5_000
 
 VoiceProfileName = Literal["room", "headset"]
 
+
+@dataclass(frozen=True)
+class VoiceRuntimeProfile:
+    """Behaviour derived from the audio devices actually in use.
+
+    Near-field and far-field capture want opposite settings for diarization,
+    attention and endpointing, and no user can set those coherently. The
+    devices answer the question, and they answer it per session: the same
+    machine moves between earbuds and a room speaker within a day.
+    """
+
+    name: VoiceProfileName = "room"
+    echo_managed: bool = False
+    source: str = "default"
+
+
+@dataclass(frozen=True)
+class VoiceSpeechStyle:
+    """How the agent sounds. The voice belongs to the agent's identity, and
+    rate is a listener's preference, so neither is a property of the channel."""
+
+    voice: str = "Owen"
+    speed: float = 1.0
+
 _VOICE_KEY_PLACEHOLDERS = {
     SONIOX_KEY_PLACEHOLDER,
     "your_qwen_api_key_here",
@@ -39,15 +67,8 @@ _VOICE_KEY_PLACEHOLDERS = {
 _VOICE_TOP_LEVEL_KEYS = frozenset(
     {
         "api_key",
-        "profile",
-        "voice",
-        "speed",
-        "language_hints",
-        "fallback_language",
-        "names",
-        "interruptions",
+        "languages",
         "quiet_hours",
-        "idle_shutdown_minutes",
         "audio",
     }
 )
@@ -55,22 +76,16 @@ _VOICE_TOP_LEVEL_KEYS = frozenset(
 VOICE_CONFIG_EXAMPLE = """channels:
   voice:
     api_key: your_soniox_api_key_here
-    profile: room
-    voice: Owen
-    speed: 1.0
-    language_hints: [zh, en]
-    fallback_language: zh
-    names: []
-    interruptions: false
-    quiet_hours: "22:00-07:00"
-    idle_shutdown_minutes: 0
-    audio:
-      input: auto
-      output: auto"""
+    languages: [zh, en]
+    quiet_hours: "22:00-07:00"""
 
 
 def parse_quiet_hours(value: str | None) -> tuple[int, int]:
-    """Parse ``HH:MM-HH:MM``. Empty string means no quiet window."""
+    """Parse ``HH:MM-HH:MM`` into minutes past midnight.
+
+    Empty string means no quiet window. Minutes are honoured: a window is not
+    allowed to accept precision it then discards.
+    """
     raw = (value or "").strip()
     if not raw:
         return 0, 0
@@ -80,17 +95,25 @@ def parse_quiet_hours(value: str | None) -> tuple[int, int]:
     )
     if not match:
         raise ValueError('voice.quiet_hours must look like "22:00-07:00" or ""')
-    start_h = int(match.group(1))
-    end_h = int(match.group(3))
-    if not (0 <= start_h <= 23 and 0 <= end_h <= 23):
+    start = _minutes_past_midnight(match.group(1), match.group(2))
+    end = _minutes_past_midnight(match.group(3), match.group(4))
+    return start, end
+
+
+def _minutes_past_midnight(hour_text: str, minute_text: str | None) -> int:
+    hour = int(hour_text)
+    minute = int(minute_text or 0)
+    if not 0 <= hour <= 23:
         raise ValueError("voice.quiet_hours hours must be between 0 and 23")
-    return start_h, end_h
+    if not 0 <= minute <= 59:
+        raise ValueError("voice.quiet_hours minutes must be between 0 and 59")
+    return hour * 60 + minute
 
 
 def format_quiet_hours(start: int, end: int) -> str:
     if start == end:
         return ""
-    return f"{start:02d}:00-{end:02d}:00"
+    return f"{start // 60:02d}:{start % 60:02d}-{end // 60:02d}:{end % 60:02d}"
 
 
 def _suggest_voice_key(bad_key: str) -> str:
@@ -133,7 +156,9 @@ class VoiceAttentionConfigModel(BaseModel):
 class VoicePresenceConfigModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    close_stt_after_idle_seconds: float = Field(default=0.0, ge=0.0, le=86_400.0)
+    close_stt_after_idle_seconds: float = Field(
+        default=VOICE_STT_IDLE_SHUTDOWN_SECONDS, ge=0.0, le=86_400.0
+    )
     wake_energy_rms: float = Field(default=450.0, ge=50.0, le=20_000.0)
     recent_speech_hours: float = Field(default=6.0, ge=0.0, le=168.0)
 
@@ -154,8 +179,8 @@ class VoicePerformanceConfigModel(BaseModel):
 class VoiceProactiveConfigModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    quiet_hours_start: int = Field(default=22, ge=0, le=23)
-    quiet_hours_end: int = Field(default=7, ge=0, le=23)
+    quiet_start_minute: int = Field(default=22 * 60, ge=0, le=1_439)
+    quiet_end_minute: int = Field(default=7 * 60, ge=0, le=1_439)
     max_per_hour: int = Field(default=3, ge=0, le=30)
     require_recent_speech: bool = True
 
@@ -198,16 +223,12 @@ class VoiceChannelConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     api_key: str | None = None
-    profile: VoiceProfileName = "room"
-    voice: str = "Owen"
-    language_hints: list[str] = Field(default_factory=lambda: ["zh", "en"])
-    fallback_language: str = "zh"
-    speed: float = Field(default=1.0, ge=0.7, le=1.3)
-    names: list[str] = Field(default_factory=list)
-    interruptions: bool = False
+    languages: list[str] = Field(default_factory=lambda: ["zh", "en"])
     quiet_hours: str = "22:00-07:00"
-    idle_shutdown_minutes: float = Field(default=0.0, ge=0.0, le=1_440.0)
     audio: VoiceAudioConfig = Field(default_factory=VoiceAudioConfig)
+
+    _runtime_profile: VoiceRuntimeProfile = PrivateAttr(default_factory=VoiceRuntimeProfile)
+    _speech_style: VoiceSpeechStyle = PrivateAttr(default_factory=VoiceSpeechStyle)
 
     @field_validator("api_key")
     @classmethod
@@ -216,26 +237,13 @@ class VoiceChannelConfig(BaseModel):
             return None
         return value.strip() or None
 
-    @field_validator("voice", "fallback_language")
+    @field_validator("languages")
     @classmethod
-    def _validate_non_empty(cls, value: str) -> str:
-        normalized = value.strip()
-        if not normalized:
-            raise ValueError("voice and fallback_language must be non-empty")
-        return normalized
-
-    @field_validator("language_hints")
-    @classmethod
-    def _validate_language_hints(cls, value: list[str]) -> list[str]:
-        hints = list(dict.fromkeys(item.strip() for item in value if item.strip()))
-        if not hints:
-            raise ValueError("voice.language_hints must include at least one language")
-        return hints
-
-    @field_validator("names")
-    @classmethod
-    def _validate_names(cls, value: list[str]) -> list[str]:
-        return list(dict.fromkeys(term.strip() for term in value if term.strip()))
+    def _validate_languages(cls, value: list[str]) -> list[str]:
+        languages = list(dict.fromkeys(item.strip() for item in value if item.strip()))
+        if not languages:
+            raise ValueError("voice.languages must include at least one language")
+        return languages
 
     @field_validator("quiet_hours")
     @classmethod
@@ -260,22 +268,27 @@ class VoiceChannelConfig(BaseModel):
         return config.to_public_dict()
 
     def to_public_dict(self) -> dict[str, Any]:
-        return {
+        """The block to write back to config.yaml.
+
+        The three curated settings are always written, defaults included: a
+        setting nobody can see in the file is a setting nobody knows they have,
+        and quiet hours in particular is expensive to leave undiscovered.
+        ``audio`` is different — it is an escape hatch for a pinned device, so
+        it appears only once someone has pinned one.
+        """
+        public: dict[str, Any] = {
             "api_key": self.api_key or SONIOX_KEY_PLACEHOLDER,
-            "profile": self.profile,
-            "voice": self.voice,
-            "speed": self.speed,
-            "language_hints": list(self.language_hints),
-            "fallback_language": self.fallback_language,
-            "names": list(self.names),
-            "interruptions": self.interruptions,
+            "languages": list(self.languages),
             "quiet_hours": self.quiet_hours,
-            "idle_shutdown_minutes": int(self.idle_shutdown_minutes),
-            "audio": {
-                "input": self.audio.input,
-                "output": self.audio.output,
-            },
         }
+        audio = {
+            key: value
+            for key, value in (("input", self.audio.input), ("output", self.audio.output))
+            if value != "auto"
+        }
+        if audio:
+            public["audio"] = audio
+        return public
 
     def resolved_api_key(self) -> str:
         configured = str(self.api_key or "").strip()
@@ -288,6 +301,28 @@ class VoiceChannelConfig(BaseModel):
             "Soniox voice API key is required. Set channels.voice.api_key in config.yaml "
             "or the SONIOX_API_KEY environment variable."
         )
+
+    def apply_runtime_profile(self, profile: VoiceRuntimeProfile) -> None:
+        self._runtime_profile = profile
+
+    def apply_speech_style(self, style: VoiceSpeechStyle) -> None:
+        self._speech_style = style
+
+    @property
+    def voice(self) -> str:
+        return self._speech_style.voice
+
+    @property
+    def speed(self) -> float:
+        return self._speech_style.speed
+
+    @property
+    def runtime_profile(self) -> VoiceRuntimeProfile:
+        return self._runtime_profile
+
+    @property
+    def profile(self) -> VoiceProfileName:
+        return self._runtime_profile.name
 
     @property
     def room_name(self) -> str:
@@ -307,7 +342,7 @@ class VoiceChannelConfig(BaseModel):
 
     @property
     def enable_interruptions(self) -> bool:
-        return self.interruptions
+        return self._runtime_profile.echo_managed
 
     @property
     def attention(self) -> VoiceAttentionConfigModel:
@@ -331,8 +366,8 @@ class VoiceChannelConfig(BaseModel):
     def proactive(self) -> VoiceProactiveConfigModel:
         start, end = parse_quiet_hours(self.quiet_hours)
         return VoiceProactiveConfigModel(
-            quiet_hours_start=start,
-            quiet_hours_end=end,
+            quiet_start_minute=start,
+            quiet_end_minute=end,
             max_per_hour=_DEFAULT_PROACTIVE_TAIL.max_per_hour,
             require_recent_speech=_DEFAULT_PROACTIVE_TAIL.require_recent_speech,
         )
@@ -340,7 +375,7 @@ class VoiceChannelConfig(BaseModel):
     @property
     def presence(self) -> VoicePresenceConfigModel:
         return VoicePresenceConfigModel(
-            close_stt_after_idle_seconds=self.idle_shutdown_minutes * 60.0,
+            close_stt_after_idle_seconds=VOICE_STT_IDLE_SHUTDOWN_SECONDS,
             wake_energy_rms=_PRESENCE_WAKE_RMS,
             recent_speech_hours=_PRESENCE_RECENT_SPEECH_HOURS,
         )
@@ -369,11 +404,16 @@ class VoiceChannelConfig(BaseModel):
     def aggregation_grace_scale(self) -> float:
         return 0.85 if self.profile == "headset" else 1.0
 
+    @property
+    def fallback_language(self) -> str:
+        """The language to speak when the reply language is unclear."""
+        return self.languages[0]
+
     def tts_language_for(self, stt_language: str | None) -> str:
         return (stt_language or "").strip() or self.fallback_language
 
     def merged_stt_context_terms(self, extra_terms: list[str] | None = None) -> list[str]:
-        terms = list(self.names)
+        terms: list[str] = []
         for term in extra_terms or []:
             cleaned = term.strip()
             if cleaned and cleaned not in terms:

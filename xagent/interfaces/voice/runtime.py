@@ -28,6 +28,8 @@ from .ack import InstantAckConfig, InstantAckSpeaker
 from .aggregator import iter_aggregated_utterances
 from .attention import VoiceAttentionConfig, VoiceAttentionGate
 from .barge_in import BargeInConfig, BargeInEvaluator
+from .context_terms import refreshed_context_terms
+from .echo_guard import SelfInterruptionGuard
 from .config import SONIOX_TTS_CHANNELS, SONIOX_TTS_SAMPLE_RATE, VoiceChannelConfig
 from .floor import ConversationFloor, FloorCommandKind, FloorEvent, FloorEventKind, FloorState
 from .presence import SttLifecycleController
@@ -162,7 +164,7 @@ class VoiceRuntime:
         self._playback_lock = asyncio.Lock()
         self._language_tracker = ConversationLanguageTracker(
             fallback=self.config.fallback_language,
-            hints=list(self.config.language_hints),
+            hints=list(self.config.languages),
         )
         metrics_path = self.options.metrics_path
         if metrics_path is None and self.options.tasks_dir is not None:
@@ -204,6 +206,7 @@ class VoiceRuntime:
         self._speaker_bindings = speaker_bindings or SpeakerBindingStore(bindings_path)
         self._stt_lifecycle = stt_lifecycle
         self._proactive_limiter = ProactiveSpeechLimiter(self.config.proactive.max_per_hour)
+        self._self_interruption = SelfInterruptionGuard()
         performance = self.config.performance
         self._instant_ack = InstantAckSpeaker(
             InstantAckConfig(
@@ -231,9 +234,23 @@ class VoiceRuntime:
         )
         self._last_preemptive_partial = ""
 
+    async def _refresh_stt_context_terms(self) -> None:
+        """Feed the recognizer the names the agent knows, before it connects."""
+        set_terms = getattr(self.recognizer, "set_extra_context_terms", None)
+        if not callable(set_terms):
+            return
+        try:
+            terms = await refreshed_context_terms(self.agent)
+        except Exception:
+            self.logger.debug("Could not refresh STT context terms", exc_info=True)
+            return
+        if terms:
+            set_terms(terms)
+
     async def run_forever(self) -> None:
         """Run until stopped or a non-recoverable STT error is raised."""
         self._event_loop = asyncio.get_running_loop()
+        await self._refresh_stt_context_terms()
         self.output("xAgent voice ready. Speak to the microphone; press Ctrl+C to stop.")
         audio_chunks = self.microphone.iter_chunks(
             pause_event=self.pause_event,
@@ -310,7 +327,7 @@ class VoiceRuntime:
 
     @property
     def _duplex_capture_enabled(self) -> bool:
-        return bool(self.config.interruptions)
+        return bool(self.config.enable_interruptions) and not self._self_interruption.tripped
 
     async def _execute_floor_commands(self, commands) -> None:
         for command in commands:
@@ -459,6 +476,19 @@ class VoiceRuntime:
                     evaluator._state.armed = True
                 verdict = evaluator.evaluate_partial(partial)
                 if verdict == "interrupt":
+                    spoken_so_far = sanitize_spoken_text("".join(reply_buffer))
+                    if self._self_interruption.classify(partial, spoken_so_far):
+                        if self._self_interruption.tripped:
+                            self.logger.warning(
+                                "Disabling barge-in for this session: the microphone keeps "
+                                "hearing our own playback, so this device does not cancel echo"
+                            )
+                            self._floor.allow_duplex_capture = False
+                            return
+                        partial_since = None
+                        evaluator.reset()
+                        await asyncio.sleep(0.05)
+                        continue
                     if interrupted_flag is not None:
                         interrupted_flag["value"] = True
                     await self._execute_floor_commands(
@@ -895,13 +925,13 @@ class VoiceRuntime:
             return False
         proactive = self.config.proactive
         if in_quiet_hours(
-            quiet_start=proactive.quiet_hours_start,
-            quiet_end=proactive.quiet_hours_end,
+            quiet_start=proactive.quiet_start_minute,
+            quiet_end=proactive.quiet_end_minute,
         ):
             return False
         if proactive.require_recent_speech:
             lifecycle = self._stt_lifecycle
-            if lifecycle is not None and lifecycle.enabled and not lifecycle.heard_recently():
+            if lifecycle is not None and not lifecycle.heard_recently():
                 return False
         return self._proactive_limiter.allow()
 
