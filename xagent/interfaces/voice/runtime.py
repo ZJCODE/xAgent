@@ -28,6 +28,7 @@ from .ack import InstantAckConfig, InstantAckSpeaker
 from .aggregator import iter_aggregated_utterances
 from .attention import VoiceAttentionConfig, VoiceAttentionGate
 from .barge_in import BargeInConfig, BargeInEvaluator
+from .context_terms import refreshed_context_terms
 from .echo_guard import SelfInterruptionGuard
 from .config import SONIOX_TTS_CHANNELS, SONIOX_TTS_SAMPLE_RATE, VoiceChannelConfig
 from .floor import ConversationFloor, FloorCommandKind, FloorEvent, FloorEventKind, FloorState
@@ -233,9 +234,23 @@ class VoiceRuntime:
         )
         self._last_preemptive_partial = ""
 
+    async def _refresh_stt_context_terms(self) -> None:
+        """Feed the recognizer the names the agent knows, before it connects."""
+        set_terms = getattr(self.recognizer, "set_extra_context_terms", None)
+        if not callable(set_terms):
+            return
+        try:
+            terms = await refreshed_context_terms(self.agent)
+        except Exception:
+            self.logger.debug("Could not refresh STT context terms", exc_info=True)
+            return
+        if terms:
+            set_terms(terms)
+
     async def run_forever(self) -> None:
         """Run until stopped or a non-recoverable STT error is raised."""
         self._event_loop = asyncio.get_running_loop()
+        await self._refresh_stt_context_terms()
         self.output("xAgent voice ready. Speak to the microphone; press Ctrl+C to stop.")
         audio_chunks = self.microphone.iter_chunks(
             pause_event=self.pause_event,

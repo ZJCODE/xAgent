@@ -34,7 +34,6 @@ function defaultVoiceSelection(schema: VoiceSetupSchema): VoiceSelectionInput {
     voice_name: defaults.voice_name,
     language_hints: [...defaults.language_hints],
     fallback_language: defaults.fallback_language,
-    names: [...defaults.names],
   };
 }
 

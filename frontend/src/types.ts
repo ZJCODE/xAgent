@@ -203,7 +203,6 @@ export interface VoiceSelectionInput {
   voice_name: string;
   language_hints: string[];
   fallback_language: string;
-  names: string[];
 }
 
 export interface VoiceSetupSchema {
@@ -213,7 +212,6 @@ export interface VoiceSetupSchema {
     voice_name: string;
     language_hints: string[];
     fallback_language: string;
-    names: string[];
   };
   placeholders: {
     soniox_api_key: string;

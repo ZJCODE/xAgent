@@ -1603,7 +1603,6 @@ class CLICommandTests(unittest.TestCase):
                 "api_key": "old-key",
                 "voice": "Ava",
                 "language_hints": ["en", "zh"],
-                "names": ["xAgent"],
                 "audio": {"input": "Mic", "output": "Speaker"},
             }
 
@@ -1613,7 +1612,7 @@ class CLICommandTests(unittest.TestCase):
 
         self.assertEqual(saved["channels"]["voice"]["api_key"], "new-key")
         self.assertEqual(saved["channels"]["voice"]["voice"], "Ava")
-        self.assertEqual(saved["channels"]["voice"]["names"], ["xAgent"])
+        self.assertEqual(saved["channels"]["voice"]["audio"]["input"], "Mic")
         self.assertNotIn("provider", saved["channels"]["voice"])
 
     def test_partial_update_launcher_includes_observability_and_routes(self):

@@ -171,7 +171,6 @@ class WebChannelRouteTests(unittest.IsolatedAsyncioTestCase):
             "api_key": "old-key",
             "voice": "Ava",
             "language_hints": ["en", "zh"],
-            "names": ["xAgent"],
             "audio": {"input": "Mic", "output": "Speaker"},
         }
         config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
@@ -189,7 +188,7 @@ class WebChannelRouteTests(unittest.IsolatedAsyncioTestCase):
         saved = yaml.safe_load(config_path.read_text(encoding="utf-8"))["channels"]["voice"]
         self.assertEqual(saved["api_key"], "new-key")
         self.assertEqual(saved["voice"], "Ava")
-        self.assertIn("xAgent", saved.get("names", []))
+        self.assertEqual(saved["language_hints"], ["en", "zh"])
         self.assertEqual(saved["audio"]["input"], "Mic")
 
     async def test_voice_setup_can_disable_channel(self):
