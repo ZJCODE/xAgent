@@ -693,14 +693,7 @@ export function WorldProvider({ children }: { children: ReactNode }) {
     const text = speakText.trim();
     const files = pendingFiles;
     if (!text && !files.length) return;
-    const people = [
-      ...current.present,
-      ...current.neighbors.map((agent) => ({
-        member_id: agent.name,
-        display_name: agent.title || agent.name,
-      })),
-    ];
-    const mentions = extractMentions(text, people);
+    const mentions = extractMentions(text, current.present);
     if (text.length > MAX_SPEAK_TEXT_LENGTH) {
       setComposeError(`text_too_long: text exceeds ${MAX_SPEAK_TEXT_LENGTH} characters`);
       return;

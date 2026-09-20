@@ -187,7 +187,6 @@ export function WorldChat() {
     removeFile,
     sending,
     present,
-    neighbors,
   } = useWorld();
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const areaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -200,23 +199,16 @@ export function WorldChat() {
   const prevSendingRef = useRef(false);
   const utteranceSeqBeforeSendRef = useRef(0);
 
-  const people = useMemo<MentionPerson[]>(() => {
-    const presentIds = new Set(present.map((item) => item.member_id));
-    const list: MentionPerson[] = present.map((item) => ({
-      member_id: item.member_id,
-      display_name: item.display_name || item.member_id,
-      here: true,
-    }));
-    for (const agent of neighbors) {
-      if (presentIds.has(agent.name)) continue;
-      list.push({
-        member_id: agent.name,
-        display_name: agent.title || agent.name,
-        here: false,
-      });
-    }
-    return list;
-  }, [neighbors, present]);
+  // Mentions follow the live roster. Local agents not invited into this world
+  // stay on the sidebar Invite list.
+  const people = useMemo<MentionPerson[]>(
+    () =>
+      present.map((item) => ({
+        member_id: item.member_id,
+        display_name: item.display_name || item.member_id,
+      })),
+    [present],
+  );
 
   const mentionQuery = joined ? findMentionQuery(speakText, cursor) : null;
   const mentionMatches = mentionQuery ? filterMentionPeople(people, mentionQuery.query) : [];
@@ -445,7 +437,6 @@ export function WorldChat() {
                     onClick={() => applyMention(person)}
                   >
                     <span className="world-mention">@{mentionLabel(person)}</span>
-                    {person.here === false ? <span className="world-mention-away">not here</span> : null}
                   </button>
                 </li>
               ))}

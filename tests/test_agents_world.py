@@ -727,6 +727,19 @@ class WorldHubTests(unittest.IsolatedAsyncioTestCase):
                 )
                 self.assertIn("ben", heard.get("mentions") or [])
 
+    async def test_mention_ignores_member_not_present(self):
+        await _http_get(self.port, "/worlds/create?name=hall")
+        from agents_world.client import WorldClient
+
+        async with WorldClient(self._ws("hall"), member_id="amy", display_name="Amy") as amy:
+            await amy.join()
+            await amy.wait_for(lambda m: m.get("type") == "snapshot")
+            await amy.speak("hey @Ghost", mentions=["ghost"])
+            heard = await amy.wait_for(
+                lambda m: m.get("type") == "event" and m.get("kind") == "utterance"
+            )
+            self.assertEqual(heard.get("mentions") or [], [])
+
     async def test_many_humans_and_agents_join_and_fanout(self):
         await _http_get(self.port, "/worlds/create?name=arena")
         from agents_world.client import WorldClient
@@ -780,6 +793,7 @@ class WorldHubTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Attach file", blob)
         self.assertIn("Type @ to mention someone", blob)
         self.assertIn("world-mention-menu", blob)
+        self.assertNotIn("world-mention-away", blob)
         self.assertIn("Open agent web", blob)
         self.assertIn("127.0.0.1:1415", blob)
 

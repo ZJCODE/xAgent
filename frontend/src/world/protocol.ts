@@ -240,8 +240,6 @@ export function escapeRegExp(value: string): string {
 export type MentionPerson = {
   member_id: string;
   display_name?: string;
-  /** False when listed from local agents but not currently in the world. */
-  here?: boolean;
 };
 
 export function mentionLabel(person: MentionPerson): string {
@@ -294,8 +292,7 @@ export function insertMention(
 export function filterMentionPeople(people: MentionPerson[], query: string): MentionPerson[] {
   const needle = query.trim().toLowerCase();
   const seen = new Set<string>();
-  const here: MentionPerson[] = [];
-  const away: MentionPerson[] = [];
+  const matches: MentionPerson[] = [];
   for (const person of people) {
     if (!person.member_id || seen.has(person.member_id)) continue;
     seen.add(person.member_id);
@@ -303,8 +300,7 @@ export function filterMentionPeople(people: MentionPerson[], query: string): Men
       const hay = `${person.member_id} ${person.display_name || ""}`.toLowerCase();
       if (!hay.includes(needle)) continue;
     }
-    if (person.here === false) away.push(person);
-    else here.push(person);
+    matches.push(person);
   }
-  return [...here, ...away];
+  return matches;
 }
