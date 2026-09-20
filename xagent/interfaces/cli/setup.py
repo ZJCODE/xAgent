@@ -430,22 +430,6 @@ def voice_init_selection_from_mapping(
 ) -> VoiceInitSelection:
     """Build a ``VoiceInitSelection`` from API/JSON input."""
     schema_defaults = build_voice_setup_schema(config).get("defaults") or {}
-    removed_fields = {
-        "voice_provider",
-        "voice_stt_provider",
-        "voice_stt_api_key",
-        "voice_tts_provider",
-        "voice_tts_api_key",
-        "voice_enable_interruptions",
-        "voice_wake_enabled",
-        "voice_wake_phrases",
-        "voice_exit_phrases",
-    }.intersection(data)
-    if removed_fields:
-        fields = ", ".join(sorted(removed_fields))
-        raise ChannelSetupError(
-            f"Voice setup is Soniox-only; removed fields are not accepted: {fields}"
-        )
     profile = str(data.get("voice_profile") or schema_defaults.get("voice_profile") or "room").strip().lower()
     if profile not in {"room", "headset"}:
         raise ChannelSetupError('voice_profile must be "room" or "headset"')
