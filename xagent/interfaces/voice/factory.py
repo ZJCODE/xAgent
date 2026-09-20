@@ -9,6 +9,7 @@ from .audio import (
     SoundDevicePlayer,
     resolve_audio_io_profile,
 )
+from .attention import VoiceAttentionConfig, VoiceAttentionGate, normalize_terms
 from .config import (
     SONIOX_STT_CHANNELS,
     SONIOX_STT_SAMPLE_RATE,
@@ -16,8 +17,23 @@ from .config import (
     SONIOX_TTS_SAMPLE_RATE,
     VoiceChannelConfig,
 )
+from .presence import SttLifecycleController, VoicePresenceConfig
 from .runtime import VoiceRuntime, VoiceRuntimeOptions
 from .soniox import SonioxSTTCallbacks, create_soniox_adapters
+
+
+def _agent_context_terms(agent: Any) -> list[str]:
+    terms: list[str] = []
+    for attr in ("display_name", "name"):
+        value = getattr(agent, attr, None)
+        if isinstance(value, str) and value.strip():
+            terms.append(value.strip())
+    identity = getattr(agent, "identity", None) or getattr(agent, "system_prompt", None)
+    if isinstance(identity, str):
+        first_line = identity.strip().splitlines()[0] if identity.strip() else ""
+        if first_line and len(first_line) <= 64:
+            terms.append(first_line)
+    return normalize_terms(terms)
 
 
 def create_local_voice_runtime(
@@ -40,13 +56,24 @@ def create_local_voice_runtime(
         if runtime is not None:
             runtime._schedule_notice("back_online")
 
+    presence_cfg = VoicePresenceConfig(
+        close_stt_after_idle_seconds=config.presence.close_stt_after_idle_seconds,
+        wake_energy_rms=config.presence.wake_energy_rms,
+        recent_speech_hours=config.presence.recent_speech_hours,
+    )
+    lifecycle = SttLifecycleController(presence_cfg)
     recognizer, synthesizer = create_soniox_adapters(
         config,
         stt_callbacks=SonioxSTTCallbacks(
             on_reconnecting=_on_stt_reconnecting,
             on_recovered=_on_stt_recovered,
         ),
+        lifecycle=lifecycle,
     )
+    extra_terms = _agent_context_terms(agent)
+    set_terms = getattr(recognizer, "set_extra_context_terms", None)
+    if callable(set_terms):
+        set_terms(extra_terms)
     audio_profile = resolve_audio_io_profile(
         input_sample_rate=SONIOX_STT_SAMPLE_RATE,
         input_channels=SONIOX_STT_CHANNELS,
@@ -71,6 +98,15 @@ def create_local_voice_runtime(
         stream_sample_rate=audio_profile.output_selection.stream_sample_rate,
         stream_channels=audio_profile.output_selection.stream_channels,
     )
+    wake_terms = normalize_terms(list(config.attention.wake_terms) + extra_terms)
+    attention_gate = VoiceAttentionGate(
+        config=VoiceAttentionConfig(
+            open_window_seconds=config.attention.open_window_seconds,
+            wake_terms=list(config.attention.wake_terms),
+            use_decide_participation=config.attention.use_decide_participation,
+        ),
+        wake_terms=wake_terms,
+    )
     runtime = VoiceRuntime(
         agent=agent,
         config=config,
@@ -79,6 +115,8 @@ def create_local_voice_runtime(
         synthesizer=synthesizer,
         player=player,
         options=options,
+        attention_gate=attention_gate,
+        stt_lifecycle=lifecycle,
     )
     runtime_holder[0] = runtime
     return runtime

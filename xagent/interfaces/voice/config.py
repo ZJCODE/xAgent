@@ -109,6 +109,36 @@ class SonioxSTTContextConfig(BaseModel):
         return payload or None
 
 
+class VoiceAttentionConfigModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    open_window_seconds: float = Field(default=25.0, ge=0.0, le=120.0)
+    wake_terms: list[str] = Field(default_factory=list)
+    use_decide_participation: bool = True
+
+    @field_validator("wake_terms")
+    @classmethod
+    def _clean_terms(cls, value: list[str]) -> list[str]:
+        return [term.strip() for term in value if term.strip()]
+
+
+class VoicePresenceConfigModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    close_stt_after_idle_seconds: float = Field(default=0.0, ge=0.0, le=86_400.0)
+    wake_energy_rms: float = Field(default=450.0, ge=50.0, le=20_000.0)
+    recent_speech_hours: float = Field(default=6.0, ge=0.0, le=168.0)
+
+
+class VoiceProactiveConfigModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    quiet_hours_start: int = Field(default=22, ge=0, le=23)
+    quiet_hours_end: int = Field(default=7, ge=0, le=23)
+    max_per_hour: int = Field(default=3, ge=0, le=30)
+    require_recent_speech: bool = True
+
+
 class VoiceInterruptionConfig(BaseModel):
     """Barge-in thresholds when ``enable_interruptions`` is true."""
 
@@ -161,6 +191,11 @@ class VoiceChannelConfig(BaseModel):
     enable_interruptions: bool = False
     interruption: VoiceInterruptionConfig = Field(default_factory=VoiceInterruptionConfig)
     aggregate_utterances: bool = True
+    enable_diarization: bool = True
+    room_name: str = "local_room"
+    attention: VoiceAttentionConfigModel = Field(default_factory=VoiceAttentionConfigModel)
+    presence: VoicePresenceConfigModel = Field(default_factory=VoicePresenceConfigModel)
+    proactive: VoiceProactiveConfigModel = Field(default_factory=VoiceProactiveConfigModel)
     context: SonioxSTTContextConfig = Field(default_factory=SonioxSTTContextConfig)
     audio: VoiceAudioConfig = Field(default_factory=VoiceAudioConfig)
 
@@ -222,3 +257,20 @@ class VoiceChannelConfig(BaseModel):
     def tts_language_for(self, stt_language: str | None) -> str:
         """Deprecated: prefer reply-based ``ConversationLanguageTracker``."""
         return (stt_language or "").strip() or self.fallback_language
+
+    def merged_stt_context(self, extra_terms: list[str] | None = None) -> SonioxSTTContextConfig:
+        terms = list(self.context.terms)
+        for term in extra_terms or []:
+            cleaned = term.strip()
+            if cleaned and cleaned not in terms:
+                terms.append(cleaned)
+        for term in self.attention.wake_terms:
+            if term not in terms:
+                terms.append(term)
+        if terms == self.context.terms:
+            return self.context
+        return SonioxSTTContextConfig(
+            general=list(self.context.general),
+            text=self.context.text,
+            terms=terms,
+        )

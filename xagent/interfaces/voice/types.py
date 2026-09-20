@@ -10,3 +10,5 @@ class VoiceUtterance:
 
     text: str
     language: str = ""
+    speaker_label: str = ""
+    confidence: float = 0.0

@@ -563,6 +563,7 @@ class Agent:
         channel: Optional[str] = None,
         inbox_kind: Optional[Union[str, InboxKind]] = None,
         sender_name: str = "",
+        extra_message_metadata: Optional[Dict[str, Any]] = None,
     ) -> AsyncGenerator[dict, None]:
         """Emit one agent turn as structured message/tool events.
 
@@ -596,6 +597,7 @@ class Agent:
             inbox_kind=inbox_kind,
             sender_name=sender_name,
             delivery_context=delivery_context,
+            extra_message_metadata=extra_message_metadata,
         )
         user_metadata = inbox_item.message_metadata()
         await self.inbox.acquire_turn()
@@ -889,11 +891,12 @@ class Agent:
         inbox_kind: Optional[Union[str, InboxKind]],
         sender_name: str = "",
         delivery_context: Any,
+        extra_message_metadata: Optional[Dict[str, Any]] = None,
     ) -> InboxItem:
         from ..components.memory import human_display_name
 
         kind = normalize_inbox_kind(inbox_kind)
-        extra_metadata: Dict[str, Any] = {}
+        extra_metadata: Dict[str, Any] = dict(extra_message_metadata or {})
         if delivery_context is not None:
             source = str((delivery_context.metadata or {}).get("source") or "").strip()
             if source:

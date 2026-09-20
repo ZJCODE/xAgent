@@ -8,10 +8,12 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, AsyncIterator, Iterable, Iterator, Optional, Protocol
 
 from xagent.core.config import AgentConfig
+from xagent.core.formatters.context import RoomContextEntry, format_room_context
 from xagent.core.runtime import (
     AsyncTaskScheduler,
     ScheduledDeliveryContext,
@@ -23,9 +25,13 @@ from xagent.core.runtime import (
 )
 
 from .aggregator import iter_aggregated_utterances
+from .attention import VoiceAttentionConfig, VoiceAttentionGate
 from .barge_in import BargeInConfig, BargeInEvaluator
 from .config import SONIOX_TTS_CHANNELS, SONIOX_TTS_SAMPLE_RATE, VoiceChannelConfig
 from .floor import ConversationFloor, FloorCommandKind, FloorEvent, FloorEventKind, FloorState
+from .presence import SttLifecycleController
+from .proactive import ProactiveSpeechLimiter, in_quiet_hours
+from .speakers import SpeakerAttribution, SpeakerBindingStore
 from .types import VoiceUtterance
 from .speech_text import (
     ConversationLanguageTracker,
@@ -136,6 +142,9 @@ class VoiceRuntime:
         player: VoicePlayer,
         options: Optional[VoiceRuntimeOptions] = None,
         output=print,
+        attention_gate: VoiceAttentionGate | None = None,
+        speaker_bindings: SpeakerBindingStore | None = None,
+        stt_lifecycle: SttLifecycleController | None = None,
     ) -> None:
         self.agent = agent
         self.config = config
@@ -181,6 +190,18 @@ class VoiceRuntime:
             )
             runtime_root = Path(self.options.tasks_dir).parent
             self._contacts_file = resolve_contacts_path(runtime_root)
+        attention_cfg = VoiceAttentionConfig(
+            open_window_seconds=self.config.attention.open_window_seconds,
+            wake_terms=list(self.config.attention.wake_terms),
+            use_decide_participation=self.config.attention.use_decide_participation,
+        )
+        self._attention = attention_gate or VoiceAttentionGate(config=attention_cfg)
+        bindings_path = None
+        if self.options.tasks_dir is not None:
+            bindings_path = Path(self.options.tasks_dir).parent / "voice_speaker_bindings.json"
+        self._speaker_bindings = speaker_bindings or SpeakerBindingStore(bindings_path)
+        self._stt_lifecycle = stt_lifecycle
+        self._proactive_limiter = ProactiveSpeechLimiter(self.config.proactive.max_per_hour)
 
     async def run_forever(self) -> None:
         """Run until stopped or a non-recoverable STT error is raised."""
@@ -215,10 +236,19 @@ class VoiceRuntime:
                 if not transcript:
                     await self._speak_notice("not_understood")
                     continue
+                attribution = self._resolve_speaker(utterance)
+                if not await self._should_reply_to_utterance(transcript, utterance, attribution):
+                    continue
                 endpoint_at = time.monotonic()
                 self.output(f"User: {transcript}")
                 try:
-                    await self._reply_to_utterance(utterance, endpoint_at=endpoint_at)
+                    await self._reply_to_utterance(
+                        utterance,
+                        endpoint_at=endpoint_at,
+                        user_id=attribution.user_id,
+                        voice_metadata=self._voice_turn_metadata(utterance, attribution),
+                    )
+                    self._attention.mark_dispatched()
                 except Exception as exc:
                     self.logger.exception("Voice turn failed")
                     self.output(f"Voice turn failed: {exc}")
@@ -268,8 +298,11 @@ class VoiceRuntime:
         utterance: VoiceUtterance,
         *,
         endpoint_at: float,
+        user_id: str | None = None,
+        voice_metadata: dict[str, Any] | None = None,
     ) -> None:
         transcript = utterance.text.strip()
+        resolved_user = user_id or self.options.user_id
         self._floor.allow_duplex_capture = self._duplex_capture_enabled
         while transcript:
             timing = _TurnTiming(endpoint_at=endpoint_at)
@@ -297,7 +330,12 @@ class VoiceRuntime:
             interrupted = {"value": False}
             try:
                 await self._speak(
-                    self._agent_text_chunks(transcript, reply_buffer=reply_buffer),
+                    self._agent_text_chunks(
+                        transcript,
+                        reply_buffer=reply_buffer,
+                        user_id=resolved_user,
+                        voice_metadata=voice_metadata,
+                    ),
                     speak_language=speak_language,
                     reply_buffer=reply_buffer,
                     timing=timing,
@@ -599,19 +637,181 @@ class VoiceRuntime:
         finally:
             self.pause_event.clear()
 
+    def _resolve_speaker(self, utterance: VoiceUtterance) -> SpeakerAttribution:
+        return self._speaker_bindings.resolve(
+            speaker_label=utterance.speaker_label,
+            fallback_user_id=self.options.user_id,
+            confidence=utterance.confidence,
+        )
+
+    @staticmethod
+    def _voice_turn_metadata(utterance: VoiceUtterance, attribution: SpeakerAttribution) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "voice": {
+                "speaker_label": attribution.speaker_label or utterance.speaker_label,
+                "confidence": utterance.confidence,
+                "bound": attribution.bound,
+            }
+        }
+        if attribution.speaker_label:
+            payload["sender_name"] = f"Speaker {attribution.speaker_label}"
+        return payload
+
+    def _room_context_for(self, *, transcript: str, speaker_label: str) -> str:
+        label = speaker_label.strip() or "Guest"
+        return format_room_context(
+            self.config.room_name,
+            [
+                RoomContextEntry(
+                    speaker_label=label,
+                    occurred_at=datetime.now(),
+                    text=transcript,
+                )
+            ],
+            room_name=self.config.room_name,
+        )
+
+    async def _should_reply_to_utterance(
+        self,
+        transcript: str,
+        utterance: VoiceUtterance,
+        attribution: SpeakerAttribution,
+    ) -> bool:
+        tier = self._attention.attention_tier(transcript)
+        if tier < 3:
+            return True
+        if not self._attention.needs_participation_decision(transcript):
+            await self._observe_ignored_speech(
+                transcript,
+                utterance,
+                attribution,
+                tier=tier,
+                reason="attention tier 3 without participation gate",
+            )
+            return False
+        decider = getattr(self.agent, "decide_participation", None)
+        if not callable(decider):
+            await self._observe_ignored_speech(
+                transcript,
+                utterance,
+                attribution,
+                tier=tier,
+                reason="no participation decider",
+            )
+            return False
+        context = self._room_context_for(
+            transcript=transcript,
+            speaker_label=attribution.speaker_label or utterance.speaker_label,
+        )
+        metadata = {
+            "source": "voice",
+            "event_type": "room_speech",
+            "attention_tier": tier,
+            "addressed_to_agent": False,
+            **self._voice_turn_metadata(utterance, attribution),
+        }
+        try:
+            decision = await decider(
+                context=context,
+                source="voice",
+                event_type="room_speech",
+                metadata=metadata,
+            )
+        except Exception:
+            self.logger.exception("Voice participation decision failed")
+            await self._observe_ignored_speech(
+                transcript,
+                utterance,
+                attribution,
+                tier=tier,
+                reason="participation decision failed",
+            )
+            return False
+        should_reply = bool(getattr(decision, "should_reply", False))
+        if isinstance(decision, dict):
+            should_reply = bool(decision.get("should_reply"))
+        if should_reply:
+            return True
+        reason = str(getattr(decision, "reason", "") or "").strip()
+        if isinstance(decision, dict):
+            reason = str(decision.get("reason") or "").strip()
+        await self._observe_ignored_speech(
+            transcript,
+            utterance,
+            attribution,
+            tier=tier,
+            reason=reason or "participation declined",
+        )
+        return False
+
+    async def _observe_ignored_speech(
+        self,
+        transcript: str,
+        utterance: VoiceUtterance,
+        attribution: SpeakerAttribution,
+        *,
+        tier: int,
+        reason: str,
+    ) -> None:
+        observer = getattr(self.agent, "observe", None)
+        if not callable(observer):
+            return
+        context = self._room_context_for(
+            transcript=transcript,
+            speaker_label=attribution.speaker_label or utterance.speaker_label,
+        )
+        metadata = {
+            "source": "voice",
+            "event_type": "room_speech",
+            "attention_tier": tier,
+            "silence_reason": reason,
+            "addressed_to_agent": False,
+            **self._voice_turn_metadata(utterance, attribution),
+        }
+        try:
+            await observer(
+                context=context,
+                source="voice",
+                event_type="room_speech",
+                metadata=metadata,
+                room_name=self.config.room_name,
+                channel="voice",
+                user_id=attribution.user_id,
+            )
+        except Exception:
+            self.logger.debug("Failed to record ignored room speech", exc_info=True)
+
+    def _proactive_speech_allowed(self) -> bool:
+        if self._floor.state not in {FloorState.IDLE}:
+            return False
+        proactive = self.config.proactive
+        if in_quiet_hours(
+            quiet_start=proactive.quiet_hours_start,
+            quiet_end=proactive.quiet_hours_end,
+        ):
+            return False
+        if proactive.require_recent_speech:
+            lifecycle = self._stt_lifecycle
+            if lifecycle is not None and lifecycle.enabled and not lifecycle.heard_recently():
+                return False
+        return self._proactive_limiter.allow()
+
     async def _agent_text_chunks(
         self,
         transcript: str,
         *,
         reply_buffer: list[str] | None = None,
+        user_id: str | None = None,
+        voice_metadata: dict[str, Any] | None = None,
     ) -> AsyncIterator[str]:
+        resolved_user = user_id or self.options.user_id
         if self._contacts_file is not None:
             try:
                 upsert_contact(
                     self._contacts_file,
                     channel="voice",
-                    user_id=self.options.user_id,
-                    target={"user_id": self.options.user_id},
+                    user_id=resolved_user,
+                    target={"user_id": resolved_user},
                 )
             except Exception:
                 pass
@@ -622,13 +822,18 @@ class VoiceRuntime:
         sanitizer = StreamingTTSSanitizer()
         raw_reply_parts: list[str] = []
         with scheduled_delivery_context(self._delivery_context()):
+            extra_metadata = dict(voice_metadata or {})
+            sender_name = str(extra_metadata.pop("sender_name", "") or "")
             async for event in self.agent.chat_events(
                 user_message=transcript,
-                user_id=self.options.user_id,
+                user_id=resolved_user,
                 stream=self.options.stream,
                 channel="voice",
                 inbox_kind="user_turn",
                 channel_instructions=VOICE_CHANNEL_INSTRUCTIONS,
+                room_name=self.config.room_name,
+                sender_name=sender_name,
+                extra_message_metadata=extra_metadata or None,
             ):
                 event_type = event.get("type")
                 message_id = str(event.get("message_id") or uuid.uuid4().hex)
@@ -690,6 +895,8 @@ class VoiceRuntime:
         return task.kind == "task" and task.delivery_channel == "voice"
 
     async def _dispatch_scheduled_task(self, task: ScheduledTaskRecord) -> None:
+        if not self._proactive_speech_allowed():
+            raise ValueError("proactive voice output blocked by floor, quiet hours, or rate cap")
         text = await self._scheduled_task_text(task)
         if not text:
             raise ValueError("scheduled voice task produced no content")
@@ -700,10 +907,13 @@ class VoiceRuntime:
             _single_text_stream(spoken),
             language=self._language_tracker.language_before_turn(),
         )
+        self._proactive_limiter.record()
 
     async def deliver_subconscious_message(self, delivery: SubconsciousDelivery) -> None:
         if delivery.recipient.channel != "voice":
             raise ValueError(f"Voice runtime cannot deliver subconscious channel {delivery.recipient.channel!r}")
+        if not self._proactive_speech_allowed():
+            raise ValueError("proactive voice output blocked by floor, quiet hours, or rate cap")
         text = str(delivery.content or "").strip()
         if not text:
             raise ValueError("subconscious voice delivery produced no content")
@@ -714,6 +924,7 @@ class VoiceRuntime:
             _single_text_stream(spoken),
             language=self._language_tracker.language_before_turn(),
         )
+        self._proactive_limiter.record()
         message_handler = getattr(self.agent, "message_handler", None)
         store_model_reply = getattr(message_handler, "store_model_reply", None)
         if callable(store_model_reply):

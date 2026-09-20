@@ -109,7 +109,12 @@ class FailingFirstAgent:
 
 
 def voice_config(data=None):
-    payload = {"api_key": "test-key", "aggregate_utterances": False, **(data or {})}
+    payload = {
+        "api_key": "test-key",
+        "aggregate_utterances": False,
+        "enable_diarization": False,
+        **(data or {}),
+    }
     return VoiceChannelConfig.from_dict(payload)
 
 

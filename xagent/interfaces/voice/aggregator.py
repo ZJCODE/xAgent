@@ -80,7 +80,16 @@ def _merge_utterances(parts: list[VoiceUtterance]) -> VoiceUtterance:
     text = " ".join(part.text.strip() for part in parts if part.text.strip()).strip()
     languages = Counter(part.language for part in parts if part.language)
     language = languages.most_common(1)[0][0] if languages else ""
-    return VoiceUtterance(text=text, language=language)
+    speakers = Counter(part.speaker_label for part in parts if part.speaker_label)
+    speaker_label = speakers.most_common(1)[0][0] if speakers else ""
+    confidences = [part.confidence for part in parts if part.confidence]
+    confidence = min(confidences) if confidences else 0.0
+    return VoiceUtterance(
+        text=text,
+        language=language,
+        speaker_label=speaker_label,
+        confidence=confidence,
+    )
 
 
 class _UtteranceFeeder:

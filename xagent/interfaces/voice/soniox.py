@@ -26,6 +26,7 @@ from .config import (
     VoiceChannelConfig,
 )
 from .partials import PartialTranscriptRelay
+from .presence import SttLifecycleController
 from .spoken_ledger import SpokenLedger
 from .types import VoiceUtterance
 
@@ -92,6 +93,8 @@ class SonioxVoiceError(RuntimeError):
 class _FinalToken:
     text: str
     language: str = ""
+    speaker: str = ""
+    confidence: float = 0.0
 
 
 class SonioxRealtimeSTT:
@@ -104,12 +107,18 @@ class SonioxRealtimeSTT:
         config: VoiceChannelConfig,
         client: Any | None = None,
         callbacks: SonioxSTTCallbacks | None = None,
+        lifecycle: SttLifecycleController | None = None,
     ) -> None:
         self.api_key = api_key
         self.config = config
         self._client = client or SonioxClient(api_key=api_key)
         self._callbacks = callbacks or SonioxSTTCallbacks()
         self.partial_relay = PartialTranscriptRelay()
+        self.lifecycle = lifecycle
+        self._extra_context_terms: list[str] = []
+
+    def set_extra_context_terms(self, terms: list[str]) -> None:
+        self._extra_context_terms = [term.strip() for term in terms if term and term.strip()]
 
     def iter_utterances(
         self,
@@ -122,6 +131,8 @@ class SonioxRealtimeSTT:
         backoff = STT_RECONNECT_BASE_SECONDS
         awaiting_recovery_notice = False
         while not stop_event.is_set():
+            if self.lifecycle is not None and self.lifecycle.is_sleeping():
+                self.lifecycle.wait_until_awake(stop_event)
             session_stop = threading.Event()
             produced_utterance = False
             try:
@@ -193,6 +204,7 @@ class SonioxRealtimeSTT:
                     stop_event,
                     session_stop,
                     send_errors,
+                    self.lifecycle,
                 ),
                 daemon=True,
                 name="xagent-soniox-stt-send",
@@ -219,12 +231,19 @@ class SonioxRealtimeSTT:
                             draft_tokens = []
                             self.partial_relay.clear()
                             if utterance.text:
+                                if self.lifecycle is not None:
+                                    self.lifecycle.note_endpoint()
                                 yield utterance
                             continue
                         if text in {"<fin>"}:
                             continue
                         final_tokens.append(
-                            _FinalToken(text=text, language=str(token.language or ""))
+                            _FinalToken(
+                                text=text,
+                                language=str(token.language or ""),
+                                speaker=str(getattr(token, "speaker", "") or ""),
+                                confidence=float(getattr(token, "confidence", 0.0) or 0.0),
+                            )
                         )
                     if event.finished:
                         break
@@ -245,13 +264,13 @@ class SonioxRealtimeSTT:
             sample_rate=SONIOX_STT_SAMPLE_RATE,
             num_channels=SONIOX_STT_CHANNELS,
             language_hints=self.config.language_hints,
-            context=self.config.context.to_soniox_payload(),
+            context=self.config.merged_stt_context(self._extra_context_terms).to_soniox_payload(),
             enable_endpoint_detection=True,
             endpoint_latency_adjustment_level=SONIOX_ENDPOINT_LATENCY_LEVEL,
             endpoint_sensitivity=SONIOX_ENDPOINT_SENSITIVITY,
             max_endpoint_delay_ms=SONIOX_MAX_ENDPOINT_DELAY_MS,
             enable_language_identification=True,
-            enable_speaker_diarization=False,
+            enable_speaker_diarization=self.config.enable_diarization,
         )
 
     @staticmethod
@@ -262,12 +281,19 @@ class SonioxRealtimeSTT:
         stop_event: threading.Event,
         session_stop: threading.Event,
         send_errors: queue.Queue[BaseException],
+        lifecycle: SttLifecycleController | None,
     ) -> None:
         paused = False
         try:
             for chunk in audio_chunks:
                 if stop_event.is_set() or session_stop.is_set():
                     return
+                if lifecycle is not None:
+                    lifecycle.observe_audio(chunk)
+                    if lifecycle.should_close_session():
+                        lifecycle.enter_sleep()
+                        session_stop.set()
+                        return
                 should_pause = pause_event.is_set()
                 if should_pause and not paused:
                     session.pause(finalize=False)
@@ -509,6 +535,7 @@ def create_soniox_adapters(
     config: VoiceChannelConfig,
     *,
     stt_callbacks: SonioxSTTCallbacks | None = None,
+    lifecycle: SttLifecycleController | None = None,
 ) -> tuple[SonioxRealtimeSTT, SonioxRealtimeTTS]:
     api_key = config.resolved_api_key()
     client = SonioxClient(api_key=api_key)
@@ -518,6 +545,7 @@ def create_soniox_adapters(
             config=config,
             client=client,
             callbacks=stt_callbacks,
+            lifecycle=lifecycle,
         ),
         SonioxRealtimeTTS(api_key=api_key, config=config, client=client),
     )
@@ -534,7 +562,16 @@ def _utterance_from(tokens: list[_FinalToken]) -> VoiceUtterance:
     text = "".join(token.text for token in tokens).strip()
     languages = Counter(token.language for token in tokens if token.language)
     language = languages.most_common(1)[0][0] if languages else ""
-    return VoiceUtterance(text=text, language=language)
+    speakers = Counter(token.speaker for token in tokens if token.speaker)
+    speaker_label = speakers.most_common(1)[0][0] if speakers else ""
+    confidences = [token.confidence for token in tokens if token.confidence]
+    confidence = min(confidences) if confidences else 0.0
+    return VoiceUtterance(
+        text=text,
+        language=language,
+        speaker_label=speaker_label,
+        confidence=confidence,
+    )
 
 
 def _raise_event_error(event: Any, *, kind: str) -> None:
