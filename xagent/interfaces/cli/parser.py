@@ -199,6 +199,13 @@ def _add_voice_runtime_arguments(
         default="auto",
         help="Override barge-in, which is otherwise enabled only on echo-cancelling devices",
     )
+    parser.add_argument(
+        "--speed",
+        dest="speech_speed",
+        type=float,
+        default=None,
+        help="Speaking rate for this session, 0.7-1.3 (default: 1.0)",
+    )
 
 
 def _add_feishu_setup_arguments(parser: argparse.ArgumentParser) -> None:

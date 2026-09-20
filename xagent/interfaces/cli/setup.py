@@ -103,7 +103,6 @@ class VoiceInitSelection:
 
     voice_enabled: bool = True
     voice_api_key: str = ""
-    voice_name: str = "Owen"
     language_hints: tuple[str, ...] = ("zh", "en")
     fallback_language: str = "zh"
 
@@ -319,7 +318,6 @@ def build_voice_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
     defaults = {
         "voice_enabled": True,
         "voice_api_key": "",
-        "voice_name": "Owen",
         "language_hints": ["zh", "en"],
         "fallback_language": "zh",
     }
@@ -332,7 +330,6 @@ def build_voice_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
                 public = parsed.to_public_dict()
                 defaults.update(
                     {
-                        "voice_name": public.get("voice", "Owen"),
                         "language_hints": list(public.get("language_hints") or ["zh", "en"]),
                         "fallback_language": public.get("fallback_language", "zh"),
                     }
@@ -428,8 +425,6 @@ def voice_init_selection_from_mapping(
     return VoiceInitSelection(
         voice_enabled=bool(data.get("voice_enabled", True)),
         voice_api_key=str(data.get("voice_api_key") or "").strip(),
-        voice_name=str(data.get("voice_name") or schema_defaults.get("voice_name") or "Owen").strip()
-        or "Owen",
         language_hints=tuple(hints),
         fallback_language=str(data.get("fallback_language") or schema_defaults.get("fallback_language") or "zh").strip()
         or "zh",
@@ -579,13 +574,11 @@ def _voice_channel_config(
     if existing:
         merged = dict(existing)
         merged["api_key"] = api_key
-        merged["voice"] = selection.voice_name
         merged["language_hints"] = list(selection.language_hints)
         merged["fallback_language"] = selection.fallback_language
         return VoiceChannelConfig.from_dict(merged).to_public_dict()
     payload = {
         "api_key": api_key,
-        "voice": selection.voice_name,
         "language_hints": list(selection.language_hints),
         "fallback_language": selection.fallback_language,
     }
@@ -616,6 +609,7 @@ def _config_yaml(selection: InitSelection, port: int) -> str:
             "notes_enabled": AgentConfig.NOTES_ENABLED,
             "notes_auto_distill": AgentConfig.NOTES_AUTO_DISTILL,
             "subconscious_activity": AgentConfig.SUBCONSCIOUS_ACTIVITY,
+            "voice": AgentConfig.DEFAULT_VOICE,
         },
         "channels": {
             "api": {
@@ -658,6 +652,10 @@ def _config_yaml(selection: InitSelection, port: int) -> str:
     yaml_str = yaml_str.replace(
         "notes_auto_distill: true\n",
         "notes_auto_distill: true  # Distil notes after weekly summaries.\n",
+    )
+    yaml_str = yaml_str.replace(
+        f"voice: {AgentConfig.DEFAULT_VOICE}\n",
+        f"voice: {AgentConfig.DEFAULT_VOICE}  # Speaking voice, used wherever the agent is heard aloud.\n",
     )
     return yaml_str
 

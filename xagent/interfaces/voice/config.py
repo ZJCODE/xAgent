@@ -49,6 +49,15 @@ class VoiceRuntimeProfile:
     echo_managed: bool = False
     source: str = "default"
 
+
+@dataclass(frozen=True)
+class VoiceSpeechStyle:
+    """How the agent sounds. The voice belongs to the agent's identity, and
+    rate is a listener's preference, so neither is a property of the channel."""
+
+    voice: str = "Owen"
+    speed: float = 1.0
+
 _VOICE_KEY_PLACEHOLDERS = {
     SONIOX_KEY_PLACEHOLDER,
     "your_qwen_api_key_here",
@@ -58,8 +67,6 @@ _VOICE_KEY_PLACEHOLDERS = {
 _VOICE_TOP_LEVEL_KEYS = frozenset(
     {
         "api_key",
-        "voice",
-        "speed",
         "language_hints",
         "fallback_language",
         "quiet_hours",
@@ -70,8 +77,6 @@ _VOICE_TOP_LEVEL_KEYS = frozenset(
 VOICE_CONFIG_EXAMPLE = """channels:
   voice:
     api_key: your_soniox_api_key_here
-    voice: Owen
-    speed: 1.0
     language_hints: [zh, en]
     fallback_language: zh
     quiet_hours: "22:00-07:00"
@@ -211,14 +216,13 @@ class VoiceChannelConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     api_key: str | None = None
-    voice: str = "Owen"
     language_hints: list[str] = Field(default_factory=lambda: ["zh", "en"])
     fallback_language: str = "zh"
-    speed: float = Field(default=1.0, ge=0.7, le=1.3)
     quiet_hours: str = "22:00-07:00"
     audio: VoiceAudioConfig = Field(default_factory=VoiceAudioConfig)
 
     _runtime_profile: VoiceRuntimeProfile = PrivateAttr(default_factory=VoiceRuntimeProfile)
+    _speech_style: VoiceSpeechStyle = PrivateAttr(default_factory=VoiceSpeechStyle)
 
     @field_validator("api_key")
     @classmethod
@@ -227,12 +231,12 @@ class VoiceChannelConfig(BaseModel):
             return None
         return value.strip() or None
 
-    @field_validator("voice", "fallback_language")
+    @field_validator("fallback_language")
     @classmethod
     def _validate_non_empty(cls, value: str) -> str:
         normalized = value.strip()
         if not normalized:
-            raise ValueError("voice and fallback_language must be non-empty")
+            raise ValueError("fallback_language must be non-empty")
         return normalized
 
     @field_validator("language_hints")
@@ -268,8 +272,6 @@ class VoiceChannelConfig(BaseModel):
     def to_public_dict(self) -> dict[str, Any]:
         return {
             "api_key": self.api_key or SONIOX_KEY_PLACEHOLDER,
-            "voice": self.voice,
-            "speed": self.speed,
             "language_hints": list(self.language_hints),
             "fallback_language": self.fallback_language,
             "quiet_hours": self.quiet_hours,
@@ -293,6 +295,17 @@ class VoiceChannelConfig(BaseModel):
 
     def apply_runtime_profile(self, profile: VoiceRuntimeProfile) -> None:
         self._runtime_profile = profile
+
+    def apply_speech_style(self, style: VoiceSpeechStyle) -> None:
+        self._speech_style = style
+
+    @property
+    def voice(self) -> str:
+        return self._speech_style.voice
+
+    @property
+    def speed(self) -> float:
+        return self._speech_style.speed
 
     @property
     def runtime_profile(self) -> VoiceRuntimeProfile:

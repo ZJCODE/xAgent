@@ -80,6 +80,10 @@ class AgentConfig:
     DEFAULT_USER_ID = "default_user"
     DEFAULT_MAX_CONCURRENT_TOOLS = 4  # Maximum concurrent tool calls
     TOOL_RESULT_PREVIEW_LENGTH = 20  # characters shown in tool-result summaries
+    # The agent's speaking voice. Part of its identity rather than of any one
+    # channel, so it stays the same wherever the agent is heard.
+    # Override per agent via config.yaml: agent.voice.
+    DEFAULT_VOICE = "Owen"
 
     # ============================================================
     # 4. Agent Runtime Bounds

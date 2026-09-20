@@ -72,25 +72,25 @@ class VoiceConfigSurfaceTests(unittest.TestCase):
         original = VoiceChannelConfig.from_dict(
             {
                 "api_key": "secret",
-                "voice": "Ava",
                 "quiet_hours": "23:00-06:00",
+                "language_hints": ["en"],
             }
         )
         public = original.to_public_dict()
         again = VoiceChannelConfig.from_dict(public)
-        self.assertEqual(again.voice, "Ava")
         self.assertEqual(again.quiet_hours, "23:00-06:00")
+        self.assertEqual(again.language_hints, ["en"])
 
     def test_voice_setup_preserves_tier1_when_rotating_key(self):
         existing = {
             "api_key": "old",
-            "voice": "Ava",
+            "quiet_hours": "23:00-06:00",
             "audio": {"input": "Mic", "output": "Speaker"},
         }
-        selection = VoiceInitSelection(voice_enabled=True, voice_api_key="new-key", voice_name="Ava")
+        selection = VoiceInitSelection(voice_enabled=True, voice_api_key="new-key")
         merged = _voice_channel_config(selection, existing=existing)
         self.assertEqual(merged["api_key"], "new-key")
-        self.assertEqual(merged["voice"], "Ava")
+        self.assertEqual(merged["quiet_hours"], "23:00-06:00")
         self.assertEqual(merged["audio"]["input"], "Mic")
 
     def test_prepare_voice_preset_update_preserves_block(self):
@@ -99,7 +99,6 @@ class VoiceConfigSurfaceTests(unittest.TestCase):
             "channels": {
                 "voice": {
                     "api_key": "old",
-                    "voice": "Ava",
                     "audio": {"input": "Mic", "output": "Speaker"},
                 }
             },
@@ -107,7 +106,6 @@ class VoiceConfigSurfaceTests(unittest.TestCase):
         update = prepare_voice_preset_update(config, provider="soniox", api_key="new")
         voice = update.data["channels"]["voice"]
         self.assertEqual(voice["api_key"], "new")
-        self.assertEqual(voice["voice"], "Ava")
         self.assertEqual(voice["audio"]["input"], "Mic")
 
     def test_runtime_profile_follows_detected_topology(self):

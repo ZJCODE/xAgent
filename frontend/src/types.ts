@@ -200,7 +200,6 @@ export type SetupChannelId = Extract<ChannelId, "voice" | "feishu" | "weixin">;
 export interface VoiceSelectionInput {
   voice_enabled: boolean;
   voice_api_key: string;
-  voice_name: string;
   language_hints: string[];
   fallback_language: string;
 }
@@ -209,7 +208,6 @@ export interface VoiceSetupSchema {
   defaults: {
     voice_enabled: boolean;
     voice_api_key: string;
-    voice_name: string;
     language_hints: string[];
     fallback_language: string;
   };
