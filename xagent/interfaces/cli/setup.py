@@ -108,7 +108,6 @@ class VoiceInitSelection:
     language_hints: tuple[str, ...] = ("zh", "en")
     fallback_language: str = "zh"
     interruptions: bool = False
-    idle_shutdown_minutes: int = 0
     names: tuple[str, ...] = ()
 
 
@@ -328,7 +327,6 @@ def build_voice_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
         "language_hints": ["zh", "en"],
         "fallback_language": "zh",
         "interruptions": False,
-        "idle_shutdown_minutes": 0,
         "names": [],
     }
     channels_cfg = config.get("channels")
@@ -345,7 +343,6 @@ def build_voice_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
                         "language_hints": list(public.get("language_hints") or ["zh", "en"]),
                         "fallback_language": public.get("fallback_language", "zh"),
                         "interruptions": bool(public.get("interruptions", False)),
-                        "idle_shutdown_minutes": int(public.get("idle_shutdown_minutes") or 0),
                         "names": list(public.get("names") or []),
                     }
                 )
@@ -454,15 +451,6 @@ def voice_init_selection_from_mapping(
             raise ChannelSetupError("names must be a list or comma-separated string")
     else:
         names = tuple(schema_defaults.get("names") or ())
-    if "idle_shutdown_minutes" in data:
-        try:
-            idle_minutes = int(data.get("idle_shutdown_minutes", 0))
-        except (TypeError, ValueError) as exc:
-            raise ChannelSetupError("idle_shutdown_minutes must be an integer") from exc
-    else:
-        idle_minutes = int(schema_defaults.get("idle_shutdown_minutes") or 0)
-    if idle_minutes < 0:
-        raise ChannelSetupError("idle_shutdown_minutes must be >= 0")
     interruptions = (
         bool(data["interruptions"])
         if "interruptions" in data
@@ -478,7 +466,6 @@ def voice_init_selection_from_mapping(
         fallback_language=str(data.get("fallback_language") or schema_defaults.get("fallback_language") or "zh").strip()
         or "zh",
         interruptions=interruptions,
-        idle_shutdown_minutes=idle_minutes,
         names=names,
     )
 
@@ -631,7 +618,6 @@ def _voice_channel_config(
         merged["language_hints"] = list(selection.language_hints)
         merged["fallback_language"] = selection.fallback_language
         merged["interruptions"] = selection.interruptions
-        merged["idle_shutdown_minutes"] = selection.idle_shutdown_minutes
         if selection.names:
             merged["names"] = list(selection.names)
         elif isinstance(existing.get("names"), list):
@@ -644,7 +630,6 @@ def _voice_channel_config(
         "language_hints": list(selection.language_hints),
         "fallback_language": selection.fallback_language,
         "interruptions": selection.interruptions,
-        "idle_shutdown_minutes": selection.idle_shutdown_minutes,
         "names": list(selection.names),
     }
     return VoiceChannelConfig.from_dict(payload).to_public_dict()

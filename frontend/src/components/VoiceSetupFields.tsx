@@ -96,18 +96,6 @@ export function VoiceSetupFields({ schema, selection, onChange }: VoiceSetupFiel
             />
             <span>Allow barge-in (needs echo-cancelling speakerphone)</span>
           </label>
-
-          <WizardField
-            label="Idle mic shutdown (minutes)"
-            hint="0 = always listening. Higher values save cost and stop streaming quiet rooms."
-          >
-            <input
-              type="number"
-              min={0}
-              value={selection.idle_shutdown_minutes}
-              onChange={(event) => onChange({ idle_shutdown_minutes: Number(event.target.value) || 0 })}
-            />
-          </WizardField>
         </>
       ) : null}
     </div>

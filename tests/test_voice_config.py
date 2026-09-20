@@ -3,6 +3,7 @@ import unittest
 from xagent.interfaces.cli.config_editor import prepare_voice_preset_update
 from xagent.interfaces.cli.setup import VoiceInitSelection, _voice_channel_config
 from xagent.interfaces.voice.config import VoiceChannelConfig, parse_quiet_hours
+from xagent.interfaces.voice.presence import VOICE_STT_IDLE_SHUTDOWN_SECONDS
 
 
 class VoiceConfigSurfaceTests(unittest.TestCase):
@@ -21,17 +22,22 @@ class VoiceConfigSurfaceTests(unittest.TestCase):
         config = VoiceChannelConfig.from_dict({"api_key": "k", "names": ["Alice", "Bob", "Alice"]})
         self.assertEqual(config.names, ["Alice", "Bob"])
 
-    def test_quiet_hours_and_idle_shutdown(self):
-        config = VoiceChannelConfig.from_dict(
-            {
-                "api_key": "k",
-                "quiet_hours": "23:00-06:00",
-                "idle_shutdown_minutes": 10,
-            }
-        )
+    def test_quiet_hours(self):
+        config = VoiceChannelConfig.from_dict({"api_key": "k", "quiet_hours": "23:00-06:00"})
         self.assertEqual(config.proactive.quiet_hours_start, 23)
         self.assertEqual(config.proactive.quiet_hours_end, 6)
-        self.assertEqual(config.presence.close_stt_after_idle_seconds, 600.0)
+
+    def test_idle_shutdown_is_always_on(self):
+        config = VoiceChannelConfig.from_dict({"api_key": "k"})
+        self.assertEqual(
+            config.presence.close_stt_after_idle_seconds,
+            VOICE_STT_IDLE_SHUTDOWN_SECONDS,
+        )
+        self.assertGreater(config.presence.close_stt_after_idle_seconds, 0.0)
+
+    def test_rejects_idle_shutdown_key(self):
+        with self.assertRaisesRegex(ValueError, "Unknown voice setting"):
+            VoiceChannelConfig.from_dict({"api_key": "k", "idle_shutdown_minutes": 10})
 
     def test_rejects_legacy_nested_keys(self):
         with self.assertRaisesRegex(ValueError, "Unknown voice setting"):
@@ -48,7 +54,6 @@ class VoiceConfigSurfaceTests(unittest.TestCase):
                 "profile": "room",
                 "names": ["Telos"],
                 "interruptions": True,
-                "idle_shutdown_minutes": 5,
             }
         )
         public = original.to_public_dict()
@@ -56,7 +61,6 @@ class VoiceConfigSurfaceTests(unittest.TestCase):
         self.assertEqual(again.profile, "room")
         self.assertEqual(again.names, ["Telos"])
         self.assertTrue(again.interruptions)
-        self.assertEqual(again.idle_shutdown_minutes, 5)
 
     def test_voice_setup_preserves_tier1_when_rotating_key(self):
         existing = {

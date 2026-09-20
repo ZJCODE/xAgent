@@ -36,7 +36,6 @@ function defaultVoiceSelection(schema: VoiceSetupSchema): VoiceSelectionInput {
     language_hints: [...defaults.language_hints],
     fallback_language: defaults.fallback_language,
     interruptions: defaults.interruptions,
-    idle_shutdown_minutes: defaults.idle_shutdown_minutes,
     names: [...defaults.names],
   };
 }

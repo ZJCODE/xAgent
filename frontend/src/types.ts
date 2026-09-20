@@ -205,7 +205,6 @@ export interface VoiceSelectionInput {
   language_hints: string[];
   fallback_language: string;
   interruptions: boolean;
-  idle_shutdown_minutes: number;
   names: string[];
 }
 
@@ -218,7 +217,6 @@ export interface VoiceSetupSchema {
     language_hints: string[];
     fallback_language: string;
     interruptions: boolean;
-    idle_shutdown_minutes: number;
     names: string[];
   };
   placeholders: {
