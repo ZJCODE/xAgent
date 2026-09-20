@@ -270,16 +270,17 @@ class VoiceChannelConfig(BaseModel):
     def to_public_dict(self) -> dict[str, Any]:
         """The block to write back to config.yaml.
 
-        Only settings the user actually chose are written. Echoing every
-        default back into the file is how a curated surface grows again after
-        each ``xagent voice setup``.
+        The three curated settings are always written, defaults included: a
+        setting nobody can see in the file is a setting nobody knows they have,
+        and quiet hours in particular is expensive to leave undiscovered.
+        ``audio`` is different — it is an escape hatch for a pinned device, so
+        it appears only once someone has pinned one.
         """
-        defaults = _DEFAULT_VOICE_CONFIG
-        public: dict[str, Any] = {"api_key": self.api_key or SONIOX_KEY_PLACEHOLDER}
-        if self.languages != defaults.languages:
-            public["languages"] = list(self.languages)
-        if self.quiet_hours != defaults.quiet_hours:
-            public["quiet_hours"] = self.quiet_hours
+        public: dict[str, Any] = {
+            "api_key": self.api_key or SONIOX_KEY_PLACEHOLDER,
+            "languages": list(self.languages),
+            "quiet_hours": self.quiet_hours,
+        }
         audio = {
             key: value
             for key, value in (("input", self.audio.input), ("output", self.audio.output))
@@ -427,6 +428,3 @@ class VoiceChannelConfig(BaseModel):
         if not terms:
             return None
         return {"terms": terms}
-
-
-_DEFAULT_VOICE_CONFIG = VoiceChannelConfig()
