@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Union
 
 from ...core.config import AgentConfig
-from ...schemas import Message
+from ...schemas import Message, RoleType
 from ...utils.search_terms import normalize_terms, score_text
 
 
@@ -154,6 +154,63 @@ class MessageStorage:
                 continue
             messages.append(_message_with_storage_cursor(message, int(row["id"])))
         return messages
+
+    async def patch_latest_assistant_metadata(
+        self,
+        *,
+        channel: str,
+        recipient_id: str,
+        metadata: dict,
+    ) -> bool:
+        return await asyncio.to_thread(
+            self._patch_latest_assistant_metadata_sync,
+            channel,
+            recipient_id,
+            metadata,
+        )
+
+    def _patch_latest_assistant_metadata_sync(
+        self,
+        channel: str,
+        recipient_id: str,
+        metadata: dict,
+    ) -> bool:
+        if not metadata:
+            return False
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT id, message_json
+                FROM {MessageStorageConfig.TABLE_NAME}
+                ORDER BY id DESC
+                LIMIT 30
+                """
+            ).fetchall()
+            for row in rows:
+                try:
+                    message = Message.model_validate_json(row["message_json"])
+                except Exception:
+                    continue
+                if message.role != RoleType.ASSISTANT:
+                    continue
+                if channel and message.channel != channel:
+                    continue
+                if recipient_id and message.recipient_id not in {None, recipient_id}:
+                    continue
+                merged = dict(message.metadata or {})
+                merged.update(metadata)
+                message = message.model_copy(update={"metadata": merged})
+                connection.execute(
+                    f"""
+                    UPDATE {MessageStorageConfig.TABLE_NAME}
+                    SET message_json = ?
+                    WHERE id = ?
+                    """,
+                    (message.model_dump_json(), int(row["id"])),
+                )
+                connection.commit()
+                return True
+        return False
 
     async def clear_messages(self) -> None:
         await asyncio.to_thread(self._clear_messages_sync)

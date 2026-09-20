@@ -54,8 +54,8 @@ class FakeSynthesizer:
         self.calls = []
         self.cancelled = False
 
-    def synthesize_chunks(self, text_chunks, *, language: str, stop_event: threading.Event):
-        del stop_event
+    def synthesize_chunks(self, text_chunks, *, language: str, stop_event: threading.Event, **kwargs):
+        del stop_event, kwargs
         chunks = list(text_chunks)
         self.calls.append({"language": language, "chunks": chunks})
         for chunk in chunks:
@@ -66,7 +66,8 @@ class FakeSynthesizer:
 
 
 class FailingOnceSynthesizer(FakeSynthesizer):
-    def synthesize_chunks(self, text_chunks, *, language: str, stop_event: threading.Event):
+    def synthesize_chunks(self, text_chunks, *, language: str, stop_event: threading.Event, **kwargs):
+        del kwargs
         chunks = list(text_chunks)
         self.calls.append({"language": language, "chunks": chunks})
         if len(self.calls) == 1:

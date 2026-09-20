@@ -23,7 +23,9 @@ from xagent.core.runtime import (
 )
 
 from .aggregator import iter_aggregated_utterances
-from .config import VoiceChannelConfig
+from .barge_in import BargeInConfig, BargeInEvaluator
+from .config import SONIOX_TTS_CHANNELS, SONIOX_TTS_SAMPLE_RATE, VoiceChannelConfig
+from .floor import ConversationFloor, FloorCommandKind, FloorEvent, FloorEventKind, FloorState
 from .types import VoiceUtterance
 from .speech_text import (
     ConversationLanguageTracker,
@@ -32,6 +34,7 @@ from .speech_text import (
     sanitize_spoken_text,
 )
 from .notices import VoiceNoticeCache, VoiceNoticeCatalog, VoiceNoticeSpeaker
+from .spoken_ledger import SpokenLedger
 from .turn_metrics import VoiceTurnMetrics, VoiceTurnMetricsWriter
 
 _PLAYBACK_MICROPHONE_COOLDOWN_SECONDS = 0.5
@@ -165,6 +168,9 @@ class VoiceRuntime:
             language_for=self._language_tracker.language_before_turn,
         )
         self._event_loop: asyncio.AbstractEventLoop | None = None
+        self._floor = ConversationFloor()
+        self._utterance_queue: asyncio.Queue[VoiceUtterance | None] | None = None
+        self._steer_result: asyncio.Future[str] | None = None
         self.task_scheduler: AsyncTaskScheduler | None = None
         self._contacts_file: Optional[Path] = None
         if self.options.tasks_dir is not None:
@@ -196,11 +202,13 @@ class VoiceRuntime:
             )
         else:
             utterances = raw_utterances
+        self._utterance_queue = asyncio.Queue()
+        utterance_worker = asyncio.create_task(self._utterance_worker(utterances))
         try:
             if self.task_scheduler is not None:
                 await self.task_scheduler.start()
             while not self.stop_event.is_set():
-                utterance = await asyncio.to_thread(_next_or_none, utterances)
+                utterance = await self._utterance_queue.get()
                 if utterance is None:
                     break
                 transcript = utterance.text.strip()
@@ -224,6 +232,36 @@ class VoiceRuntime:
                 close()
             if self.task_scheduler is not None:
                 await self.task_scheduler.stop()
+            utterance_worker.cancel()
+            await asyncio.gather(utterance_worker, return_exceptions=True)
+
+    async def _utterance_worker(self, utterances: Iterable[VoiceUtterance]) -> None:
+        assert self._utterance_queue is not None
+        while not self.stop_event.is_set():
+            utterance = await asyncio.to_thread(_next_or_none, utterances)
+            await self._utterance_queue.put(utterance)
+            if utterance is None:
+                return
+
+    @property
+    def _duplex_capture_enabled(self) -> bool:
+        return bool(self.config.enable_interruptions)
+
+    async def _execute_floor_commands(self, commands) -> None:
+        for command in commands:
+            if command.kind is FloorCommandKind.MIC_MUTE:
+                self.pause_event.set()
+            elif command.kind is FloorCommandKind.MIC_OPEN:
+                self.pause_event.clear()
+            elif command.kind is FloorCommandKind.CANCEL_AGENT:
+                abort = getattr(self.agent, "abort", None)
+                if callable(abort):
+                    abort()
+            elif command.kind is FloorCommandKind.CANCEL_TTS:
+                self.synthesizer.cancel()
+            elif command.kind is FloorCommandKind.EMIT_NOTICE:
+                if command.notice_category:
+                    await self._speak_notice(command.notice_category)
 
     async def _reply_to_utterance(
         self,
@@ -231,37 +269,153 @@ class VoiceRuntime:
         *,
         endpoint_at: float,
     ) -> None:
-        timing = _TurnTiming(endpoint_at=endpoint_at)
-        metrics = VoiceTurnMetrics(
-            transcript=utterance.text.strip(),
-            tts_language=self._language_tracker.language_before_turn(),
-            endpoint_at=endpoint_at,
+        transcript = utterance.text.strip()
+        self._floor.allow_duplex_capture = self._duplex_capture_enabled
+        while transcript:
+            timing = _TurnTiming(endpoint_at=endpoint_at)
+            metrics = VoiceTurnMetrics(
+                transcript=transcript,
+                tts_language=self._language_tracker.language_before_turn(),
+                endpoint_at=endpoint_at,
+            )
+            reply_buffer: list[str] = []
+            speak_language = {"value": self._language_tracker.language_before_turn()}
+            spoken_ledger = SpokenLedger(
+                sample_rate=SONIOX_TTS_SAMPLE_RATE,
+                channels=SONIOX_TTS_CHANNELS,
+            )
+            await self._execute_floor_commands(
+                self._floor.handle(FloorEvent(FloorEventKind.STT_ENDPOINT, text=transcript))
+            )
+            steer_event = asyncio.Event()
+            self._active_steer_event = steer_event
+            self._steer_result = asyncio.get_running_loop().create_future()
+            steer_task: asyncio.Task[None] | None = None
+            if self._duplex_capture_enabled:
+                steer_task = asyncio.create_task(self._steer_during_think(transcript, steer_event))
+            still_working = asyncio.create_task(self._still_working_guard(timing))
+            interrupted = {"value": False}
+            try:
+                await self._speak(
+                    self._agent_text_chunks(transcript, reply_buffer=reply_buffer),
+                    speak_language=speak_language,
+                    reply_buffer=reply_buffer,
+                    timing=timing,
+                    metrics=metrics,
+                    spoken_ledger=spoken_ledger,
+                    interrupted_flag=interrupted,
+                )
+            except Exception as exc:
+                metrics.error_class = type(exc).__name__
+                raise
+            finally:
+                steer_event.set()
+                self._active_steer_event = None
+                if steer_task is not None:
+                    await asyncio.gather(steer_task, return_exceptions=True)
+                still_working.cancel()
+                await asyncio.gather(still_working, return_exceptions=True)
+                metrics.turn_end_at = time.monotonic()
+                metrics.reply_char_count = sum(len(part) for part in reply_buffer)
+                metrics.tts_language = speak_language["value"]
+                metrics.interrupted = bool(interrupted["value"])
+                self._metrics_writer.write(metrics)
+                await self._execute_floor_commands(
+                    self._floor.handle(FloorEvent(FloorEventKind.PLAYBACK_STOPPED))
+                )
+                self.logger.info(
+                    "Voice latency turn_total_ms=%.1f",
+                    (metrics.turn_end_at - endpoint_at) * 1000,
+                )
+            if self._steer_result is not None and self._steer_result.done():
+                transcript = self._steer_result.result().strip()
+                endpoint_at = time.monotonic()
+                continue
+            break
+
+    async def _steer_during_think(self, base_transcript: str, stop_event: asyncio.Event) -> None:
+        assert self._utterance_queue is not None
+        assert self._steer_result is not None
+        merged = base_transcript
+        while not stop_event.is_set():
+            try:
+                nxt = await asyncio.wait_for(self._utterance_queue.get(), timeout=0.05)
+            except TimeoutError:
+                continue
+            if nxt is None:
+                await self._utterance_queue.put(None)
+                return
+            addition = nxt.text.strip()
+            if not addition:
+                continue
+            merged = f"{merged} {addition}".strip()
+            await self._execute_floor_commands(
+                self._floor.handle(FloorEvent(FloorEventKind.STT_ENDPOINT, text=merged))
+            )
+            if not self._steer_result.done():
+                self._steer_result.set_result(merged)
+            return
+
+    async def _monitor_barge_in(
+        self,
+        *,
+        playback_stop_event: threading.Event,
+        spoken_ledger: SpokenLedger,
+        reply_buffer: list[str],
+        interrupted_flag: dict[str, bool] | None = None,
+    ) -> None:
+        relay = getattr(self.recognizer, "partial_relay", None)
+        if relay is None:
+            return
+        cfg = self.config.interruption
+        evaluator = BargeInEvaluator(
+            BargeInConfig(min_speech_ms=cfg.min_speech_ms, min_words=cfg.min_words)
         )
-        reply_buffer: list[str] = []
-        speak_language = {"value": self._language_tracker.language_before_turn()}
-        still_working = asyncio.create_task(self._still_working_guard(timing))
+        partial_since: float | None = None
+        while not playback_stop_event.is_set() and not self.stop_event.is_set():
+            partial = relay.snapshot().strip()
+            if partial:
+                if partial_since is None:
+                    partial_since = time.monotonic()
+                elif (time.monotonic() - partial_since) * 1000 >= cfg.min_speech_ms:
+                    evaluator._state.armed = True
+                verdict = evaluator.evaluate_partial(partial)
+                if verdict == "interrupt":
+                    if interrupted_flag is not None:
+                        interrupted_flag["value"] = True
+                    await self._execute_floor_commands(
+                        self._floor.handle(
+                            FloorEvent(FloorEventKind.BARGE_IN_CONFIRMED, text=partial)
+                        )
+                    )
+                    playback_stop_event.set()
+                    full_text = sanitize_spoken_text("".join(reply_buffer))
+                    await self._annotate_spoken_metadata(full_text, spoken_ledger)
+                    return
+                if verdict == "backchannel":
+                    partial_since = None
+                    evaluator.reset()
+            else:
+                partial_since = None
+                evaluator.reset()
+            await asyncio.sleep(0.05)
+
+    async def _annotate_spoken_metadata(self, full_text: str, spoken_ledger: SpokenLedger) -> None:
+        if not full_text:
+            return
+        metadata = spoken_ledger.spoken_through_metadata(full_text)
+        handler = getattr(self.agent, "message_handler", None)
+        patch = getattr(handler, "patch_latest_assistant_metadata", None)
+        if not callable(patch):
+            return
         try:
-            await self._speak(
-                self._agent_text_chunks(utterance.text, reply_buffer=reply_buffer),
-                speak_language=speak_language,
-                reply_buffer=reply_buffer,
-                timing=timing,
-                metrics=metrics,
+            await patch(
+                channel="voice",
+                recipient_id=self.options.user_id,
+                metadata=metadata,
             )
-        except Exception as exc:
-            metrics.error_class = type(exc).__name__
-            raise
-        finally:
-            still_working.cancel()
-            await asyncio.gather(still_working, return_exceptions=True)
-            metrics.turn_end_at = time.monotonic()
-            metrics.reply_char_count = sum(len(part) for part in reply_buffer)
-            metrics.tts_language = speak_language["value"]
-            self._metrics_writer.write(metrics)
-            self.logger.info(
-                "Voice latency turn_total_ms=%.1f",
-                (metrics.turn_end_at - endpoint_at) * 1000,
-            )
+        except Exception:
+            self.logger.debug("Failed to patch spoken-through metadata", exc_info=True)
 
     async def _speak(
         self,
@@ -272,6 +426,8 @@ class VoiceRuntime:
         reply_buffer: list[str] | None = None,
         timing: _TurnTiming | None = None,
         metrics: VoiceTurnMetrics | None = None,
+        spoken_ledger: SpokenLedger | None = None,
+        interrupted_flag: dict[str, bool] | None = None,
     ) -> None:
         """Speak one stream while capture remains paused, then apply echo cooldown."""
         if speak_language is None:
@@ -279,11 +435,13 @@ class VoiceRuntime:
                 "value": language or self._language_tracker.language_before_turn(),
             }
         async with self._playback_lock:
-            self.pause_event.set()
+            if not self._duplex_capture_enabled:
+                self.pause_event.set()
             text_queue = _TextChunkQueue()
             playback_stop_event = threading.Event()
             first_text = asyncio.get_running_loop().create_future()
             playback_task: asyncio.Task[None] | None = None
+            barge_task: asyncio.Task[None] | None = None
             producer_task = asyncio.create_task(
                 self._feed_text_stream(
                     text_chunks,
@@ -301,6 +459,18 @@ class VoiceRuntime:
                     return_when=asyncio.FIRST_COMPLETED,
                 )
                 if first_text in done:
+                    await self._execute_floor_commands(
+                        self._floor.handle(FloorEvent(FloorEventKind.AGENT_FIRST_TEXT))
+                    )
+                    if self._duplex_capture_enabled and spoken_ledger is not None:
+                        barge_task = asyncio.create_task(
+                            self._monitor_barge_in(
+                                playback_stop_event=playback_stop_event,
+                                spoken_ledger=spoken_ledger,
+                                reply_buffer=reply_buffer or [],
+                                interrupted_flag=interrupted_flag,
+                            )
+                        )
                     playback_task = asyncio.create_task(
                         asyncio.to_thread(
                             self._play_text_queue,
@@ -309,6 +479,7 @@ class VoiceRuntime:
                             playback_stop_event,
                             timing,
                             metrics,
+                            spoken_ledger,
                         )
                     )
                     pipeline_done, _pipeline_pending = await asyncio.wait(
@@ -343,6 +514,9 @@ class VoiceRuntime:
                         pass
                 raise
             finally:
+                if barge_task is not None:
+                    barge_task.cancel()
+                    await asyncio.gather(barge_task, return_exceptions=True)
                 if not first_text.done():
                     first_text.cancel()
                 text_queue.close()
@@ -373,6 +547,8 @@ class VoiceRuntime:
                     if timing is not None:
                         timing.mark_first_text(self.logger)
                     first_text.set_result(None)
+                    if self._active_steer_event is not None:
+                        self._active_steer_event.set()
                 text_queue.put(text)
         finally:
             text_queue.close()
@@ -384,12 +560,17 @@ class VoiceRuntime:
         playback_stop_event: threading.Event,
         timing: _TurnTiming | None,
         metrics: VoiceTurnMetrics | None,
+        spoken_ledger: SpokenLedger | None,
     ) -> None:
         language = speak_language["value"]
+        synth_kwargs: dict[str, object] = {}
+        if spoken_ledger is not None:
+            synth_kwargs["spoken_ledger"] = spoken_ledger
         audio_chunks = self.synthesizer.synthesize_chunks(
             text_queue,
             language=language,
             stop_event=playback_stop_event,
+            **synth_kwargs,
         )
 
         def timed_audio() -> Iterator[bytes]:
@@ -401,12 +582,16 @@ class VoiceRuntime:
                         timing.mark_first_audio(self.logger)
                 if metrics is not None and chunk:
                     metrics.playback_audio_bytes += len(chunk)
+                if spoken_ledger is not None and chunk:
+                    spoken_ledger.note_playback_bytes(len(chunk))
                 yield chunk
 
         self.player.play_chunks(timed_audio(), stop_event=playback_stop_event)
 
     async def _release_microphone_after_playback(self) -> None:
         """Keep capture paused so the speaker tail cannot reach STT."""
+        if self._duplex_capture_enabled:
+            return
         self.pause_event.set()
         try:
             if not self.stop_event.is_set():

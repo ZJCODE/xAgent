@@ -109,6 +109,15 @@ class SonioxSTTContextConfig(BaseModel):
         return payload or None
 
 
+class VoiceInterruptionConfig(BaseModel):
+    """Barge-in thresholds when ``enable_interruptions`` is true."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    min_speech_ms: int = Field(default=250, ge=50, le=2_000)
+    min_words: int = Field(default=2, ge=1, le=8)
+
+
 class VoiceAudioConfig(BaseModel):
     """Local audio-device preferences."""
 
@@ -116,6 +125,15 @@ class VoiceAudioConfig(BaseModel):
 
     input: str | int | None = "auto"
     output: str | int | None = "auto"
+    echo_cancellation: str = Field(default="none")
+
+    @field_validator("echo_cancellation")
+    @classmethod
+    def _validate_echo_cancellation(cls, value: str) -> str:
+        normalized = (value or "none").strip().lower()
+        if normalized not in {"none", "device", "software"}:
+            raise ValueError("voice.audio.echo_cancellation must be one of: none, device, software")
+        return normalized
 
     @field_validator("input", "output")
     @classmethod
@@ -141,6 +159,7 @@ class VoiceChannelConfig(BaseModel):
     speed: float = Field(default=1.0, ge=0.7, le=1.3)
     return_timestamps: bool = True
     enable_interruptions: bool = False
+    interruption: VoiceInterruptionConfig = Field(default_factory=VoiceInterruptionConfig)
     aggregate_utterances: bool = True
     context: SonioxSTTContextConfig = Field(default_factory=SonioxSTTContextConfig)
     audio: VoiceAudioConfig = Field(default_factory=VoiceAudioConfig)

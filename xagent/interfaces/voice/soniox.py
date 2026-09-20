@@ -25,6 +25,8 @@ from .config import (
     SONIOX_TTS_SAMPLE_RATE,
     VoiceChannelConfig,
 )
+from .partials import PartialTranscriptRelay
+from .spoken_ledger import SpokenLedger
 from .types import VoiceUtterance
 
 _logger = logging.getLogger(__name__)
@@ -107,6 +109,7 @@ class SonioxRealtimeSTT:
         self.config = config
         self._client = client or SonioxClient(api_key=api_key)
         self._callbacks = callbacks or SonioxSTTCallbacks()
+        self.partial_relay = PartialTranscriptRelay()
 
     def iter_utterances(
         self,
@@ -196,6 +199,7 @@ class SonioxRealtimeSTT:
             )
             sender.start()
             final_tokens: list[_FinalToken] = []
+            draft_tokens: list[str] = []
             try:
                 for event in session.receive_events():
                     if stop_event.is_set() or session_stop.is_set():
@@ -203,11 +207,17 @@ class SonioxRealtimeSTT:
                     _raise_event_error(event, kind="STT")
                     for token in event.tokens:
                         if not token.is_final:
+                            text = str(token.text or "")
+                            if text and text not in {"<end>", "<fin>"}:
+                                draft_tokens.append(text)
+                                self.partial_relay.update("".join(draft_tokens))
                             continue
                         text = str(token.text or "")
                         if text == "<end>":
                             utterance = _utterance_from(final_tokens)
                             final_tokens = []
+                            draft_tokens = []
+                            self.partial_relay.clear()
                             if utterance.text:
                                 yield utterance
                             continue
@@ -331,6 +341,7 @@ class SonioxRealtimeTTS:
         *,
         language: str,
         stop_event: threading.Event,
+        spoken_ledger: SpokenLedger | None = None,
     ) -> Iterator[bytes]:
         if stop_event.is_set() or self._cancel_event.is_set():
             return
@@ -373,6 +384,13 @@ class SonioxRealtimeTTS:
                         raise send_errors.get()
                     if max_duration_hit.is_set():
                         break
+                    if spoken_ledger is not None and event.timestamps is not None:
+                        spoken_ledger.ingest_timestamps(
+                            characters=list(event.timestamps.characters),
+                            character_end_times_seconds=list(
+                                event.timestamps.character_end_times_seconds
+                            ),
+                        )
                     try:
                         chunk = event.audio_bytes()
                     except ValueError as exc:

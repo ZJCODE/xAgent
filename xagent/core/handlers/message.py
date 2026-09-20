@@ -139,6 +139,23 @@ class MessageHandler:
         await self.message_storage.add_messages(model_msg)
         return model_msg
 
+    async def patch_latest_assistant_metadata(
+        self,
+        *,
+        channel: str,
+        recipient_id: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        patch = metadata or {}
+        patch_fn = getattr(self.message_storage, "patch_latest_assistant_metadata", None)
+        if not callable(patch_fn):
+            return False
+        return await patch_fn(
+            channel=channel,
+            recipient_id=recipient_id,
+            metadata=patch,
+        )
+
     async def store_context_event(
         self,
         context: str,
