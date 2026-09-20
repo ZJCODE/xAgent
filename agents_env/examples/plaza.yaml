@@ -1,0 +1,9 @@
+world: plaza
+rooms:
+  - id: hall
+    name: 大厅
+    setting: 傍晚的开放大厅，谁都可以进来说话
+scenes:
+  - at: "+5m"
+    room: hall
+    text: 天色暗下来了

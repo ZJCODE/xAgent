@@ -618,6 +618,13 @@ class MessageHandler:
                 MessageHandler._format_transcript_speaker(message)
             )
             header = f"[speaker={speaker}][timestamp={timestamp}]"
+        metadata = message.metadata if isinstance(message.metadata, dict) else {}
+        if message.role == RoleType.USER and AgentConfig.ADDRESSED_METADATA_KEY in metadata:
+            header = (
+                "[direct_to_me]"
+                if metadata.get(AgentConfig.ADDRESSED_METADATA_KEY)
+                else "[ambient_listen]"
+            ) + header
         if message.channel:
             header += f"[channel={message.channel}]"
         if message.room_name:
@@ -689,10 +696,36 @@ class MessageHandler:
             max_keep=max(1, int(max_messages or AgentConfig.DEFAULT_RECENT_MESSAGES)),
             covers_through_cursor=covers_through_cursor,
         )
+        selected = MessageHandler._cap_ambient_listen_messages(selected)
         return [
             (msg, msg.content.strip() or "[Empty message]")
             for msg in selected
         ], omitted_count
+
+    @staticmethod
+    def _is_ambient_listen_message(message: Message) -> bool:
+        if message.role != RoleType.USER:
+            return False
+        metadata = message.metadata if isinstance(message.metadata, dict) else {}
+        if AgentConfig.ADDRESSED_METADATA_KEY not in metadata:
+            return False
+        return not bool(metadata.get(AgentConfig.ADDRESSED_METADATA_KEY))
+
+    @staticmethod
+    def _cap_ambient_listen_messages(messages: List[Message]) -> List[Message]:
+        cap = max(0, int(AgentConfig.AMBIENT_TRANSCRIPT_BUDGET))
+        if cap <= 0:
+            return [msg for msg in messages if not MessageHandler._is_ambient_listen_message(msg)]
+        direct: List[Message] = []
+        ambient: List[Message] = []
+        for message in messages:
+            if MessageHandler._is_ambient_listen_message(message):
+                ambient.append(message)
+            else:
+                direct.append(message)
+        if len(ambient) > cap:
+            ambient = ambient[-cap:]
+        return sorted([*direct, *ambient], key=lambda item: item.timestamp)
 
     @staticmethod
     def _count_message_images(message: Message) -> int:

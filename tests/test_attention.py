@@ -22,7 +22,6 @@ class AttentionLoopTests(unittest.IsolatedAsyncioTestCase):
             spoken.append((room_key, through_cursor, kwargs["events"]))
 
         loop = AttentionLoop(
-            addressed_grace=0,
             quiet_window=0.05,
             max_wait=1,
             decide=decide,
@@ -34,6 +33,7 @@ class AttentionLoopTests(unittest.IsolatedAsyncioTestCase):
                 room,
                 addressed=False,
                 content=f"line {index}",
+                cursor=index + 1,
                 sender_id="ou_alice",
                 sender_name="Alice",
             )
@@ -58,7 +58,6 @@ class AttentionLoopTests(unittest.IsolatedAsyncioTestCase):
             spoken.append(kwargs["events"])
 
         loop = AttentionLoop(
-            addressed_grace=0,
             quiet_window=5,
             max_wait=5,
             decide=decide,
@@ -68,6 +67,7 @@ class AttentionLoopTests(unittest.IsolatedAsyncioTestCase):
             "feishu:oc_dm",
             addressed=True,
             content="hello",
+            cursor=1,
             sender_id="ou_user",
         )
         await loop.idle()
@@ -83,13 +83,12 @@ class AttentionLoopTests(unittest.IsolatedAsyncioTestCase):
             raise RuntimeError("delivery failed")
 
         loop = AttentionLoop(
-            addressed_grace=0,
             quiet_window=0,
             max_wait=0,
             decide=decide,
         )
         loop.register_speaker("feishu", speak)
-        await loop.notice("feishu:oc_group", addressed=False, content="ping")
+        await loop.notice("feishu:oc_group", addressed=False, content="ping", cursor=1)
         with self.assertRaises(asyncio.TimeoutError):
             await loop.idle(timeout=0.2)
         self.assertEqual(loop.cursors("feishu:oc_group").attended_through, 0)
@@ -104,7 +103,6 @@ class AttentionLoopTests(unittest.IsolatedAsyncioTestCase):
             stored = await storage.add_messages(first)
             loop = AttentionLoop(
                 store_path=Path(tmpdir) / ".attention.json",
-                addressed_grace=0,
                 quiet_window=0,
                 max_wait=0,
             )

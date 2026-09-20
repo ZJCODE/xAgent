@@ -13,7 +13,7 @@ from typing import Any, Optional
 from urllib.parse import parse_qs, unquote, urlparse
 
 from ...core.agent import Agent
-from ...core.attention import make_room_key, message_storage_cursor
+from ...core.attention import AttentionSpeakError, make_room_key, message_storage_cursor
 from ...core.config import AgentConfig
 from ...core.runtime import (
     AsyncTaskScheduler,
@@ -407,9 +407,16 @@ class WeixinAdapter:
                 attachments=inbound.attachments or None,
             )
             cursor = message_storage_cursor(persisted) or None
+        if cursor is None or int(cursor) <= 0:
+            self.logger.error(
+                "Weixin message stored without cursor user_id=%s message_id=%s",
+                user_id,
+                extras.get("message_id"),
+            )
+            return
         attention = self._attention_loop()
         if attention is None:
-            await self._deliver_weixin_dm(extras)
+            self.logger.warning("Weixin adapter has no attention loop; dropping message")
             return
         await attention.notice(
             room_key,
@@ -447,41 +454,37 @@ class WeixinAdapter:
         source_message_id = str(extras.get("message_id") or "")
         inbound = extras.get("inbound")
         text = str(extras.get("text") or (events[-1].content if events else ""))
-        if callable(respond) and storage is not None:
-            context = ScheduledDeliveryContext(
-                channel="weixin",
-                user_id=user_id,
-                target={
-                    "user_id": user_id,
-                    "account_id": extras.get("account_id"),
-                },
-                metadata={
-                    "source": "weixin",
-                    "message_id": source_message_id,
-                },
-            )
-            typing_task: Optional[asyncio.Task[None]] = None
-            try:
-                if self.config.send_typing:
-                    typing_task = asyncio.create_task(self._typing_keepalive(user_id, context_token))
-                with scheduled_delivery_context(context):
-                    await self._send_event_replies(
-                        user_id=user_id,
-                        context_token=context_token,
-                        source_message_id=source_message_id,
-                        event_source=respond(room_key, through_cursor, stream=False),
-                    )
-            finally:
-                if typing_task is not None:
-                    typing_task.cancel()
-                    await asyncio.gather(typing_task, return_exceptions=True)
-                if self.config.send_typing:
-                    await self._stop_typing(user_id, context_token)
-            return
-        extras = dict(extras)
-        extras["text"] = text
-        extras["inbound"] = inbound
-        await self._deliver_weixin_dm(extras)
+        if not callable(respond) or storage is None:
+            raise AttentionSpeakError("agent missing respond or message_storage")
+        context = ScheduledDeliveryContext(
+            channel="weixin",
+            user_id=user_id,
+            target={
+                "user_id": user_id,
+                "account_id": extras.get("account_id"),
+            },
+            metadata={
+                "source": "weixin",
+                "message_id": source_message_id,
+            },
+        )
+        typing_task: Optional[asyncio.Task[None]] = None
+        try:
+            if self.config.send_typing:
+                typing_task = asyncio.create_task(self._typing_keepalive(user_id, context_token))
+            with scheduled_delivery_context(context):
+                await self._send_event_replies(
+                    user_id=user_id,
+                    context_token=context_token,
+                    source_message_id=source_message_id,
+                    event_source=respond(room_key, through_cursor, stream=False),
+                )
+        finally:
+            if typing_task is not None:
+                typing_task.cancel()
+                await asyncio.gather(typing_task, return_exceptions=True)
+            if self.config.send_typing:
+                await self._stop_typing(user_id, context_token)
 
     async def _deliver_weixin_dm(self, extras: dict[str, Any]) -> None:
         user_id = str(extras.get("user_id") or "")

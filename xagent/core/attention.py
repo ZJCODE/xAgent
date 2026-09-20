@@ -29,6 +29,11 @@ ADDRESSED_METADATA_KEY = AgentConfig.ADDRESSED_METADATA_KEY
 DecideFn = Callable[..., Awaitable[ParticipationDecision]]
 SpeakFn = Callable[..., Awaitable[None]]
 FormatFn = Callable[..., Awaitable[str]]
+IntervalFn = Callable[..., Awaitable[None]]
+
+
+class AttentionSpeakError(Exception):
+    """Speaker or respond path failed to produce a delivery."""
 
 
 def make_room_key(channel: str, room_id: str) -> str:
@@ -58,6 +63,14 @@ def message_storage_cursor(message: Message) -> int:
         return 0
 
 
+def reply_anchor_event(batch: List["AttentionEvent"]) -> Optional["AttentionEvent"]:
+    """Last addressed event in the batch, else the last event."""
+    for event in reversed(batch):
+        if event.addressed:
+            return event
+    return batch[-1] if batch else None
+
+
 @dataclass
 class AttentionEvent:
     """One inbound utterance the loop has been asked to consider."""
@@ -85,13 +98,13 @@ class AttentionEvent:
 @dataclass
 class RoomState:
     attended_through: int = 0
-    spoken_through: int = 0
     last_event_at: float = 0.0
     earliest_unattended_at: float = 0.0
     due_at: float = 0.0
     pending_addressed: bool = False
     events: List[AttentionEvent] = field(default_factory=list)
-    extras: Dict[str, Any] = field(default_factory=dict)
+    speak_failures: int = 0
+    retry_at: float = 0.0
 
     @property
     def pending_count(self) -> int:
@@ -128,7 +141,6 @@ class AttentionStore:
                 continue
             restored[str(key)] = RoomState(
                 attended_through=_safe_int(value.get("attended_through")),
-                spoken_through=_safe_int(value.get("spoken_through")),
             )
         return restored
 
@@ -136,10 +148,7 @@ class AttentionStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "rooms": {
-                key: {
-                    "attended_through": state.attended_through,
-                    "spoken_through": state.spoken_through,
-                }
+                key: {"attended_through": state.attended_through}
                 for key, state in rooms.items()
             }
         }
@@ -149,6 +158,39 @@ class AttentionStore:
             encoding="utf-8",
         )
         tmp_path.replace(self.path)
+
+
+async def build_room_context_from_storage(
+    storage: Any,
+    room_key: str,
+    *,
+    start_exclusive: int,
+    end_inclusive: int,
+    limit: int = AgentConfig.ATTENTION_HISTORY_MESSAGES,
+    room_name: Optional[str] = None,
+) -> str:
+    """Load recent rows for *room_key* from the message table as room context."""
+    get_for_room = getattr(storage, "get_messages_for_room", None)
+    if not callable(get_for_room):
+        return ""
+    messages = await get_for_room(
+        room_key,
+        start_exclusive=start_exclusive,
+        end_inclusive=end_inclusive,
+        limit=limit,
+    )
+    if not messages:
+        return ""
+    events = events_from_messages(messages, room_key)
+    resolved_room_name = room_name or next(
+        (msg.room_name for msg in messages if msg.room_name),
+        None,
+    )
+    return format_interval_context(
+        room_key,
+        events,
+        room_name=resolved_room_name,
+    )
 
 
 def format_interval_context(
@@ -168,26 +210,25 @@ def format_interval_context(
 class AttentionLoop:
     """One serial consumer per agent that evaluates unattended room intervals."""
 
+    _IDLE_ROOM_TTL_SECONDS = 3600.0
+
     def __init__(
         self,
         *,
         agent: Any = None,
         store_path: Optional[Path] = None,
-        addressed_grace: float = AgentConfig.ATTENTION_ADDRESSED_GRACE_SECONDS,
         quiet_window: float = AgentConfig.ATTENTION_QUIET_WINDOW_SECONDS,
-        max_burst: int = AgentConfig.ATTENTION_MAX_BURST_MESSAGES,
         max_wait: float = AgentConfig.ATTENTION_MAX_WAIT_SECONDS,
         decide: Optional[DecideFn] = None,
+        on_interval: Optional[IntervalFn] = None,
     ) -> None:
         self._agent = agent
         self._store = AttentionStore(Path(store_path)) if store_path is not None else None
-        self.addressed_grace = max(0.0, float(addressed_grace))
         self.quiet_window = max(0.0, float(quiet_window))
-        self.max_burst = max(1, int(max_burst))
         self.max_wait = max(0.0, float(max_wait))
         self._decide = decide
+        self._on_interval = on_interval
         self._speakers: Dict[str, SpeakFn] = {}
-        self._formatters: Dict[str, FormatFn] = {}
         self._rooms: Dict[str, RoomState] = {}
         if self._store is not None:
             self._rooms.update(self._store.read())
@@ -195,14 +236,10 @@ class AttentionLoop:
         self._task: Optional[asyncio.Task[None]] = None
         self._evaluating = False
         self._stopped = False
-        self._seq = 0
         self._lock = asyncio.Lock()
 
     def register_speaker(self, channel: str, speaker: SpeakFn) -> None:
         self._speakers[str(channel or "").strip()] = speaker
-
-    def set_formatter(self, channel: str, formatter: FormatFn) -> None:
-        self._formatters[str(channel or "").strip()] = formatter
 
     def set_decider(self, decide: DecideFn) -> None:
         self._decide = decide
@@ -211,17 +248,60 @@ class AttentionLoop:
         return self._room(room_key)
 
     async def reset_to_present(self, storage: Any = None) -> None:
-        """Skip backlog on process start. Does not run on ``notice``."""
+        """Skip ambient backlog on start; replay recent addressed direct requests."""
         source = storage or getattr(self._agent, "message_storage", None)
         list_keys = getattr(source, "list_room_keys", None)
         latest_for = getattr(source, "get_latest_room_cursor", None)
+        get_for_room = getattr(source, "get_messages_for_room", None)
         if not callable(list_keys) or not callable(latest_for):
             return
+        replay_window = float(AgentConfig.ATTENTION_REPLAY_ADDRESSED_SECONDS)
+        now = time.time()
         for room_key in await list_keys():
             latest = int(await latest_for(room_key) or 0)
             state = self._room(room_key)
+            if not callable(get_for_room):
+                state.attended_through = max(state.attended_through, latest)
+                state.events.clear()
+                continue
+            pending = await get_for_room(
+                room_key,
+                start_exclusive=state.attended_through,
+                end_inclusive=latest,
+            )
+            addressed_recent = [
+                message
+                for message in pending
+                if message_is_addressed(message)
+                and float(message.timestamp or 0.0) >= now - replay_window
+            ]
+            if addressed_recent:
+                first_ts = min(float(message.timestamp or 0.0) for message in addressed_recent)
+                replay_messages = [
+                    message
+                    for message in pending
+                    if float(message.timestamp or 0.0) >= first_ts
+                ]
+                state.events.clear()
+                state.pending_addressed = False
+                state.due_at = 0.0
+                for message in replay_messages:
+                    await self.notice(
+                        room_key,
+                        addressed=message_is_addressed(message),
+                        content=str(message.content or ""),
+                        cursor=message_storage_cursor(message),
+                        sender_id=str(message.sender_id or ""),
+                        sender_name=str((message.metadata or {}).get("sender_name") or ""),
+                        timestamp=float(message.timestamp or 0.0),
+                        extras={
+                            key: value
+                            for key, value in (message.metadata or {}).items()
+                            if key not in {ROOM_KEY_METADATA_KEY, ADDRESSED_METADATA_KEY}
+                        },
+                    )
+                continue
             state.attended_through = max(state.attended_through, latest)
-            state.spoken_through = max(state.spoken_through, latest)
             state.events.clear()
             state.pending_addressed = False
             state.due_at = 0.0
@@ -272,11 +352,18 @@ class AttentionLoop:
         key = str(room_key or "").strip()
         if not key:
             raise ValueError("room_key is required")
+        if cursor is None or int(cursor) <= 0:
+            logger.warning(
+                "attention notice missing storage cursor room=%s addressed=%s",
+                key,
+                addressed,
+            )
+            raise ValueError("storage cursor is required")
+        assigned_cursor = int(cursor)
         now = time.time()
         event_time = float(timestamp) if timestamp is not None else now
         async with self._lock:
             state = self._room(key)
-            assigned_cursor = int(cursor) if cursor is not None else self._next_memory_cursor(state)
             event = AttentionEvent(
                 room_key=key,
                 cursor=assigned_cursor,
@@ -287,14 +374,12 @@ class AttentionLoop:
                 timestamp=event_time,
                 extras=dict(extras or {}),
             )
-            if extras:
-                state.extras = dict(extras)
-            else:
-                state.extras.update(event.extras)
             if not state.events:
                 state.earliest_unattended_at = now
             state.events.append(event)
             state.last_event_at = now
+            state.speak_failures = 0
+            state.retry_at = 0.0
             if event.addressed:
                 state.pending_addressed = True
             state.due_at = self._due_at(state, now=now)
@@ -313,22 +398,17 @@ class AttentionLoop:
     def _due_at(self, state: RoomState, *, now: float) -> float:
         if not state.events:
             return 0.0
-        if state.pending_count >= self.max_burst:
-            return now
+        if state.retry_at > now:
+            return state.retry_at
         if self.max_wait <= 0:
             wait_cap = now
         else:
             wait_cap = state.earliest_unattended_at + self.max_wait
         if state.pending_addressed:
-            candidate = now + self.addressed_grace
+            candidate = now
         else:
             candidate = now + self.quiet_window
         return min(candidate, wait_cap)
-
-    def _next_memory_cursor(self, state: RoomState) -> int:
-        self._seq += 1
-        latest_event = state.events[-1].cursor if state.events else 0
-        return max(state.attended_through, latest_event, self._seq, state.spoken_through) + 1
 
     def _room(self, room_key: str) -> RoomState:
         state = self._rooms.get(room_key)
@@ -338,7 +418,19 @@ class AttentionLoop:
         return state
 
     def _armed_rooms(self) -> List[str]:
-        return [key for key, state in self._rooms.items() if state.events]
+        now = time.time()
+        armed: List[str] = []
+        for key, state in list(self._rooms.items()):
+            if state.events:
+                armed.append(key)
+                continue
+            if (
+                not state.events
+                and state.last_event_at > 0
+                and now - state.last_event_at > self._IDLE_ROOM_TTL_SECONDS
+            ):
+                del self._rooms[key]
+        return armed
 
     def _ensure_loop(self) -> None:
         if self._stopped:
@@ -407,66 +499,126 @@ class AttentionLoop:
         return best_key, max(0.0, best_due - now)
 
     async def _evaluate(self, room_key: str) -> None:
+        started = time.monotonic()
         async with self._lock:
             state = self._room(room_key)
             batch = list(state.events)
-            extras = dict(state.extras)
             through = batch[-1].cursor if batch else state.attended_through
             addressed = any(event.addressed for event in batch)
         if not batch:
             return
 
         self._evaluating = True
+        should_reply = False
+        decision: Optional[ParticipationDecision] = None
+        spoke = False
         try:
             should_reply, decision = await self._decide_batch(
                 room_key,
                 batch,
-                extras=extras,
                 addressed=addressed,
             )
+            if should_reply:
+                speaker = self._speakers.get(room_key_channel(room_key))
+                if speaker is None:
+                    raise AttentionSpeakError(f"no speaker for {room_key}")
+                anchor = reply_anchor_event(batch)
+                merged_extras = dict(anchor.extras if anchor else {})
+                merged_extras["reply_message_id"] = (anchor.extras or {}).get("message_id") if anchor else None
+                await speaker(
+                    room_key,
+                    through,
+                    events=batch,
+                    extras=merged_extras,
+                    decision=decision,
+                )
+                spoke = True
+            await self._emit_interval(room_key, batch, addressed, should_reply, decision)
+            async with self._lock:
+                self._room(room_key).speak_failures = 0
+                self._room(room_key).retry_at = 0.0
+                self._advance(room_key, through)
+            self._persist()
             logger.info(
-                "attention evaluate room=%s events=%d addressed=%s reply=%s reason=%s",
+                "attention evaluate room=%s events=%d addressed=%s reply=%s reason=%s latency_ms=%.0f",
                 room_key,
                 len(batch),
                 addressed,
                 should_reply,
                 (decision.reason if decision is not None else ""),
+                (time.monotonic() - started) * 1000,
             )
-            if should_reply:
-                speaker = self._speakers.get(room_key_channel(room_key))
-                if speaker is None:
-                    logger.warning("attention has no speaker for room=%s", room_key)
-                else:
-                    await speaker(
-                        room_key,
-                        through,
-                        events=batch,
-                        extras=extras,
-                        decision=decision,
-                    )
-                async with self._lock:
-                    self._room(room_key).spoken_through = max(
-                        self._room(room_key).spoken_through,
-                        through,
-                    )
-            async with self._lock:
-                self._advance(room_key, through)
-            self._persist()
+        except AttentionSpeakError:
+            await self._handle_speak_failure(room_key, batch, addressed)
         except Exception:
             logger.exception("attention evaluate failed room=%s", room_key)
-            async with self._lock:
-                failed = self._room(room_key)
-                if failed.events:
-                    failed.due_at = time.time() + 1.0
+            await self._handle_speak_failure(room_key, batch, addressed)
         finally:
             self._evaluating = False
+
+    async def _handle_speak_failure(
+        self,
+        room_key: str,
+        batch: List[AttentionEvent],
+        addressed: bool,
+    ) -> None:
+        max_failures = int(AgentConfig.ATTENTION_SPEAK_MAX_FAILURES)
+        async with self._lock:
+            state = self._room(room_key)
+            state.speak_failures += 1
+            failures = state.speak_failures
+            if failures >= max_failures:
+                through = batch[-1].cursor if batch else state.attended_through
+                logger.warning(
+                    "attention giving up room=%s after %d failures; advancing through=%s addressed=%s",
+                    room_key,
+                    failures,
+                    through,
+                    addressed,
+                )
+                state.speak_failures = 0
+                state.retry_at = 0.0
+                self._advance(room_key, through)
+                self._persist()
+                return
+            delay = min(32.0, 2 ** max(0, failures - 1))
+            state.retry_at = time.time() + delay
+            state.due_at = state.retry_at
+        logger.warning(
+            "attention speak failed room=%s attempt=%d retry_in=%.1fs addressed=%s",
+            room_key,
+            failures,
+            delay,
+            addressed,
+        )
+
+    async def _emit_interval(
+        self,
+        room_key: str,
+        batch: List[AttentionEvent],
+        addressed: bool,
+        should_reply: bool,
+        decision: Optional[ParticipationDecision],
+    ) -> None:
+        callback = self._on_interval
+        if callback is None:
+            agent = self._agent
+            callback = getattr(agent, "on_attention_interval", None) if agent is not None else None
+        if not callable(callback):
+            return
+        await callback(
+            room_key=room_key,
+            events=batch,
+            addressed=addressed,
+            should_reply=should_reply,
+            decision=decision,
+        )
 
     async def _decide_batch(
         self,
         room_key: str,
         batch: List[AttentionEvent],
         *,
-        extras: Dict[str, Any],
         addressed: bool,
     ) -> tuple[bool, Optional[ParticipationDecision]]:
         if addressed:
@@ -482,7 +634,23 @@ class AttentionLoop:
             decider = maybe if callable(maybe) else None
         if decider is None:
             return False, ParticipationDecision(should_reply=False, reason="no decider")
-        context = await self._format_context(room_key, batch, extras=extras)
+        storage = getattr(self._agent, "message_storage", None)
+        attended = self._room(room_key).attended_through
+        through = batch[-1].cursor
+        context = await build_room_context_from_storage(
+            storage,
+            room_key,
+            start_exclusive=attended,
+            end_inclusive=through,
+            room_name=str((batch[-1].extras or {}).get("room_name") or "") or None,
+        )
+        if not context.strip():
+            context = format_interval_context(
+                room_key,
+                batch,
+                room_name=str((batch[-1].extras or {}).get("room_name") or "") or None,
+            )
+        extras = batch[-1].extras if batch else {}
         decision = await decider(
             context=context,
             source=str(extras.get("source") or room_key_channel(room_key) or "environment"),
@@ -495,22 +663,6 @@ class AttentionLoop:
         )
         parsed = _coerce_decision(decision)
         return bool(parsed.should_reply), parsed
-
-    async def _format_context(
-        self,
-        room_key: str,
-        batch: List[AttentionEvent],
-        *,
-        extras: Dict[str, Any],
-    ) -> str:
-        formatter = self._formatters.get(room_key_channel(room_key))
-        if formatter is not None:
-            return await formatter(room_key, batch, extras=extras)
-        return format_interval_context(
-            room_key,
-            batch,
-            room_name=str(extras.get("room_name") or "") or None,
-        )
 
     def _advance(self, room_key: str, through: int) -> None:
         state = self._room(room_key)

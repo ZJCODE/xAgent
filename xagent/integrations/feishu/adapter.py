@@ -42,7 +42,7 @@ from typing import Any, AsyncGenerator, Optional, Union
 from urllib.parse import parse_qs, unquote, urlparse
 
 from ...core.agent import Agent
-from ...core.attention import make_room_key, message_storage_cursor
+from ...core.attention import AttentionSpeakError, make_room_key, message_storage_cursor
 from ...core.config import AgentConfig
 from ...core.runtime import (
     AsyncTaskScheduler,
@@ -678,9 +678,6 @@ class FeishuAdapter:
             register = getattr(attention, "register_speaker", None)
             if callable(register):
                 register("feishu", self._speak_attention)
-            set_formatter = getattr(attention, "set_formatter", None)
-            if callable(set_formatter):
-                set_formatter("feishu", self._format_attention_context)
             self._attention_bound = True
         return attention
 
@@ -705,6 +702,10 @@ class FeishuAdapter:
     ) -> None:
         image_assets = image_assets or []
         attachments = attachments or []
+        if image_assets:
+            text = self._strip_redundant_feishu_image_markdown(text)
+            if not str(text or "").strip():
+                text = _FEISHU_IMAGE_PLACEHOLDER
         room_name = None
         if is_group:
             room_name = await self._resolve_room_name(chat_id, msg)
@@ -713,6 +714,11 @@ class FeishuAdapter:
         cursor = None
         perceiver = getattr(self.agent, "perceive", None)
         if stored and callable(perceiver):
+            model_images = (
+                self._image_sources_for_model(image_assets)
+                if getattr(self.agent, "supports_vision", True)
+                else None
+            )
             persisted = await perceiver(
                 text,
                 user_id=user_id,
@@ -728,10 +734,17 @@ class FeishuAdapter:
                     "chat_type": chat_type,
                     "sender_id": sender_id,
                 },
-                image_source=self._image_sources_for_model(image_assets) or None,
+                image_source=model_images or None,
                 attachments=attachments or None,
             )
             cursor = message_storage_cursor(persisted) or None
+        if stored and (cursor is None or int(cursor) <= 0):
+            self.logger.error(
+                "Feishu message stored without cursor chat_id=%s message_id=%s",
+                chat_id,
+                message_id,
+            )
+            return
         extras = {
             "source": "feishu",
             "event_type": "group_message" if is_group else "direct_message",
@@ -751,20 +764,7 @@ class FeishuAdapter:
         }
         attention = self._attention_loop()
         if attention is None:
-            if addressed:
-                await self._handle_chat(
-                    chat_id=chat_id,
-                    message_id=message_id,
-                    user_id=user_id,
-                    sender_id=sender_id,
-                    sender_name=sender_name,
-                    text=text,
-                    is_group=is_group,
-                    raw_msg=msg,
-                    image_assets=image_assets,
-                    attachments=attachments,
-                    room_name=room_name,
-                )
+            self.logger.warning("Feishu adapter has no attention loop; dropping message_id=%s", message_id)
             return
         await attention.notice(
             room_key,
@@ -774,43 +774,6 @@ class FeishuAdapter:
             sender_id=sender_id,
             sender_name=sender_name,
             extras=extras,
-        )
-
-    async def _format_attention_context(
-        self,
-        room_key: str,
-        events: list,
-        *,
-        extras: dict,
-    ) -> str:
-        chat_id = str(extras.get("chat_id") or room_key.split(":", 1)[-1])
-        raw_msg = extras.get("raw_msg")
-        records = []
-        if extras.get("is_group"):
-            records = await self._fetch_group_history(
-                chat_id=chat_id,
-                current_message_id=extras.get("message_id"),
-                raw_msg=raw_msg,
-            )
-        event_records = [
-            FeishuMessageRecord(
-                str((event.extras or {}).get("message_id") or extras.get("message_id") or event.cursor),
-                event.sender_id,
-                event.sender_name,
-                event.content,
-                int((event.timestamp or time.time()) * 1000),
-            )
-            for event in events
-        ]
-        room_name = extras.get("room_name")
-        if extras.get("is_group") and raw_msg is not None and not room_name:
-            room_name = await self._resolve_room_name(chat_id, raw_msg)
-        return format_room_context(
-            chat_id,
-            [*records, *event_records],
-            room_name=room_name,
-            bot_open_id=self._bot_open_id(),
-            bot_app_id=self.config.app_id,
         )
 
     async def _speak_attention(
@@ -824,9 +787,9 @@ class FeishuAdapter:
     ) -> None:
         chat_id = str(extras.get("chat_id") or "")
         if not chat_id:
-            return
+            raise AttentionSpeakError("missing chat_id for delivery")
         is_group = bool(extras.get("is_group"))
-        message_id = extras.get("message_id")
+        message_id = extras.get("reply_message_id") or extras.get("message_id")
         raw_msg = extras.get("raw_msg")
         sender_id = str(extras.get("sender_id") or "")
         sender_name = str(extras.get("sender_name") or "")
@@ -845,8 +808,9 @@ class FeishuAdapter:
         )
         respond = getattr(self.agent, "respond", None)
         storage = getattr(self.agent, "message_storage", None)
-        if callable(respond) and storage is not None:
-            chat_kwargs = self._chat_kwargs(
+        if not callable(respond) or storage is None:
+            raise AttentionSpeakError("agent missing respond or message_storage")
+        chat_kwargs = self._chat_kwargs(
                 user_id=user_id,
                 sender_name=sender_name,
                 text=text,
@@ -854,57 +818,45 @@ class FeishuAdapter:
                 attachments=attachments,
                 room_name=room_name,
                 is_group=is_group,
-            ).to_chat_kwargs()
-            self._upsert_attention_contact(
-                user_id=user_id,
-                chat_id=chat_id,
-                is_group=is_group,
-                sender_id=sender_id,
-                sender_name=sender_name,
-            )
-            context = ScheduledDeliveryContext(
-                channel="feishu",
-                user_id=user_id,
-                target={
-                    "chat_id": chat_id,
-                    "message_id": self._reply_anchor(raw_msg=raw_msg, message_id=message_id),
-                    "is_group": is_group,
-                    "sender_id": sender_id,
-                    "sender_name": sender_name,
-                },
-                metadata={
-                    "source": "feishu",
-                    "message_id": message_id,
-                    "chat_id": chat_id,
-                },
-            )
-            with scheduled_delivery_context(context):
-                await self._deliver_agent_events(
-                    chat_id=chat_id,
-                    message_id=message_id,
-                    is_group=is_group,
-                    raw_msg=raw_msg,
-                    events=respond(
-                        room_key,
-                        through_cursor,
-                        stream=False,
-                        channel_instructions=str(chat_kwargs.get("channel_instructions") or ""),
-                    ),
-                )
-            return
-        await self._handle_chat(
-            chat_id=chat_id,
-            message_id=message_id,
+        ).to_chat_kwargs()
+        self._upsert_attention_contact(
             user_id=user_id,
+            chat_id=chat_id,
+            is_group=is_group,
             sender_id=sender_id,
             sender_name=sender_name,
-            text=text,
-            is_group=is_group,
-            raw_msg=raw_msg,
-            image_assets=image_assets,
-            attachments=attachments,
-            room_name=room_name,
         )
+        context = ScheduledDeliveryContext(
+            channel="feishu",
+            user_id=user_id,
+            target={
+                "chat_id": chat_id,
+                "message_id": self._reply_anchor(raw_msg=raw_msg, message_id=message_id),
+                "is_group": is_group,
+                "sender_id": sender_id,
+                "sender_name": sender_name,
+            },
+            metadata={
+                "source": "feishu",
+                "message_id": message_id,
+                "chat_id": chat_id,
+            },
+        )
+        with scheduled_delivery_context(context):
+            delivered = await self._deliver_agent_events(
+                chat_id=chat_id,
+                message_id=message_id,
+                is_group=is_group,
+                raw_msg=raw_msg,
+                events=respond(
+                    room_key,
+                    through_cursor,
+                    stream=False,
+                    channel_instructions=str(chat_kwargs.get("channel_instructions") or ""),
+                ),
+            )
+        if not delivered:
+            raise AttentionSpeakError("respond produced no deliverable output")
 
     def _upsert_attention_contact(
         self,
@@ -938,7 +890,7 @@ class FeishuAdapter:
         is_group: bool,
         raw_msg: Any,
         events,
-    ) -> None:
+    ) -> bool:
         anchor = self._reply_anchor(raw_msg=raw_msg, message_id=message_id)
         sent_count = 0
         async for event in events:
@@ -968,77 +920,7 @@ class FeishuAdapter:
                     text=str(event.get("error") or "Agent processing error."),
                     is_group=is_group,
                 )
-
-    async def _route_group_chat(
-        self,
-        *,
-        msg: Any,
-        chat_type: str,
-        chat_id: str,
-        message_id: Optional[str],
-        sender_id: str,
-        sender_id_type: Optional[str],
-        sender_type: str,
-        sender_fallback_name: Optional[str],
-        text: str,
-        mentioned: bool,
-        route_reason: str,
-        decision: Any = None,
-    ) -> None:
-        attachment_download = await self._download_message_attachment_assets_with_failures(msg, message_id=message_id)
-        if attachment_download.failed_resources:
-            await self._send_attachment_download_failed(
-                chat_id=chat_id,
-                message_id=message_id,
-                raw_msg=msg,
-                is_group=True,
-                failures=attachment_download.failed_resources,
-            )
-            return
-        attachment_assets = attachment_download.assets
-        image_assets = self._image_assets_from_attachment_assets(attachment_assets)
-        if not text and image_assets and len(image_assets) == len(attachment_assets):
-            text = _FEISHU_IMAGE_PLACEHOLDER
-        elif not text and attachment_assets:
-            text = (
-                "The user mentioned you with file attachments."
-                if mentioned
-                else "The user sent file attachments."
-            )
-        elif not text:
-            text = (
-                "The user mentioned you without adding any text."
-                if mentioned
-                else "The user sent a group message without text."
-            )
-        decision_reason = self._decision_reason(decision) if decision else ""
-        log_reason = f"{route_reason}" + (f" ({decision_reason})" if decision_reason else "")
-        self.logger.info(
-            "Feishu group message → reply: chat_type=%s chat_id=%s message_id=%s sender_id=%s reason=%s",
-            chat_type,
-            chat_id,
-            message_id,
-            sender_id,
-            log_reason,
-        )
-        sender_name = await self._resolve_sender_name(
-            sender_id,
-            fallback=sender_fallback_name,
-            id_type=sender_id_type,
-            sender_type=sender_type,
-        )
-        await self._handle_chat(
-            chat_id=chat_id,
-            message_id=message_id,
-            user_id=self._stable_user_id(sender_id, sender_name),
-            sender_id=sender_id,
-            sender_name=sender_name,
-            text=text,
-            is_group=True,
-            raw_msg=msg,
-            image_assets=image_assets,
-            attachments=self._attachments_from_attachment_assets(attachment_assets),
-        )
+        return sent_count > 0
 
     async def _handle_group_observation(
         self,
@@ -1083,46 +965,6 @@ class FeishuAdapter:
             user_id=self._stable_user_id(sender_id, sender_name),
         )
 
-    async def _decide_group_participation(
-        self,
-        *,
-        context: str,
-        chat_type: str,
-        chat_id: str,
-        message_id: Optional[str],
-        sender_id: str,
-        sender_name: str,
-        raw_msg: Any,
-    ) -> Any:
-        decider = getattr(self.agent, "decide_participation", None)
-        if not callable(decider):
-            return None
-        metadata = {
-            "source": "feishu",
-            "event_type": "group_message",
-            "chat_type": chat_type,
-            "chat_id": chat_id,
-            "message_id": message_id,
-            "sender_id": sender_id,
-            "sender_name": sender_name,
-            "addressed_to_agent": False,
-        }
-        room_name = await self._resolve_room_name(chat_id, raw_msg)
-        if room_name:
-            metadata["room_name"] = room_name
-        try:
-            return await decider(
-                context=context,
-                source="feishu",
-                event_type="group_message",
-                metadata=metadata,
-            )
-        except Exception:
-            self.logger.exception(
-                "Feishu group participation decision failed; observing without reply"
-            )
-            return None
-
     @staticmethod
     def _decision_should_reply(decision: Any) -> bool:
         if isinstance(decision, dict):
@@ -1159,39 +1001,6 @@ class FeishuAdapter:
         return format_room_context(
             chat_id,
             [current_record],
-            room_name=room_name,
-            bot_open_id=self._bot_open_id(),
-            bot_app_id=self.config.app_id,
-        )
-
-    async def _group_decision_context(
-        self,
-        *,
-        chat_id: str,
-        current_message_id: Optional[str],
-        raw_msg: Any,
-        sender_id: str,
-        sender_name: str,
-        text: str,
-    ) -> str:
-        """Build a full room-context block with recent history for participation decision."""
-        records = await self._fetch_group_history(
-            chat_id=chat_id,
-            current_message_id=current_message_id,
-            raw_msg=raw_msg,
-        )
-        room_name = await self._resolve_room_name(chat_id, raw_msg)
-        current_record = FeishuMessageRecord(
-            current_message_id or "",
-            sender_id,
-            sender_name,
-            text,
-            self._message_create_time_ms(raw_msg),
-        )
-        context_records = [*records, current_record]
-        return format_room_context(
-            chat_id,
-            context_records,
             room_name=room_name,
             bot_open_id=self._bot_open_id(),
             bot_app_id=self.config.app_id,

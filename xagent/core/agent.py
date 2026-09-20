@@ -47,7 +47,14 @@ from .inbox import (
     is_scheduled_work,
     normalize_inbox_kind,
 )
-from .attention import AttentionLoop, ADDRESSED_METADATA_KEY, ROOM_KEY_METADATA_KEY
+from .attention import (
+    ADDRESSED_METADATA_KEY,
+    AttentionLoop,
+    AttentionSpeakError,
+    ROOM_KEY_METADATA_KEY,
+    events_from_messages,
+    format_interval_context,
+)
 from .handlers import MemoryHandler, MessageHandler, ModelClient
 from .journal import JournalLLMService
 from .providers import (
@@ -230,6 +237,7 @@ class Agent:
         self._attention = AttentionLoop(
             agent=self,
             store_path=self._message_storage_path(runtime_root).parent / AgentConfig.ATTENTION_FILENAME,
+            on_interval=self.on_attention_interval,
         )
 
     @property
@@ -635,29 +643,46 @@ class Agent:
         Inbound messages must already be in the message table. This does not
         store a new user message.
         """
-        from .attention import events_from_messages, format_interval_context
-
         self._record_last_interaction()
         storage = self.message_storage
         get_for_room = getattr(storage, "get_messages_for_room", None)
         if not callable(get_for_room):
             return
         state = self.attention.cursors(room_key)
+        attended = state.attended_through
         interval = await get_for_room(
             room_key,
-            start_exclusive=state.attended_through,
+            start_exclusive=attended,
             end_inclusive=through_cursor,
         )
         if not interval:
-            return
+            logger.warning(
+                "respond empty interval room=%s attended=%s through=%s",
+                room_key,
+                attended,
+                through_cursor,
+            )
+            raise AttentionSpeakError("empty message interval")
+        room_name = next((msg.room_name for msg in interval if msg.room_name), None)
+        history_end = attended
+        history_start = max(0, attended - AgentConfig.ATTENTION_HISTORY_MESSAGES)
+        history_messages = await get_for_room(
+            room_key,
+            start_exclusive=history_start,
+            end_inclusive=history_end,
+            limit=AgentConfig.ATTENTION_HISTORY_MESSAGES,
+        )
+        interval_events = events_from_messages(interval, room_key)
+        history_events = events_from_messages(history_messages, room_key) if history_messages else []
+        content = format_interval_context(
+            room_key,
+            interval_events,
+            room_name=room_name,
+            history=history_events,
+        )
         last_user = next(
             (msg for msg in reversed(interval) if msg.role == RoleType.USER),
             interval[-1],
-        )
-        content = format_interval_context(
-            room_key,
-            events_from_messages(interval, room_key),
-            room_name=next((msg.room_name for msg in interval if msg.room_name), None),
         )
         user_msg = last_user.model_copy(update={"content": content})
         inbox_item = InboxItem(
@@ -829,7 +854,10 @@ class Agent:
                         await msg_handler.store_model_reply(
                             visible_text,
                             self._assistant_sender_id,
-                            metadata={"turn_phase": "preface"},
+                            metadata=self._assistant_reply_metadata(
+                                user_msg,
+                                {"turn_phase": "preface"},
+                            ),
                             room_name=room_name,
                             channel=channel,
                             recipient_id=room_name or user_id,
@@ -873,7 +901,10 @@ class Agent:
                         assistant_msg = await msg_handler.store_model_reply(
                             tool_result.description,
                             self._assistant_sender_id,
-                            metadata={"turn_phase": "final"},
+                            metadata=self._assistant_reply_metadata(
+                                user_msg,
+                                {"turn_phase": "final"},
+                            ),
                             attachments=tool_result.attachments,
                             room_name=room_name,
                             channel=channel,
@@ -909,7 +940,10 @@ class Agent:
                     assistant_msg = await msg_handler.store_model_reply(
                         visible_text,
                         self._assistant_sender_id,
-                        metadata={"turn_phase": "final"},
+                        metadata=self._assistant_reply_metadata(
+                            user_msg,
+                            {"turn_phase": "final"},
+                        ),
                         room_name=room_name,
                         channel=channel,
                         recipient_id=room_name or user_id,
@@ -1062,6 +1096,32 @@ class Agent:
             event_type=event_metadata.get("event_type"),
             source=event_metadata.get("source"),
         )
+
+    async def on_attention_interval(
+        self,
+        *,
+        room_key: str,
+        events: list,
+        addressed: bool,
+        should_reply: bool,
+        decision: Optional[ParticipationDecision] = None,
+        **_: Any,
+    ) -> None:
+        """After each interval judgment, queue diary maintenance for what was heard."""
+        storage = self.message_storage
+        get_for_room = getattr(storage, "get_messages_for_room", None)
+        if not callable(get_for_room) or not events:
+            return
+        cursors = [int(event.cursor) for event in events if int(event.cursor) > 0]
+        if not cursors:
+            return
+        messages = await get_for_room(
+            room_key,
+            start_exclusive=min(cursors) - 1,
+            end_inclusive=max(cursors),
+        )
+        if messages:
+            self._schedule_experience_write(messages=messages)
 
     async def perceive(
         self,
@@ -1252,9 +1312,11 @@ class Agent:
         recipient_id = room_name or next(
             (m.sender_id for m in triggering_messages if m.sender_id and m.role == RoleType.USER), None
         )
+        anchor = triggering_messages[-1] if triggering_messages else None
         assistant_msg = await msg_handler.store_model_reply(
             reply_text,
             self._assistant_sender_id,
+            metadata=self._assistant_reply_metadata(anchor, {}) if anchor is not None else None,
             room_name=room_name,
             channel=channel,
             recipient_id=recipient_id,
@@ -1262,6 +1324,17 @@ class Agent:
         self._schedule_experience_write(
             messages=[*triggering_messages, assistant_msg],
         )
+
+    @staticmethod
+    def _assistant_reply_metadata(
+        user_msg: Message,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        merged = dict(extra or {})
+        room_key = (user_msg.metadata or {}).get(ROOM_KEY_METADATA_KEY)
+        if room_key:
+            merged.setdefault(ROOM_KEY_METADATA_KEY, room_key)
+        return merged
 
     def _schedule_experience_write(
         self,
