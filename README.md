@@ -40,17 +40,17 @@ pip install 'myxagent[feishu]'
 
 ### Raspberry Pi
 
-Raspberry Pi OS often points pip at [piwheels](https://www.piwheels.org/). That index still lists old invalid `pytz` / `regex` wheels (harmless pip 25.3 deprecation warnings) and can download large packages such as `lark-oapi` very slowly.
+Raspberry Pi OS configures pip with [piwheels](https://www.piwheels.org/) as an extra index (`/etc/pip.conf`). That is why a normal `pip install myxagent` downloads every wheel from `www.piwheels.org`, prints a flood of old `pytz` / `regex` filename warnings, and crawls large files such as `lark-oapi` at tens of KB/s with dropped connections.
 
-Use the official installer above (uv + PyPI), or force PyPI / a nearby mirror:
+`pip install -i https://pypi.org/simple` is not enough: pip still reads `extra-index-url` from `/etc/pip.conf` and keeps using piwheels. Ignore that config, then use PyPI or a nearby mirror:
 
 ```bash
-pip install myxagent -i https://pypi.org/simple
+PIP_CONFIG_FILE=/dev/null pip install --isolated myxagent -i https://pypi.org/simple
 # China:
-pip install myxagent -i https://pypi.tuna.tsinghua.edu.cn/simple
+PIP_CONFIG_FILE=/dev/null pip install --isolated myxagent -i https://pypi.tuna.tsinghua.edu.cn/simple
 ```
 
-Skip the Feishu SDK on a slow link:
+Or skip pip entirely and use the official installer above (uv talks only to PyPI). To also skip the Feishu SDK:
 
 ```bash
 XAGENT_EXTRAS= curl -fsSL https://raw.githubusercontent.com/ZJCODE/xagent/main/install.sh | bash

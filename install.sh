@@ -203,6 +203,8 @@ install_via_uv() {
 
     if is_raspberry_pi; then
         info "Raspberry Pi detected. Using $PYPI_INDEX (not piwheels) for more reliable wheels."
+        info "If a pip install is crawling www.piwheels.org, stop it and use this installer, or:"
+        info "  PIP_CONFIG_FILE=/dev/null pip install --isolated myxagent -i $PYPI_INDEX"
         if [ -n "$XAGENT_EXTRAS" ]; then
             info "Skip the Feishu SDK for a lighter install: XAGENT_EXTRAS= curl -fsSL ... | bash"
         fi

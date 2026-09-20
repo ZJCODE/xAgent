@@ -1565,6 +1565,8 @@ channels:
         self.assertIn("myxagent[feishu]", readme)
         self.assertIn("Raspberry Pi", readme)
         self.assertIn("piwheels", readme)
+        self.assertIn("PIP_CONFIG_FILE", readme)
+        self.assertIn("--isolated", readme)
         self.assertNotIn("myxagent[voice]", readme)
         self.assertNotIn("SONIOX_API_KEY", readme)
 
