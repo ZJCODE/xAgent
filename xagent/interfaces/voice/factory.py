@@ -1,10 +1,12 @@
 """Factory helpers for the Soniox-only local voice runtime."""
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from .audio import (
     AudioDevicePreference,
+    AudioIOProfile,
     SoundDeviceMicrophone,
     SoundDevicePlayer,
     resolve_audio_io_profile,
@@ -16,10 +18,14 @@ from .config import (
     SONIOX_TTS_CHANNELS,
     SONIOX_TTS_SAMPLE_RATE,
     VoiceChannelConfig,
+    VoiceProfileName,
+    VoiceRuntimeProfile,
 )
 from .presence import SttLifecycleController, VoicePresenceConfig
 from .runtime import VoiceRuntime, VoiceRuntimeOptions
 from .soniox import SonioxSTTCallbacks, create_soniox_adapters
+
+logger = logging.getLogger(__name__)
 
 
 def _agent_context_terms(agent: Any) -> list[str]:
@@ -36,6 +42,26 @@ def _agent_context_terms(agent: Any) -> list[str]:
     return normalize_terms(terms)
 
 
+def resolve_runtime_profile(
+    audio_profile: AudioIOProfile,
+    *,
+    profile_override: VoiceProfileName | None = None,
+    interruptions_override: bool | None = None,
+) -> VoiceRuntimeProfile:
+    """Turn detected device topology, plus any session override, into policy."""
+    topology = audio_profile.topology
+    detected_name: VoiceProfileName = "headset" if topology.near_field else "room"
+    name = profile_override or detected_name
+    echo_managed = (
+        topology.echo_managed if interruptions_override is None else interruptions_override
+    )
+    sources = [] if profile_override is None else [f"profile={profile_override} (override)"]
+    if interruptions_override is not None:
+        sources.append(f"interruptions={'on' if interruptions_override else 'off'} (override)")
+    source = ", ".join(sources) if sources else topology.reason
+    return VoiceRuntimeProfile(name=name, echo_managed=echo_managed, source=source)
+
+
 def create_local_voice_runtime(
     *,
     agent: Any,
@@ -43,6 +69,8 @@ def create_local_voice_runtime(
     options: VoiceRuntimeOptions,
     input_device: AudioDevicePreference = None,
     output_device: AudioDevicePreference = None,
+    profile_override: VoiceProfileName | None = None,
+    interruptions_override: bool | None = None,
 ) -> VoiceRuntime:
     runtime_holder: list[VoiceRuntime | None] = [None]
 
@@ -55,6 +83,29 @@ def create_local_voice_runtime(
         runtime = runtime_holder[0]
         if runtime is not None:
             runtime._schedule_notice("back_online")
+
+    audio_profile = resolve_audio_io_profile(
+        input_sample_rate=SONIOX_STT_SAMPLE_RATE,
+        input_channels=SONIOX_STT_CHANNELS,
+        output_sample_rate=SONIOX_TTS_SAMPLE_RATE,
+        output_channels=SONIOX_TTS_CHANNELS,
+        input_device=input_device if input_device is not None else config.audio.input,
+        output_device=output_device if output_device is not None else config.audio.output,
+    )
+    # Diarization, attention and endpointing all read the profile, and the STT
+    # session is configured from it, so settle it before the adapters exist.
+    runtime_profile = resolve_runtime_profile(
+        audio_profile,
+        profile_override=profile_override,
+        interruptions_override=interruptions_override,
+    )
+    config.apply_runtime_profile(runtime_profile)
+    logger.info(
+        "Voice profile: %s, barge-in %s (%s)",
+        runtime_profile.name,
+        "on" if runtime_profile.echo_managed else "off",
+        runtime_profile.source,
+    )
 
     presence_cfg = VoicePresenceConfig(
         close_stt_after_idle_seconds=config.presence.close_stt_after_idle_seconds,
@@ -74,14 +125,6 @@ def create_local_voice_runtime(
     set_terms = getattr(recognizer, "set_extra_context_terms", None)
     if callable(set_terms):
         set_terms(extra_terms)
-    audio_profile = resolve_audio_io_profile(
-        input_sample_rate=SONIOX_STT_SAMPLE_RATE,
-        input_channels=SONIOX_STT_CHANNELS,
-        output_sample_rate=SONIOX_TTS_SAMPLE_RATE,
-        output_channels=SONIOX_TTS_CHANNELS,
-        input_device=input_device if input_device is not None else config.audio.input,
-        output_device=output_device if output_device is not None else config.audio.output,
-    )
     microphone = SoundDeviceMicrophone(
         sample_rate=SONIOX_STT_SAMPLE_RATE,
         channels=SONIOX_STT_CHANNELS,

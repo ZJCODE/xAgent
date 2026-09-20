@@ -21,7 +21,9 @@ from xagent.interfaces.voice.config import (
     SONIOX_TTS_MAX_TEXT_CHARS,
     SONIOX_TTS_MODEL,
     VoiceChannelConfig,
+    VoiceRuntimeProfile,
 )
+from xagent.interfaces.voice.audio import AudioTopology
 from xagent.interfaces.voice.factory import create_local_voice_runtime
 from xagent.interfaces.voice.runtime import VoiceRuntime, VoiceRuntimeOptions
 from xagent.interfaces.voice.types import VoiceUtterance
@@ -108,9 +110,13 @@ class FailingFirstAgent:
         yield {"type": "message_done", "message_id": str(self.calls), "content": "recovered"}
 
 
-def voice_config(data=None):
-    payload = {"api_key": "test-key", "profile": "headset", **(data or {})}
-    return VoiceChannelConfig.from_dict(payload)
+def voice_config(data=None, *, profile="headset", echo_managed=False):
+    payload = {"api_key": "test-key", **(data or {})}
+    config = VoiceChannelConfig.from_dict(payload)
+    config.apply_runtime_profile(
+        VoiceRuntimeProfile(name=profile, echo_managed=echo_managed, source="test")
+    )
+    return config
 
 
 class VoiceConfigTests(unittest.TestCase):
@@ -162,10 +168,20 @@ class VoiceConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "language_hints"):
             VoiceChannelConfig.from_dict({"language_hints": [" "]})
 
-    def test_interruptions_flag(self):
-        config = VoiceChannelConfig.from_dict({"api_key": "key", "interruptions": True})
-        self.assertTrue(config.interruptions)
+    def test_interruptions_follow_the_detected_devices(self):
+        config = VoiceChannelConfig.from_dict({"api_key": "key"})
+        self.assertFalse(config.enable_interruptions)
+        config.apply_runtime_profile(
+            VoiceRuntimeProfile(name="room", echo_managed=True, source="test")
+        )
+        self.assertTrue(config.enable_interruptions)
         self.assertTrue(config.return_timestamps)
+
+    def test_rejects_profile_and_interruptions_keys(self):
+        with self.assertRaisesRegex(ValueError, "Unknown voice setting"):
+            VoiceChannelConfig.from_dict({"api_key": "key", "profile": "headset"})
+        with self.assertRaisesRegex(ValueError, "Unknown voice setting"):
+            VoiceChannelConfig.from_dict({"api_key": "key", "interruptions": True})
 
     def test_rejects_unknown_voice_keys(self):
         with self.assertRaisesRegex(ValueError, "Unknown voice setting"):
@@ -668,7 +684,11 @@ class VoiceRuntimeTests(unittest.TestCase):
             stream_sample_rate=24000,
             stream_channels=1,
         )
-        profile = SimpleNamespace(input_selection=input_selection, output_selection=output_selection)
+        profile = SimpleNamespace(
+            input_selection=input_selection,
+            output_selection=output_selection,
+            topology=AudioTopology(near_field=False, echo_managed=False, reason="test"),
+        )
         with patch("xagent.interfaces.voice.factory.create_soniox_adapters", return_value=(object(), object())), patch(
             "xagent.interfaces.voice.factory.resolve_audio_io_profile", return_value=profile
         ) as resolve, patch("xagent.interfaces.voice.factory.SoundDeviceMicrophone") as microphone, patch(

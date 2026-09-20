@@ -1,19 +1,40 @@
 import unittest
+from types import SimpleNamespace
 
 from xagent.interfaces.cli.config_editor import prepare_voice_preset_update
 from xagent.interfaces.cli.setup import VoiceInitSelection, _voice_channel_config
-from xagent.interfaces.voice.config import VoiceChannelConfig, parse_quiet_hours
+from xagent.interfaces.voice.config import (
+    VoiceChannelConfig,
+    VoiceRuntimeProfile,
+    parse_quiet_hours,
+)
+from xagent.interfaces.voice.audio import AudioTopology
+from xagent.interfaces.voice.factory import resolve_runtime_profile
 from xagent.interfaces.voice.presence import VOICE_STT_IDLE_SHUTDOWN_SECONDS
 
 
+def _audio_profile(*, near_field: bool, echo_managed: bool):
+    return SimpleNamespace(
+        topology=AudioTopology(
+            near_field=near_field,
+            echo_managed=echo_managed,
+            reason="test",
+        )
+    )
+
+
 class VoiceConfigSurfaceTests(unittest.TestCase):
-    def test_profile_room_enables_diarization(self):
-        config = VoiceChannelConfig.from_dict({"api_key": "k", "profile": "room"})
+    def test_room_is_the_default_profile(self):
+        config = VoiceChannelConfig.from_dict({"api_key": "k"})
+        self.assertEqual(config.profile, "room")
         self.assertTrue(config.enable_diarization)
         self.assertTrue(config.attention.use_decide_participation)
 
-    def test_profile_headset_disables_diarization(self):
-        config = VoiceChannelConfig.from_dict({"api_key": "k", "profile": "headset"})
+    def test_detected_headset_profile_disables_diarization(self):
+        config = VoiceChannelConfig.from_dict({"api_key": "k"})
+        config.apply_runtime_profile(
+            VoiceRuntimeProfile(name="headset", echo_managed=True, source="test")
+        )
         self.assertFalse(config.enable_diarization)
         self.assertFalse(config.attention.use_decide_participation)
         self.assertEqual(config.interruption.min_words, 1)
@@ -44,28 +65,25 @@ class VoiceConfigSurfaceTests(unittest.TestCase):
             VoiceChannelConfig.from_dict({"api_key": "k", "context": {"terms": ["x"]}})
 
     def test_unknown_key_suggests_close_match(self):
-        with self.assertRaisesRegex(ValueError, "interruptions"):
-            VoiceChannelConfig.from_dict({"api_key": "k", "interuptions": True})
+        with self.assertRaisesRegex(ValueError, "quiet_hours"):
+            VoiceChannelConfig.from_dict({"api_key": "k", "quiet_hour": "22:00-07:00"})
 
     def test_to_public_dict_round_trip(self):
         original = VoiceChannelConfig.from_dict(
             {
                 "api_key": "secret",
-                "profile": "room",
                 "names": ["Telos"],
-                "interruptions": True,
+                "voice": "Ava",
             }
         )
         public = original.to_public_dict()
         again = VoiceChannelConfig.from_dict(public)
-        self.assertEqual(again.profile, "room")
         self.assertEqual(again.names, ["Telos"])
-        self.assertTrue(again.interruptions)
+        self.assertEqual(again.voice, "Ava")
 
     def test_voice_setup_preserves_tier1_when_rotating_key(self):
         existing = {
             "api_key": "old",
-            "profile": "room",
             "voice": "Ava",
             "names": ["Telos"],
             "audio": {"input": "Mic", "output": "Speaker"},
@@ -93,6 +111,25 @@ class VoiceConfigSurfaceTests(unittest.TestCase):
         self.assertEqual(voice["api_key"], "new")
         self.assertEqual(voice["voice"], "Ava")
         self.assertEqual(voice["names"], ["Telos"])
+
+    def test_runtime_profile_follows_detected_topology(self):
+        room = resolve_runtime_profile(_audio_profile(near_field=False, echo_managed=False))
+        self.assertEqual(room.name, "room")
+        self.assertFalse(room.echo_managed)
+
+        headset = resolve_runtime_profile(_audio_profile(near_field=True, echo_managed=True))
+        self.assertEqual(headset.name, "headset")
+        self.assertTrue(headset.echo_managed)
+
+    def test_session_overrides_beat_detection(self):
+        profile = resolve_runtime_profile(
+            _audio_profile(near_field=True, echo_managed=False),
+            profile_override="room",
+            interruptions_override=True,
+        )
+        self.assertEqual(profile.name, "room")
+        self.assertTrue(profile.echo_managed)
+        self.assertIn("override", profile.source)
 
     def test_parse_quiet_hours(self):
         self.assertEqual(parse_quiet_hours("22:00-07:00"), (22, 7))

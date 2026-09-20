@@ -4,12 +4,14 @@ from __future__ import annotations
 import difflib
 import os
 import re
+from dataclasses import dataclass
 from typing import Any, Literal
 
 from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    PrivateAttr,
     ValidationError,
     field_validator,
     model_validator,
@@ -32,6 +34,21 @@ SONIOX_TTS_MAX_TEXT_CHARS = 5_000
 
 VoiceProfileName = Literal["room", "headset"]
 
+
+@dataclass(frozen=True)
+class VoiceRuntimeProfile:
+    """Behaviour derived from the audio devices actually in use.
+
+    Near-field and far-field capture want opposite settings for diarization,
+    attention and endpointing, and no user can set those coherently. The
+    devices answer the question, and they answer it per session: the same
+    machine moves between earbuds and a room speaker within a day.
+    """
+
+    name: VoiceProfileName = "room"
+    echo_managed: bool = False
+    source: str = "default"
+
 _VOICE_KEY_PLACEHOLDERS = {
     SONIOX_KEY_PLACEHOLDER,
     "your_qwen_api_key_here",
@@ -41,13 +58,11 @@ _VOICE_KEY_PLACEHOLDERS = {
 _VOICE_TOP_LEVEL_KEYS = frozenset(
     {
         "api_key",
-        "profile",
         "voice",
         "speed",
         "language_hints",
         "fallback_language",
         "names",
-        "interruptions",
         "quiet_hours",
         "audio",
     }
@@ -56,13 +71,11 @@ _VOICE_TOP_LEVEL_KEYS = frozenset(
 VOICE_CONFIG_EXAMPLE = """channels:
   voice:
     api_key: your_soniox_api_key_here
-    profile: room
     voice: Owen
     speed: 1.0
     language_hints: [zh, en]
     fallback_language: zh
     names: []
-    interruptions: false
     quiet_hours: "22:00-07:00"
     audio:
       input: auto
@@ -200,15 +213,15 @@ class VoiceChannelConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     api_key: str | None = None
-    profile: VoiceProfileName = "room"
     voice: str = "Owen"
     language_hints: list[str] = Field(default_factory=lambda: ["zh", "en"])
     fallback_language: str = "zh"
     speed: float = Field(default=1.0, ge=0.7, le=1.3)
     names: list[str] = Field(default_factory=list)
-    interruptions: bool = False
     quiet_hours: str = "22:00-07:00"
     audio: VoiceAudioConfig = Field(default_factory=VoiceAudioConfig)
+
+    _runtime_profile: VoiceRuntimeProfile = PrivateAttr(default_factory=VoiceRuntimeProfile)
 
     @field_validator("api_key")
     @classmethod
@@ -263,13 +276,11 @@ class VoiceChannelConfig(BaseModel):
     def to_public_dict(self) -> dict[str, Any]:
         return {
             "api_key": self.api_key or SONIOX_KEY_PLACEHOLDER,
-            "profile": self.profile,
             "voice": self.voice,
             "speed": self.speed,
             "language_hints": list(self.language_hints),
             "fallback_language": self.fallback_language,
             "names": list(self.names),
-            "interruptions": self.interruptions,
             "quiet_hours": self.quiet_hours,
             "audio": {
                 "input": self.audio.input,
@@ -289,6 +300,17 @@ class VoiceChannelConfig(BaseModel):
             "or the SONIOX_API_KEY environment variable."
         )
 
+    def apply_runtime_profile(self, profile: VoiceRuntimeProfile) -> None:
+        self._runtime_profile = profile
+
+    @property
+    def runtime_profile(self) -> VoiceRuntimeProfile:
+        return self._runtime_profile
+
+    @property
+    def profile(self) -> VoiceProfileName:
+        return self._runtime_profile.name
+
     @property
     def room_name(self) -> str:
         return _ROOM_NAME
@@ -307,7 +329,7 @@ class VoiceChannelConfig(BaseModel):
 
     @property
     def enable_interruptions(self) -> bool:
-        return self.interruptions
+        return self._runtime_profile.echo_managed
 
     @property
     def attention(self) -> VoiceAttentionConfigModel:
