@@ -29,9 +29,10 @@ OPTIONAL_SECTION_ORDER = (
 CONTINUITY_DROP_ORDER = (
     AgentConfig.RELATIONSHIP_CONTEXT_NAME,
     AgentConfig.SUBCONSCIOUS_RELATIONSHIPS_NAME,
-    AgentConfig.ROOM_CONTEXT_NAME,
     AgentConfig.RECENT_MEMORY_NAME,
     AgentConfig.RECENT_EXPERIENCE_NAME,
+    # Room entries may be the only remaining copy after experience dedupe.
+    AgentConfig.ROOM_CONTEXT_NAME,
 )
 
 _SECTION_CHAR_LIMITS = {
@@ -98,7 +99,7 @@ def _entries_total_tokens(
 
 
 def _refresh_entry(entry: ManifestEntry, message: dict) -> ManifestEntry:
-    return manifest_entry_from_message(
+    refreshed = manifest_entry_from_message(
         message,
         kind=entry.kind,
         trust=entry.trust,
@@ -106,6 +107,7 @@ def _refresh_entry(entry: ManifestEntry, message: dict) -> ManifestEntry:
         authority=entry.authority,
         provenance=entry.provenance,
     )
+    return replace(refreshed, reason=entry.reason, dropped=entry.dropped)
 
 
 def _drop_section(
@@ -148,6 +150,56 @@ def _trim_recent_experience_message(message: dict, *, max_tokens: int) -> dict:
             break
         blocks.pop(0)
     trimmed = "".join(blocks).strip()
+    return {**message, "content": trimmed}
+
+
+def _trim_room_context_message(message: dict, *, max_tokens: int) -> dict:
+    """Keep recent attributed speech, even when its experience copy was deduped.
+
+    Retain at least two history entries to preserve the immediate exchange.
+    If necessary, shorten their bodies rather than removing all room evidence.
+    Tiny budgets may still overflow the minimum attributed excerpts; the caller
+    reports that through continuity_over_budget.
+    """
+    content = str(message.get("content") or "")
+    if estimate_tokens(content) <= max_tokens:
+        return message
+    lines = content.splitlines()
+    entry_pattern = re.compile(r"^(.+ \d{4}-\d{2}-\d{2} \d{2}:\d{2}: )(.*)$")
+    entries = [(index, entry_pattern.match(line)) for index, line in enumerate(lines)]
+    entries = [(index, match) for index, match in entries if match is not None]
+    if not entries:
+        # Legacy free-form room text has no safe message boundaries.
+        return {**message, "content": truncate_middle(content, max(64, max_tokens))}
+
+    first, last = entries[0][0], entries[-1][0]
+    retained = entries[:]
+
+    def render(body_limit: int | None = None) -> str:
+        omitted = len(entries) - len(retained)
+        notice = [f"[Earlier room messages omitted: {omitted}]"] if omitted else []
+        body = [
+            match.group(1) + (
+                truncate_middle(match.group(2), body_limit)
+                if body_limit is not None else match.group(2)
+            )
+            for _, match in retained
+        ]
+        return "\n".join([*lines[:first], *notice, *body, *lines[last + 1:]])
+
+    while len(retained) > 2 and estimate_tokens(render()) > max_tokens:
+        retained.pop(0)
+    trimmed = render()
+    if estimate_tokens(trimmed) > max_tokens:
+        low, high = 32, max(32, max(len(match.group(2)) for _, match in retained))
+        # Use the same multilingual estimator as the global budget.
+        while low < high:
+            middle = (low + high + 1) // 2
+            if estimate_tokens(render(middle)) <= max_tokens:
+                low = middle
+            else:
+                high = middle - 1
+        trimmed = render(low)
     return {**message, "content": trimmed}
 
 
@@ -234,6 +286,19 @@ def apply_context_budget(
     for section_name in CONTINUITY_DROP_ORDER:
         if total() <= effective:
             break
+        if section_name == AgentConfig.ROOM_CONTEXT_NAME:
+            message = next((m for m in turn_messages if m.get("name") == section_name), None)
+            if message is None:
+                continue
+            index = next(i for i, entry in enumerate(turn_entries) if entry.name == section_name)
+            remaining = effective - (total() - turn_entries[index].est_tokens)
+            trimmed = _trim_room_context_message(message, max_tokens=max(0, remaining))
+            turn_messages = [trimmed if m.get("name") == section_name else m for m in turn_messages]
+            turn_entries[index] = replace(
+                _refresh_entry(turn_entries[index], trimmed),
+                reason="over_budget:room_trimmed",
+            )
+            continue
         if section_name == AgentConfig.RECENT_EXPERIENCE_NAME:
             message = next(
                 (m for m in turn_messages if m.get("name") == section_name),

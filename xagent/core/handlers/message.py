@@ -1,4 +1,5 @@
 import logging
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
@@ -309,6 +310,22 @@ class MessageHandler:
             budgeted_observations,
         )
         room_snapshot, room_render = MessageHandler._resolve_room_context(room_context)
+        # The trigger belongs to current_input, including presence turns. Only
+        # remove an identified event in the same room; equal text is not identity.
+        if (
+            isinstance(room_context, RoomSnapshot)
+            and current_message is not None
+            and current_message.event_key
+            and current_message.resolved_room_id == room_snapshot.room_id
+        ):
+            room_snapshot = replace(
+                room_snapshot,
+                entries=tuple(
+                    entry for entry in room_snapshot.entries
+                    if entry.event_id != current_message.event_key
+                ),
+            )
+            room_render = room_snapshot.render()
         experience_entries = MessageHandler._exclude_covered_experience_entries(
             experience_entries,
             current_message=current_message,

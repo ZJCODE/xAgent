@@ -82,7 +82,7 @@ class ContextDedupeTests(unittest.TestCase):
         self.assertEqual(policy["role"], "system")
         self.assertIn("<channel_policy", policy["content"])
 
-    def test_room_snapshot_covered_entries_excluded_from_recent_experience(self):
+    def test_snapshot_with_only_trigger_leaves_only_current_input(self):
         event_id = "feishu:om_1"
         line = Message.create("anyone here?", role=RoleType.USER, sender_id="alice")
         line.source_event_id = event_id
@@ -106,10 +106,11 @@ class ContextDedupeTests(unittest.TestCase):
             room_context=snapshot,
         )
         by_name = {m["name"]: m["content"] for m in messages}
-        self.assertIn("anyone here?", by_name[AgentConfig.ROOM_CONTEXT_NAME])
+        self.assertNotIn(AgentConfig.ROOM_CONTEXT_NAME, by_name)
+        self.assertIn("anyone here?", by_name[AgentConfig.CURRENT_INPUT_NAME])
         self.assertNotIn("anyone here?", by_name.get(AgentConfig.RECENT_EXPERIENCE_NAME, ""))
 
-    def test_legacy_string_room_context_still_dedupes_trigger(self):
+    def test_legacy_room_text_without_event_ids_is_not_deduped_by_text(self):
         current = Message.create("trigger line", role=RoleType.USER, sender_id="bob")
         current.source_event_id = "feishu:om_trigger"
         current.room_id = "oc_group"
@@ -160,8 +161,41 @@ class ContextDedupeTests(unittest.TestCase):
             room_context=snapshot,
         )
         text = _flatten_turn_text(messages)
-        self.assertEqual(text.count("anyone here?"), 2)
+        self.assertEqual(text.count("anyone here?"), 1)
+        self.assertIn("from: alice", text)
         self.assertLessEqual(text.lower().count("alice"), 3)
+
+    def test_room_trigger_dedupe_keeps_other_events_with_identical_text(self):
+        for kind in (InboxKind.USER_TURN, InboxKind.PRESENCE_TURN):
+            with self.subTest(kind=kind):
+                current = Message.create("收到", role=RoleType.USER, sender_id="bob")
+                current.room_id = "oc_group"
+                current.source_event_id = "feishu:current"
+                current.metadata[INBOX_KIND_METADATA_KEY] = kind.value
+                snapshot = RoomSnapshot("oc_group", "测试群", (
+                    RoomContextEntry("alice", datetime(2026, 9, 20, 11), "收到", event_id="feishu:earlier"),
+                    RoomContextEntry("bob", datetime(2026, 9, 20, 11, 1), "收到", event_id=current.event_key),
+                ))
+                messages = MessageHandler.build_turn_context_messages(
+                    [current], current_user_id="bob", current_message=current, room_context=snapshot,
+                )
+                room = next(m["content"] for m in messages if m["name"] == AgentConfig.ROOM_CONTEXT_NAME)
+                self.assertIn("alice", room)
+                self.assertNotIn("bob", room)
+                self.assertEqual(_flatten_turn_text(messages).count("收到"), 2)
+                self.assertEqual(len(snapshot.entries), 2)  # Caller-owned snapshot stays intact.
+
+    def test_trigger_dedupe_requires_matching_room(self):
+        current = Message.create("current", role=RoleType.USER, sender_id="bob")
+        current.room_id = "room_a"
+        current.source_event_id = "event_1"
+        snapshot = RoomSnapshot("room_b", "Other room", (
+            RoomContextEntry("alice", datetime(2026, 9, 20), "other event", event_id="event_1"),
+        ))
+        messages = MessageHandler.build_turn_context_messages(
+            [current], current_user_id="bob", current_message=current, room_context=snapshot,
+        )
+        self.assertIn("other event", _flatten_turn_text(messages))
 
     def test_observation_content_has_no_speaker_prefix(self):
         observation = Message(

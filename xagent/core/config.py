@@ -495,6 +495,7 @@ class AgentConfig:
         "- `[ambient context][timestamp=Time][channel=Channel]` — something observed or received via Channel, not a direct message.\n"
         "- `[ambient context][timestamp=Time][channel=Channel][room=RoomName]` — something observed or received in RoomName via Channel.\n"
         "- `[room context]` ... `[/room context]` blocks: `room_name:`, `room_id:`, optional `present:` (who is here now), lines like `Name YYYY-MM-DD HH:mm: text`; `ME ...` inside means you.\n"
+        "- Room history is partial evidence, not a complete roster or delivery receipt. Missing speech does not establish absence, silence, or delivery failure. A mention alone does not establish that its target received it.\n"
         "- Keep people, rooms, preferences, commitments, and experiences separate. Do not carry one person's private topic into another person's reply unless they clearly joined or referred to it.\n"
         "\n"
     )
@@ -632,6 +633,7 @@ class AgentConfig:
             input_kind = "scheduled_turn"
         elif is_presence_turn(kind):
             header = f"room: {room_label}" if room_label else "room: (shared)"
+            header += f"\nfrom: {current_user_id}"
             guidance = AgentConfig.TURN_GUIDANCE_PRESENCE.format(room=room_label or "this room")
             input_kind = "presence_turn"
         elif has_room_snapshot or room_label:

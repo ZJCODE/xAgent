@@ -1777,14 +1777,16 @@ class FeishuAdapter:
     ) -> list[FeishuMessageRecord]:
         fetch_limit = self.config.group_fetch_limit
         if fetch_limit <= 0:
+            self.logger.info("Feishu group history disabled: chat_id=%s", chat_id)
             return []
 
         fetcher = self._get_history_fetcher()
         if fetcher is None:
+            self.logger.warning("Feishu group history unavailable: chat_id=%s channel not ready", chat_id)
             return []
 
         try:
-            return await asyncio.wait_for(
+            records = await asyncio.wait_for(
                 fetcher.fetch_recent_messages(
                     chat_id=chat_id,
                     current_message_id=current_message_id,
@@ -1793,6 +1795,11 @@ class FeishuAdapter:
                 ),
                 timeout=self.config.group_fetch_timeout,
             )
+            self.logger.info(
+                "Feishu group history fetched: chat_id=%s message_id=%s thread_id=%s records=%d limit=%d",
+                chat_id, current_message_id, self._thread_id(raw_msg), len(records), fetch_limit,
+            )
+            return records
         except asyncio.TimeoutError:
             self.logger.warning(
                 "Feishu group history fetch timed out after %.1fs; continuing without it",

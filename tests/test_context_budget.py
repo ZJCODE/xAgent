@@ -2,6 +2,7 @@
 
 import json
 import unittest
+from datetime import datetime, timedelta
 
 from xagent.core.config import AgentConfig
 from xagent.core.context_budget import (
@@ -13,10 +14,98 @@ from xagent.core.context_budget import (
 )
 from xagent.core.context_manifest import ManifestEntry, manifest_entry_from_message
 from xagent.core.handlers.memory import MemoryHandler
+from xagent.core.handlers.message import MessageHandler
+from xagent.core.formatters import RoomContextEntry, RoomSnapshot
 from xagent.schemas import Message, RoleType
 
 
 class ContextBudgetTests(unittest.TestCase):
+    def _room_turn(self, bodies, *, memory_context=""):
+        rows = []
+        entries = []
+        for index, body in enumerate(bodies):
+            row = Message.create(body, role=RoleType.USER, sender_id=f"user{index}")
+            row.room_id = "oc_group"
+            row.source_event_id = f"feishu:om_{index}"
+            rows.append(row)
+            entries.append(RoomContextEntry(
+                speaker_label=f"user{index}",
+                occurred_at=datetime(2026, 9, 20, 10) + timedelta(minutes=index),
+                text=body,
+                event_id=row.source_event_id,
+            ))
+        return MessageHandler.build_turn_context_with_manifest(
+            rows,
+            current_user_id=rows[-1].sender_id,
+            current_message=rows[-1],
+            room_context=RoomSnapshot("oc_group", "测试群", tuple(entries)),
+            memory_context=memory_context,
+        )
+
+    def test_budget_keeps_deduped_group_speech_before_old_memory(self):
+        speech = "项目周五上线"
+        messages, entries = self._room_turn(
+            [speech, "刚才说了什么？"], memory_context="旧日记。" * 1000,
+        )
+        experience = next(m["content"] for m in messages if m["name"] == AgentConfig.RECENT_EXPERIENCE_NAME)
+        self.assertNotIn(speech, experience)
+        _, output, _, manifest, reason = apply_context_budget(
+            [], messages, [], entries, [], budget_tokens=1000,
+        )
+        text = "\n".join(m["content"] for m in output)
+        self.assertEqual(text.count(speech), 1)
+        self.assertNotIn("旧日记", text)
+        room = next(e for e in manifest if e.name == AgentConfig.ROOM_CONTEXT_NAME)
+        self.assertFalse(room.dropped)
+        self.assertEqual(reason, "")
+
+    def test_room_budget_drops_old_entries_and_keeps_attribution(self):
+        bodies = [f"旧消息{i}" + "较早的讨论。" * 70 for i in range(8)]
+        messages, entries = self._room_turn([*bodies, "项目周五上线", "刚才说了什么？"])
+        _, output, _, manifest, reason = apply_context_budget(
+            [], messages, [], entries, [], budget_tokens=650,
+        )
+        room = next(m["content"] for m in output if m["name"] == AgentConfig.ROOM_CONTEXT_NAME)
+        self.assertIn("room_name: 测试群", room)
+        self.assertIn("room_id: oc_group", room)
+        self.assertIn("user8 2026-09-20 10:08: 项目周五上线", room)
+        self.assertNotIn("刚才说了什么？", room)
+        self.assertEqual(str(output).count("刚才说了什么？"), 1)
+        self.assertNotIn("旧消息0", room)
+        self.assertIn("[Earlier room messages omitted:", room)
+        self.assertTrue(room.endswith("[/room context]"))
+        self.assertLessEqual(sum(e.est_tokens for e in manifest) + estimate_tokens("[]"), int(650 * .85))
+        self.assertEqual(reason, "")
+        self.assertEqual(next(e.reason for e in manifest if e.name == AgentConfig.ROOM_CONTEXT_NAME), "over_budget:room_trimmed")
+
+    def test_room_budget_shortens_long_chinese_bodies_without_losing_speakers(self):
+        messages, entries = self._room_turn(["上线计划" + "详细讨论" * 140, "再补充" + "相关内容" * 140, "请概括"])
+        _, output, _, manifest, reason = apply_context_budget(
+            [], messages, [], entries, [], budget_tokens=400,
+        )
+        room = next(m["content"] for m in output if m["name"] == AgentConfig.ROOM_CONTEXT_NAME)
+        self.assertIn("user1 2026-09-20 10:01: 再补充", room)
+        self.assertIn("user0 2026-09-20 10:00: 上线计划", room)
+        self.assertNotIn("请概括", room)
+        self.assertIn("omitted", room)
+        self.assertEqual(reason, "")
+        self.assertLessEqual(sum(e.est_tokens for e in manifest) + estimate_tokens("[]"), int(400 * .85))
+
+    def test_room_minimum_overflow_is_reported_instead_of_silent_loss(self):
+        messages, entries = self._room_turn(["项目周五上线", "请回答" + "问" * 195])
+        _, output, _, manifest, reason = apply_context_budget(
+            [], messages, [], entries, [], budget_tokens=256,
+        )
+        self.assertIn("项目周五上线", str(output))
+        self.assertEqual(reason, "continuity_over_budget")
+        self.assertFalse(next(e.dropped for e in manifest if e.name == AgentConfig.ROOM_CONTEXT_NAME))
+
+    def test_room_context_unchanged_when_budget_is_sufficient(self):
+        messages, entries = self._room_turn(["项目周五上线", "收到"])
+        _, output, _, _, reason = apply_context_budget([], messages, [], entries, [], budget_tokens=32000)
+        self.assertEqual(output, messages)
+        self.assertEqual(reason, "")
+
     def test_required_sections_never_trimmed(self):
         instructions = [
             {"role": "system", "name": AgentConfig.CORE_INTERACTION_RULES_NAME, "content": "rules"},
