@@ -28,6 +28,7 @@ from .ack import InstantAckConfig, InstantAckSpeaker
 from .aggregator import iter_aggregated_utterances
 from .attention import VoiceAttentionConfig, VoiceAttentionGate
 from .barge_in import BargeInConfig, BargeInEvaluator
+from .echo_guard import SelfInterruptionGuard
 from .config import SONIOX_TTS_CHANNELS, SONIOX_TTS_SAMPLE_RATE, VoiceChannelConfig
 from .floor import ConversationFloor, FloorCommandKind, FloorEvent, FloorEventKind, FloorState
 from .presence import SttLifecycleController
@@ -204,6 +205,7 @@ class VoiceRuntime:
         self._speaker_bindings = speaker_bindings or SpeakerBindingStore(bindings_path)
         self._stt_lifecycle = stt_lifecycle
         self._proactive_limiter = ProactiveSpeechLimiter(self.config.proactive.max_per_hour)
+        self._self_interruption = SelfInterruptionGuard()
         performance = self.config.performance
         self._instant_ack = InstantAckSpeaker(
             InstantAckConfig(
@@ -310,7 +312,7 @@ class VoiceRuntime:
 
     @property
     def _duplex_capture_enabled(self) -> bool:
-        return bool(self.config.enable_interruptions)
+        return bool(self.config.enable_interruptions) and not self._self_interruption.tripped
 
     async def _execute_floor_commands(self, commands) -> None:
         for command in commands:
@@ -459,6 +461,19 @@ class VoiceRuntime:
                     evaluator._state.armed = True
                 verdict = evaluator.evaluate_partial(partial)
                 if verdict == "interrupt":
+                    spoken_so_far = sanitize_spoken_text("".join(reply_buffer))
+                    if self._self_interruption.classify(partial, spoken_so_far):
+                        if self._self_interruption.tripped:
+                            self.logger.warning(
+                                "Disabling barge-in for this session: the microphone keeps "
+                                "hearing our own playback, so this device does not cancel echo"
+                            )
+                            self._floor.allow_duplex_capture = False
+                            return
+                        partial_since = None
+                        evaluator.reset()
+                        await asyncio.sleep(0.05)
+                        continue
                     if interrupted_flag is not None:
                         interrupted_flag["value"] = True
                     await self._execute_floor_commands(
