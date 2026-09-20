@@ -1,9 +1,0 @@
-world: plaza-fast
-rooms:
-  - id: hall
-    name: 大厅
-    setting: 测试用大厅
-scenes:
-  - at: "+1s"
-    room: hall
-    text: 天色暗下来了
