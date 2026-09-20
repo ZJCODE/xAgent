@@ -468,6 +468,16 @@ def _voice_interruptions_override(args: argparse.Namespace) -> bool | None:
     return value == "on"
 
 
+def _voice_speed_override(args: argparse.Namespace) -> float | None:
+    value = getattr(args, "speech_speed", None)
+    if value is None:
+        return None
+    speed = float(value)
+    if not 0.7 <= speed <= 1.3:
+        raise ValueError("--speed must be between 0.7 and 1.3")
+    return speed
+
+
 def _run_voice_channel(args: argparse.Namespace, config: dict[str, Any]) -> int:
     log_level = logging.INFO if getattr(args, "verbose", False) else logging.INFO
     logging.basicConfig(
@@ -498,6 +508,7 @@ def _run_voice_channel(args: argparse.Namespace, config: dict[str, Any]) -> int:
             output_device=getattr(args, "output_device", None),
             profile_override=_voice_profile_override(args),
             interruptions_override=_voice_interruptions_override(args),
+            speed_override=_voice_speed_override(args),
         )
     except Exception as exc:
         print(f"Failed to start voice channel: {exc}")

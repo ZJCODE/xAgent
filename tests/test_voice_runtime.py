@@ -22,6 +22,7 @@ from xagent.interfaces.voice.config import (
     SONIOX_TTS_MODEL,
     VoiceChannelConfig,
     VoiceRuntimeProfile,
+    VoiceSpeechStyle,
 )
 from xagent.interfaces.voice.audio import AudioTopology
 from xagent.interfaces.voice.factory import create_local_voice_runtime
@@ -129,14 +130,25 @@ class VoiceConfigTests(unittest.TestCase):
         self.assertEqual(config.speed, 1.0)
         self.assertEqual(config.audio.input, "auto")
 
+    def test_speech_style_comes_from_the_agent_not_the_channel(self):
+        config = VoiceChannelConfig.from_dict({"api_key": "key"})
+        config.apply_speech_style(VoiceSpeechStyle(voice="Ava", speed=1.2))
+
+        self.assertEqual(config.voice, "Ava")
+        self.assertEqual(config.speed, 1.2)
+
+    def test_rejects_voice_and_speed_keys(self):
+        with self.assertRaisesRegex(ValueError, "Unknown voice setting"):
+            VoiceChannelConfig.from_dict({"api_key": "key", "voice": "Ava"})
+        with self.assertRaisesRegex(ValueError, "Unknown voice setting"):
+            VoiceChannelConfig.from_dict({"api_key": "key", "speed": 1.2})
+
     def test_full_flat_configuration(self):
         config = VoiceChannelConfig.from_dict(
             {
                 "api_key": " key ",
-                "voice": "Ava",
                 "language_hints": ["en", "zh", "en"],
                 "fallback_language": "en",
-                "speed": 1.2,
                 "audio": {"input": "Mic", "output": 2},
             }
         )
@@ -160,9 +172,7 @@ class VoiceConfigTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "SONIOX_API_KEY"):
                 VoiceChannelConfig.from_dict({}).resolved_api_key()
 
-    def test_rejects_invalid_speed_and_empty_languages(self):
-        with self.assertRaises(ValueError):
-            VoiceChannelConfig.from_dict({"speed": 1.31})
+    def test_rejects_empty_languages(self):
         with self.assertRaisesRegex(ValueError, "language_hints"):
             VoiceChannelConfig.from_dict({"language_hints": [" "]})
 

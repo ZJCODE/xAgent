@@ -31,13 +31,6 @@ export function VoiceSetupFields({ schema, selection, onChange }: VoiceSetupFiel
             />
           </WizardField>
 
-          <WizardField label="TTS voice name">
-            <input
-              value={selection.voice_name}
-              onChange={(event) => onChange({ voice_name: event.target.value })}
-            />
-          </WizardField>
-
           <WizardField label="Spoken languages" hint="Comma-separated language codes, e.g. zh, en">
             <input
               value={selection.language_hints.join(", ")}

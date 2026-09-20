@@ -94,6 +94,7 @@ class Agent:
         notes_enabled: bool = AgentConfig.NOTES_ENABLED,
         notes_auto_distill: bool = AgentConfig.NOTES_AUTO_DISTILL,
         subconscious_activity: float = AgentConfig.SUBCONSCIOUS_ACTIVITY,
+        voice: str = AgentConfig.DEFAULT_VOICE,
         provider_name: str = PROVIDER_OPENAI,
         reasoning: Optional[ReasoningConfig] = None,
     ):
@@ -112,6 +113,7 @@ class Agent:
         self.notes_enabled = bool(notes_enabled)
         self.notes_auto_distill = bool(notes_auto_distill)
         self.subconscious_activity = subconscious_activity
+        self.voice = str(voice or AgentConfig.DEFAULT_VOICE).strip() or AgentConfig.DEFAULT_VOICE
         self.observability = observability or NoopObservabilityRuntime()
         self.client = client
         if self.client is None:

@@ -21,6 +21,7 @@ from .config import (
     VoiceChannelConfig,
     VoiceProfileName,
     VoiceRuntimeProfile,
+    VoiceSpeechStyle,
 )
 from .presence import SttLifecycleController, VoicePresenceConfig
 from .runtime import VoiceRuntime, VoiceRuntimeOptions
@@ -58,6 +59,7 @@ def create_local_voice_runtime(
     output_device: AudioDevicePreference = None,
     profile_override: VoiceProfileName | None = None,
     interruptions_override: bool | None = None,
+    speed_override: float | None = None,
 ) -> VoiceRuntime:
     runtime_holder: list[VoiceRuntime | None] = [None]
 
@@ -87,6 +89,13 @@ def create_local_voice_runtime(
         interruptions_override=interruptions_override,
     )
     config.apply_runtime_profile(runtime_profile)
+    default_style = VoiceSpeechStyle()
+    config.apply_speech_style(
+        VoiceSpeechStyle(
+            voice=str(getattr(agent, "voice", "") or "").strip() or default_style.voice,
+            speed=default_style.speed if speed_override is None else speed_override,
+        )
+    )
     logger.info(
         "Voice profile: %s, barge-in %s (%s)",
         runtime_profile.name,

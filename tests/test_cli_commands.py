@@ -1601,7 +1601,6 @@ class CLICommandTests(unittest.TestCase):
             config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
             config["channels"]["voice"] = {
                 "api_key": "old-key",
-                "voice": "Ava",
                 "language_hints": ["en", "zh"],
                 "audio": {"input": "Mic", "output": "Speaker"},
             }
@@ -1611,7 +1610,7 @@ class CLICommandTests(unittest.TestCase):
             saved = yaml.safe_load(config_path.read_text(encoding="utf-8"))
 
         self.assertEqual(saved["channels"]["voice"]["api_key"], "new-key")
-        self.assertEqual(saved["channels"]["voice"]["voice"], "Ava")
+        self.assertEqual(saved["channels"]["voice"]["language_hints"], ["en", "zh"])
         self.assertEqual(saved["channels"]["voice"]["audio"]["input"], "Mic")
         self.assertNotIn("provider", saved["channels"]["voice"])
 
