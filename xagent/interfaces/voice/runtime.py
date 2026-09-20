@@ -901,7 +901,7 @@ class VoiceRuntime:
             return False
         if proactive.require_recent_speech:
             lifecycle = self._stt_lifecycle
-            if lifecycle is not None and lifecycle.enabled and not lifecycle.heard_recently():
+            if lifecycle is not None and not lifecycle.heard_recently():
                 return False
         return self._proactive_limiter.allow()
 
