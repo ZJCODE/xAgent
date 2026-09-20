@@ -22,7 +22,9 @@ from xagent.core.runtime import (
     upsert_contact,
 )
 
+from .aggregator import iter_aggregated_utterances
 from .config import VoiceChannelConfig
+from .types import VoiceUtterance
 from .speech_text import (
     ConversationLanguageTracker,
     StreamingTTSSanitizer,
@@ -32,14 +34,6 @@ from .speech_text import (
 from .turn_metrics import VoiceTurnMetrics, VoiceTurnMetricsWriter
 
 _PLAYBACK_MICROPHONE_COOLDOWN_SECONDS = 0.5
-
-
-@dataclass(frozen=True)
-class VoiceUtterance:
-    """A completed user turn returned by Soniox endpoint detection."""
-
-    text: str
-    language: str = ""
 
 
 @dataclass(frozen=True)
@@ -177,11 +171,18 @@ class VoiceRuntime:
             pause_event=self.pause_event,
             stop_event=self.stop_event,
         )
-        utterances = self.recognizer.iter_utterances(
+        raw_utterances = self.recognizer.iter_utterances(
             audio_chunks,
             pause_event=self.pause_event,
             stop_event=self.stop_event,
         )
+        if self.config.aggregate_utterances:
+            utterances = iter_aggregated_utterances(
+                raw_utterances,
+                stop_event=self.stop_event,
+            )
+        else:
+            utterances = raw_utterances
         try:
             if self.task_scheduler is not None:
                 await self.task_scheduler.start()

@@ -672,6 +672,7 @@ class SoundDeviceMicrophone:
     ) -> Iterator[bytes]:
         sd = _import_sounddevice()
         chunks: "queue.Queue[bytes]" = queue.Queue(maxsize=32)
+        dropped_capture_blocks = 0
         converter = _PCMInputConverter(
             source_channels=self.stream_channels,
             source_rate=self.stream_sample_rate,
@@ -690,6 +691,7 @@ class SoundDeviceMicrophone:
         )
 
         def callback(indata, frames, time_info, status) -> None:  # noqa: ANN001
+            nonlocal dropped_capture_blocks
             del frames, time_info
             if status:
                 logger.info("Microphone stream status from %s: %s", self.device_name, status)
@@ -698,7 +700,13 @@ class SoundDeviceMicrophone:
             try:
                 chunks.put_nowait(bytes(indata))
             except queue.Full:
-                pass
+                dropped_capture_blocks += 1
+                if dropped_capture_blocks == 1 or dropped_capture_blocks % 50 == 0:
+                    logger.warning(
+                        "Dropped microphone blocks=%s device=%s",
+                        dropped_capture_blocks,
+                        self.device_name,
+                    )
 
         with sd.RawInputStream(
             device=self.device_index,

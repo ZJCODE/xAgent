@@ -26,13 +26,26 @@ from .config import (
     SONIOX_TTS_SAMPLE_RATE,
     VoiceChannelConfig,
 )
-from .runtime import VoiceUtterance
+from .types import VoiceUtterance
 
 _logger = logging.getLogger(__name__)
 
 STT_RECONNECT_BASE_SECONDS = 0.5
 STT_RECONNECT_MAX_SECONDS = 30.0
-_RETRYABLE_ERROR_TYPES = frozenset({"service_unavailable", "max_duration_reached"})
+_RETRYABLE_ERROR_TYPES = frozenset(
+    {
+        "service_unavailable",
+        "max_duration_reached",
+        "internal_error",
+        "request_timeout",
+        "limit_exceeded",
+    }
+)
+_RETRY_BACKOFF_SECONDS = {
+    "limit_exceeded": 5.0,
+    "request_timeout": 2.0,
+    "internal_error": 1.0,
+}
 _NON_RETRYABLE_STATUS_CODES = frozenset({400, 401, 402, 403, 404, 409, 422})
 
 
@@ -53,6 +66,12 @@ class SonioxVoiceError(RuntimeError):
     @property
     def retryable(self) -> bool:
         return self.error_type in _RETRYABLE_ERROR_TYPES
+
+    @property
+    def retry_backoff_seconds(self) -> float | None:
+        if not self.retryable or not self.error_type:
+            return None
+        return _RETRY_BACKOFF_SECONDS.get(self.error_type)
 
 
 @dataclass(frozen=True)
@@ -102,6 +121,8 @@ class SonioxRealtimeSTT:
                     return
                 if not _is_recoverable_stt_error(exc):
                     raise
+                if isinstance(exc, SonioxVoiceError) and exc.retry_backoff_seconds:
+                    backoff = max(backoff, exc.retry_backoff_seconds)
                 _logger.warning(
                     "Soniox STT session failed (%s); reconnecting in %.1fs",
                     exc,

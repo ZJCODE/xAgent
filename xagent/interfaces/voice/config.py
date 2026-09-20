@@ -141,6 +141,7 @@ class VoiceChannelConfig(BaseModel):
     speed: float = Field(default=1.0, ge=0.7, le=1.3)
     return_timestamps: bool = True
     enable_interruptions: bool = False
+    aggregate_utterances: bool = True
     context: SonioxSTTContextConfig = Field(default_factory=SonioxSTTContextConfig)
     audio: VoiceAudioConfig = Field(default_factory=VoiceAudioConfig)
 

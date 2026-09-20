@@ -23,11 +23,8 @@ from xagent.interfaces.voice.config import (
     VoiceChannelConfig,
 )
 from xagent.interfaces.voice.factory import create_local_voice_runtime
-from xagent.interfaces.voice.runtime import (
-    VoiceRuntime,
-    VoiceRuntimeOptions,
-    VoiceUtterance,
-)
+from xagent.interfaces.voice.runtime import VoiceRuntime, VoiceRuntimeOptions
+from xagent.interfaces.voice.types import VoiceUtterance
 from xagent.interfaces.voice.soniox import (
     SonioxRealtimeSTT,
     SonioxRealtimeTTS,
@@ -111,7 +108,8 @@ class FailingFirstAgent:
 
 
 def voice_config(data=None):
-    return VoiceChannelConfig.from_dict({"api_key": "test-key", **(data or {})})
+    payload = {"api_key": "test-key", "aggregate_utterances": False, **(data or {})}
+    return VoiceChannelConfig.from_dict(payload)
 
 
 class VoiceConfigTests(unittest.TestCase):
@@ -365,7 +363,7 @@ class SonioxSDKAdapterTests(unittest.TestCase):
             client=FakeClient(stt_session=FakeSTTSession([])),
         )
         utterance = VoiceUtterance("next", "en")
-        for error_type in ("service_unavailable", "max_duration_reached"):
+        for error_type in ("service_unavailable", "max_duration_reached", "internal_error"):
             with self.subTest(error_type=error_type):
                 with patch.object(
                     stt,
