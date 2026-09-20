@@ -9,7 +9,7 @@ from typing import Optional
 from fastapi import FastAPI
 
 from ...core.agent import Agent
-from ...core.runtime import AsyncTaskScheduler, SubconsciousDelivery
+from ...core.runtime import AsyncTaskScheduler, SubconsciousDelivery, record_scheduled_delivery_failure
 from ...interfaces.server.runtime_routes import register_runtime_routes
 from .chat_service import ChatService
 from .config import ChatLimits
@@ -59,6 +59,7 @@ class ApiChannelAdapter:
             can_handle=self.tasks.can_handle,
             dispatch=self.tasks.dispatch,
             logger_=self.logger,
+            on_terminal_failure=self._on_scheduled_terminal_failure,
         )
         self._task_scheduler = scheduler
         await scheduler.start()
@@ -69,6 +70,9 @@ class ApiChannelAdapter:
             await self._task_scheduler.stop()
             self._task_scheduler = None
             self.logger.info("Scheduled task runtime stopped")
+
+    async def _on_scheduled_terminal_failure(self, task, error: Exception) -> None:
+        await record_scheduled_delivery_failure(self.agent, task, error)
 
     async def deliver_subconscious_message(self, delivery: SubconsciousDelivery) -> None:
         await self.delivery.deliver_subconscious(delivery, agent=self.agent)

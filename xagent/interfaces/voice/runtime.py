@@ -17,6 +17,7 @@ from xagent.core.runtime import (
     ScheduledDeliveryContext,
     ScheduledTaskRecord,
     SubconsciousDelivery,
+    record_scheduled_delivery_failure,
     resolve_contacts_path,
     scheduled_delivery_context,
     upsert_contact,
@@ -150,6 +151,7 @@ class VoiceRuntime:
                 self.options.tasks_dir,
                 can_handle=self._can_handle_scheduled_task,
                 dispatch=self._dispatch_scheduled_task,
+                on_terminal_failure=self._on_scheduled_terminal_failure,
             )
             runtime_root = Path(self.options.tasks_dir).parent
             self._contacts_file = resolve_contacts_path(runtime_root)
@@ -403,6 +405,9 @@ class VoiceRuntime:
 
     def _can_handle_scheduled_task(self, task: ScheduledTaskRecord) -> bool:
         return task.kind == "task" and task.delivery_channel == "voice"
+
+    async def _on_scheduled_terminal_failure(self, task: ScheduledTaskRecord, error: Exception) -> None:
+        await record_scheduled_delivery_failure(self.agent, task, error)
 
     async def _dispatch_scheduled_task(self, task: ScheduledTaskRecord) -> None:
         text = await self._scheduled_task_text(task)

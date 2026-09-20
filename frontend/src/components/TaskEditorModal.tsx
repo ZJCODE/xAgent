@@ -152,7 +152,10 @@ export function TaskEditorModal({
                 <input value={form.title} onChange={(event) => updateForm({ title: event.target.value })} />
               </WizardField>
 
-              <WizardField label="Type">
+              <WizardField
+                label="Type"
+                hint="message sends this text as-is; agent runs a turn first. Delivery retries are the same for both."
+              >
                 <select value={form.taskType} onChange={(event) => updateForm({ taskType: event.target.value as "message" | "agent" })}>
                   <option value="message">message</option>
                   <option value="agent">agent</option>
