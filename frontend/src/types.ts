@@ -200,16 +200,14 @@ export type SetupChannelId = Extract<ChannelId, "voice" | "feishu" | "weixin">;
 export interface VoiceSelectionInput {
   voice_enabled: boolean;
   voice_api_key: string;
-  language_hints: string[];
-  fallback_language: string;
+  languages: string[];
 }
 
 export interface VoiceSetupSchema {
   defaults: {
     voice_enabled: boolean;
     voice_api_key: string;
-    language_hints: string[];
-    fallback_language: string;
+    languages: string[];
   };
   placeholders: {
     soniox_api_key: string;

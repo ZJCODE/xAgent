@@ -164,7 +164,7 @@ class VoiceRuntime:
         self._playback_lock = asyncio.Lock()
         self._language_tracker = ConversationLanguageTracker(
             fallback=self.config.fallback_language,
-            hints=list(self.config.language_hints),
+            hints=list(self.config.languages),
         )
         metrics_path = self.options.metrics_path
         if metrics_path is None and self.options.tasks_dir is not None:
@@ -925,8 +925,8 @@ class VoiceRuntime:
             return False
         proactive = self.config.proactive
         if in_quiet_hours(
-            quiet_start=proactive.quiet_hours_start,
-            quiet_end=proactive.quiet_hours_end,
+            quiet_start=proactive.quiet_start_minute,
+            quiet_end=proactive.quiet_end_minute,
         ):
             return False
         if proactive.require_recent_speech:

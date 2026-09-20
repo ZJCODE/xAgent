@@ -69,10 +69,29 @@ class PresenceTests(unittest.TestCase):
 class ProactivePolicyTests(unittest.TestCase):
     def test_quiet_hours_wraps_midnight(self):
         self.assertTrue(
-            in_quiet_hours(quiet_start=22, quiet_end=7, now=datetime(2026, 1, 1, 23, 0))
+            in_quiet_hours(
+                quiet_start=22 * 60, quiet_end=7 * 60, now=datetime(2026, 1, 1, 23, 0)
+            )
         )
         self.assertFalse(
-            in_quiet_hours(quiet_start=22, quiet_end=7, now=datetime(2026, 1, 1, 12, 0))
+            in_quiet_hours(
+                quiet_start=22 * 60, quiet_end=7 * 60, now=datetime(2026, 1, 1, 12, 0)
+            )
+        )
+
+    def test_quiet_hours_respect_minutes(self):
+        start, end = 22 * 60 + 30, 7 * 60 + 15
+        self.assertFalse(
+            in_quiet_hours(quiet_start=start, quiet_end=end, now=datetime(2026, 1, 1, 22, 15))
+        )
+        self.assertTrue(
+            in_quiet_hours(quiet_start=start, quiet_end=end, now=datetime(2026, 1, 1, 22, 45))
+        )
+        self.assertTrue(
+            in_quiet_hours(quiet_start=start, quiet_end=end, now=datetime(2026, 1, 1, 7, 10))
+        )
+        self.assertFalse(
+            in_quiet_hours(quiet_start=start, quiet_end=end, now=datetime(2026, 1, 1, 7, 20))
         )
 
     def test_rate_limiter(self):

@@ -125,7 +125,7 @@ class VoiceConfigTests(unittest.TestCase):
         config = VoiceChannelConfig.from_dict({"api_key": "key"})
 
         self.assertEqual(config.voice, "Owen")
-        self.assertEqual(config.language_hints, ["zh", "en"])
+        self.assertEqual(config.languages, ["zh", "en"])
         self.assertEqual(config.fallback_language, "zh")
         self.assertEqual(config.speed, 1.0)
         self.assertEqual(config.audio.input, "auto")
@@ -147,14 +147,14 @@ class VoiceConfigTests(unittest.TestCase):
         config = VoiceChannelConfig.from_dict(
             {
                 "api_key": " key ",
-                "language_hints": ["en", "zh", "en"],
-                "fallback_language": "en",
+                "languages": ["en", "zh", "en"],
                 "audio": {"input": "Mic", "output": 2},
             }
         )
 
         self.assertEqual(config.api_key, "key")
-        self.assertEqual(config.language_hints, ["en", "zh"])
+        self.assertEqual(config.languages, ["en", "zh"])
+        self.assertEqual(config.fallback_language, "en")
         self.assertEqual(config.audio.output, 2)
 
     def test_api_key_falls_back_to_environment(self):
@@ -173,8 +173,8 @@ class VoiceConfigTests(unittest.TestCase):
                 VoiceChannelConfig.from_dict({}).resolved_api_key()
 
     def test_rejects_empty_languages(self):
-        with self.assertRaisesRegex(ValueError, "language_hints"):
-            VoiceChannelConfig.from_dict({"language_hints": [" "]})
+        with self.assertRaisesRegex(ValueError, "languages"):
+            VoiceChannelConfig.from_dict({"languages": [" "]})
 
     def test_interruptions_follow_the_detected_devices(self):
         config = VoiceChannelConfig.from_dict({"api_key": "key"})

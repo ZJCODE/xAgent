@@ -137,7 +137,7 @@ class WebChannelRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(payload["configured"])
         self.assertTrue(payload["defaults"]["voice_enabled"])
         self.assertEqual(payload["defaults"]["voice_api_key"], "")
-        self.assertEqual(payload["defaults"]["language_hints"], ["zh", "en"])
+        self.assertEqual(payload["defaults"]["languages"], ["zh", "en"])
         self.assertNotIn("voice_providers", payload)
         self.assertNotIn("qwen_voice_api_key", payload["placeholders"])
 
@@ -169,7 +169,7 @@ class WebChannelRouteTests(unittest.IsolatedAsyncioTestCase):
         config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
         config["channels"]["voice"] = {
             "api_key": "old-key",
-            "language_hints": ["en", "zh"],
+            "languages": ["en", "zh"],
             "audio": {"input": "Mic", "output": "Speaker"},
         }
         config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
@@ -186,7 +186,7 @@ class WebChannelRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
         saved = yaml.safe_load(config_path.read_text(encoding="utf-8"))["channels"]["voice"]
         self.assertEqual(saved["api_key"], "new-key")
-        self.assertEqual(saved["language_hints"], ["en", "zh"])
+        self.assertEqual(saved["languages"], ["en", "zh"])
         self.assertEqual(saved["audio"]["input"], "Mic")
 
     async def test_voice_setup_can_disable_channel(self):

@@ -67,8 +67,7 @@ _VOICE_KEY_PLACEHOLDERS = {
 _VOICE_TOP_LEVEL_KEYS = frozenset(
     {
         "api_key",
-        "language_hints",
-        "fallback_language",
+        "languages",
         "quiet_hours",
         "audio",
     }
@@ -77,16 +76,16 @@ _VOICE_TOP_LEVEL_KEYS = frozenset(
 VOICE_CONFIG_EXAMPLE = """channels:
   voice:
     api_key: your_soniox_api_key_here
-    language_hints: [zh, en]
-    fallback_language: zh
-    quiet_hours: "22:00-07:00"
-    audio:
-      input: auto
-      output: auto"""
+    languages: [zh, en]
+    quiet_hours: "22:00-07:00"""
 
 
 def parse_quiet_hours(value: str | None) -> tuple[int, int]:
-    """Parse ``HH:MM-HH:MM``. Empty string means no quiet window."""
+    """Parse ``HH:MM-HH:MM`` into minutes past midnight.
+
+    Empty string means no quiet window. Minutes are honoured: a window is not
+    allowed to accept precision it then discards.
+    """
     raw = (value or "").strip()
     if not raw:
         return 0, 0
@@ -96,17 +95,25 @@ def parse_quiet_hours(value: str | None) -> tuple[int, int]:
     )
     if not match:
         raise ValueError('voice.quiet_hours must look like "22:00-07:00" or ""')
-    start_h = int(match.group(1))
-    end_h = int(match.group(3))
-    if not (0 <= start_h <= 23 and 0 <= end_h <= 23):
+    start = _minutes_past_midnight(match.group(1), match.group(2))
+    end = _minutes_past_midnight(match.group(3), match.group(4))
+    return start, end
+
+
+def _minutes_past_midnight(hour_text: str, minute_text: str | None) -> int:
+    hour = int(hour_text)
+    minute = int(minute_text or 0)
+    if not 0 <= hour <= 23:
         raise ValueError("voice.quiet_hours hours must be between 0 and 23")
-    return start_h, end_h
+    if not 0 <= minute <= 59:
+        raise ValueError("voice.quiet_hours minutes must be between 0 and 59")
+    return hour * 60 + minute
 
 
 def format_quiet_hours(start: int, end: int) -> str:
     if start == end:
         return ""
-    return f"{start:02d}:00-{end:02d}:00"
+    return f"{start // 60:02d}:{start % 60:02d}-{end // 60:02d}:{end % 60:02d}"
 
 
 def _suggest_voice_key(bad_key: str) -> str:
@@ -172,8 +179,8 @@ class VoicePerformanceConfigModel(BaseModel):
 class VoiceProactiveConfigModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    quiet_hours_start: int = Field(default=22, ge=0, le=23)
-    quiet_hours_end: int = Field(default=7, ge=0, le=23)
+    quiet_start_minute: int = Field(default=22 * 60, ge=0, le=1_439)
+    quiet_end_minute: int = Field(default=7 * 60, ge=0, le=1_439)
     max_per_hour: int = Field(default=3, ge=0, le=30)
     require_recent_speech: bool = True
 
@@ -216,8 +223,7 @@ class VoiceChannelConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     api_key: str | None = None
-    language_hints: list[str] = Field(default_factory=lambda: ["zh", "en"])
-    fallback_language: str = "zh"
+    languages: list[str] = Field(default_factory=lambda: ["zh", "en"])
     quiet_hours: str = "22:00-07:00"
     audio: VoiceAudioConfig = Field(default_factory=VoiceAudioConfig)
 
@@ -231,21 +237,13 @@ class VoiceChannelConfig(BaseModel):
             return None
         return value.strip() or None
 
-    @field_validator("fallback_language")
+    @field_validator("languages")
     @classmethod
-    def _validate_non_empty(cls, value: str) -> str:
-        normalized = value.strip()
-        if not normalized:
-            raise ValueError("fallback_language must be non-empty")
-        return normalized
-
-    @field_validator("language_hints")
-    @classmethod
-    def _validate_language_hints(cls, value: list[str]) -> list[str]:
-        hints = list(dict.fromkeys(item.strip() for item in value if item.strip()))
-        if not hints:
-            raise ValueError("voice.language_hints must include at least one language")
-        return hints
+    def _validate_languages(cls, value: list[str]) -> list[str]:
+        languages = list(dict.fromkeys(item.strip() for item in value if item.strip()))
+        if not languages:
+            raise ValueError("voice.languages must include at least one language")
+        return languages
 
     @field_validator("quiet_hours")
     @classmethod
@@ -270,16 +268,26 @@ class VoiceChannelConfig(BaseModel):
         return config.to_public_dict()
 
     def to_public_dict(self) -> dict[str, Any]:
-        return {
-            "api_key": self.api_key or SONIOX_KEY_PLACEHOLDER,
-            "language_hints": list(self.language_hints),
-            "fallback_language": self.fallback_language,
-            "quiet_hours": self.quiet_hours,
-            "audio": {
-                "input": self.audio.input,
-                "output": self.audio.output,
-            },
+        """The block to write back to config.yaml.
+
+        Only settings the user actually chose are written. Echoing every
+        default back into the file is how a curated surface grows again after
+        each ``xagent voice setup``.
+        """
+        defaults = _DEFAULT_VOICE_CONFIG
+        public: dict[str, Any] = {"api_key": self.api_key or SONIOX_KEY_PLACEHOLDER}
+        if self.languages != defaults.languages:
+            public["languages"] = list(self.languages)
+        if self.quiet_hours != defaults.quiet_hours:
+            public["quiet_hours"] = self.quiet_hours
+        audio = {
+            key: value
+            for key, value in (("input", self.audio.input), ("output", self.audio.output))
+            if value != "auto"
         }
+        if audio:
+            public["audio"] = audio
+        return public
 
     def resolved_api_key(self) -> str:
         configured = str(self.api_key or "").strip()
@@ -357,8 +365,8 @@ class VoiceChannelConfig(BaseModel):
     def proactive(self) -> VoiceProactiveConfigModel:
         start, end = parse_quiet_hours(self.quiet_hours)
         return VoiceProactiveConfigModel(
-            quiet_hours_start=start,
-            quiet_hours_end=end,
+            quiet_start_minute=start,
+            quiet_end_minute=end,
             max_per_hour=_DEFAULT_PROACTIVE_TAIL.max_per_hour,
             require_recent_speech=_DEFAULT_PROACTIVE_TAIL.require_recent_speech,
         )
@@ -395,6 +403,11 @@ class VoiceChannelConfig(BaseModel):
     def aggregation_grace_scale(self) -> float:
         return 0.85 if self.profile == "headset" else 1.0
 
+    @property
+    def fallback_language(self) -> str:
+        """The language to speak when the reply language is unclear."""
+        return self.languages[0]
+
     def tts_language_for(self, stt_language: str | None) -> str:
         return (stt_language or "").strip() or self.fallback_language
 
@@ -414,3 +427,6 @@ class VoiceChannelConfig(BaseModel):
         if not terms:
             return None
         return {"terms": terms}
+
+
+_DEFAULT_VOICE_CONFIG = VoiceChannelConfig()
