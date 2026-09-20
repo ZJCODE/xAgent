@@ -84,6 +84,37 @@ class ProactivePolicyTests(unittest.TestCase):
         self.assertFalse(limiter.allow())
 
 
+class ProactiveGateTests(unittest.TestCase):
+    def _runtime(self, lifecycle):
+        return VoiceRuntime(
+            agent=FakeAgent(),
+            config=voice_config(),
+            microphone=FakeMicrophone(),
+            recognizer=FakeRecognizer([]),
+            synthesizer=FakeSynthesizer(),
+            player=FakePlayer(),
+            options=VoiceRuntimeOptions(user_id="alice"),
+            output=lambda *args, **kwargs: None,
+            stt_lifecycle=lifecycle,
+        )
+
+    def test_silent_room_blocks_proactive_speech(self):
+        lifecycle = SttLifecycleController(VoicePresenceConfig(recent_speech_hours=6.0))
+        runtime = self._runtime(lifecycle)
+        with patch("xagent.interfaces.voice.presence.time.monotonic", return_value=100_000.0):
+            self.assertFalse(runtime._proactive_speech_allowed())
+
+    def test_recent_speech_allows_proactive_speech(self):
+        lifecycle = SttLifecycleController(VoicePresenceConfig(recent_speech_hours=6.0))
+        runtime = self._runtime(lifecycle)
+        lifecycle.note_endpoint()
+        with patch(
+            "xagent.interfaces.voice.runtime.in_quiet_hours",
+            return_value=False,
+        ):
+            self.assertTrue(runtime._proactive_speech_allowed())
+
+
 class ObservingAgent(FakeAgent):
     async def observe(self, **kwargs):
         self.observed = kwargs
