@@ -526,31 +526,19 @@ def prepare_voice_preset_update(
         resolved_api_key = (api_key or "").strip()
         if not resolved_api_key and existing_key and not is_placeholder_api_key(existing_key):
             resolved_api_key = existing_key
-        preserved_keys = {
-            "voice",
-            "language_hints",
-            "fallback_language",
-            "speed",
-            "context",
-            "audio",
-        }
-        channels["voice"] = {
-            "api_key": resolved_api_key or SONIOX_KEY_PLACEHOLDER,
-            **{key: value for key, value in current.items() if key in preserved_keys},
-        }
+        if current:
+            updated = dict(current)
+            updated["api_key"] = resolved_api_key or SONIOX_KEY_PLACEHOLDER
+            channels["voice"] = updated
+        else:
+            channels["voice"] = VoiceChannelConfig.default_public_dict(
+                api_key=resolved_api_key or SONIOX_KEY_PLACEHOLDER,
+            )
 
     return prepare_update(
         config,
         mutate,
-        (
-            "channels.voice.api_key",
-            "channels.voice.voice",
-            "channels.voice.language_hints",
-            "channels.voice.fallback_language",
-            "channels.voice.speed",
-            "channels.voice.context",
-            "channels.voice.audio",
-        ),
+        ("channels.voice",),
     )
 
 

@@ -266,9 +266,9 @@ class SonioxRealtimeSTT:
             language_hints=self.config.language_hints,
             context=self.config.merged_stt_context(self._extra_context_terms).to_soniox_payload(),
             enable_endpoint_detection=True,
-            endpoint_latency_adjustment_level=SONIOX_ENDPOINT_LATENCY_LEVEL,
-            endpoint_sensitivity=SONIOX_ENDPOINT_SENSITIVITY,
-            max_endpoint_delay_ms=SONIOX_MAX_ENDPOINT_DELAY_MS,
+            endpoint_latency_adjustment_level=self.config.stt_endpoint_latency_level,
+            endpoint_sensitivity=self.config.stt_endpoint_sensitivity,
+            max_endpoint_delay_ms=self.config.stt_max_endpoint_delay_ms,
             enable_language_identification=True,
             enable_speaker_diarization=self.config.enable_diarization,
         )

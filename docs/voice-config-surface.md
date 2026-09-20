@@ -1,6 +1,6 @@
 # Voice config surface: what to expose, what to hide
 
-Status: recommendation, nothing implemented. Written after stages 1–5 landed and
+Status: implemented (Tier 1 surface, profile presets, setup preservation). Written after stages 1–5 landed and
 `channels.voice` grew from 6 keys to 34.
 
 Scope: which of the knobs in `xagent/interfaces/voice/config.py` belong in the

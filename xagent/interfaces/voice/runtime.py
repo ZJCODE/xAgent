@@ -248,6 +248,7 @@ class VoiceRuntime:
             utterances = iter_aggregated_utterances(
                 raw_utterances,
                 stop_event=self.stop_event,
+                grace_scale=self.config.aggregation_grace_scale,
             )
         else:
             utterances = raw_utterances

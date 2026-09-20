@@ -103,6 +103,13 @@ class VoiceInitSelection:
 
     voice_enabled: bool = True
     voice_api_key: str = ""
+    voice_profile: str = "room"
+    voice_name: str = "Owen"
+    language_hints: tuple[str, ...] = ("zh", "en")
+    fallback_language: str = "zh"
+    interruptions: bool = False
+    idle_shutdown_minutes: int = 0
+    names: tuple[str, ...] = ()
 
 
 OPENAI_BASE_URL = provider_base_url(PROVIDER_OPENAI)
@@ -311,9 +318,46 @@ def _channel_configured(config: dict[str, Any], channel: str) -> bool:
 
 def build_voice_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
     """Return wizard metadata for the web voice channel setup client."""
+    from ..voice.config import VoiceChannelConfig
+
+    defaults = {
+        "voice_enabled": True,
+        "voice_api_key": "",
+        "voice_profile": "room",
+        "voice_name": "Owen",
+        "language_hints": ["zh", "en"],
+        "fallback_language": "zh",
+        "interruptions": False,
+        "idle_shutdown_minutes": 0,
+        "names": [],
+    }
+    channels_cfg = config.get("channels")
+    if isinstance(channels_cfg, dict):
+        voice_raw = channels_cfg.get("voice")
+        if isinstance(voice_raw, dict) and voice_raw:
+            try:
+                parsed = VoiceChannelConfig.from_dict(voice_raw)
+                public = parsed.to_public_dict()
+                defaults.update(
+                    {
+                        "voice_profile": public.get("profile", "room"),
+                        "voice_name": public.get("voice", "Owen"),
+                        "language_hints": list(public.get("language_hints") or ["zh", "en"]),
+                        "fallback_language": public.get("fallback_language", "zh"),
+                        "interruptions": bool(public.get("interruptions", False)),
+                        "idle_shutdown_minutes": int(public.get("idle_shutdown_minutes") or 0),
+                        "names": list(public.get("names") or []),
+                    }
+                )
+            except ValueError:
+                pass
     return {
-        "defaults": {"voice_enabled": True, "voice_api_key": ""},
+        "defaults": defaults,
         "placeholders": {"soniox_api_key": SONIOX_KEY_PLACEHOLDER},
+        "profile_options": [
+            {"id": "room", "label": "Room device", "description": "Far-field speaker, several people."},
+            {"id": "headset", "label": "Headset", "description": "Near-field mic, usually one person."},
+        ],
         "configured": _channel_configured(config, "voice"),
         "can_force": True,
     }
@@ -385,7 +429,7 @@ def voice_init_selection_from_mapping(
     config: dict[str, Any],
 ) -> VoiceInitSelection:
     """Build a ``VoiceInitSelection`` from API/JSON input."""
-    _ = config
+    schema_defaults = build_voice_setup_schema(config).get("defaults") or {}
     removed_fields = {
         "voice_provider",
         "voice_stt_provider",
@@ -402,9 +446,56 @@ def voice_init_selection_from_mapping(
         raise ChannelSetupError(
             f"Voice setup is Soniox-only; removed fields are not accepted: {fields}"
         )
+    profile = str(data.get("voice_profile") or schema_defaults.get("voice_profile") or "room").strip().lower()
+    if profile not in {"room", "headset"}:
+        raise ChannelSetupError('voice_profile must be "room" or "headset"')
+    hints_raw = data.get("language_hints")
+    if hints_raw is None:
+        hints = list(schema_defaults.get("language_hints") or ["zh", "en"])
+    elif isinstance(hints_raw, str):
+        hints = [part.strip() for part in hints_raw.replace(",", " ").split() if part.strip()]
+    elif isinstance(hints_raw, (list, tuple)):
+        hints = [str(part).strip() for part in hints_raw if str(part).strip()]
+    else:
+        raise ChannelSetupError("language_hints must be a list or comma-separated string")
+    if not hints:
+        raise ChannelSetupError("language_hints must include at least one language")
+    if "names" in data:
+        names_raw = data.get("names") or []
+        if isinstance(names_raw, str):
+            names = tuple(part.strip() for part in names_raw.split(",") if part.strip())
+        elif isinstance(names_raw, (list, tuple)):
+            names = tuple(str(part).strip() for part in names_raw if str(part).strip())
+        else:
+            raise ChannelSetupError("names must be a list or comma-separated string")
+    else:
+        names = tuple(schema_defaults.get("names") or ())
+    if "idle_shutdown_minutes" in data:
+        try:
+            idle_minutes = int(data.get("idle_shutdown_minutes", 0))
+        except (TypeError, ValueError) as exc:
+            raise ChannelSetupError("idle_shutdown_minutes must be an integer") from exc
+    else:
+        idle_minutes = int(schema_defaults.get("idle_shutdown_minutes") or 0)
+    if idle_minutes < 0:
+        raise ChannelSetupError("idle_shutdown_minutes must be >= 0")
+    interruptions = (
+        bool(data["interruptions"])
+        if "interruptions" in data
+        else bool(schema_defaults.get("interruptions", False))
+    )
     return VoiceInitSelection(
         voice_enabled=bool(data.get("voice_enabled", True)),
         voice_api_key=str(data.get("voice_api_key") or "").strip(),
+        voice_profile=profile,
+        voice_name=str(data.get("voice_name") or schema_defaults.get("voice_name") or "Owen").strip()
+        or "Owen",
+        language_hints=tuple(hints),
+        fallback_language=str(data.get("fallback_language") or schema_defaults.get("fallback_language") or "zh").strip()
+        or "zh",
+        interruptions=interruptions,
+        idle_shutdown_minutes=idle_minutes,
+        names=names,
     )
 
 
@@ -539,29 +630,70 @@ def _default_init_selection() -> InitSelection:
     )
 
 
+_VOICE_ADVANCED_CONFIG_KEYS = (
+    "attention",
+    "presence",
+    "proactive",
+    "performance",
+    "interruption",
+    "context",
+    "room_name",
+    "enable_diarization",
+)
+
+
+def _attach_advanced_voice_keys(public: dict[str, Any], existing: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(public)
+    for key in _VOICE_ADVANCED_CONFIG_KEYS:
+        if key not in existing:
+            continue
+        if key == "context":
+            ctx = existing.get("context")
+            if isinstance(ctx, dict) and (ctx.get("general") or ctx.get("text")):
+                merged["context"] = ctx
+            continue
+        merged[key] = existing[key]
+    audio = existing.get("audio")
+    if isinstance(audio, dict):
+        inp = audio.get("input")
+        out = audio.get("output")
+        if inp not in (None, "auto") or out not in (None, "auto"):
+            merged["audio"] = dict(audio)
+    return merged
+
+
 def _voice_channel_config(
     selection: VoiceInitSelection,
     *,
     existing: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Update credentials while preserving valid hand-written flat options."""
-    preserved_keys = {
-        "voice",
-        "language_hints",
-        "fallback_language",
-        "speed",
-        "context",
-        "audio",
+    """Merge wizard choices into ``channels.voice``, preserving advanced keys."""
+    from ..voice.config import VoiceChannelConfig
+
+    api_key = selection.voice_api_key.strip() or SONIOX_KEY_PLACEHOLDER
+    if existing:
+        merged = dict(existing)
+        merged["api_key"] = api_key
+        merged["profile"] = selection.voice_profile
+        merged["voice"] = selection.voice_name
+        merged["language_hints"] = list(selection.language_hints)
+        merged["fallback_language"] = selection.fallback_language
+        merged["interruptions"] = selection.interruptions
+        merged["idle_shutdown_minutes"] = selection.idle_shutdown_minutes
+        merged["names"] = list(selection.names)
+        public = VoiceChannelConfig.from_dict(merged).to_public_dict()
+        return _attach_advanced_voice_keys(public, existing) | {"api_key": api_key}
+    payload = {
+        "api_key": api_key,
+        "profile": selection.voice_profile,
+        "voice": selection.voice_name,
+        "language_hints": list(selection.language_hints),
+        "fallback_language": selection.fallback_language,
+        "interruptions": selection.interruptions,
+        "idle_shutdown_minutes": selection.idle_shutdown_minutes,
+        "names": list(selection.names),
     }
-    voice_config = {
-        key: value
-        for key, value in (existing or {}).items()
-        if key in preserved_keys
-    }
-    return {
-        "api_key": selection.voice_api_key.strip() or SONIOX_KEY_PLACEHOLDER,
-        **voice_config,
-    }
+    return VoiceChannelConfig.from_dict(payload).to_public_dict()
 
 
 def _config_yaml(selection: InitSelection, port: int) -> str:

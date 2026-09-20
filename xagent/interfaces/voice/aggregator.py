@@ -35,6 +35,7 @@ def iter_aggregated_utterances(
     *,
     stop_event: threading.Event,
     max_segments: int = _MAX_SEGMENTS,
+    grace_scale: float = 1.0,
 ) -> Iterator[VoiceUtterance]:
     """Yield merged utterances after a short grace window following each endpoint."""
     feeder = _UtteranceFeeder(utterances)
@@ -46,7 +47,8 @@ def iter_aggregated_utterances(
                     return
                 continue
             batch = [first]
-            deadline = time.monotonic() + _grace_seconds_for(first.text)
+            scale = max(0.25, float(grace_scale or 1.0))
+            deadline = time.monotonic() + _grace_seconds_for(first.text) * scale
             while len(batch) < max_segments and not stop_event.is_set():
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
@@ -55,7 +57,7 @@ def iter_aggregated_utterances(
                 if nxt is None:
                     continue
                 batch.append(nxt)
-                deadline = time.monotonic() + _grace_seconds_for(nxt.text)
+                deadline = time.monotonic() + _grace_seconds_for(nxt.text) * scale
             yield _merge_utterances(batch)
     finally:
         feeder.close()

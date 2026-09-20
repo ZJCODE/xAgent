@@ -172,11 +172,11 @@ class VoiceConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "language_hints"):
             VoiceChannelConfig.from_dict({"language_hints": [" "]})
 
-    def test_accepts_voice_interruption_and_timestamp_flags(self):
+    def test_accepts_interruption_aliases_and_forces_timestamps(self):
         config = VoiceChannelConfig.from_dict(
-            {"api_key": "key", "return_timestamps": False, "enable_interruptions": True}
+            {"api_key": "key", "interruptions": True, "enable_interruptions": False}
         )
-        self.assertFalse(config.return_timestamps)
+        self.assertTrue(config.return_timestamps)
         self.assertTrue(config.enable_interruptions)
 
     def test_rejects_legacy_nested_and_qwen_configuration_with_example(self):

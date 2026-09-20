@@ -200,16 +200,31 @@ export type SetupChannelId = Extract<ChannelId, "voice" | "feishu" | "weixin">;
 export interface VoiceSelectionInput {
   voice_enabled: boolean;
   voice_api_key: string;
+  voice_profile: "room" | "headset";
+  voice_name: string;
+  language_hints: string[];
+  fallback_language: string;
+  interruptions: boolean;
+  idle_shutdown_minutes: number;
+  names: string[];
 }
 
 export interface VoiceSetupSchema {
   defaults: {
     voice_enabled: boolean;
     voice_api_key: string;
+    voice_profile: "room" | "headset";
+    voice_name: string;
+    language_hints: string[];
+    fallback_language: string;
+    interruptions: boolean;
+    idle_shutdown_minutes: number;
+    names: string[];
   };
   placeholders: {
     soniox_api_key: string;
   };
+  profile_options: SetupOption[];
   configured: boolean;
   can_force: boolean;
 }
