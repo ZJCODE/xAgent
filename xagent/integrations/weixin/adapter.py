@@ -13,6 +13,7 @@ from typing import Any, Optional
 from urllib.parse import parse_qs, unquote, urlparse
 
 from ...core.agent import Agent
+from ...core.attention import make_room_key, message_storage_cursor
 from ...core.config import AgentConfig
 from ...core.runtime import (
     AsyncTaskScheduler,
@@ -148,6 +149,7 @@ class WeixinAdapter:
         self._tasks_dir = self.runtime_dir / AgentConfig.TASKS_DIRNAME
         self._task_scheduler: Optional[AsyncTaskScheduler] = None
         self._contacts_file = resolve_contacts_path(self.runtime_dir)
+        self._attention_bound = False
 
     async def run(self) -> None:
         credentials = self.state_store.load_credentials(self.config.account_id)
@@ -173,6 +175,9 @@ class WeixinAdapter:
         )
         self._task_scheduler = task_scheduler
         await task_scheduler.start()
+        attention = self._attention_loop()
+        if attention is not None:
+            await attention.reset_to_present(getattr(self.agent, "message_storage", None))
 
         try:
             await self._poll_loop()
@@ -360,9 +365,6 @@ class WeixinAdapter:
         if not text:
             return
 
-        chat_kwargs = self._chat_kwargs(user_id=user_id, text=text, inbound=inbound).to_chat_kwargs()
-
-        # Record contact for subconscious thought routing
         try:
             upsert_contact(
                 self._contacts_file,
@@ -376,16 +378,128 @@ class WeixinAdapter:
         except Exception:
             self.logger.debug("Failed to record contact for subconscious", exc_info=True)
 
+        extras = {
+            "source": "weixin",
+            "event_type": "direct_message",
+            "user_id": user_id,
+            "account_id": self._credentials.account_id,
+            "context_token": context_token,
+            "message_id": str(message.get("message_id") or ""),
+            "text": text,
+            "inbound": inbound,
+        }
+        room_key = make_room_key("weixin", user_id)
+        cursor = None
+        perceiver = getattr(self.agent, "perceive", None)
+        if callable(perceiver):
+            persisted = await perceiver(
+                text,
+                user_id=user_id,
+                room_key=room_key,
+                addressed=True,
+                channel="weixin",
+                sender_name="",
+                metadata={
+                    "source": "weixin",
+                    "message_id": extras["message_id"],
+                },
+                image_source=inbound.image_sources or None,
+                attachments=inbound.attachments or None,
+            )
+            cursor = message_storage_cursor(persisted) or None
+        attention = self._attention_loop()
+        if attention is None:
+            await self._deliver_weixin_dm(extras)
+            return
+        await attention.notice(
+            room_key,
+            addressed=True,
+            content=text,
+            cursor=cursor,
+            sender_id=user_id,
+            extras=extras,
+        )
+
+    def _attention_loop(self):
+        attention = getattr(self.agent, "attention", None)
+        if attention is None:
+            return None
+        if not self._attention_bound:
+            register = getattr(attention, "register_speaker", None)
+            if callable(register):
+                register("weixin", self._speak_attention)
+            self._attention_bound = True
+        return attention
+
+    async def _speak_attention(
+        self,
+        room_key: str,
+        through_cursor: int,
+        *,
+        events: list,
+        extras: dict,
+        decision=None,
+    ) -> None:
+        respond = getattr(self.agent, "respond", None)
+        storage = getattr(self.agent, "message_storage", None)
+        user_id = str(extras.get("user_id") or "")
+        context_token = str(extras.get("context_token") or "")
+        source_message_id = str(extras.get("message_id") or "")
+        inbound = extras.get("inbound")
+        text = str(extras.get("text") or (events[-1].content if events else ""))
+        if callable(respond) and storage is not None:
+            context = ScheduledDeliveryContext(
+                channel="weixin",
+                user_id=user_id,
+                target={
+                    "user_id": user_id,
+                    "account_id": extras.get("account_id"),
+                },
+                metadata={
+                    "source": "weixin",
+                    "message_id": source_message_id,
+                },
+            )
+            typing_task: Optional[asyncio.Task[None]] = None
+            try:
+                if self.config.send_typing:
+                    typing_task = asyncio.create_task(self._typing_keepalive(user_id, context_token))
+                with scheduled_delivery_context(context):
+                    await self._send_event_replies(
+                        user_id=user_id,
+                        context_token=context_token,
+                        source_message_id=source_message_id,
+                        event_source=respond(room_key, through_cursor, stream=False),
+                    )
+            finally:
+                if typing_task is not None:
+                    typing_task.cancel()
+                    await asyncio.gather(typing_task, return_exceptions=True)
+                if self.config.send_typing:
+                    await self._stop_typing(user_id, context_token)
+            return
+        extras = dict(extras)
+        extras["text"] = text
+        extras["inbound"] = inbound
+        await self._deliver_weixin_dm(extras)
+
+    async def _deliver_weixin_dm(self, extras: dict[str, Any]) -> None:
+        user_id = str(extras.get("user_id") or "")
+        inbound = extras.get("inbound")
+        text = str(extras.get("text") or "")
+        context_token = str(extras.get("context_token") or "")
+        source_message_id = str(extras.get("message_id") or "")
+        chat_kwargs = self._chat_kwargs(user_id=user_id, text=text, inbound=inbound).to_chat_kwargs()
         context = ScheduledDeliveryContext(
             channel="weixin",
             user_id=user_id,
             target={
                 "user_id": user_id,
-                "account_id": self._credentials.account_id,
+                "account_id": extras.get("account_id"),
             },
             metadata={
                 "source": "weixin",
-                "message_id": str(message.get("message_id") or ""),
+                "message_id": source_message_id,
             },
         )
         typing_task: Optional[asyncio.Task[None]] = None
@@ -393,7 +507,12 @@ class WeixinAdapter:
             if self.config.send_typing:
                 typing_task = asyncio.create_task(self._typing_keepalive(user_id, context_token))
             with scheduled_delivery_context(context):
-                await self._send_event_replies(user_id=user_id, context_token=context_token, source_message_id=str(message.get("message_id") or ""), chat_kwargs=chat_kwargs)
+                await self._send_event_replies(
+                    user_id=user_id,
+                    context_token=context_token,
+                    source_message_id=source_message_id,
+                    chat_kwargs=chat_kwargs,
+                )
         finally:
             if typing_task is not None:
                 typing_task.cancel()
@@ -508,14 +627,24 @@ class WeixinAdapter:
             attachments=inbound.attachments or None,
         )
 
-    async def _send_event_replies(self, *, user_id: str, context_token: str, source_message_id: str, chat_kwargs: dict[str, Any]) -> None:
-        chat_events = getattr(self.agent, "chat_events", None)
-        if not callable(chat_events):
-            raise RuntimeError("Agent does not support chat_events().")
+    async def _send_event_replies(
+        self,
+        *,
+        user_id: str,
+        context_token: str,
+        source_message_id: str,
+        chat_kwargs: Optional[dict[str, Any]] = None,
+        event_source=None,
+    ) -> None:
+        if event_source is None:
+            chat_events = getattr(self.agent, "chat_events", None)
+            if not callable(chat_events):
+                raise RuntimeError("Agent does not support chat_events().")
+            event_source = chat_events(**(chat_kwargs or {}), stream=False)
         sent_count = 0
         try:
             async with asyncio.timeout(_WECHAT_CHAT_TIMEOUT):
-                async for event in chat_events(**chat_kwargs, stream=False):
+                async for event in event_source:
                     event_type = event.get("type")
                     if event_type == "message_done":
                         content = str(event.get("content") or "").strip()

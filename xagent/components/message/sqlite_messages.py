@@ -107,23 +107,26 @@ class MessageStorage:
         self,
         messages: MessageBatch,
         **kwargs,
-    ) -> None:
+    ) -> List[Message]:
         normalized_messages = self.normalize_messages(messages)
         if not normalized_messages:
-            return
-        await asyncio.to_thread(self._add_messages_sync, normalized_messages)
+            return []
+        return await asyncio.to_thread(self._add_messages_sync, normalized_messages)
 
-    def _add_messages_sync(self, messages: List[Message]) -> None:
-        rows = [(message.timestamp, message.model_dump_json()) for message in messages]
+    def _add_messages_sync(self, messages: List[Message]) -> List[Message]:
+        stored: List[Message] = []
         with self._connect() as connection:
-            connection.executemany(
-                f"""
-                INSERT INTO {MessageStorageConfig.TABLE_NAME} (timestamp, message_json)
-                VALUES (?, ?)
-                """,
-                rows,
-            )
+            for message in messages:
+                cursor = connection.execute(
+                    f"""
+                    INSERT INTO {MessageStorageConfig.TABLE_NAME} (timestamp, message_json)
+                    VALUES (?, ?)
+                    """,
+                    (message.timestamp, message.model_dump_json()),
+                ).lastrowid
+                stored.append(_message_with_storage_cursor(message, int(cursor)))
             connection.commit()
+        return stored
 
     async def get_messages(
         self,
@@ -304,6 +307,146 @@ class MessageStorage:
             normalized_end,
         )
 
+    async def get_messages_for_room(
+        self,
+        room_key: str,
+        start_exclusive: int = 0,
+        end_inclusive: Optional[int] = None,
+        limit: Optional[int] = None,
+    ) -> List[Message]:
+        """Return messages in *room_key* with id in ``(start_exclusive, end]``.
+
+        ``room_key`` is stored on ``metadata.room_key``. Empty or unknown keys
+        yield an empty list. When *limit* is set, the newest matching rows up
+        to that count are returned, still ordered oldest to newest.
+        """
+        key = str(room_key or "").strip()
+        if not key:
+            return []
+        try:
+            normalized_start = max(0, int(start_exclusive))
+        except (TypeError, ValueError):
+            normalized_start = 0
+
+        if end_inclusive is None:
+            normalized_end = None
+        else:
+            try:
+                normalized_end = max(0, int(end_inclusive))
+            except (TypeError, ValueError):
+                normalized_end = 0
+
+        if normalized_end is not None and normalized_end <= normalized_start:
+            return []
+
+        try:
+            normalized_limit = int(limit) if limit is not None else None
+        except (TypeError, ValueError):
+            normalized_limit = None
+        if normalized_limit is not None and normalized_limit <= 0:
+            return []
+
+        return await asyncio.to_thread(
+            self._get_messages_for_room_sync,
+            key,
+            normalized_start,
+            normalized_end,
+            normalized_limit,
+        )
+
+    def _get_messages_for_room_sync(
+        self,
+        room_key: str,
+        start_exclusive: int,
+        end_inclusive: Optional[int],
+        limit: Optional[int],
+    ) -> List[Message]:
+        table = MessageStorageConfig.TABLE_NAME
+        clauses = [
+            "json_extract(message_json, '$.metadata.room_key') = ?",
+            "id > ?",
+        ]
+        params: list = [room_key, start_exclusive]
+        if end_inclusive is not None:
+            clauses.append("id <= ?")
+            params.append(end_inclusive)
+
+        where = " AND ".join(clauses)
+        order_limit = "ORDER BY id ASC"
+        if limit is not None:
+            # Newest *limit* rows in the range, then restore chronological order.
+            sql = f"""
+                SELECT id, message_json FROM (
+                    SELECT id, message_json
+                    FROM {table}
+                    WHERE {where}
+                    ORDER BY id DESC
+                    LIMIT ?
+                )
+                ORDER BY id ASC
+            """
+            params.append(limit)
+        else:
+            sql = f"""
+                SELECT id, message_json
+                FROM {table}
+                WHERE {where}
+                {order_limit}
+            """
+
+        with self._connect() as connection:
+            rows = connection.execute(sql, params).fetchall()
+        return self._messages_from_rows(rows)
+
+    async def get_latest_room_cursor(self, room_key: str) -> int:
+        key = str(room_key or "").strip()
+        if not key:
+            return 0
+        return await asyncio.to_thread(self._get_latest_room_cursor_sync, key)
+
+    def _get_latest_room_cursor_sync(self, room_key: str) -> int:
+        with self._connect() as connection:
+            row = connection.execute(
+                f"""
+                SELECT COALESCE(MAX(id), 0) AS latest_id
+                FROM {MessageStorageConfig.TABLE_NAME}
+                WHERE json_extract(message_json, '$.metadata.room_key') = ?
+                """,
+                (room_key,),
+            ).fetchone()
+        return int(row["latest_id"]) if row is not None else 0
+
+    async def list_room_keys(self) -> List[str]:
+        return await asyncio.to_thread(self._list_room_keys_sync)
+
+    def _list_room_keys_sync(self) -> List[str]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT DISTINCT json_extract(message_json, '$.metadata.room_key') AS room_key
+                FROM {MessageStorageConfig.TABLE_NAME}
+                WHERE json_extract(message_json, '$.metadata.room_key') IS NOT NULL
+                  AND json_extract(message_json, '$.metadata.room_key') != ''
+                """
+            ).fetchall()
+        keys: List[str] = []
+        for row in rows:
+            key = str(row["room_key"] or "").strip()
+            if key:
+                keys.append(key)
+        return keys
+
+    def _messages_from_rows(self, rows) -> List[Message]:
+        messages: List[Message] = []
+        for row in rows:
+            try:
+                message = Message.model_validate_json(row["message_json"])
+            except Exception as exception:
+                self.logger.warning("Skipping invalid local message: %s", exception)
+                continue
+            messages.append(_message_with_storage_cursor(message, int(row["id"])))
+        return messages
+
     def _get_messages_in_cursor_range_sync(
         self,
         start_exclusive: int,
@@ -319,16 +462,7 @@ class MessageStorage:
                 """,
                 (start_exclusive, end_inclusive),
             ).fetchall()
-
-        messages: List[Message] = []
-        for row in rows:
-            try:
-                message = Message.model_validate_json(row["message_json"])
-            except Exception as exception:
-                self.logger.warning("Skipping invalid local message: %s", exception)
-                continue
-            messages.append(_message_with_storage_cursor(message, int(row["id"])))
-        return messages
+        return self._messages_from_rows(rows)
 
     async def cursor_for_message_count(self, message_count: int) -> int:
         try:

@@ -48,6 +48,10 @@ class ParticipationDecision(BaseModel):
 
     should_reply: bool = Field(False, description="Whether the agent should speak now")
     reason: Optional[str] = Field(None, description="Brief internal reason for the decision")
+    addressing: List[str] = Field(
+        default_factory=list,
+        description="Interval message refs the agent intends to address",
+    )
 
 
 class Message(BaseModel):

@@ -103,8 +103,7 @@ class MessageHandler:
             msg.metadata[ATTACHMENT_METADATA_KEY] = normalized_attachments
         if image_metadata:
             msg.metadata["images"] = image_metadata
-        await self.message_storage.add_messages(msg)
-        return msg
+        return await self._persist_message(msg)
 
     async def store_model_reply(
         self,
@@ -136,8 +135,7 @@ class MessageHandler:
         image_metadata = self._preview_image_metadata(image_source)
         if image_metadata and "images" not in model_msg.metadata:
             model_msg.metadata["images"] = image_metadata
-        await self.message_storage.add_messages(model_msg)
-        return model_msg
+        return await self._persist_message(model_msg)
 
     async def patch_latest_assistant_metadata(
         self,
@@ -184,8 +182,13 @@ class MessageHandler:
             event_msg.room_name = room_name
         if channel:
             event_msg.channel = channel
-        await self.message_storage.add_messages(event_msg)
-        return event_msg
+        return await self._persist_message(event_msg)
+
+    async def _persist_message(self, message: Message) -> Message:
+        stored = await self.message_storage.add_messages(message)
+        if stored:
+            return stored[0]
+        return message
 
     async def get_recent_messages(
         self,

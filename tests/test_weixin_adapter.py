@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from xagent.core.runtime import ContactEntry, SubconsciousDelivery, enqueue_scheduled_task, list_task_records
+from xagent.core.attention import AttentionLoop
 from xagent.integrations.weixin.adapter import WeixinAdapter
 from xagent.integrations.weixin.config import WeixinAdapterConfig
 from xagent.integrations.weixin.state import WeixinCredentials, WeixinStateStore
@@ -20,6 +21,11 @@ class _FakeAgent:
         self.chat_calls = []
         self.maintenance_count = 0
         self.workspace_dir = None
+        self.attention = AttentionLoop(
+            addressed_grace=0,
+            quiet_window=0,
+            max_wait=0,
+        )
 
     async def chat_events(self, **kwargs):
         self.chat_calls.append(kwargs)
@@ -88,6 +94,16 @@ class WeixinAdapterTests(unittest.TestCase):
         adapter._context_tokens = state.load_context_tokens(credentials.account_id)
         return adapter, agent, client, state
 
+
+def _process_until_idle(adapter, message):
+    async def scenario():
+        await adapter._process_message(message)
+        attention = getattr(adapter.agent, "attention", None)
+        if attention is not None:
+            await attention.idle()
+
+    asyncio.run(scenario())
+
     def test_owner_direct_message_routes_to_agent_and_replies(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             adapter, agent, client, state = self._adapter(tmpdir)
@@ -100,7 +116,7 @@ class WeixinAdapterTests(unittest.TestCase):
                 "item_list": [{"type": 1, "text_item": {"text": "hello"}}],
             }
 
-            asyncio.run(adapter._process_message(message))
+            _process_until_idle(adapter, message)
 
             self.assertEqual(agent.chat_calls[0]["user_message"], "hello")
             self.assertEqual(agent.chat_calls[0]["user_id"], "owner@im.wechat")
@@ -122,7 +138,7 @@ class WeixinAdapterTests(unittest.TestCase):
                 "item_list": [{"type": 1, "text_item": {"text": "hello"}}],
             }
 
-            asyncio.run(adapter._process_message(message))
+            _process_until_idle(adapter, message)
 
             self.assertEqual(agent.chat_calls, [])
             self.assertEqual(client.sent_text, [])
@@ -140,7 +156,7 @@ class WeixinAdapterTests(unittest.TestCase):
                 "item_list": [{"type": 1, "text_item": {"text": "hello"}}],
             }
 
-            asyncio.run(adapter._process_message(message))
+            _process_until_idle(adapter, message)
 
             self.assertEqual(agent.chat_calls, [])
             self.assertEqual(client.sent_text, [])
@@ -161,7 +177,7 @@ class WeixinAdapterTests(unittest.TestCase):
                 "item_list": [{"type": 1, "text_item": {"text": "go"}}],
             }
 
-            asyncio.run(adapter._process_message(message))
+            _process_until_idle(adapter, message)
 
             self.assertGreater(len(client.sent_text), 1)
             self.assertEqual([item["text"] for item in client.sent_text], ["first line", "second line", "third line"])

@@ -41,11 +41,31 @@ class InMemoryMessageStorage:
         self.last_count = None
         self.last_offset = None
 
-    async def add_messages(self, messages, **kwargs) -> None:
-        if isinstance(messages, list):
-            self.messages.extend(messages)
-        else:
-            self.messages.append(messages)
+    async def add_messages(self, messages, **kwargs):
+        items = messages if isinstance(messages, list) else [messages]
+        self.messages.extend(items)
+        return list(items)
+
+    async def get_messages_for_room(
+        self,
+        room_key,
+        start_exclusive=0,
+        end_inclusive=None,
+        limit=None,
+    ):
+        matched = []
+        for index, msg in enumerate(self.messages, start=1):
+            if str((msg.metadata or {}).get("room_key") or "") != room_key:
+                continue
+            cursor = int((msg.metadata or {}).get("storage_cursor") or index)
+            if cursor <= start_exclusive:
+                continue
+            if end_inclusive is not None and cursor > end_inclusive:
+                continue
+            matched.append(msg)
+        if limit is not None:
+            matched = matched[-limit:]
+        return matched
 
     async def get_messages(self, count: int = 20, offset: int = 0):
         self.last_count = count
@@ -1440,6 +1460,46 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("participation_decision", model_client.calls[0][0]["name"])
         self.assertIn("should we ship?", model_client.calls[0][0]["content"])
         self.assertIn("Return JSON only", model_client.calls[0][0]["content"])
+
+    async def test_respond_uses_stored_interval_without_storing_another_user_message(self):
+        first = Message.create("line one", role=RoleType.USER, sender_id="alice")
+        first.channel = "feishu"
+        first.metadata = {
+            "room_key": "feishu:oc_group",
+            "storage_cursor": 1,
+            "sender_name": "Alice",
+            "addressed_to_agent": False,
+        }
+        second = Message.create("line two", role=RoleType.USER, sender_id="alice")
+        second.channel = "feishu"
+        second.metadata = {
+            "room_key": "feishu:oc_group",
+            "storage_cursor": 2,
+            "sender_name": "Alice",
+            "addressed_to_agent": False,
+        }
+        storage = InMemoryMessageStorage([first, second])
+        model_client = CapturingModelClient([
+            (ReplyType.SIMPLE_REPLY, "got both"),
+        ])
+        agent = self._build_agent(storage=storage, model_client=model_client)
+        agent.workspace_dir = None
+        agent.working_context_compactor = None
+        agent.skills_storage = None
+
+        events = [
+            event
+            async for event in Agent.respond(agent, "feishu:oc_group", 2, stream=False)
+        ]
+
+        self.assertEqual(
+            [message.content for message in storage.messages if message.role == RoleType.USER],
+            ["line one", "line two"],
+        )
+        self.assertTrue(any(event.get("type") == "message_done" and event.get("content") == "got both" for event in events))
+        self.assertEqual(len(storage.messages), 3)
+        self.assertEqual(storage.messages[-1].role, RoleType.ASSISTANT)
+        self.assertEqual(storage.messages[-1].content, "got both")
 
     async def test_decide_participation_defaults_to_silence_on_invalid_model_output(self):
         storage = InMemoryMessageStorage()
