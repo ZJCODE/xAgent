@@ -48,7 +48,9 @@ class ScheduledTaskDisplayContentTests(unittest.TestCase):
     def test_frontend_prefix_stays_in_sync(self):
         from pathlib import Path
 
-        source = Path("/workspace/frontend/src/lib/scheduledMessage.ts").read_text(encoding="utf-8")
+        source = (
+            Path(__file__).resolve().parents[1] / "frontend/src/lib/scheduledMessage.ts"
+        ).read_text(encoding="utf-8")
         self.assertIn(SCHEDULED_AGENT_PROMPT_PREFIX.replace("\n", "\\n"), source)
 
     def test_message_metadata_records_task_body(self):

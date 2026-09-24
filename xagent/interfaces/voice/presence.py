@@ -49,7 +49,10 @@ class SttLifecycleController:
         self._wake = threading.Event()
         self._wake.set()
         self._last_activity = time.monotonic()
-        self._last_heard_endpoint = time.monotonic()
+        # "Never heard yet": the STT session may have just opened, but no
+        # endpoint has been noted. require_recent_speech must block until
+        # the first real utterance, not treat boot time as speech.
+        self._last_heard_endpoint = 0.0
 
     def note_endpoint(self) -> None:
         now = time.monotonic()

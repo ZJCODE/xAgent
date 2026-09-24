@@ -1651,7 +1651,7 @@ class CLICommandTests(unittest.TestCase):
 
         self.assertEqual(
             fake_ui.option_titles,
-            ["Model", "Search", "Observability", "Back"],
+            ["Model", "Search", "Image", "Observability", "Back"],
         )
         observability_launcher.assert_called_once_with(fake_ui, config_dir)
 
