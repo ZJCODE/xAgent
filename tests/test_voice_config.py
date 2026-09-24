@@ -1,12 +1,13 @@
 import unittest
 from types import SimpleNamespace
 
+import yaml
+
 from xagent.interfaces.cli.config_editor import prepare_voice_preset_update
 from xagent.interfaces.cli.setup import VoiceInitSelection, _voice_channel_config
 from xagent.interfaces.voice.config import (
     VoiceChannelConfig,
     VoiceRuntimeProfile,
-    parse_quiet_hours,
 )
 from xagent.interfaces.voice.audio import AudioTopology
 from xagent.interfaces.voice.factory import resolve_runtime_profile
@@ -43,20 +44,6 @@ class VoiceConfigSurfaceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Unknown voice setting"):
             VoiceChannelConfig.from_dict({"api_key": "k", "names": ["Alice"]})
 
-    def test_quiet_hours(self):
-        config = VoiceChannelConfig.from_dict({"api_key": "k", "quiet_hours": "23:00-06:00"})
-        self.assertEqual(config.proactive.quiet_start_minute, 23 * 60)
-        self.assertEqual(config.proactive.quiet_end_minute, 6 * 60)
-
-    def test_quiet_hours_honors_minutes(self):
-        config = VoiceChannelConfig.from_dict({"api_key": "k", "quiet_hours": "22:30-07:15"})
-        self.assertEqual(config.proactive.quiet_start_minute, 22 * 60 + 30)
-        self.assertEqual(config.proactive.quiet_end_minute, 7 * 60 + 15)
-
-    def test_quiet_hours_rejects_impossible_minutes(self):
-        with self.assertRaisesRegex(ValueError, "minutes"):
-            VoiceChannelConfig.from_dict({"api_key": "k", "quiet_hours": "22:70-07:00"})
-
     def test_idle_shutdown_is_always_on(self):
         config = VoiceChannelConfig.from_dict({"api_key": "k"})
         self.assertEqual(
@@ -74,20 +61,18 @@ class VoiceConfigSurfaceTests(unittest.TestCase):
             VoiceChannelConfig.from_dict({"api_key": "k", "context": {"terms": ["x"]}})
 
     def test_unknown_key_suggests_close_match(self):
-        with self.assertRaisesRegex(ValueError, "quiet_hours"):
-            VoiceChannelConfig.from_dict({"api_key": "k", "quiet_hour": "22:00-07:00"})
+        with self.assertRaisesRegex(ValueError, "interruptions"):
+            VoiceChannelConfig.from_dict({"api_key": "k", "interruptio": "auto"})
 
     def test_to_public_dict_round_trip(self):
         original = VoiceChannelConfig.from_dict(
             {
                 "api_key": "secret",
-                "quiet_hours": "23:00-06:00",
                 "languages": ["en"],
             }
         )
         public = original.to_public_dict()
         again = VoiceChannelConfig.from_dict(public)
-        self.assertEqual(again.quiet_hours, "23:00-06:00")
         self.assertEqual(again.languages, ["en"])
 
     def test_public_dict_is_the_curated_surface(self):
@@ -98,8 +83,8 @@ class VoiceConfigSurfaceTests(unittest.TestCase):
             {
                 "api_key": "secret",
                 "languages": ["zh", "en"],
-                "quiet_hours": "22:00-07:00",
-                "voice": "Owen",
+                "voice": "Daniel",
+                "interruptions": "auto",
             },
         )
 
@@ -113,13 +98,13 @@ class VoiceConfigSurfaceTests(unittest.TestCase):
     def test_voice_setup_preserves_tier1_when_rotating_key(self):
         existing = {
             "api_key": "old",
-            "quiet_hours": "23:00-06:00",
+            "interruptions": "off",
             "audio": {"input": "Mic", "output": "Speaker"},
         }
-        selection = VoiceInitSelection(voice_enabled=True, voice_api_key="new-key")
+        selection = VoiceInitSelection(voice_api_key="new-key")
         merged = _voice_channel_config(selection, existing=existing)
         self.assertEqual(merged["api_key"], "new-key")
-        self.assertEqual(merged["quiet_hours"], "23:00-06:00")
+        self.assertEqual(merged["interruptions"], "off")
         self.assertEqual(merged["audio"]["input"], "Mic")
 
     def test_prepare_voice_preset_update_preserves_block(self):
@@ -128,6 +113,7 @@ class VoiceConfigSurfaceTests(unittest.TestCase):
             "channels": {
                 "voice": {
                     "api_key": "old",
+                    "interruptions": "on",
                     "audio": {"input": "Mic", "output": "Speaker"},
                 }
             },
@@ -135,6 +121,7 @@ class VoiceConfigSurfaceTests(unittest.TestCase):
         update = prepare_voice_preset_update(config, provider="soniox", api_key="new")
         voice = update.data["channels"]["voice"]
         self.assertEqual(voice["api_key"], "new")
+        self.assertEqual(voice["interruptions"], "on")
         self.assertEqual(voice["audio"]["input"], "Mic")
 
     def test_runtime_profile_follows_detected_topology(self):
@@ -150,16 +137,47 @@ class VoiceConfigSurfaceTests(unittest.TestCase):
         profile = resolve_runtime_profile(
             _audio_profile(near_field=True, echo_managed=False),
             profile_override="room",
-            interruptions_override=True,
+            interruptions_override="on",
         )
         self.assertEqual(profile.name, "room")
-        self.assertTrue(profile.echo_managed)
+        self.assertFalse(profile.echo_managed)
+        self.assertEqual(profile.interruptions_override, "on")
         self.assertIn("override", profile.source)
 
-    def test_parse_quiet_hours(self):
-        self.assertEqual(parse_quiet_hours("22:00-07:00"), (22 * 60, 7 * 60))
-        self.assertEqual(parse_quiet_hours("22:30-07:15"), (22 * 60 + 30, 7 * 60 + 15))
-        self.assertEqual(parse_quiet_hours(""), (0, 0))
+    def test_interruption_precedence_preserves_hardware_and_saved_preference(self):
+        for detected in (False, True):
+            for persisted in ("auto", "on", "off"):
+                for override in (None, "auto", "on", "off"):
+                    with self.subTest(detected=detected, persisted=persisted, override=override):
+                        config = VoiceChannelConfig.from_dict({"interruptions": persisted})
+                        config.apply_runtime_profile(resolve_runtime_profile(
+                            _audio_profile(near_field=False, echo_managed=detected),
+                            interruptions_override=override,
+                        ))
+                        mode = persisted if override is None else override
+                        self.assertEqual(config.interruption_mode, mode)
+                        self.assertEqual(
+                            config.enable_interruptions,
+                            detected if mode == "auto" else mode == "on",
+                        )
+                        self.assertEqual(config.runtime_profile.echo_managed, detected)
+                        self.assertEqual(config.to_public_dict()["interruptions"], persisted)
+
+    def test_interruption_yaml_round_trip(self):
+        for literal, expected in (
+            ("auto", "auto"), ("on", "on"), ("off", "off"),
+            ('"on"', "on"), ('"off"', "off"), ("true", "on"), ("false", "off"),
+        ):
+            with self.subTest(literal=literal):
+                config = VoiceChannelConfig.from_dict(yaml.safe_load(f"interruptions: {literal}"))
+                self.assertEqual(config.interruptions, expected)
+                restored = VoiceChannelConfig.from_dict(yaml.safe_load(yaml.safe_dump(config.to_public_dict())))
+                self.assertEqual(restored.interruptions, expected)
+
+    def test_invalid_interruption_modes_are_rejected(self):
+        for value in ("always", "", None, 0, 1, {}):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "interruptions"):
+                VoiceChannelConfig.from_dict({"interruptions": value})
 
 
 if __name__ == "__main__":

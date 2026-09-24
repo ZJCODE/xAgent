@@ -10,45 +10,15 @@ interface VoiceSetupFieldsProps {
 export function VoiceSetupFields({ schema, selection, onChange }: VoiceSetupFieldsProps) {
   return (
     <div className="wizard-grid">
-      <label className="wizard-checkbox">
+      <WizardField label="Soniox API key" hint={schema.configured ? "Leave blank to keep the existing key." : undefined}>
         <input
-          type="checkbox"
-          checked={selection.voice_enabled}
-          onChange={(event) => onChange({ voice_enabled: event.target.checked })}
+          type="password"
+          value={selection.voice_api_key}
+          placeholder={schema.placeholders.soniox_api_key}
+          autoComplete="off"
+          onChange={(event) => onChange({ voice_api_key: event.target.value })}
         />
-        <span>Enable Soniox voice</span>
-      </label>
-
-      {selection.voice_enabled ? (
-        <>
-          <WizardField label="Soniox API key" hint={schema.configured ? "Leave blank to keep the existing key." : undefined}>
-            <input
-              type="password"
-              value={selection.voice_api_key}
-              placeholder={schema.placeholders.soniox_api_key}
-              autoComplete="off"
-              onChange={(event) => onChange({ voice_api_key: event.target.value })}
-            />
-          </WizardField>
-
-          <WizardField
-            label="Spoken languages"
-            hint="Comma-separated language codes, e.g. zh, en. The first is used when the reply language is unclear."
-          >
-            <input
-              value={selection.languages.join(", ")}
-              onChange={(event) =>
-                onChange({
-                  languages: event.target.value
-                    .split(",")
-                    .map((part) => part.trim())
-                    .filter(Boolean),
-                })
-              }
-            />
-          </WizardField>
-        </>
-      ) : null}
+      </WizardField>
     </div>
   );
 }

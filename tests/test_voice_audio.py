@@ -293,6 +293,31 @@ class VoiceAudioTests(unittest.TestCase):
         self.assertIn("#2  iMac麦克风", text)
         self.assertIn("#3  iMac扬声器", text)
 
+    def test_list_audio_device_options_has_auto_and_directional_devices(self):
+        fake_sd = _FakeMacSoundDevice()
+
+        with patch("xagent.interfaces.voice.audio._import_sounddevice", return_value=fake_sd):
+            options = voice_audio.list_audio_device_options()
+
+        self.assertEqual(options["input"][0]["id"], "auto")
+        self.assertEqual(options["output"][0]["id"], "auto")
+        self.assertIn(
+            {
+                "id": "2",
+                "label": "iMac麦克风 (#2)",
+                "description": "1 channel(s) via Core Audio (default input)",
+            },
+            options["input"],
+        )
+        self.assertIn(
+            {
+                "id": "3",
+                "label": "iMac扬声器 (#3)",
+                "description": "2 channel(s) via Core Audio (default output)",
+            },
+            options["output"],
+        )
+
     def test_input_converter_downmixes_stereo_to_mono(self):
         converter = voice_audio._PCMInputConverter(
             source_channels=2,

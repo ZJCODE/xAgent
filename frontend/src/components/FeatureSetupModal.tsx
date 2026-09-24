@@ -122,13 +122,43 @@ export function FeatureSetupModal({ open, feature, schema, onClose, onSaved }: F
   const [publicKey, setPublicKey] = useState("");
   const [secretKey, setSecretKey] = useState("");
   const [langfuseBaseUrl, setLangfuseBaseUrl] = useState("");
+  const [voiceApiKey, setVoiceApiKey] = useState("");
+  const [voiceName, setVoiceName] = useState("Daniel");
+  const [voiceLanguages, setVoiceLanguages] = useState<string[]>(["zh", "en"]);
+  const [voiceInterruptions, setVoiceInterruptions] = useState<"auto" | "on" | "off">("auto");
+  const [voiceInput, setVoiceInput] = useState("auto");
+  const [voiceOutput, setVoiceOutput] = useState("auto");
+
+  const voiceOptions = schema.voice.voice_options?.length
+    ? schema.voice.voice_options
+    : [{ id: voiceName, label: voiceName, description: "Current voice" }];
+  const inputOptions = schema.voice.audio_devices?.input?.length
+    ? schema.voice.audio_devices.input
+    : [{ id: "auto", label: "Auto (recommended)" }];
+  const outputOptions = schema.voice.audio_devices?.output?.length
+    ? schema.voice.audio_devices.output
+    : [{ id: "auto", label: "Auto (recommended)" }];
+  const inputSelectOptions = inputOptions.some((item) => item.id === voiceInput)
+    ? inputOptions
+    : [...inputOptions, { id: voiceInput, label: `${voiceInput} (current/unavailable)` }];
+  const outputSelectOptions = outputOptions.some((item) => item.id === voiceOutput)
+    ? outputOptions
+    : [...outputOptions, { id: voiceOutput, label: `${voiceOutput} (current/unavailable)` }];
 
   useEffect(() => {
     if (!open) return;
     setError("");
     setSubmitting(false);
     setApiKey("");
-    if (isProviderFeature(feature)) {
+    if (feature === "voice") {
+      const defaults = schema.voice.defaults;
+      setVoiceApiKey("");
+      setVoiceName(defaults.voice || "Daniel");
+      setVoiceLanguages(defaults.languages || ["zh", "en"]);
+      setVoiceInterruptions(defaults.interruptions || "auto");
+      setVoiceInput(String(defaults.audio_input ?? "auto"));
+      setVoiceOutput(String(defaults.audio_output ?? "auto"));
+    } else if (isProviderFeature(feature)) {
       setProvider(providerFeatureSchema(schema, feature).current.provider || "none");
     } else if (feature === "observability") {
       setObservabilityEnabled(schema.observability.current.enabled);
@@ -152,7 +182,9 @@ export function FeatureSetupModal({ open, feature, schema, onClose, onSaved }: F
         ? "Edit Image"
         : feature === "observability"
           ? "Edit Observability"
-          : "Edit Model";
+          : feature === "voice"
+            ? "Edit Voice"
+            : "Edit Model";
 
   const models = schema.model.models[provider] || [];
   const capability = useMemo(
@@ -166,6 +198,17 @@ export function FeatureSetupModal({ open, feature, schema, onClose, onSaved }: F
   const providerFeature = isProviderFeature(feature) ? providerFeatureSchema(schema, feature) : null;
 
   const isDirty = useMemo(() => {
+    if (feature === "voice") {
+      const current = schema.voice.defaults;
+      return (
+        Boolean(voiceApiKey.trim()) ||
+        voiceName !== current.voice ||
+        JSON.stringify(voiceLanguages) !== JSON.stringify(current.languages) ||
+        voiceInterruptions !== current.interruptions ||
+        voiceInput !== String(current.audio_input ?? "auto") ||
+        voiceOutput !== String(current.audio_output ?? "auto")
+      );
+    }
     if (isProviderFeature(feature)) {
       const current = providerFeatureSchema(schema, feature).current;
       return provider !== current.provider || Boolean(apiKey.trim());
@@ -201,6 +244,12 @@ export function FeatureSetupModal({ open, feature, schema, onClose, onSaved }: F
     modelApi,
     supportsVision,
     reasoning,
+    voiceApiKey,
+    voiceName,
+    voiceLanguages,
+    voiceInterruptions,
+    voiceInput,
+    voiceOutput,
   ]);
 
   const onProviderChange = (next: string) => {
@@ -220,7 +269,21 @@ export function FeatureSetupModal({ open, feature, schema, onClose, onSaved }: F
     setError("");
     try {
       let selection: Record<string, unknown> = {};
-      if (isProviderFeature(feature)) {
+      if (feature === "voice") {
+        if (!voiceApiKey.trim() && !schema.voice.configured) {
+          setError("Soniox API key is required to configure voice.");
+          setSubmitting(false);
+          return;
+        }
+        selection = {
+          voice_api_key: voiceApiKey.trim() || undefined,
+          voice: voiceName.trim(),
+          languages: voiceLanguages,
+          interruptions: voiceInterruptions,
+          audio_input: voiceInput.trim() || "auto",
+          audio_output: voiceOutput.trim() || "auto",
+        };
+      } else if (isProviderFeature(feature)) {
         selection = {
           provider,
           api_key: apiKey.trim() || undefined,
@@ -277,7 +340,64 @@ export function FeatureSetupModal({ open, feature, schema, onClose, onSaved }: F
       onNext={() => undefined}
       onSubmit={() => void submit()}
     >
-      {isProviderFeature(feature) && providerFeature ? (
+      {feature === "voice" ? (
+        <div className="wizard-grid">
+          <WizardField
+            label="Soniox API key"
+            hint={schema.voice.configured ? "Leave blank to keep the current key." : undefined}
+          >
+            <input
+              type="password"
+              autoComplete="off"
+              value={voiceApiKey}
+              placeholder={schema.voice.placeholders.soniox_api_key}
+              onChange={(event) => setVoiceApiKey(event.target.value)}
+            />
+          </WizardField>
+          <WizardField label="Speaking voice">
+            <select value={voiceName} onChange={(event) => setVoiceName(event.target.value)}>
+              {voiceOptions.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.label || item.id}
+                </option>
+              ))}
+            </select>
+          </WizardField>
+          <WizardField label="Spoken languages" hint="Comma-separated codes; the first is the fallback reply language.">
+            <input
+              value={voiceLanguages.join(", ")}
+              onChange={(event) =>
+                setVoiceLanguages(event.target.value.split(",").map((item) => item.trim()).filter(Boolean))
+              }
+            />
+          </WizardField>
+          <WizardField label="Allow interruptions" hint="Auto follows detected audio devices; echo protection remains active.">
+            <select value={voiceInterruptions} onChange={(event) => setVoiceInterruptions(event.target.value as "auto" | "on" | "off")}>
+              <option value="auto">Auto</option>
+              <option value="on">On</option>
+              <option value="off">Off</option>
+            </select>
+          </WizardField>
+          <WizardField label="Input device" hint={schema.voice.audio_devices?.error || "Choose the microphone used for speech input."}>
+            <select value={voiceInput} onChange={(event) => setVoiceInput(event.target.value)}>
+              {inputSelectOptions.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.label || item.id}
+                </option>
+              ))}
+            </select>
+          </WizardField>
+          <WizardField label="Output device" hint={schema.voice.audio_devices?.error || "Choose the speaker or headset used for voice playback."}>
+            <select value={voiceOutput} onChange={(event) => setVoiceOutput(event.target.value)}>
+              {outputSelectOptions.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.label || item.id}
+                </option>
+              ))}
+            </select>
+          </WizardField>
+        </div>
+      ) : isProviderFeature(feature) && providerFeature ? (
         <ProviderFeatureFields
           label={feature === "search" ? "Search provider" : "Image provider"}
           providers={providerFeature.providers}

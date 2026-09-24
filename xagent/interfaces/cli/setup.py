@@ -101,9 +101,12 @@ class WeixinInitSelection:
 class VoiceInitSelection:
     """Interactive choices used to configure the local voice channel."""
 
-    voice_enabled: bool = True
     voice_api_key: str = ""
     languages: tuple[str, ...] = ("zh", "en")
+    voice: str = "Daniel"
+    interruptions: str = "auto"
+    audio_input: str | int | None = "auto"
+    audio_output: str | int | None = "auto"
 
 
 OPENAI_BASE_URL = provider_base_url(PROVIDER_OPENAI)
@@ -312,12 +315,16 @@ def _channel_configured(config: dict[str, Any], channel: str) -> bool:
 
 def build_voice_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
     """Return wizard metadata for the web voice channel setup client."""
-    from ..voice.config import VoiceChannelConfig
+    from ..voice.audio import list_audio_device_options
+    from ..voice.config import SONIOX_SHARED_VOICE_OPTIONS, VoiceChannelConfig
 
     defaults = {
-        "voice_enabled": True,
         "voice_api_key": "",
         "languages": ["zh", "en"],
+        "voice": "Daniel",
+        "interruptions": "auto",
+        "audio_input": "auto",
+        "audio_output": "auto",
     }
     channels_cfg = config.get("channels")
     if isinstance(channels_cfg, dict):
@@ -325,11 +332,37 @@ def build_voice_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
         if isinstance(voice_raw, dict) and voice_raw:
             try:
                 parsed = VoiceChannelConfig.from_dict(voice_raw)
-                defaults.update({"languages": list(parsed.languages)})
+                defaults.update({
+                    "languages": list(parsed.languages),
+                    "voice": parsed.speaking_voice,
+                    "interruptions": parsed.interruptions,
+                    "audio_input": parsed.audio.input,
+                    "audio_output": parsed.audio.output,
+                })
             except ValueError:
                 pass
+    voice_options = [
+        {"id": voice_id, "label": f"{voice_id} · {description}", "description": description}
+        for voice_id, description in SONIOX_SHARED_VOICE_OPTIONS
+    ]
+    audio_devices = list_audio_device_options()
+    for direction, key in (("input", "audio_input"), ("output", "audio_output")):
+        current = defaults[key]
+        current_id = str(current if current is not None else "auto")
+        options = audio_devices.get(direction) or []
+        if current_id and not any(str(item.get("id")) == current_id for item in options):
+            options.append(
+                {
+                    "id": current_id,
+                    "label": f"{current_id} (current/unavailable)",
+                    "description": "This value is saved but was not reported by the local audio system.",
+                }
+            )
+        audio_devices[direction] = options
     return {
         "defaults": defaults,
+        "voice_options": voice_options,
+        "audio_devices": audio_devices,
         "placeholders": {"soniox_api_key": SONIOX_KEY_PLACEHOLDER},
         "configured": _channel_configured(config, "voice"),
         "can_force": True,
@@ -416,10 +449,16 @@ def voice_init_selection_from_mapping(
         raise ChannelSetupError("languages must be a list or comma-separated string")
     if not languages:
         raise ChannelSetupError("languages must include at least one language")
+    interruption_value = data.get("interruptions", schema_defaults.get("interruptions", "auto"))
+    if isinstance(interruption_value, bool):
+        interruption_value = "on" if interruption_value else "off"
     return VoiceInitSelection(
-        voice_enabled=bool(data.get("voice_enabled", True)),
         voice_api_key=str(data.get("voice_api_key") or "").strip(),
         languages=tuple(languages),
+        voice=str(data.get("voice", schema_defaults.get("voice", "Daniel")) or "Daniel").strip(),
+        interruptions=str(interruption_value or "auto").strip().lower(),
+        audio_input=data.get("audio_input", schema_defaults.get("audio_input", "auto")),
+        audio_output=data.get("audio_output", schema_defaults.get("audio_output", "auto")),
     )
 
 
@@ -513,14 +552,11 @@ def apply_channel_setup(
 
     if normalized == "voice":
         selection = voice_init_selection_from_mapping(selection_data, config=config)
-        if not selection.voice_enabled:
-            channels_cfg.pop("voice", None)
-        else:
-            existing_voice = channels_cfg.get("voice")
-            channels_cfg["voice"] = _voice_channel_config(
-                selection,
-                existing=existing_voice if isinstance(existing_voice, dict) else None,
-            )
+        existing_voice = channels_cfg.get("voice")
+        channels_cfg["voice"] = _voice_channel_config(
+            selection,
+            existing=existing_voice if isinstance(existing_voice, dict) else None,
+        )
     elif normalized == "feishu":
         selection = feishu_init_selection_from_mapping(selection_data)
         _ensure_api_port(channels_cfg)
@@ -562,15 +598,25 @@ def _voice_channel_config(
     """Merge wizard choices into ``channels.voice``, preserving advanced keys."""
     from ..voice.config import VoiceChannelConfig
 
-    api_key = selection.voice_api_key.strip() or SONIOX_KEY_PLACEHOLDER
     if existing:
         merged = dict(existing)
-        merged["api_key"] = api_key
-        merged["languages"] = list(selection.languages)
+        existing_key = str(existing.get("api_key") or "").strip()
+        merged["api_key"] = selection.voice_api_key.strip() or existing_key or SONIOX_KEY_PLACEHOLDER
+        if selection.languages != ("zh", "en"):
+            merged["languages"] = list(selection.languages)
+        if selection.voice != "Daniel":
+            merged["voice"] = selection.voice
+        if selection.interruptions != "auto":
+            merged["interruptions"] = selection.interruptions
+        if selection.audio_input != "auto" or selection.audio_output != "auto":
+            merged["audio"] = {"input": selection.audio_input, "output": selection.audio_output}
         return VoiceChannelConfig.from_dict(merged).to_public_dict()
     payload = {
-        "api_key": api_key,
+        "api_key": selection.voice_api_key.strip() or SONIOX_KEY_PLACEHOLDER,
         "languages": list(selection.languages),
+        "voice": selection.voice,
+        "interruptions": selection.interruptions,
+        "audio": {"input": selection.audio_input, "output": selection.audio_output},
     }
     return VoiceChannelConfig.from_dict(payload).to_public_dict()
 
@@ -1363,16 +1409,12 @@ def collect_voice_init_selection_terminal_ui(
     wizard_ui = ui or TerminalUI()
     ask_secret = wizard_ui.ask_secret if wizard_ui.interactive else secret_input_func
     _ = config
-    enabled_arg = getattr(args, "enabled", None)
-    voice_enabled = (
-        _terminal_prompt_yes_no(wizard_ui, "Enable voice?", default=True)
-        if enabled_arg is None
-        else bool(enabled_arg)
-    )
     voice_api_key = _arg_text(args, "api_key")
-    if voice_enabled and not voice_api_key:
+    existing_voice = config.get("channels", {}).get("voice") if isinstance(config.get("channels"), dict) else None
+    existing_key = str(existing_voice.get("api_key") or "").strip() if isinstance(existing_voice, dict) else ""
+    if not voice_api_key and not existing_key:
         voice_api_key = _prompt_voice_api_key(secret_input_func=ask_secret)
-    return VoiceInitSelection(voice_enabled=voice_enabled, voice_api_key=voice_api_key)
+    return VoiceInitSelection(voice_api_key=voice_api_key)
 
 
 def _print_voice_post_setup(
@@ -1386,11 +1428,8 @@ def _print_voice_post_setup(
     summary = Text()
     summary.append(f"Voice channel updated in {config_path}\n\n")
     summary.append("Configured behavior:\n")
-    if selection.voice_enabled:
-        summary.append("- Provider: Soniox\n")
-        summary.append("- Mode: Half-duplex\n")
-    else:
-        summary.append("- Voice: Disabled\n")
+    summary.append("- Provider: Soniox\n")
+    summary.append("- Mode: Reply to user turns only\n")
     ui.print_panel(summary, title="Voice Ready", leading_blank_line=True)
 
     start = _format_init_command("xagent voice start", config_dir=config_dir, agent_name=agent_name)

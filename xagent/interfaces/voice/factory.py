@@ -19,6 +19,7 @@ from .config import (
     SONIOX_TTS_CHANNELS,
     SONIOX_TTS_SAMPLE_RATE,
     VoiceChannelConfig,
+    VoiceInterruptionMode,
     VoiceProfileName,
     VoiceRuntimeProfile,
     VoiceSpeechStyle,
@@ -34,20 +35,23 @@ def resolve_runtime_profile(
     audio_profile: AudioIOProfile,
     *,
     profile_override: VoiceProfileName | None = None,
-    interruptions_override: bool | None = None,
+    interruptions_override: VoiceInterruptionMode | None = None,
 ) -> VoiceRuntimeProfile:
     """Turn detected device topology, plus any session override, into policy."""
     topology = audio_profile.topology
     detected_name: VoiceProfileName = "headset" if topology.near_field else "room"
     name = profile_override or detected_name
-    echo_managed = (
-        topology.echo_managed if interruptions_override is None else interruptions_override
-    )
-    sources = [] if profile_override is None else [f"profile={profile_override} (override)"]
+    sources = [topology.reason]
+    if profile_override is not None:
+        sources.append(f"profile={profile_override} (override)")
     if interruptions_override is not None:
-        sources.append(f"interruptions={'on' if interruptions_override else 'off'} (override)")
-    source = ", ".join(sources) if sources else topology.reason
-    return VoiceRuntimeProfile(name=name, echo_managed=echo_managed, source=source)
+        sources.append(f"interruptions={interruptions_override} (override)")
+    return VoiceRuntimeProfile(
+        name=name,
+        echo_managed=topology.echo_managed,
+        source=", ".join(sources),
+        interruptions_override=interruptions_override,
+    )
 
 
 def create_local_voice_runtime(
@@ -58,7 +62,7 @@ def create_local_voice_runtime(
     input_device: AudioDevicePreference = None,
     output_device: AudioDevicePreference = None,
     profile_override: VoiceProfileName | None = None,
-    interruptions_override: bool | None = None,
+    interruptions_override: VoiceInterruptionMode | None = None,
     speed_override: float | None = None,
 ) -> VoiceRuntime:
     runtime_holder: list[VoiceRuntime | None] = [None]
@@ -97,9 +101,12 @@ def create_local_voice_runtime(
         )
     )
     logger.info(
-        "Voice profile: %s, barge-in %s (%s)",
+        "Voice profile: %s, barge-in %s, interruptions=%s (%s), detected echo-managed=%s (%s)",
         runtime_profile.name,
-        "on" if runtime_profile.echo_managed else "off",
+        "on" if config.enable_interruptions else "off",
+        config.interruption_mode,
+        "CLI" if interruptions_override is not None else "config/default",
+        runtime_profile.echo_managed,
         runtime_profile.source,
     )
 

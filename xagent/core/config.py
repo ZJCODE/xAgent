@@ -83,7 +83,7 @@ class AgentConfig:
     # The agent's speaking voice. Not every agent is heard aloud, so the name
     # lives in the voice channel block rather than on the agent itself.
     # Override per agent via config.yaml: channels.voice.voice.
-    DEFAULT_VOICE = "Owen"
+    DEFAULT_VOICE = "Daniel"
 
     # ============================================================
     # 4. Agent Runtime Bounds

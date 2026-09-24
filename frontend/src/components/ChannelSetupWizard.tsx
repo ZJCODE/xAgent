@@ -29,9 +29,12 @@ interface ChannelSetupWizardProps {
 function defaultVoiceSelection(schema: VoiceSetupSchema): VoiceSelectionInput {
   const defaults = schema.defaults;
   return {
-    voice_enabled: defaults.voice_enabled,
     voice_api_key: defaults.voice_api_key,
     languages: [...defaults.languages],
+    voice: defaults.voice,
+    interruptions: defaults.interruptions,
+    audio_input: defaults.audio_input,
+    audio_output: defaults.audio_output,
   };
 }
 
@@ -164,7 +167,6 @@ export function ChannelSetupWizard({ channel, open, onClose, onComplete }: Chann
   const validateStep = (): string => {
     if (channel === "voice" && voiceSelection) {
       if (
-        voiceSelection.voice_enabled &&
         !voiceSelection.voice_api_key.trim() &&
         !(schema as VoiceSetupSchema | null)?.configured
       ) {
@@ -185,7 +187,7 @@ export function ChannelSetupWizard({ channel, open, onClose, onComplete }: Chann
         return "Complete Weixin QR login before continuing.";
       }
     }
-    if (stepIndex === steps.length - 1 && schema?.configured && !force) {
+    if (channel !== "voice" && stepIndex === steps.length - 1 && schema?.configured && !force) {
       return "Confirm overwriting the existing channel configuration.";
     }
     return "";
@@ -247,7 +249,7 @@ export function ChannelSetupWizard({ channel, open, onClose, onComplete }: Chann
     setError("");
     try {
       await setupChannel(channel, {
-        force,
+        force: channel === "voice" ? true : force,
         selection: buildSelection(),
       });
       onComplete();
@@ -400,7 +402,7 @@ export function ChannelSetupWizard({ channel, open, onClose, onComplete }: Chann
         </div>
       ) : null}
 
-      {schema?.configured && stepIndex === steps.length - 1 ? (
+      {channel !== "voice" && schema?.configured && stepIndex === steps.length - 1 ? (
         <label className="wizard-checkbox wizard-warning">
           <input type="checkbox" checked={force} onChange={(event) => setForce(event.target.checked)} />
           <span>Overwrite existing {channel} channel settings</span>

@@ -33,7 +33,7 @@ from .echo_guard import SelfInterruptionGuard
 from .config import SONIOX_TTS_CHANNELS, SONIOX_TTS_SAMPLE_RATE, VoiceChannelConfig
 from .floor import ConversationFloor, FloorCommandKind, FloorEvent, FloorEventKind, FloorState
 from .presence import SttLifecycleController
-from .proactive import ProactiveSpeechLimiter, in_quiet_hours
+from .proactive import ProactiveSpeechLimiter
 from .speakers import SpeakerAttribution, SpeakerBindingStore
 from .types import VoiceUtterance
 from .speech_text import (
@@ -58,6 +58,9 @@ class VoiceRuntimeOptions:
     stream: bool = True
     tasks_dir: Optional[Path | str] = None
     metrics_path: Optional[Path | str] = None
+    # Voice currently only speaks in response to a live user turn. Keep the
+    # autonomous scheduler behind an explicit opt-in for a future mode.
+    allow_proactive_output: bool = False
 
 
 @dataclass
@@ -185,8 +188,9 @@ class VoiceRuntime:
         self._utterance_queue: asyncio.Queue[VoiceUtterance | None] | None = None
         self._steer_result: asyncio.Future[str] | None = None
         self.task_scheduler: AsyncTaskScheduler | None = None
+        self._allow_proactive_output = bool(options.allow_proactive_output)
         self._contacts_file: Optional[Path] = None
-        if self.options.tasks_dir is not None:
+        if self._allow_proactive_output and self.options.tasks_dir is not None:
             self.task_scheduler = AsyncTaskScheduler(
                 self.options.tasks_dir,
                 can_handle=self._can_handle_scheduled_task,
@@ -480,10 +484,12 @@ class VoiceRuntime:
                     if self._self_interruption.classify(partial, spoken_so_far):
                         if self._self_interruption.tripped:
                             self.logger.warning(
-                                "Disabling barge-in for this session: the microphone keeps "
-                                "hearing our own playback, so this device does not cancel echo"
+                                "Disabling barge-in for this session: repeated playback echo "
+                                "detected (interruptions=%s); switching to half-duplex capture",
+                                self.config.interruption_mode,
                             )
                             self._floor.allow_duplex_capture = False
+                            self.pause_event.set()
                             return
                         partial_since = None
                         evaluator.reset()
@@ -921,14 +927,11 @@ class VoiceRuntime:
             self.logger.debug("Failed to record ignored room speech", exc_info=True)
 
     def _proactive_speech_allowed(self) -> bool:
+        if not self._allow_proactive_output:
+            return False
         if self._floor.state not in {FloorState.IDLE}:
             return False
         proactive = self.config.proactive
-        if in_quiet_hours(
-            quiet_start=proactive.quiet_start_minute,
-            quiet_end=proactive.quiet_end_minute,
-        ):
-            return False
         if proactive.require_recent_speech:
             lifecycle = self._stt_lifecycle
             if lifecycle is not None and not lifecycle.heard_recently():
@@ -1045,11 +1048,11 @@ class VoiceRuntime:
         )
 
     def _can_handle_scheduled_task(self, task: ScheduledTaskRecord) -> bool:
-        return task.kind == "task" and task.delivery_channel == "voice"
+        return self._allow_proactive_output and task.kind == "task" and task.delivery_channel == "voice"
 
     async def _dispatch_scheduled_task(self, task: ScheduledTaskRecord) -> None:
         if not self._proactive_speech_allowed():
-            raise ValueError("proactive voice output blocked by floor, quiet hours, or rate cap")
+            raise ValueError("proactive voice output blocked by floor or rate cap")
         text = await self._scheduled_task_text(task)
         if not text:
             raise ValueError("scheduled voice task produced no content")
@@ -1066,7 +1069,7 @@ class VoiceRuntime:
         if delivery.recipient.channel != "voice":
             raise ValueError(f"Voice runtime cannot deliver subconscious channel {delivery.recipient.channel!r}")
         if not self._proactive_speech_allowed():
-            raise ValueError("proactive voice output blocked by floor, quiet hours, or rate cap")
+            raise ValueError("proactive voice output blocked by floor or rate cap")
         text = str(delivery.content or "").strip()
         if not text:
             raise ValueError("subconscious voice delivery produced no content")

@@ -198,16 +198,28 @@ export interface ChannelLogsResponse {
 export type SetupChannelId = Extract<ChannelId, "voice" | "feishu" | "weixin">;
 
 export interface VoiceSelectionInput {
-  voice_enabled: boolean;
   voice_api_key: string;
   languages: string[];
+  voice: string;
+  interruptions: "auto" | "on" | "off";
+  audio_input: string | number | null;
+  audio_output: string | number | null;
 }
 
 export interface VoiceSetupSchema {
   defaults: {
-    voice_enabled: boolean;
     voice_api_key: string;
     languages: string[];
+    voice: string;
+    interruptions: "auto" | "on" | "off";
+    audio_input: string | number | null;
+    audio_output: string | number | null;
+  };
+  voice_options: SetupOption[];
+  audio_devices: {
+    input: SetupOption[];
+    output: SetupOption[];
+    error?: string;
   };
   placeholders: {
     soniox_api_key: string;
@@ -361,7 +373,7 @@ export interface CreateAgentInput {
   selection: InitSelectionInput;
 }
 
-export type AgentEditSetupFeatureId = "model" | "search" | "image_generation" | "observability";
+export type AgentEditSetupFeatureId = "model" | "search" | "image_generation" | "observability" | "voice";
 
 export interface AgentEditSetupFeature {
   id: AgentEditSetupFeatureId;
@@ -416,6 +428,24 @@ export interface AgentEditSetupSchema {
     };
     placeholders: Record<string, string>;
   };
+  voice: {
+    configured: boolean;
+    defaults: {
+      voice_api_key: string;
+      languages: string[];
+      voice: string;
+      interruptions: "auto" | "on" | "off";
+      audio_input: string | number | null;
+      audio_output: string | number | null;
+    };
+    voice_options: SetupOption[];
+    audio_devices: {
+      input: SetupOption[];
+      output: SetupOption[];
+      error?: string;
+    };
+    placeholders: { soniox_api_key: string };
+  };
 }
 
 export interface AgentEditSetupChange {
@@ -428,6 +458,7 @@ export interface AgentEditSetupResponse {
   status: string;
   feature: string;
   restart_required: boolean;
+  restart_channel?: ChannelId;
   changed: boolean;
   changes: AgentEditSetupChange[];
 }

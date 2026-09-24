@@ -509,6 +509,11 @@ def prepare_voice_preset_update(
     *,
     provider: str,
     api_key: str | None = None,
+    voice: str | None = None,
+    languages: list[str] | tuple[str, ...] | None = None,
+    interruptions: str | None = None,
+    audio_input: str | int | None = None,
+    audio_output: str | int | None = None,
 ) -> ConfigUpdate:
     normalized_provider = provider.strip().lower()
     if normalized_provider not in VOICE_PRESETS:
@@ -529,11 +534,34 @@ def prepare_voice_preset_update(
         if current:
             updated = dict(current)
             updated["api_key"] = resolved_api_key or SONIOX_KEY_PLACEHOLDER
+            if voice is not None:
+                updated["voice"] = voice
+            if languages is not None:
+                updated["languages"] = list(languages)
+            if interruptions is not None:
+                updated["interruptions"] = interruptions
+            if audio_input is not None or audio_output is not None:
+                audio = dict(updated.get("audio") or {})
+                if audio_input is not None:
+                    audio["input"] = audio_input
+                if audio_output is not None:
+                    audio["output"] = audio_output
+                updated["audio"] = audio
             channels["voice"] = updated
         else:
-            channels["voice"] = VoiceChannelConfig.default_public_dict(
-                api_key=resolved_api_key or SONIOX_KEY_PLACEHOLDER,
-            )
+            payload = VoiceChannelConfig.default_public_dict(api_key=resolved_api_key or SONIOX_KEY_PLACEHOLDER)
+            if voice is not None:
+                payload["voice"] = voice
+            if languages is not None:
+                payload["languages"] = list(languages)
+            if interruptions is not None:
+                payload["interruptions"] = interruptions
+            if audio_input is not None or audio_output is not None:
+                payload["audio"] = {
+                    key: value for key, value in (("input", audio_input), ("output", audio_output))
+                    if value is not None
+                }
+            channels["voice"] = VoiceChannelConfig.from_dict(payload).to_public_dict()
 
     return prepare_update(
         config,
@@ -549,7 +577,7 @@ def validate_voice_config(data: dict[str, Any]) -> None:
     VoiceChannelConfig.from_dict(channels["voice"])
 
 
-AGENT_SETUP_FEATURES = ("model", "search", "image_generation", "observability")
+AGENT_SETUP_FEATURES = ("model", "search", "image_generation", "observability", "voice")
 _SEARCH_PROVIDER_DESCRIPTIONS = {
     "none": "Do not enable a provider-native web search tool.",
     "openai": "Use OpenAI web search.",
@@ -570,10 +598,7 @@ def _has_usable_secret(value: Any) -> bool:
 
 
 def build_agent_edit_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
-    """Return Edit Setup metadata for the web Agent tab (model/search/image_generation/observability).
-
-    Channel setup (voice/feishu/weixin) lives on the Channels tab, not here.
-    """
+    """Return Edit Setup metadata for the web Agent tab."""
     from .setup import (
         _PROVIDER_DESCRIPTIONS,
         _PROVIDER_LABELS,
@@ -585,6 +610,7 @@ def build_agent_edit_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
         OPENAI_MODELS,
         QWEN_MODELS,
         build_setup_schema,
+        build_voice_setup_schema,
     )
 
     create_schema = build_setup_schema()
@@ -603,6 +629,11 @@ def build_agent_edit_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
         image_provider = IMAGE_GENERATION_PROVIDER_NONE
     observability_cfg = config.get("observability") if isinstance(config.get("observability"), dict) else {}
     observability_enabled = bool(observability_cfg.get("enabled", False))
+    voice_raw = config.get("channels", {}).get("voice") if isinstance(config.get("channels"), dict) else None
+    voice_data = dict(voice_raw) if isinstance(voice_raw, dict) else {}
+    voice_config = VoiceChannelConfig.from_dict(voice_data)
+    voice_ready = bool(voice_data)
+    voice_setup_schema = build_voice_setup_schema(config)
 
     features = [
         {
@@ -644,6 +675,15 @@ def build_agent_edit_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
             "status": ("enabled" if observability_enabled else "disabled"),
             "disabled": not observability_available,
             "disabled_reason": "" if observability_available else "Requires an OpenAI-compatible model API.",
+        },
+        {
+            "id": "voice",
+            "kind": "agent",
+            "label": "Voice",
+            "description": "Configure Soniox voice, interruption policy, and audio devices.",
+            "status": f"{'enabled' if voice_ready else 'disabled'} / interruptions={voice_config.interruptions}",
+            "disabled": False,
+            "disabled_reason": "",
         },
     ]
 
@@ -720,6 +760,20 @@ def build_agent_edit_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
                 "base_url": LANGFUSE_BASE_URL,
             },
         },
+        "voice": {
+            "configured": voice_ready,
+            "defaults": {
+                "voice_api_key": "",
+                "languages": list(voice_config.languages),
+                "voice": voice_config.speaking_voice,
+                "interruptions": voice_config.interruptions,
+                "audio_input": voice_config.audio.input,
+                "audio_output": voice_config.audio.output,
+            },
+            "voice_options": voice_setup_schema["voice_options"],
+            "audio_devices": voice_setup_schema["audio_devices"],
+            "placeholders": {"soniox_api_key": SONIOX_KEY_PLACEHOLDER},
+        },
     }
 
 
@@ -734,7 +788,22 @@ def apply_agent_edit_setup(
         raise ValueError(f"Unsupported setup feature: {feature}")
 
     config = load_config(config_dir)
-    if normalized == "search":
+    if normalized == "voice":
+        selected_key = str(selection.get("voice_api_key") or "").strip()
+        existing_key = str(_current_voice(config).get("api_key") or "").strip()
+        if not selected_key and (not existing_key or is_placeholder_api_key(existing_key)):
+            raise ValueError("Soniox API key is required to configure voice")
+        update = prepare_voice_preset_update(
+            config,
+            provider="soniox",
+            api_key=selection.get("voice_api_key"),
+            voice=selection.get("voice"),
+            languages=selection.get("languages"),
+            interruptions=selection.get("interruptions"),
+            audio_input=selection.get("audio_input"),
+            audio_output=selection.get("audio_output"),
+        )
+    elif normalized == "search":
         update = prepare_search_provider_update(
             config,
             provider=str(selection.get("provider") or SEARCH_PROVIDER_NONE),
@@ -775,7 +844,8 @@ def apply_agent_edit_setup(
     return {
         "status": "ok",
         "feature": normalized,
-        "restart_required": True,
+        "restart_required": normalized in {"model", "search", "image_generation", "observability", "voice"},
+        "restart_channel": "voice" if normalized == "voice" else "api",
         "changed": bool(update.changes),
         "changes": [
             {"path": change.path, "before": change.before, "after": change.after}

@@ -83,6 +83,7 @@ from xagent.interfaces.cli.launcher import (
 )
 from xagent.interfaces.cli.overview import STATUS_ERROR, build_runtime_overview
 from xagent.interfaces.cli.processes import StartResult
+from xagent.interfaces.cli.runtime import _channel_command, _voice_interruptions_override
 from xagent.interfaces.cli.setup import SETUP_EXIT_CANCELLED
 from xagent.interfaces.cli.web_client import DEFAULT_WEB_CLIENT_PORT, web_client_config
 from xagent.schemas import Message, RoleType
@@ -841,14 +842,28 @@ class CLICommandTests(unittest.TestCase):
             "--api-key",
             "voice-key",
             "--force",
-            "--no-enabled",
         ])
         self.assertEqual(voice_setup.command, "voice")
         self.assertEqual(voice_setup.voice_action, "setup")
         self.assertIs(voice_setup.handler, handle_init_voice)
         self.assertEqual(voice_setup.api_key, "voice-key")
         self.assertTrue(voice_setup.force)
-        self.assertFalse(voice_setup.enabled)
+        self.assertFalse(hasattr(voice_setup, "enabled"))
+
+    def test_voice_interruption_override_survives_background_launch(self):
+        for action in ([], ["start"], ["restart"]):
+            for mode in (None, "auto", "on", "off"):
+                with self.subTest(action=action, mode=mode), patch(
+                    "xagent.interfaces.cli.runtime.resolve_agent_name", return_value="work"
+                ):
+                    flags = [] if mode is None else ["--interruptions", mode]
+                    args = build_parser().parse_args(["voice", *action, "--agent", "work", *flags])
+                    self.assertEqual(_voice_interruptions_override(args), mode)
+                    command = _channel_command("voice", args)
+                    child = build_parser().parse_args(command[3:])
+                    self.assertEqual(_voice_interruptions_override(child), mode)
+                    if mode is None:
+                        self.assertNotIn("--interruptions", command)
 
     def test_service_command_is_removed(self):
         with self.assertRaises(SystemExit):
@@ -1651,7 +1666,7 @@ class CLICommandTests(unittest.TestCase):
 
         self.assertEqual(
             fake_ui.option_titles,
-            ["Model", "Search", "Image", "Observability", "Back"],
+            ["Model", "Search", "Image", "Observability", "Voice", "Back"],
         )
         observability_launcher.assert_called_once_with(fake_ui, config_dir)
 
@@ -1828,8 +1843,7 @@ class CLICommandTests(unittest.TestCase):
             _write_runtime(tmpdir)
             _run_partial_update_launcher(fake_ui, Path(tmpdir))
 
-        self.assertEqual(fake_ui.option_keys, ["model", "search", "image_generation", "observability", "back"])
-        self.assertNotIn("voice", fake_ui.option_keys)
+        self.assertEqual(fake_ui.option_keys, ["model", "search", "image_generation", "observability", "voice", "back"])
         self.assertNotIn("feishu", fake_ui.option_keys)
         self.assertNotIn("weixin", fake_ui.option_keys)
 
@@ -2015,9 +2029,14 @@ class CLICommandTests(unittest.TestCase):
 
             _run_voice_config_launcher(fake_ui, config_dir)
 
-        self.assertEqual(set(fake_ui.options_by_key), {"api_key", "disable", "back"})
+        self.assertEqual(
+            set(fake_ui.options_by_key),
+            {"api_key", "voice", "languages", "interruptions", "input_device", "output_device", "disable", "back"},
+        )
         self.assertFalse(fake_ui.options_by_key["api_key"].disabled)
         self.assertTrue(fake_ui.options_by_key["disable"].disabled)
+        for key in ("voice", "languages", "interruptions", "input_device", "output_device"):
+            self.assertTrue(fake_ui.options_by_key[key].disabled)
 
     def test_voice_channel_launcher_shows_setup_when_voice_not_enabled(self):
         class FakeUI:
@@ -2544,11 +2563,10 @@ class CLICommandTests(unittest.TestCase):
             args = argparse.Namespace(
                 config_dir=tmpdir,
                 agent=None,
-                enabled=True,
                 api_key=None,
                 force=False,
             )
-            selection = VoiceInitSelection(voice_enabled=True, voice_api_key="voice-key")
+            selection = VoiceInitSelection(voice_api_key="voice-key")
 
             with patch("xagent.interfaces.cli.setup.TerminalUI") as terminal_ui:
                 with patch(
@@ -2569,7 +2587,6 @@ class CLICommandTests(unittest.TestCase):
             args = argparse.Namespace(
                 config_dir=tmpdir,
                 agent="work",
-                enabled=True,
                 api_key="voice-key",
                 force=False,
             )
@@ -2589,8 +2606,8 @@ class CLICommandTests(unittest.TestCase):
             {
                 "api_key": "voice-key",
                 "languages": ["zh", "en"],
-                "quiet_hours": "22:00-07:00",
-                "voice": "Owen",
+                "voice": "Daniel",
+                "interruptions": "auto",
             },
         )
         output = stdout.getvalue()
@@ -2603,7 +2620,6 @@ class CLICommandTests(unittest.TestCase):
             args = argparse.Namespace(
                 config_dir=tmpdir,
                 agent=None,
-                enabled=True,
                 api_key="new-key",
                 force=False,
             )
@@ -2617,13 +2633,12 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(config["channels"]["voice"]["api_key"], "soniox-key")
         self.assertIn("xagent voice setup --force", stdout.getvalue())
 
-    def test_init_voice_can_disable_existing_channel(self):
+    def test_init_voice_reuses_existing_key_when_no_key_is_entered(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             _write_runtime(tmpdir, voice=True)
             args = argparse.Namespace(
                 config_dir=tmpdir,
                 agent=None,
-                enabled=False,
                 api_key=None,
                 force=True,
             )
@@ -2634,7 +2649,7 @@ class CLICommandTests(unittest.TestCase):
             config = yaml.safe_load((Path(tmpdir) / "config.yaml").read_text(encoding="utf-8"))
 
         self.assertEqual(exit_code, 0)
-        self.assertNotIn("voice", config["channels"])
+        self.assertEqual(config["channels"]["voice"]["api_key"], "soniox-key")
 
     def test_channel_setup_intro_shows_runtime_and_config(self):
         class FakeUI:
@@ -2666,7 +2681,6 @@ class CLICommandTests(unittest.TestCase):
             voice_args = argparse.Namespace(
                 config_dir=tmpdir,
                 agent=None,
-                enabled=True,
                 api_key="voice-key",
                 force=False,
             )

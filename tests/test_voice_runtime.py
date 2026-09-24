@@ -5,7 +5,7 @@ import threading
 import unittest
 from datetime import datetime, timedelta
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from xagent.core.runtime import (
     ContactEntry,
@@ -26,6 +26,8 @@ from xagent.interfaces.voice.config import (
 )
 from xagent.interfaces.voice.audio import AudioTopology
 from xagent.interfaces.voice.factory import create_local_voice_runtime
+from xagent.interfaces.voice.floor import FloorState
+from xagent.interfaces.voice.spoken_ledger import SpokenLedger
 from xagent.interfaces.voice.runtime import VoiceRuntime, VoiceRuntimeOptions
 from xagent.interfaces.voice.types import VoiceUtterance
 from xagent.interfaces.voice.soniox import (
@@ -124,7 +126,7 @@ class VoiceConfigTests(unittest.TestCase):
     def test_minimal_configuration_uses_fixed_defaults(self):
         config = VoiceChannelConfig.from_dict({"api_key": "key"})
 
-        self.assertEqual(config.voice, "Owen")
+        self.assertEqual(config.voice, "Daniel")
         self.assertEqual(config.languages, ["zh", "en"])
         self.assertEqual(config.fallback_language, "zh")
         self.assertEqual(config.speed, 1.0)
@@ -138,9 +140,9 @@ class VoiceConfigTests(unittest.TestCase):
         self.assertEqual(config.speed, 1.2)
 
     def test_accepts_voice_name_rejects_speed_key(self):
-        config = VoiceChannelConfig.from_dict({"api_key": "key", "voice": "Ava"})
-        self.assertEqual(config.speaking_voice, "Ava")
-        self.assertEqual(config.to_public_dict()["voice"], "Ava")
+        config = VoiceChannelConfig.from_dict({"api_key": "key", "voice": "Daniel"})
+        self.assertEqual(config.speaking_voice, "Daniel")
+        self.assertEqual(config.to_public_dict()["voice"], "Daniel")
         with self.assertRaisesRegex(ValueError, "non-empty"):
             VoiceChannelConfig.from_dict({"api_key": "key", "voice": "  "})
         with self.assertRaisesRegex(ValueError, "Unknown voice setting"):
@@ -188,11 +190,9 @@ class VoiceConfigTests(unittest.TestCase):
         self.assertTrue(config.enable_interruptions)
         self.assertTrue(config.return_timestamps)
 
-    def test_rejects_profile_and_interruptions_keys(self):
+    def test_rejects_profile_key(self):
         with self.assertRaisesRegex(ValueError, "Unknown voice setting"):
             VoiceChannelConfig.from_dict({"api_key": "key", "profile": "headset"})
-        with self.assertRaisesRegex(ValueError, "Unknown voice setting"):
-            VoiceChannelConfig.from_dict({"api_key": "key", "interruptions": True})
 
     def test_rejects_unknown_voice_keys(self):
         with self.assertRaisesRegex(ValueError, "Unknown voice setting"):
@@ -549,18 +549,102 @@ class VoiceRuntimeTests(unittest.TestCase):
         cooldown.start()
         self.addCleanup(cooldown.stop)
 
-    def make_runtime(self, *, agent=None, recognizer=None, synthesizer=None, player=None, tasks_dir=None):
+    def make_runtime(
+        self,
+        *,
+        agent=None,
+        recognizer=None,
+        synthesizer=None,
+        player=None,
+        tasks_dir=None,
+        config=None,
+        allow_proactive_output=False,
+    ):
         runtime = VoiceRuntime(
             agent=agent or FakeAgent(),
-            config=voice_config(),
+            config=config or voice_config(),
             microphone=FakeMicrophone(),
             recognizer=recognizer or FakeRecognizer([]),
             synthesizer=synthesizer or FakeSynthesizer(),
             player=player or FakePlayer(),
-            options=VoiceRuntimeOptions(user_id="alice", tasks_dir=tasks_dir),
+            options=VoiceRuntimeOptions(
+                user_id="alice",
+                tasks_dir=tasks_dir,
+                allow_proactive_output=allow_proactive_output,
+            ),
             output=lambda *args, **kwargs: None,
         )
         return runtime
+
+    def test_voice_mode_does_not_start_autonomous_output_by_default(self):
+        runtime = self.make_runtime()
+
+        self.assertIsNone(runtime.task_scheduler)
+        self.assertFalse(runtime._proactive_speech_allowed())
+
+    def test_configured_interruptions_control_microphone_during_reply(self):
+        for mode, detected, paused in (("on", False, False), ("off", True, True)):
+            with self.subTest(mode=mode):
+                player = FakePlayer()
+                runtime = self.make_runtime(
+                    config=voice_config({"interruptions": mode}, echo_managed=detected),
+                    recognizer=FakeRecognizer([VoiceUtterance("你好", "zh")]),
+                    player=player,
+                )
+                player.pause_event = runtime.pause_event
+                asyncio.run(runtime.run_forever())
+                self.assertTrue(player.played)
+                self.assertEqual(player.pause_was_set, paused)
+
+    def test_forced_interruptions_still_degrade_on_repeated_echo(self):
+        async def run():
+            runtime = self.make_runtime(config=voice_config({"interruptions": "on"}))
+            runtime.recognizer.partial_relay = SimpleNamespace(snapshot=lambda: "hello there")
+            runtime._floor.allow_duplex_capture = True
+            stop = threading.Event()
+            with patch("xagent.interfaces.voice.runtime.time", Mock(monotonic=Mock(side_effect=[0, 1, 2, 3]))), patch(
+                "xagent.interfaces.voice.runtime.asyncio.sleep", new_callable=AsyncMock
+            ), self.assertLogs("VoiceRuntime", level="WARNING") as logs:
+                await runtime._monitor_barge_in(
+                    playback_stop_event=stop,
+                    spoken_ledger=SpokenLedger(),
+                    reply_buffer=["hello there."],
+                )
+            self.assertIn("interruptions=on", " ".join(logs.output))
+            self.assertFalse(runtime._duplex_capture_enabled)
+            self.assertFalse(runtime._floor.allow_duplex_capture)
+            self.assertTrue(runtime.pause_event.is_set())
+            self.assertFalse(stop.is_set())
+            self.assertEqual(runtime.config.to_public_dict()["interruptions"], "on")
+            await runtime._release_microphone_after_playback()
+            self.assertFalse(runtime.pause_event.is_set())
+        asyncio.run(run())
+
+    def test_forced_interruptions_cancel_reply_on_user_speech(self):
+        async def run():
+            agent = FakeAgent()
+            agent.abort = Mock()
+            runtime = self.make_runtime(agent=agent, config=voice_config({"interruptions": "on"}))
+            runtime.recognizer.partial_relay = SimpleNamespace(snapshot=lambda: "wait stop")
+            runtime._floor.state = FloorState.SPEAKING
+            stop = threading.Event()
+            interrupted = {"value": False}
+            with patch("xagent.interfaces.voice.runtime.time", Mock(monotonic=Mock(side_effect=[0, 1]))), patch(
+                "xagent.interfaces.voice.runtime.asyncio.sleep", new_callable=AsyncMock
+            ):
+                await runtime._monitor_barge_in(
+                    playback_stop_event=stop,
+                    spoken_ledger=SpokenLedger(),
+                    reply_buffer=["hello there."],
+                    interrupted_flag=interrupted,
+                )
+            self.assertTrue(stop.is_set())
+            self.assertTrue(interrupted["value"])
+            self.assertTrue(runtime.synthesizer.cancelled)
+            agent.abort.assert_called_once()
+            self.assertEqual(runtime._floor.state, FloorState.USER_SPEAKING)
+            self.assertTrue(runtime._duplex_capture_enabled)
+        asyncio.run(run())
 
     def test_routes_endpoint_to_agent_and_streamed_tts(self):
         agent = FakeAgent()
@@ -652,7 +736,7 @@ class VoiceRuntimeTests(unittest.TestCase):
                     user_id="alice",
                     target={"user_id": "alice"},
                 )
-                runtime = self.make_runtime(tasks_dir=tmpdir)
+                runtime = self.make_runtime(tasks_dir=tmpdir, allow_proactive_output=True)
                 runtime._speak = AsyncMock()
                 await runtime.task_scheduler.tick()
                 self.assertEqual(runtime._speak.await_count, 1)
@@ -664,7 +748,7 @@ class VoiceRuntimeTests(unittest.TestCase):
         async def run_delivery():
             agent = FakeAgent()
             agent.message_handler = SimpleNamespace(store_model_reply=AsyncMock())
-            runtime = self.make_runtime(agent=agent)
+            runtime = self.make_runtime(agent=agent, allow_proactive_output=True)
             runtime._speak = AsyncMock()
             delivery = SubconsciousDelivery(
                 content="background thought",
@@ -730,9 +814,9 @@ class VoiceRuntimeTests(unittest.TestCase):
                 near_field=True, echo_managed=True, reason="device name contains 'airpod'"
             ),
         )
-        config = VoiceChannelConfig.from_dict({"api_key": "key"})
+        config = VoiceChannelConfig.from_dict({"api_key": "key", "interruptions": "off"})
         agent = FakeAgent()
-        agent.voice = "Ava"
+        agent.voice = "Daniel"
         seen: dict[str, object] = {}
 
         def _adapters(cfg, **kwargs):
@@ -741,6 +825,7 @@ class VoiceRuntimeTests(unittest.TestCase):
             seen["diarization"] = cfg.enable_diarization
             seen["voice"] = cfg.voice
             seen["speed"] = cfg.speed
+            seen["interruptions"] = cfg.enable_interruptions
             return object(), object()
 
         with patch(
@@ -759,6 +844,10 @@ class VoiceRuntimeTests(unittest.TestCase):
 
         self.assertEqual(
             seen,
-            {"profile": "headset", "diarization": False, "voice": "Ava", "speed": 1.1},
+            {
+                "profile": "headset", "diarization": False, "voice": "Daniel",
+                "speed": 1.1, "interruptions": False,
+            },
         )
-        self.assertTrue(config.enable_interruptions)
+        self.assertFalse(config.enable_interruptions)
+        self.assertTrue(config.runtime_profile.echo_managed)

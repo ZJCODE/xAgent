@@ -94,6 +94,7 @@ from .setup import (
     SEARCH_PROVIDERS,
     SETUP_EXIT_CANCELLED,
     _format_init_command,
+    build_voice_setup_schema,
     handle_init,
     handle_init_feishu,
     handle_init_weixin,
@@ -310,27 +311,27 @@ def _voice_is_configured(config: dict[str, Any]) -> bool:
 
 
 def _voice_channel_options(config: dict[str, Any]) -> list[MenuOption]:
-    voice_enabled = _voice_is_configured(config)
+    voice_configured = _voice_is_configured(config)
     start_description = (
         "Start the voice channel."
-        if voice_enabled
+        if voice_configured
         else "Set up voice first."
     )
     return [
         MenuOption(
             "configure",
-            "Configure" if voice_enabled else "Set up",
-            "Update the Soniox API key or disable voice."
-            if voice_enabled
-            else "Add a Soniox API key and enable voice.",
+            "Configure" if voice_configured else "Set up",
+            "Update the Soniox API key or voice settings."
+            if voice_configured
+            else "Add a Soniox API key to configure voice.",
         ),
-        MenuOption("start", "Start", start_description, disabled=not voice_enabled),
+        MenuOption("start", "Start", start_description, disabled=not voice_configured),
         MenuOption("stop", "Stop", "Stop the voice channel."),
         MenuOption(
             "restart",
             "Restart",
-            "Restart the voice channel." if voice_enabled else "Set up voice first.",
-            disabled=not voice_enabled,
+            "Restart the voice channel." if voice_configured else "Set up voice first.",
+            disabled=not voice_configured,
         ),
         MenuOption("logs", "Logs", "View and follow the latest log output in real time."),
         MenuOption("devices", "List Devices", "Print available local audio input/output devices."),
@@ -339,15 +340,16 @@ def _voice_channel_options(config: dict[str, Any]) -> list[MenuOption]:
 
 
 def _voice_resetup_options(config: dict[str, Any]) -> list[MenuOption]:
-    voice_enabled = _voice_is_configured(config)
-    disable_description = (
-        "Remove channels.voice from config."
-        if voice_enabled
-        else "Voice is already disabled."
-    )
+    voice_configured = _voice_is_configured(config)
+    disable_description = "Remove channels.voice from config." if voice_configured else "Voice is already disabled."
     return [
-        MenuOption("api_key", "Soniox API Key", "Enable voice or update its credential."),
-        MenuOption("disable", "Disable", disable_description, disabled=not voice_enabled),
+        MenuOption("api_key", "Configure Voice", "Set the Soniox API key; other settings keep their defaults."),
+        MenuOption("voice", "Speaking voice", "Choose the voice used for spoken replies.", disabled=not voice_configured),
+        MenuOption("languages", "Spoken languages", "Set the language order used by speech recognition and replies.", disabled=not voice_configured),
+        MenuOption("interruptions", "Allow interruptions", "Choose automatic, always-on, or turn-taking behavior.", disabled=not voice_configured),
+        MenuOption("input_device", "Input device", "Choose the local microphone.", disabled=not voice_configured),
+        MenuOption("output_device", "Output device", "Choose the local speaker or headset.", disabled=not voice_configured),
+        MenuOption("disable", "Disable", disable_description, disabled=not voice_configured),
         MenuOption("back", "Back", "Return to Voice."),
     ]
 
@@ -388,7 +390,8 @@ def _partial_update_options(config_dir: Path) -> list[MenuOption]:
             observability_description,
             disabled=not observability_available,
         ),
-        MenuOption("back", "Back", "Return to Setup. Channels live under Channel."),
+        MenuOption("voice", "Voice", "Configure Soniox voice, interruptions, and audio devices."),
+        MenuOption("back", "Back", "Return to Setup. Channel lifecycle actions live under Channel."),
     ]
 
 
@@ -702,7 +705,8 @@ def _voice_summary_subtitle(config: dict[str, Any]) -> str:
         return "Voice is disabled."
     api_key = str(voice.get("api_key") or "").strip()
     credential = "configured" if api_key and not is_placeholder_api_key(api_key) else "placeholder"
-    return f"Provider: Soniox\nMode: Half-duplex\nAPI key: {credential}"
+    mode = str(voice.get("interruptions") or "auto")
+    return f"Provider: Soniox\nInterruptions: {mode}\nAPI key: {credential}"
 
 
 def _feishu_config_subtitle(config_dir: Path) -> str:
@@ -1339,6 +1343,80 @@ def _run_voice_config_launcher(ui: TerminalUI, config_dir: Path) -> None:
                 ui.print_panel(f"Voice update is invalid: {exc}", title="Setup", border_style="red")
                 continue
             _apply_config_update(ui, config_dir, update, return_home_on_success=True)
+        elif option.key in {"voice", "languages", "interruptions", "input_device", "output_device"}:
+            current = voice_config(config)
+            voice_schema = build_voice_setup_schema(config)
+            update_kwargs: dict[str, Any] = {"provider": "soniox"}
+            if option.key == "voice":
+                rows = [
+                    MenuOption(
+                        str(item.get("id")),
+                        str(item.get("label") or item.get("id")),
+                        str(item.get("description") or ""),
+                    )
+                    for item in (voice_schema.get("voice_options") or [])
+                    if item.get("id")
+                ]
+                choice = ui.select_menu(
+                    title="Speaking voice",
+                    subtitle="Choose a Soniox shared voice.",
+                    options=rows,
+                    footer="↑/↓ Move • Enter Select  •  q Back",
+                )
+                if choice is None:
+                    continue
+                update_kwargs["voice"] = choice.key
+            elif option.key == "languages":
+                default_languages = ", ".join(str(item) for item in (current.get("languages") or ["zh", "en"]))
+                text_value = ui.ask_text("Spoken languages", default=default_languages).strip() or default_languages
+                update_kwargs["languages"] = [
+                    item.strip() for item in text_value.replace(",", " ").split() if item.strip()
+                ]
+            elif option.key == "interruptions":
+                current_mode = str(current.get("interruptions") or "auto")
+                choice = ui.select_menu(
+                    title="Allow interruptions",
+                    subtitle="Auto follows the selected audio devices; echo protection remains active.",
+                    options=[
+                        MenuOption("auto", "Auto", "Follow detected device echo handling."),
+                        MenuOption("on", "On", "Allow barge-in when speech is detected."),
+                        MenuOption("off", "Off", "Use turn-taking during thinking and playback."),
+                    ],
+                    footer="↑/↓ Move • Enter Select  •  q Back",
+                )
+                if choice is None:
+                    continue
+                update_kwargs["interruptions"] = choice.key or current_mode
+            else:
+                direction = "input" if option.key == "input_device" else "output"
+                rows = [
+                    MenuOption(
+                        str(item.get("id")),
+                        str(item.get("label") or item.get("id")),
+                        str(item.get("description") or ""),
+                    )
+                    for item in (voice_schema.get("audio_devices", {}).get(direction) or [])
+                    if item.get("id")
+                ]
+                current_audio = current.get("audio") if isinstance(current.get("audio"), dict) else {}
+                selected = str(current_audio.get(direction) or "auto")
+                if not any(item.key == selected for item in rows):
+                    rows.append(MenuOption(selected, f"{selected} (current/unavailable)", "Saved value not reported by the local audio system."))
+                choice = ui.select_menu(
+                    title="Voice input device" if direction == "input" else "Voice output device",
+                    subtitle=(voice_schema.get("audio_devices", {}).get("error") or "Choose a local audio device."),
+                    options=rows,
+                    footer="↑/↓ Move • Enter Select  •  q Back",
+                )
+                if choice is None:
+                    continue
+                update_kwargs["audio_input" if direction == "input" else "audio_output"] = choice.key or selected
+            try:
+                update = prepare_voice_preset_update(config, **update_kwargs)
+            except Exception as exc:
+                ui.print_panel(f"Voice update is invalid: {exc}", title="Setup", border_style="red")
+                continue
+            _apply_config_update(ui, config_dir, update, return_home_on_success=True)
         elif option.key == "disable":
             try:
                 update = prepare_voice_preset_update(config, provider="none")
@@ -1370,6 +1448,8 @@ def _run_partial_update_launcher(ui: TerminalUI, config_dir: Path) -> None:
             should_pause = _run_search_config_launcher(ui, config_dir)
         elif option.key == "image_generation":
             should_pause = _run_image_generation_config_launcher(ui, config_dir)
+        elif option.key == "voice":
+            _run_voice_config_launcher(ui, config_dir)
         if should_pause is True:
             ui.pause("Press Enter to return to Edit Setup")
 
@@ -1386,7 +1466,7 @@ def _run_resetup_launcher(config_dir: Path) -> int:
                     MenuOption(
                         "partial",
                         "Edit Setup",
-                        "Update model, search, image generation, or observability. Channels live under Channel.",
+                        "Update model, search, image generation, observability, or voice settings.",
                     ),
                     MenuOption("full", "Full Setup", "Run the full setup flow again."),
                     MenuOption("back", "Back", "Return to the main launcher."),

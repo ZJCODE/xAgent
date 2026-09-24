@@ -409,7 +409,7 @@ That last point argues for the runtime owning tags for system speech and keeping
 the model's own use rare.
 
 Voice cloning is the further end of the same axis: the agent could have one
-distinct voice of its own rather than a catalogue entry named Owen.
+distinct voice of its own rather than a fixed catalogue entry such as Daniel.
 
 ### 7d. Rejected: buffering to sentence boundaries before TTS
 

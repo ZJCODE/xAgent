@@ -196,8 +196,8 @@ def _add_voice_runtime_arguments(
         "--interruptions",
         dest="interruptions",
         choices=["auto", "on", "off"],
-        default="auto",
-        help="Override barge-in, which is otherwise enabled only on echo-cancelling devices",
+        default=None,
+        help="Override channels.voice.interruptions for this session (auto follows detected devices)",
     )
     parser.add_argument(
         "--speed",
@@ -270,12 +270,6 @@ def _add_weixin_setup_arguments(parser: argparse.ArgumentParser) -> None:
 
 def _add_voice_setup_arguments(parser: argparse.ArgumentParser) -> None:
     _add_agent_argument(parser)
-    parser.add_argument(
-        "--enabled",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="Enable or disable voice",
-    )
     parser.add_argument("--api-key", dest="api_key", default=None, help="Soniox API key")
     parser.add_argument("--force", action="store_true", help="Overwrite existing channels.voice config")
 

@@ -3,26 +3,6 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
-
-
-def in_quiet_hours(
-    *,
-    quiet_start: int,
-    quiet_end: int,
-    now: datetime | None = None,
-) -> bool:
-    """Return True when local time is inside the quiet window.
-
-    Bounds are minutes past midnight; equal bounds mean no window.
-    """
-    current = now or datetime.now()
-    minute_of_day = current.hour * 60 + current.minute
-    if quiet_start == quiet_end:
-        return False
-    if quiet_start < quiet_end:
-        return quiet_start <= minute_of_day < quiet_end
-    return minute_of_day >= quiet_start or minute_of_day < quiet_end
 
 
 @dataclass

@@ -64,16 +64,44 @@ def _write_agent(root: Path, *, anthropic: bool = False) -> Path:
 
 
 class AgentEditSetupHelperTests(unittest.TestCase):
-    def test_schema_features_exclude_channel_setup(self):
+    def test_schema_features_include_voice_setup(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             agent_dir = _write_agent(Path(tmpdir))
             schema = build_agent_edit_setup_schema(load_config(agent_dir))
 
         self.assertEqual(
             [row["id"] for row in schema["features"]],
-            ["model", "search", "image_generation", "observability"],
+            ["model", "search", "image_generation", "observability", "voice"],
         )
         self.assertFalse(schema["features"][3]["disabled"])
+        self.assertEqual(
+            [item["id"] for item in schema["voice"]["voice_options"]],
+            ["Maya", "Daniel", "Adrian", "Claire", "Oliver", "Isla"],
+        )
+        self.assertEqual(schema["voice"]["audio_devices"]["input"][0]["id"], "auto")
+        self.assertEqual(schema["voice"]["audio_devices"]["output"][0]["id"], "auto")
+
+    def test_voice_schema_and_apply_preserve_other_channel_settings(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            agent_dir = _write_agent(Path(tmpdir))
+            config = load_config(agent_dir)
+            config["channels"]["voice"] = {
+                "api_key": "voice-key",
+                "interruptions": "off",
+            }
+            (agent_dir / "config.yaml").write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+            schema = build_agent_edit_setup_schema(load_config(agent_dir))
+            result = apply_agent_edit_setup(
+                agent_dir,
+                "voice",
+                {"voice": "Maya", "interruptions": "on", "languages": ["en"]},
+            )
+            updated = load_config(agent_dir)["channels"]["voice"]
+        self.assertEqual(schema["voice"]["defaults"]["interruptions"], "off")
+        self.assertTrue(result["changed"])
+        self.assertEqual(updated["voice"], "Maya")
+        self.assertEqual(updated["interruptions"], "on")
+        self.assertEqual(updated["languages"], ["en"])
 
     def test_observability_disabled_for_anthropic_model_api(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -156,16 +184,31 @@ class AgentEditSetupRouteTests(unittest.TestCase):
                 "/api/agent/setup/image_generation",
                 json={"provider": "openai"},
             )
+            voice_response = client.post(
+                "/api/agent/setup/voice",
+                json={
+                    "voice_api_key": "voice-key",
+                    "voice": "Maya",
+                    "languages": ["en", "zh"],
+                    "interruptions": "on",
+                },
+            )
 
             self.assertEqual(schema_response.status_code, 200)
             feature_ids = [row["id"] for row in schema_response.json()["features"]]
-            self.assertEqual(feature_ids, ["model", "search", "image_generation", "observability"])
+            self.assertEqual(feature_ids, ["model", "search", "image_generation", "observability", "voice"])
             self.assertEqual(apply_response.status_code, 200)
             self.assertEqual(apply_response.json()["feature"], "search")
             self.assertTrue(apply_response.json()["restart_required"])
             self.assertEqual(image_response.status_code, 200)
             self.assertEqual(image_response.json()["feature"], "image_generation")
+            self.assertEqual(voice_response.status_code, 200)
+            self.assertEqual(voice_response.json()["feature"], "voice")
+            self.assertEqual(voice_response.json()["restart_channel"], "voice")
             self.assertEqual(load_config(agent_dir)["image_generation"]["provider"], "openai")
+            voice = load_config(agent_dir)["channels"]["voice"]
+            self.assertEqual(voice["voice"], "Maya")
+            self.assertEqual(voice["interruptions"], "on")
 
 
 if __name__ == "__main__":

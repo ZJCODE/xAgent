@@ -395,19 +395,12 @@ is what local-first should mean on a device with a microphone.
 Worth confirming against a real invoice before sizing the work, but the
 documented billing rule is unambiguous.
 
-### 4.4 Quiet hours and presence
+### 4.4 Proactive output deferred
 
-Proactive speech (scheduled tasks, subconscious deliveries) currently has no
-guard except prose inside a prompt. On a device in a bedroom that is not
-adequate. Add real preconditions, checked by the floor: hour within the allowed
-window, someone heard within the last N hours, floor idle, and a rate cap per
-hour. A proactive utterance should also open softly rather than starting
-mid-thought at full volume.
-
-**Acceptance:** two people in a room are separated in the transcript and not
-merged into one relationship card; television audio produces no dispatches over
-a 30-minute sample; idle-day cost drops to near zero; no proactive utterance
-inside quiet hours across a week of scheduled tasks.
+Scheduled tasks and subconscious deliveries do not speak in the current voice
+mode. This keeps the first release turn-based: the microphone listens and the
+agent replies only after an explicit user turn. Revisit proactive output as a
+separate product decision after the basic conversation loop is stable.
 
 ## Stage 5 — Make it fast
 
@@ -435,7 +428,7 @@ semantics optimises the wrong thing.
   `max_endpoint_delay_ms` (the Soniox + LiveKit reference agent runs 1000 ms) and
   make sensitivity adapt to the shape of the partial transcript.
 - **A voice of its own.** Optionally clone a voice so the agent is a specific
-  person rather than a catalogue entry named Owen. This belongs to identity, not
+  person rather than a fixed catalogue entry such as Daniel. This belongs to identity, not
   latency, but it is the last thing standing between the current output and
   something that sounds like someone.
 
@@ -498,7 +491,7 @@ settings arrive piecemeal:
 - `attention` — mode (always / open window / name required), window length, wake
   terms.
 - `presence` — idle timeout before closing the STT session.
-- `proactive` — quiet hours, rate cap, presence requirement.
+- `proactive` — reserved for a future opt-in output mode.
 - `speakers` — diarization on/off, what to do with an unbound speaker.
 
 Keep defaults good enough that an untouched config gives a good room experience;

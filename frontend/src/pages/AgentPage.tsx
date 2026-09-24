@@ -144,6 +144,7 @@ export function AgentPage() {
   const [setupFeature, setSetupFeature] = useState<AgentEditSetupFeatureId | null>(null);
   const [setupNotice, setSetupNotice] = useState("");
   const [restartingApi, setRestartingApi] = useState(false);
+  const [restartSetupChannel, setRestartSetupChannel] = useState<"api" | "voice" | null>(null);
 
   const dirty = useMemo(() => editorValue !== (identity?.identity || ""), [editorValue, identity]);
   const dirtyConfig = useMemo(
@@ -272,11 +273,13 @@ export function AgentPage() {
     setSetupFeature(null);
     if (!result.changed) {
       setSetupNotice("No config values changed.");
+      setRestartSetupChannel(null);
       return;
     }
+    setRestartSetupChannel(result.restart_required ? (result.restart_channel === "voice" ? "voice" : "api") : null);
     setSetupNotice(
       result.restart_required
-        ? "Setup saved. Restart the API channel for model, search, image generation, and observability changes to take effect."
+        ? `Setup saved. Restart the ${result.restart_channel === "voice" ? "Voice" : "API"} channel for the changes to take effect.`
         : "Setup saved.",
     );
     await load();
@@ -284,11 +287,13 @@ export function AgentPage() {
   };
 
   const restartApiChannel = async () => {
+    const channel = restartSetupChannel || "api";
     setRestartingApi(true);
     setError("");
     try {
-      await restartChannel("api");
-      setSetupNotice("API channel restarted.");
+      await restartChannel(channel);
+      setSetupNotice(`${channel === "voice" ? "Voice" : "API"} channel restarted.`);
+      setRestartSetupChannel(null);
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -350,10 +355,10 @@ export function AgentPage() {
       {setupNotice ? (
         <div className="success-strip setup-notice-strip">
           <span>{setupNotice}</span>
-          {setupNotice.includes("Restart the API") ? (
+          {restartSetupChannel ? (
             <Button type="button" variant="secondary" disabled={restartingApi} onClick={() => void restartApiChannel()}>
               <RefreshCw size={14} />
-              {restartingApi ? "Restarting..." : "Restart API"}
+              {restartingApi ? "Restarting..." : `Restart ${restartSetupChannel === "voice" ? "Voice" : "API"}`}
             </Button>
           ) : null}
         </div>

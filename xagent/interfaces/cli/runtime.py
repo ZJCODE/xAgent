@@ -16,6 +16,7 @@ from typing import Any, Optional
 
 from ...core.runtime import create_runtime_heartbeat
 from ..base import BaseAgentConfig, BaseAgentRunner
+from ..voice.config import VoiceInterruptionMode
 from .agents import AgentRegistryError, management_root, resolve_agent_name
 from .channels import (
     CHANNEL_API,
@@ -168,13 +169,12 @@ def _channel_command(channel: str, args: argparse.Namespace) -> list[str]:
         output_device = getattr(args, "output_device", None)
         if output_device is not None:
             command.extend(["--output-device", str(output_device)])
-        for flag, attr in (
-            ("--profile", "voice_profile"),
-            ("--interruptions", "interruptions"),
-        ):
-            value = getattr(args, attr, None)
-            if value not in (None, "auto"):
-                command.extend([flag, str(value)])
+        profile = getattr(args, "voice_profile", None)
+        if profile not in (None, "auto"):
+            command.extend(["--profile", str(profile)])
+        interruptions = _voice_interruptions_override(args)
+        if interruptions is not None:
+            command.extend(["--interruptions", interruptions])
         speed = getattr(args, "speech_speed", None)
         if speed is not None:
             command.extend(["--speed", str(speed)])
@@ -471,11 +471,9 @@ def _voice_profile_override(args: argparse.Namespace) -> str | None:
     return None if value == "auto" else value
 
 
-def _voice_interruptions_override(args: argparse.Namespace) -> bool | None:
-    value = str(getattr(args, "interruptions", "auto") or "auto").strip().lower()
-    if value == "auto":
-        return None
-    return value == "on"
+def _voice_interruptions_override(args: argparse.Namespace) -> VoiceInterruptionMode | None:
+    # None inherits config; explicit auto must override a persisted on/off.
+    return getattr(args, "interruptions", None)
 
 
 def _voice_speed_override(args: argparse.Namespace) -> float | None:
@@ -529,8 +527,8 @@ def _run_voice_channel(args: argparse.Namespace, config: dict[str, Any]) -> int:
             runner.agent,
             config.get("runtime") if isinstance(config, dict) else None,
             logger_=logging.getLogger(__name__),
-            subconscious_delivery_sink=getattr(runtime, "deliver_subconscious_message", None),
-            subconscious_deliverable_channels={"voice"},
+            subconscious_delivery_sink=None,
+            subconscious_deliverable_channels=set(),
         )
         stop_requested = False
         loop = asyncio.get_running_loop()

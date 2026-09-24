@@ -135,7 +135,6 @@ class WebChannelRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertFalse(payload["configured"])
-        self.assertTrue(payload["defaults"]["voice_enabled"])
         self.assertEqual(payload["defaults"]["voice_api_key"], "")
         self.assertEqual(payload["defaults"]["languages"], ["zh", "en"])
         self.assertNotIn("voice_providers", payload)
@@ -148,7 +147,6 @@ class WebChannelRouteTests(unittest.IsolatedAsyncioTestCase):
                 json={
                     "force": False,
                     "selection": {
-                        "voice_enabled": True,
                         "voice_api_key": "voice-test-key",
                     },
                 },
@@ -179,7 +177,7 @@ class WebChannelRouteTests(unittest.IsolatedAsyncioTestCase):
                 "/api/channels/voice/setup",
                 json={
                     "force": True,
-                    "selection": {"voice_enabled": True, "voice_api_key": "new-key"},
+                    "selection": {"voice_api_key": "new-key"},
                 },
             )
 
@@ -189,7 +187,7 @@ class WebChannelRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(saved["languages"], ["en", "zh"])
         self.assertEqual(saved["audio"]["input"], "Mic")
 
-    async def test_voice_setup_can_disable_channel(self):
+    async def test_voice_setup_always_configures_channel(self):
         config_path = self.agent_a_path / "config.yaml"
         config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
         config["channels"]["voice"] = {"api_key": "old-key"}
@@ -198,13 +196,13 @@ class WebChannelRouteTests(unittest.IsolatedAsyncioTestCase):
         async with await self._client() as client:
             response = await client.post(
                 "/api/channels/voice/setup",
-                json={"force": True, "selection": {"voice_enabled": False, "voice_api_key": ""}},
+                json={"force": True, "selection": {"voice_api_key": "new-key"}},
             )
 
         self.assertEqual(response.status_code, 200)
-        self.assertFalse(response.json()["channel"]["configured"])
+        self.assertTrue(response.json()["channel"]["configured"])
         saved = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-        self.assertNotIn("voice", saved["channels"])
+        self.assertEqual(saved["channels"]["voice"]["api_key"], "new-key")
 
     async def test_feishu_manual_setup_writes_credentials(self):
         async with await self._client() as client:
@@ -255,11 +253,11 @@ class WebChannelRouteTests(unittest.IsolatedAsyncioTestCase):
         async with await self._client() as client:
             first = await client.post(
                 "/api/channels/voice/setup",
-                json={"force": False, "selection": {"voice_enabled": True, "voice_api_key": "one"}},
+                json={"force": False, "selection": {"voice_api_key": "one"}},
             )
             second = await client.post(
                 "/api/channels/voice/setup",
-                json={"force": False, "selection": {"voice_enabled": True, "voice_api_key": "two"}},
+                json={"force": False, "selection": {"voice_api_key": "two"}},
             )
 
         self.assertEqual(first.status_code, 200)
@@ -276,7 +274,6 @@ class WebChannelRouteTests(unittest.IsolatedAsyncioTestCase):
                 json={
                     "force": False,
                     "selection": {
-                        "voice_enabled": True,
                         "voice_api_key": "voice-test-key",
                     },
                 },

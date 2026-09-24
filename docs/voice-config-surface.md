@@ -1,7 +1,7 @@
 # Voice config surface: what to expose, what to hide
 
 Status: implemented. `channels.voice` grew from 6 keys to 34 during stages 1–5,
-was curated down to 11, and is now 4.
+was curated down to 11, and now writes 5 regular settings plus optional devices.
 
 Scope: which of the knobs in `xagent/interfaces/voice/config.py` belong in the
 `config.yaml` that `xagent init` / `xagent voice setup` writes, which stay legal
@@ -10,7 +10,7 @@ but unwritten, and which should stop being config at all.
 ## 1. The test
 
 For an agent that perceives and remembers, every config key is a claim that the
-agent cannot work something out for itself. Only three kinds of setting survive
+agent cannot work something out for itself. Four kinds of setting survive
 that claim:
 
 1. **A credential.** Unobservable from inside the room; it can only be told.
@@ -19,10 +19,13 @@ that claim:
    good, because the failure is expensive and silent.
 3. **A fact that cold start cannot observe.** Something the agent would work out
    after a few minutes of listening, but which must be right on the first turn.
+4. **An explicit interaction preference.** Whether people want to interrupt a
+   reply cannot be inferred from whether the hardware can support it. A shared
+   channel policy must also work before any speaker is identified.
 
-Everything else is one of three other things, none of them config: a property of
-the hardware, which can be detected; a preference of a particular person, which
-belongs in memory; or an invariant with one correct answer, which is a constant.
+Hardware properties should be detected, preferences of an identified person can
+belong in memory, and invariants with one correct answer should be constants.
+Explicit channel policies remain configuration rather than inferred hardware facts.
 
 Two hard exclusions on top:
 
@@ -41,18 +44,13 @@ channels:
     api_key: your_soniox_api_key_here
     languages: [zh, en]         # languages actually spoken here; the first is
                                 # also the TTS language when a reply is unclear
-    quiet_hours: "22:00-07:00"  # never start talking unprompted inside this
-                                # window; "" disables it
-    voice: Owen                 # speaking voice, used wherever the agent is heard
+    voice: Daniel               # one of six representative English voices
+    interruptions: auto         # auto | "on" | "off"
 ```
 
 Why each earns its line:
 
 - **`api_key`** — test 1. Required, no default possible.
-- **`quiet_hours`** — test 2, and the only one of these whose wrong value cannot
-  be taken back. A physical speaker in a bedroom at 3 a.m. is not recoverable by
-  editing the file the next morning. One `"22:00-07:00"` string reads like a
-  setting where two integer keys read like an implementation detail.
 - **`languages`** — test 3. Soniox accuracy depends on it from the first
   utterance, before there is any conversation to infer it from. A household that
   speaks one language should not pay the accuracy cost of hints for two. One
@@ -64,6 +62,10 @@ Why each earns its line:
   every agent is heard aloud: an agent that never speaks carries no voice
   setting at all, and the one place a voice is actually used is the place it
   is configured.
+- **`interruptions`** — test 4. `auto` follows detected echo handling; `on`
+  attempts to allow interruptions even when detection says otherwise; `off`
+  selects turn-taking. All modes retain runtime echo protection. Unquoted YAML
+  `on`/`off` (and booleans `true`/`false`) are accepted and normalized to strings.
 
 `to_public_dict` always writes the curated settings, defaults included —
 `audio` appears only once a device has been pinned. Echoing defaults back into
@@ -71,7 +73,7 @@ the file is how a curated surface grows again on the next `xagent voice setup`.
 
 ## 3. Detected, not configured
 
-**`profile` and `interruptions`.** `detect_audio_topology` (`audio.py`) reads the
+**Device topology and `profile`.** `detect_audio_topology` (`audio.py`) reads the
 devices that were actually selected and answers two questions the old `profile`
 boolean conflated:
 
@@ -82,11 +84,25 @@ boolean conflated:
   conference speakerphone is far-field but echo-managed, a laptop mic with
   laptop speakers is neither.
 
-Both are session-level facts, not install-level ones. The same machine moves
-between earbuds and a room speaker within a day, so a value written into
-`config.yaml` is wrong half the time, while a detection that is wrong once is
-corrected by the next session. The decision is logged, and `--profile` and
-`--interruptions` override it for a session.
+Both are inferred session-level facts, not persistent preferences. Detection
+uses device names and whether capture/playback share a device; it does not
+measure acoustic echo cancellation. `--profile` can override the near/far-field
+profile for a session.
+
+Interruption policy is separate from those facts. Precedence is an explicitly
+provided `--interruptions auto|on|off`, then `channels.voice.interruptions`, then
+the default `auto`. In particular, `--interruptions auto` overrides a saved
+`on` or `off`, including when using `voice start` or `voice restart`. Session
+overrides never overwrite the saved preference or the detected echo capability.
+Startup logs report the policy, its source, detected echo handling and whether
+barge-in is enabled.
+
+`off` preserves the existing half-duplex behavior: microphone audio is paused
+during both thinking and playback, so follow-up steering during thinking is
+also disabled. Separate controls for these two phases are not introduced here.
+Timing and word-count thresholds remain internal profile settings. The current
+runtime measures the persistence of a nonempty partial transcript, not raw VAD
+speech duration.
 
 | Behaviour | `headset` | `room` |
 | --- | --- | --- |
@@ -101,9 +117,11 @@ corrected by the next session. The decision is logged, and `--profile` and
 Detection can misjudge echo cancellation, and that failure is loud: the agent
 interrupts itself for the rest of the session. `SelfInterruptionGuard`
 (`echo_guard.py`) recognises the symptom — the words that interrupt are the
-words being spoken — and disables duplex capture after the second such partial.
-An automatic decision needs a way to be proven wrong; otherwise it is only a
-config problem the user can no longer see.
+words being spoken — and disables duplex capture after two consecutive echo
+classifications. This also applies to `on`: capture is paused immediately for
+the current playback, subsequent replies use half-duplex, and a warning gives
+the reason and requested policy. The saved preference is unchanged; a new
+runtime session starts with a fresh guard.
 
 ## 4. Remembered, not configured
 
@@ -141,16 +159,18 @@ person, and the agent has per-person memory. `--speed` remains for a session.
 
 ## 6. Schema shape
 
-`channels.voice` accepts `api_key`, `languages`, `quiet_hours`, `voice` and
-`audio`; anything else is rejected with a close-match hint. `audio` is accepted but not
-written: on a fixed appliance the selected device is a stable machine-level fact
+`channels.voice` accepts `api_key`, `languages`, `voice`, `interruptions` and
+`audio`; anything else is rejected with a close-match hint. There is no quiet
+hours setting because voice only replies to an explicit user turn.
+`audio` is written only when pinned: on a fixed appliance the selected device is a stable machine-level fact
 that has to survive a restart, and the launcher restarts the channel without
 flags. Everywhere a human is at a terminal, `--input-device` / `--output-device`
 and `xagent voice --list-devices` are the escape hatch.
 
-There is no advanced tier of YAML keys. Overrides are session-level CLI flags,
-so that an override is a decision someone makes now with the device in front of
-them, rather than a line that outlives the situation that justified it.
+There is no advanced tier of YAML thresholds. Session-level CLI flags override
+the persistent policy without changing it. Existing configurations without
+`interruptions` retain device-based automatic behavior; setup and credential
+rotation preserve an explicitly saved preference.
 
 ## 7. Goal check (GOAL.md mandatory review)
 
@@ -168,12 +188,41 @@ them, rather than a line that outlives the situation that justified it.
   no unspoken text stored as spoken, no half-question stored as a whole turn.
 - **Unified-memory impact.** Improved. Removing `names` removes a parallel store
   of who the agent knows.
-- **Agent-governed sharing.** `quiet_hours` constrains when the agent speaks
-  aloud in a shared physical space, never what it is willing to say. It now
-  honours minutes, which it previously accepted and discarded.
+- **Agent-governed sharing.** The current voice mode only speaks in response to
+  an explicit user turn; proactive output is disabled while this surface is
+  simplified.
 - **Diary-anchored carrier.** Unchanged; no setting here adds a parallel store.
 - **Attribution and continuity impact.** Names derived from relationship cards
   improve recognition at the source, and diarization stays on by default so
   who-said-what survives into the diary. Fixing `require_recent_speech` is a
   continuity fix too: the agent no longer speaks into a room it has not heard
   from in days.
+
+Interruption-policy goal check: the agent's identity, first-person journal,
+unified memory, diary authority and sharing decisions remain unchanged. The
+policy applies to the channel in both 1:1 and group settings, preserving speaker
+attribution and existing spoken-position metadata. Persisting it supplies
+continuity across restarts without creating a per-user memory store or changing
+who is allowed to receive information.
+
+## 8. Setup surfaces
+
+Voice is exposed in both `xAgent Setup / Edit Setup` and the web Agent setup
+tiles. The channel setup wizard uses the same fields and validation. Both
+surfaces edit the persisted channel block; they do not write session CLI
+overrides. API keys remain masked and blank means “keep the existing key”.
+
+Entering voice setup enables the channel and asks only for the Soniox key;
+there is no separate enable checkbox. Edit Setup exposes speaking voice,
+ordered languages, interruption policy, and optional input/output device pins
+when they need to be changed.
+The summary shows the saved interruption policy, while actual runtime
+activation continues to be reported by the voice startup log because `auto`
+depends on the devices selected at that session.
+
+The setup surfaces render `Speaking voice` as a dropdown with six representative
+English voices from Soniox's published shared catalogue. `Input device` and
+`Output device` are populated from the local PortAudio/sounddevice inventory,
+with an `Auto (recommended)` entry always available. If the host cannot
+enumerate audio hardware, the UI keeps the Auto choice and shows the
+enumeration error instead of blocking setup.

@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import difflib
 import os
-import re
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -32,7 +31,20 @@ SONIOX_ENDPOINT_SENSITIVITY = 0.3
 SONIOX_MAX_ENDPOINT_DELAY_MS = 1_500
 SONIOX_TTS_MAX_TEXT_CHARS = 5_000
 
+# Six representative English voices from Soniox's shared catalogue. Keeping a
+# small fixed set makes the first setup decision quick and predictable.
+SONIOX_SHARED_VOICE_OPTIONS = (
+    ("Maya", "Female · American English"),
+    ("Daniel", "Male · American English"),
+    ("Adrian", "Male · British English"),
+    ("Claire", "Female · British English"),
+    ("Oliver", "Male · Australian English"),
+    ("Isla", "Female · Australian English"),
+)
+SONIOX_SHARED_VOICE_IDS = frozenset(voice_id for voice_id, _ in SONIOX_SHARED_VOICE_OPTIONS)
+
 VoiceProfileName = Literal["room", "headset"]
+VoiceInterruptionMode = Literal["auto", "on", "off"]
 
 
 @dataclass(frozen=True)
@@ -48,6 +60,8 @@ class VoiceRuntimeProfile:
     name: VoiceProfileName = "room"
     echo_managed: bool = False
     source: str = "default"
+    # A session preference must never overwrite detected hardware capability.
+    interruptions_override: VoiceInterruptionMode | None = None
 
 
 @dataclass(frozen=True)
@@ -56,7 +70,7 @@ class VoiceSpeechStyle:
     block — the channel is the only place the agent is heard — while rate is a
     listener's preference and stays a per-session override."""
 
-    voice: str = "Owen"
+    voice: str = "Daniel"
     speed: float = 1.0
 
 _VOICE_KEY_PLACEHOLDERS = {
@@ -69,8 +83,8 @@ _VOICE_TOP_LEVEL_KEYS = frozenset(
     {
         "api_key",
         "languages",
-        "quiet_hours",
         "voice",
+        "interruptions",
         "audio",
     }
 )
@@ -79,44 +93,8 @@ VOICE_CONFIG_EXAMPLE = """channels:
   voice:
     api_key: your_soniox_api_key_here
     languages: [zh, en]
-    quiet_hours: "22:00-07:00"
-    voice: Owen"""
-
-
-def parse_quiet_hours(value: str | None) -> tuple[int, int]:
-    """Parse ``HH:MM-HH:MM`` into minutes past midnight.
-
-    Empty string means no quiet window. Minutes are honoured: a window is not
-    allowed to accept precision it then discards.
-    """
-    raw = (value or "").strip()
-    if not raw:
-        return 0, 0
-    match = re.match(
-        r"^(\d{1,2})(?::(\d{2}))?\s*-\s*(\d{1,2})(?::(\d{2}))?$",
-        raw,
-    )
-    if not match:
-        raise ValueError('voice.quiet_hours must look like "22:00-07:00" or ""')
-    start = _minutes_past_midnight(match.group(1), match.group(2))
-    end = _minutes_past_midnight(match.group(3), match.group(4))
-    return start, end
-
-
-def _minutes_past_midnight(hour_text: str, minute_text: str | None) -> int:
-    hour = int(hour_text)
-    minute = int(minute_text or 0)
-    if not 0 <= hour <= 23:
-        raise ValueError("voice.quiet_hours hours must be between 0 and 23")
-    if not 0 <= minute <= 59:
-        raise ValueError("voice.quiet_hours minutes must be between 0 and 59")
-    return hour * 60 + minute
-
-
-def format_quiet_hours(start: int, end: int) -> str:
-    if start == end:
-        return ""
-    return f"{start // 60:02d}:{start % 60:02d}-{end // 60:02d}:{end % 60:02d}"
+    voice: Daniel
+    interruptions: auto"""
 
 
 def _suggest_voice_key(bad_key: str) -> str:
@@ -182,8 +160,6 @@ class VoicePerformanceConfigModel(BaseModel):
 class VoiceProactiveConfigModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    quiet_start_minute: int = Field(default=22 * 60, ge=0, le=1_439)
-    quiet_end_minute: int = Field(default=7 * 60, ge=0, le=1_439)
     max_per_hour: int = Field(default=3, ge=0, le=30)
     require_recent_speech: bool = True
 
@@ -227,16 +203,24 @@ class VoiceChannelConfig(BaseModel):
 
     api_key: str | None = None
     languages: list[str] = Field(default_factory=lambda: ["zh", "en"])
-    quiet_hours: str = "22:00-07:00"
     # The speaking voice. Not every agent is heard aloud, so the name lives in
     # the voice channel block rather than on the agent itself. YAML key is
     # ``voice``; the runtime reads the resolved ``voice`` property instead
     # (set by ``apply_speech_style``), which may differ per session.
-    speaking_voice: str = Field(default="Owen", alias="voice")
+    speaking_voice: str = Field(default="Daniel", alias="voice")
+    interruptions: VoiceInterruptionMode = "auto"
     audio: VoiceAudioConfig = Field(default_factory=VoiceAudioConfig)
 
     _runtime_profile: VoiceRuntimeProfile = PrivateAttr(default_factory=VoiceRuntimeProfile)
     _speech_style: VoiceSpeechStyle = PrivateAttr(default_factory=VoiceSpeechStyle)
+
+    @field_validator("interruptions", mode="before")
+    @classmethod
+    def _validate_interruptions(cls, value: Any) -> Any:
+        # PyYAML's YAML 1.1 loader reads unquoted on/off as booleans.
+        if isinstance(value, bool):
+            return "on" if value else "off"
+        return value
 
     @field_validator("api_key")
     @classmethod
@@ -251,6 +235,9 @@ class VoiceChannelConfig(BaseModel):
         voice = value.strip()
         if not voice:
             raise ValueError("channels.voice.voice must be a non-empty string")
+        if voice not in SONIOX_SHARED_VOICE_IDS:
+            choices = ", ".join(sorted(SONIOX_SHARED_VOICE_IDS))
+            raise ValueError(f"channels.voice.voice must be one of: {choices}")
         return voice
 
     @field_validator("languages")
@@ -260,12 +247,6 @@ class VoiceChannelConfig(BaseModel):
         if not languages:
             raise ValueError("voice.languages must include at least one language")
         return languages
-
-    @field_validator("quiet_hours")
-    @classmethod
-    def _validate_quiet_hours(cls, value: str) -> str:
-        parse_quiet_hours(value)
-        return value.strip()
 
     @classmethod
     def from_dict(cls, data: Any) -> "VoiceChannelConfig":
@@ -286,10 +267,8 @@ class VoiceChannelConfig(BaseModel):
     def to_public_dict(self) -> dict[str, Any]:
         """The block to write back to config.yaml.
 
-        The curated settings are always written, defaults included: a setting
-        nobody can see in the file is a setting nobody knows they have, and
-        quiet hours in particular is expensive to leave undiscovered. The
-        speaking voice is written for the same reason — an agent heard aloud
+        The curated settings are always written, defaults included. The
+        speaking voice is written because an agent heard aloud
         should sound like itself. ``audio`` is different — it is an escape
         hatch for a pinned device, so it appears only once someone has pinned
         one.
@@ -297,8 +276,8 @@ class VoiceChannelConfig(BaseModel):
         public: dict[str, Any] = {
             "api_key": self.api_key or SONIOX_KEY_PLACEHOLDER,
             "languages": list(self.languages),
-            "quiet_hours": self.quiet_hours,
             "voice": self.speaking_voice,
+            "interruptions": self.interruptions,
         }
         audio = {
             key: value
@@ -360,8 +339,16 @@ class VoiceChannelConfig(BaseModel):
         return True
 
     @property
+    def interruption_mode(self) -> VoiceInterruptionMode:
+        """Session preference, falling back to the persisted channel policy."""
+        return self._runtime_profile.interruptions_override or self.interruptions
+
+    @property
     def enable_interruptions(self) -> bool:
-        return self._runtime_profile.echo_managed
+        """Requested capture mode; the runtime echo guard can still disable it."""
+        if self.interruption_mode == "auto":
+            return self._runtime_profile.echo_managed
+        return self.interruption_mode == "on"
 
     @property
     def attention(self) -> VoiceAttentionConfigModel:
@@ -383,10 +370,7 @@ class VoiceChannelConfig(BaseModel):
 
     @property
     def proactive(self) -> VoiceProactiveConfigModel:
-        start, end = parse_quiet_hours(self.quiet_hours)
         return VoiceProactiveConfigModel(
-            quiet_start_minute=start,
-            quiet_end_minute=end,
             max_per_hour=_DEFAULT_PROACTIVE_TAIL.max_per_hour,
             require_recent_speech=_DEFAULT_PROACTIVE_TAIL.require_recent_speech,
         )

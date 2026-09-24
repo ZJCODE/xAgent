@@ -226,6 +226,59 @@ def list_audio_devices_text() -> str:
     return _format_audio_device_inventory(devices)
 
 
+def list_audio_device_options() -> dict[str, Any]:
+    """Return local audio devices in the shape used by setup UIs.
+
+    Setup must remain usable on machines where PortAudio is unavailable (for
+    example, a headless server).  ``auto`` is therefore always present and a
+    human-readable error is returned instead of making the setup endpoint fail.
+    Device indices are string values because HTML and terminal menus both
+    transport selections as text; the runtime accepts numeric strings too.
+    """
+    auto = {
+        "id": "auto",
+        "label": "Auto (recommended)",
+        "description": "Let the voice runtime choose the best compatible device.",
+    }
+    result: dict[str, Any] = {"input": [auto], "output": [dict(auto)]}
+    try:
+        sd = _import_sounddevice()
+        devices = _query_audio_devices(sd)
+    except Exception as exc:  # pragma: no cover - depends on host audio stack
+        result["error"] = str(exc)
+        return result
+
+    for device in devices:
+        directions: list[str] = []
+        if device.max_input_channels > 0:
+            directions.append("input")
+        if device.max_output_channels > 0:
+            directions.append("output")
+        if not directions:
+            continue
+        value = str(device.index)
+        suffix = f"#{device.index}"
+        hostapi = f" via {device.hostapi_name}" if device.hostapi_name else ""
+        defaults: list[str] = []
+        if device.is_default_input:
+            defaults.append("default input")
+        if device.is_default_output:
+            defaults.append("default output")
+        default_text = f" ({', '.join(defaults)})" if defaults else ""
+        for direction in directions:
+            channels = (
+                device.max_input_channels if direction == "input" else device.max_output_channels
+            )
+            result[direction].append(
+                {
+                    "id": value,
+                    "label": f"{device.name} ({suffix})",
+                    "description": f"{channels} channel(s){hostapi}{default_text}",
+                }
+            )
+    return result
+
+
 def _query_audio_devices(sd) -> list[_AudioDeviceInfo]:  # noqa: ANN001
     raw_devices = sd.query_devices()
     if isinstance(raw_devices, dict):

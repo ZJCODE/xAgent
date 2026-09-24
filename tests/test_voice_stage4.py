@@ -2,14 +2,13 @@ import asyncio
 import tempfile
 import threading
 import unittest
-from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from xagent.interfaces.voice.attention import VoiceAttentionConfig, VoiceAttentionGate
 from xagent.interfaces.voice.presence import SttLifecycleController, VoicePresenceConfig, pcm16_rms
-from xagent.interfaces.voice.proactive import ProactiveSpeechLimiter, in_quiet_hours
+from xagent.interfaces.voice.proactive import ProactiveSpeechLimiter
 from xagent.interfaces.voice.runtime import VoiceRuntime, VoiceRuntimeOptions
 from xagent.interfaces.voice.speakers import SpeakerBindingStore
 from xagent.interfaces.voice.types import VoiceUtterance
@@ -67,33 +66,6 @@ class PresenceTests(unittest.TestCase):
 
 
 class ProactivePolicyTests(unittest.TestCase):
-    def test_quiet_hours_wraps_midnight(self):
-        self.assertTrue(
-            in_quiet_hours(
-                quiet_start=22 * 60, quiet_end=7 * 60, now=datetime(2026, 1, 1, 23, 0)
-            )
-        )
-        self.assertFalse(
-            in_quiet_hours(
-                quiet_start=22 * 60, quiet_end=7 * 60, now=datetime(2026, 1, 1, 12, 0)
-            )
-        )
-
-    def test_quiet_hours_respect_minutes(self):
-        start, end = 22 * 60 + 30, 7 * 60 + 15
-        self.assertFalse(
-            in_quiet_hours(quiet_start=start, quiet_end=end, now=datetime(2026, 1, 1, 22, 15))
-        )
-        self.assertTrue(
-            in_quiet_hours(quiet_start=start, quiet_end=end, now=datetime(2026, 1, 1, 22, 45))
-        )
-        self.assertTrue(
-            in_quiet_hours(quiet_start=start, quiet_end=end, now=datetime(2026, 1, 1, 7, 10))
-        )
-        self.assertFalse(
-            in_quiet_hours(quiet_start=start, quiet_end=end, now=datetime(2026, 1, 1, 7, 20))
-        )
-
     def test_rate_limiter(self):
         limiter = ProactiveSpeechLimiter(max_per_hour=2)
         self.assertTrue(limiter.allow())
@@ -112,7 +84,7 @@ class ProactiveGateTests(unittest.TestCase):
             recognizer=FakeRecognizer([]),
             synthesizer=FakeSynthesizer(),
             player=FakePlayer(),
-            options=VoiceRuntimeOptions(user_id="alice"),
+            options=VoiceRuntimeOptions(user_id="alice", allow_proactive_output=True),
             output=lambda *args, **kwargs: None,
             stt_lifecycle=lifecycle,
         )
@@ -127,11 +99,7 @@ class ProactiveGateTests(unittest.TestCase):
         lifecycle = SttLifecycleController(VoicePresenceConfig(recent_speech_hours=6.0))
         runtime = self._runtime(lifecycle)
         lifecycle.note_endpoint()
-        with patch(
-            "xagent.interfaces.voice.runtime.in_quiet_hours",
-            return_value=False,
-        ):
-            self.assertTrue(runtime._proactive_speech_allowed())
+        self.assertTrue(runtime._proactive_speech_allowed())
 
 
 class ObservingAgent(FakeAgent):
