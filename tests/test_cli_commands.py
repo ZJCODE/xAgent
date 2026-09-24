@@ -2586,7 +2586,12 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(config["channels"]["feishu"]["app_id"], "cli_test")
         self.assertEqual(
             config["channels"]["voice"],
-            {"api_key": "voice-key", "languages": ["zh", "en"], "quiet_hours": "22:00-07:00"},
+            {
+                "api_key": "voice-key",
+                "languages": ["zh", "en"],
+                "quiet_hours": "22:00-07:00",
+                "voice": "Owen",
+            },
         )
         output = stdout.getvalue()
         self.assertIn("xagent voice start --agent work", output)

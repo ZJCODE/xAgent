@@ -95,7 +95,12 @@ class VoiceConfigSurfaceTests(unittest.TestCase):
 
         self.assertEqual(
             public,
-            {"api_key": "secret", "languages": ["zh", "en"], "quiet_hours": "22:00-07:00"},
+            {
+                "api_key": "secret",
+                "languages": ["zh", "en"],
+                "quiet_hours": "22:00-07:00",
+                "voice": "Owen",
+            },
         )
 
     def test_public_dict_writes_audio_only_once_pinned(self):

@@ -52,8 +52,9 @@ class VoiceRuntimeProfile:
 
 @dataclass(frozen=True)
 class VoiceSpeechStyle:
-    """How the agent sounds. The voice belongs to the agent's identity, and
-    rate is a listener's preference, so neither is a property of the channel."""
+    """How the agent sounds. The voice is configured in the ``channels.voice``
+    block — the channel is the only place the agent is heard — while rate is a
+    listener's preference and stays a per-session override."""
 
     voice: str = "Owen"
     speed: float = 1.0
@@ -69,6 +70,7 @@ _VOICE_TOP_LEVEL_KEYS = frozenset(
         "api_key",
         "languages",
         "quiet_hours",
+        "voice",
         "audio",
     }
 )
@@ -77,7 +79,8 @@ VOICE_CONFIG_EXAMPLE = """channels:
   voice:
     api_key: your_soniox_api_key_here
     languages: [zh, en]
-    quiet_hours: "22:00-07:00"""
+    quiet_hours: "22:00-07:00"
+    voice: Owen"""
 
 
 def parse_quiet_hours(value: str | None) -> tuple[int, int]:
@@ -225,6 +228,11 @@ class VoiceChannelConfig(BaseModel):
     api_key: str | None = None
     languages: list[str] = Field(default_factory=lambda: ["zh", "en"])
     quiet_hours: str = "22:00-07:00"
+    # The speaking voice. Not every agent is heard aloud, so the name lives in
+    # the voice channel block rather than on the agent itself. YAML key is
+    # ``voice``; the runtime reads the resolved ``voice`` property instead
+    # (set by ``apply_speech_style``), which may differ per session.
+    speaking_voice: str = Field(default="Owen", alias="voice")
     audio: VoiceAudioConfig = Field(default_factory=VoiceAudioConfig)
 
     _runtime_profile: VoiceRuntimeProfile = PrivateAttr(default_factory=VoiceRuntimeProfile)
@@ -236,6 +244,14 @@ class VoiceChannelConfig(BaseModel):
         if value is None:
             return None
         return value.strip() or None
+
+    @field_validator("speaking_voice")
+    @classmethod
+    def _validate_speaking_voice(cls, value: str) -> str:
+        voice = value.strip()
+        if not voice:
+            raise ValueError("channels.voice.voice must be a non-empty string")
+        return voice
 
     @field_validator("languages")
     @classmethod
@@ -270,16 +286,19 @@ class VoiceChannelConfig(BaseModel):
     def to_public_dict(self) -> dict[str, Any]:
         """The block to write back to config.yaml.
 
-        The three curated settings are always written, defaults included: a
-        setting nobody can see in the file is a setting nobody knows they have,
-        and quiet hours in particular is expensive to leave undiscovered.
-        ``audio`` is different — it is an escape hatch for a pinned device, so
-        it appears only once someone has pinned one.
+        The curated settings are always written, defaults included: a setting
+        nobody can see in the file is a setting nobody knows they have, and
+        quiet hours in particular is expensive to leave undiscovered. The
+        speaking voice is written for the same reason — an agent heard aloud
+        should sound like itself. ``audio`` is different — it is an escape
+        hatch for a pinned device, so it appears only once someone has pinned
+        one.
         """
         public: dict[str, Any] = {
             "api_key": self.api_key or SONIOX_KEY_PLACEHOLDER,
             "languages": list(self.languages),
             "quiet_hours": self.quiet_hours,
+            "voice": self.speaking_voice,
         }
         audio = {
             key: value

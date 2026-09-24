@@ -137,9 +137,12 @@ class VoiceConfigTests(unittest.TestCase):
         self.assertEqual(config.voice, "Ava")
         self.assertEqual(config.speed, 1.2)
 
-    def test_rejects_voice_and_speed_keys(self):
-        with self.assertRaisesRegex(ValueError, "Unknown voice setting"):
-            VoiceChannelConfig.from_dict({"api_key": "key", "voice": "Ava"})
+    def test_accepts_voice_name_rejects_speed_key(self):
+        config = VoiceChannelConfig.from_dict({"api_key": "key", "voice": "Ava"})
+        self.assertEqual(config.speaking_voice, "Ava")
+        self.assertEqual(config.to_public_dict()["voice"], "Ava")
+        with self.assertRaisesRegex(ValueError, "non-empty"):
+            VoiceChannelConfig.from_dict({"api_key": "key", "voice": "  "})
         with self.assertRaisesRegex(ValueError, "Unknown voice setting"):
             VoiceChannelConfig.from_dict({"api_key": "key", "speed": 1.2})
 

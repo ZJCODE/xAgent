@@ -246,7 +246,6 @@ class BaseAgentRunner:
                 "diary_context_days",
                 "notes_enabled",
                 "notes_auto_distill",
-                "voice",
             }
             unsupported_agent_keys = sorted(set(agent_cfg) - allowed_agent_keys)
             if unsupported_agent_keys:
@@ -267,12 +266,6 @@ class BaseAgentRunner:
                 if key in agent_cfg and not isinstance(agent_cfg[key], bool):
                     raise ValueError(
                         f"agent.{key} must be a boolean, got {agent_cfg[key]!r}"
-                    )
-            if "voice" in agent_cfg:
-                voice_name = agent_cfg["voice"]
-                if not isinstance(voice_name, str) or not voice_name.strip():
-                    raise ValueError(
-                        f"agent.voice must be a non-empty string, got {voice_name!r}"
                     )
         self._validate_observability_config(config.get("observability"))
 
@@ -607,6 +600,12 @@ class BaseAgentRunner:
         tools = self._load_agent_tools(agent_cfg, client=client)
 
         agent_section = agent_cfg.get("agent") or {}
+        voice_channel_cfg = (agent_cfg.get("channels") or {}).get("voice")
+        voice_name = (
+            voice_channel_cfg.get("voice", AgentConfig.DEFAULT_VOICE)
+            if isinstance(voice_channel_cfg, dict)
+            else AgentConfig.DEFAULT_VOICE
+        )
         return Agent(
             system_prompt=self.identity,
             model=self._get_agent_model(agent_cfg),
@@ -631,7 +630,7 @@ class BaseAgentRunner:
                 "notes_auto_distill", AgentConfig.NOTES_AUTO_DISTILL
             ),
             subconscious_activity=agent_section.get("subconscious_activity", AgentConfig.SUBCONSCIOUS_ACTIVITY),
-            voice=agent_section.get("voice", AgentConfig.DEFAULT_VOICE),
+            voice=voice_name,
         )
 
     def _initialize_observability(self, agent_cfg: Dict[str, Any]) -> ObservabilityRuntime:

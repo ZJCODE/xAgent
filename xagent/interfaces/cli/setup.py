@@ -599,7 +599,6 @@ def _config_yaml(selection: InitSelection, port: int) -> str:
             "notes_enabled": AgentConfig.NOTES_ENABLED,
             "notes_auto_distill": AgentConfig.NOTES_AUTO_DISTILL,
             "subconscious_activity": AgentConfig.SUBCONSCIOUS_ACTIVITY,
-            "voice": AgentConfig.DEFAULT_VOICE,
         },
         "channels": {
             "api": {
@@ -642,10 +641,6 @@ def _config_yaml(selection: InitSelection, port: int) -> str:
     yaml_str = yaml_str.replace(
         "notes_auto_distill: true\n",
         "notes_auto_distill: true  # Distil notes after weekly summaries.\n",
-    )
-    yaml_str = yaml_str.replace(
-        f"voice: {AgentConfig.DEFAULT_VOICE}\n",
-        f"voice: {AgentConfig.DEFAULT_VOICE}  # Speaking voice, used wherever the agent is heard aloud.\n",
     )
     return yaml_str
 

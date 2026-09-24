@@ -1,7 +1,7 @@
 # Voice config surface: what to expose, what to hide
 
 Status: implemented. `channels.voice` grew from 6 keys to 34 during stages 1–5,
-was curated down to 11, and is now 3.
+was curated down to 11, and is now 4.
 
 Scope: which of the knobs in `xagent/interfaces/voice/config.py` belong in the
 `config.yaml` that `xagent init` / `xagent voice setup` writes, which stay legal
@@ -43,13 +43,7 @@ channels:
                                 # also the TTS language when a reply is unclear
     quiet_hours: "22:00-07:00"  # never start talking unprompted inside this
                                 # window; "" disables it
-```
-
-plus one line in the `agent:` block:
-
-```yaml
-agent:
-  voice: Owen                   # speaking voice, used wherever the agent is heard
+    voice: Owen                 # speaking voice, used wherever the agent is heard
 ```
 
 Why each earns its line:
@@ -65,14 +59,15 @@ Why each earns its line:
   question, one answer: splitting it into `language_hints` plus
   `fallback_language` allowed contradictory pairs such as hints `[en]` with
   fallback `zh`.
-- **`agent.voice`** — GOAL.md asks for a consistent self. The voice is the
-  audible half of identity, so it lives beside `identity.md` in the `agent:`
-  block rather than inside one channel; a second TTS channel would otherwise
-  need its own copy of it.
+- **`voice`** — GOAL.md asks for a consistent self, and the name still follows
+  the agent wherever it is heard. It lives in the channel block because not
+  every agent is heard aloud: an agent that never speaks carries no voice
+  setting at all, and the one place a voice is actually used is the place it
+  is configured.
 
-`to_public_dict` writes only settings that differ from the default. Echoing
-defaults back into the file is how a curated surface grows again on the next
-`xagent voice setup`.
+`to_public_dict` always writes the curated settings, defaults included —
+`audio` appears only once a device has been pinned. Echoing defaults back into
+the file is how a curated surface grows again on the next `xagent voice setup`.
 
 ## 3. Detected, not configured
 
@@ -146,8 +141,8 @@ person, and the agent has per-person memory. `--speed` remains for a session.
 
 ## 6. Schema shape
 
-`channels.voice` accepts `api_key`, `languages`, `quiet_hours` and `audio`;
-anything else is rejected with a close-match hint. `audio` is accepted but not
+`channels.voice` accepts `api_key`, `languages`, `quiet_hours`, `voice` and
+`audio`; anything else is rejected with a close-match hint. `audio` is accepted but not
 written: on a fixed appliance the selected device is a stable machine-level fact
 that has to survive a restart, and the launcher restarts the channel without
 flags. Everywhere a human is at a terminal, `--input-device` / `--output-device`
@@ -159,9 +154,10 @@ them, rather than a line that outlives the situation that justified it.
 
 ## 7. Goal check (GOAL.md mandatory review)
 
-- **Identity impact.** Positive. `agent.voice` puts the audible self beside the
-  written one, so the agent sounds like one entity across devices and channels.
-  Latency tics stop being per-install choices.
+- **Identity impact.** Positive. `channels.voice.voice` keeps the audible self
+  with the only place the agent is heard, so the agent sounds like one entity
+  across devices, while an agent without a voice channel carries no voice
+  setting at all. Latency tics stop being per-install choices.
 - **Multi-user impact.** `enable_diarization` follows the detected profile and
   defaults to on, so speaker separation cannot be switched off by a user who
   does not know principle 2 depends on it.
