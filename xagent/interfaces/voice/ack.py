@@ -7,10 +7,9 @@ from dataclasses import dataclass, field
 
 
 DEFAULT_ACK_PHRASES = (
-    "[thoughtful]嗯……",
-    "[short]好。",
-    "[thoughtful]让我想想。",
-    "[short]OK.",
+    "[thoughtful]Hmm…",
+    "[thoughtful]Mmm…",
+    "[thoughtful]嗯...",
 )
 
 

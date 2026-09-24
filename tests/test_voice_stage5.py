@@ -3,7 +3,7 @@ import threading
 import unittest
 from unittest.mock import patch
 
-from xagent.interfaces.voice.ack import InstantAckConfig, InstantAckSpeaker
+from xagent.interfaces.voice.ack import DEFAULT_ACK_PHRASES, InstantAckConfig, InstantAckSpeaker
 from xagent.interfaces.voice.audio import SoundDevicePlayer
 from xagent.interfaces.voice.preemptive import (
     PreemptiveGenerationController,
@@ -50,6 +50,12 @@ class PreemptiveTests(unittest.TestCase):
 
 
 class InstantAckTests(unittest.TestCase):
+    def test_default_ack_phrase_is_minimal(self):
+        self.assertEqual(
+            DEFAULT_ACK_PHRASES,
+            ("[thoughtful]Hmm…", "[thoughtful]Mmm…", "[thoughtful]嗯..."),
+        )
+
     def test_cooldown_blocks_back_to_back(self):
         speaker = InstantAckSpeaker(InstantAckConfig(cooldown_seconds=60.0))
         self.assertTrue(speaker.should_play())
