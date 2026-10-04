@@ -184,12 +184,14 @@ class VoiceConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "languages"):
             VoiceChannelConfig.from_dict({"languages": [" "]})
 
-    def test_interruptions_follow_the_detected_devices(self):
+    def test_interruptions_require_explicit_enablement(self):
         config = VoiceChannelConfig.from_dict({"api_key": "key"})
         self.assertFalse(config.enable_interruptions)
         config.apply_runtime_profile(
             VoiceRuntimeProfile(name="room", echo_managed=True, source="test")
         )
+        self.assertFalse(config.enable_interruptions)
+        config = VoiceChannelConfig.from_dict({"api_key": "key", "interruptions": True})
         self.assertTrue(config.enable_interruptions)
         self.assertTrue(config.return_timestamps)
 
@@ -276,6 +278,7 @@ class FakeTTSEvent:
         self._audio_bytes = audio
         self.error_code = error_code
         self.terminated = terminated
+        self.timestamps = None
 
     def audio_bytes(self):
         return self._audio_bytes
@@ -607,6 +610,73 @@ class SonioxSDKAdapterTests(unittest.TestCase):
         self.assertEqual(list(tts.synthesize_chunks(["hello"], language="en", stop_event=stop_event)), [])
         self.assertEqual(connection.cancelled, 0)
 
+    def test_tts_recovers_after_previous_turn_was_cancelled(self):
+        connection = FakeTTSConnection()
+        tts = SonioxRealtimeTTS(
+            api_key="key",
+            config=voice_config(),
+            client=FakeClient(tts_connection=connection),
+        )
+        tts.cancel()
+
+        audio = list(tts.synthesize_chunks(["hello"], language="en", stop_event=threading.Event()))
+
+        self.assertEqual(audio, [b"one", b"two"])
+
+    def test_tts_ends_idle_stream_and_starts_another_for_later_text(self):
+        next_chunk = threading.Event()
+
+        class GapConnection(FakeTTSConnection):
+            def finish(self):
+                super().finish()
+                next_chunk.set()
+
+        class GapMux(FakeTTSMux):
+            def open_stream(self, *, config):
+                self.connection.finished.clear()
+                return super().open_stream(config=config)
+
+        def text_chunks():
+            yield "before tool"
+            next_chunk.wait(1.0)
+            yield "after tool"
+
+        connection = GapConnection(audio=(b"audio",))
+        client = FakeClient(tts_connection=connection)
+        mux = GapMux(connection)
+        client.realtime.tts.connect_multi_stream = lambda **kwargs: mux
+        tts = SonioxRealtimeTTS(api_key="key", config=voice_config(), client=client)
+
+        with patch("xagent.interfaces.voice.soniox.TTS_STREAM_IDLE_FLUSH_SECONDS", 0.01):
+            audio = list(tts.synthesize_chunks(text_chunks(), language="en", stop_event=threading.Event()))
+
+        self.assertEqual(audio, [b"audio", b"audio"])
+        self.assertEqual(len(mux.configs), 2)
+        self.assertEqual(
+            connection.sent,
+            [("before tool", False), ("after tool", False)],
+        )
+
+    def test_tts_stream_error_is_not_silenced(self):
+        class ErrorStream(FakeTTSStream):
+            def receive_events(self):
+                self.connection.finished.wait(1.0)
+                raise SonioxVoiceError("request_timeout")
+                yield
+
+        class ErrorMux(FakeTTSMux):
+            def open_stream(self, *, config):
+                self.configs.append(config)
+                return ErrorStream(self.connection, config)
+
+        connection = FakeTTSConnection()
+        client = FakeClient(tts_connection=connection)
+        client.realtime.tts.connect_multi_stream = lambda **kwargs: ErrorMux(connection)
+        tts = SonioxRealtimeTTS(api_key="key", config=voice_config(), client=client)
+
+        with self.assertRaisesRegex(SonioxVoiceError, "request_timeout"):
+            list(tts.synthesize_chunks(["hello"], language="en", stop_event=threading.Event()))
+
     def test_text_split_has_no_small_delta_buffering(self):
         self.assertEqual(list(_split_text_chunk("abc")), ["abc"])
 
@@ -651,7 +721,7 @@ class VoiceRuntimeTests(unittest.TestCase):
         self.assertFalse(runtime._proactive_speech_allowed())
 
     def test_configured_interruptions_control_microphone_during_reply(self):
-        for mode, detected, paused in (("on", False, False), ("off", True, True)):
+        for mode, detected, paused in ((True, False, False), (False, True, True)):
             with self.subTest(mode=mode):
                 player = FakePlayer()
                 runtime = self.make_runtime(
@@ -666,7 +736,7 @@ class VoiceRuntimeTests(unittest.TestCase):
 
     def test_forced_interruptions_still_degrade_on_repeated_echo(self):
         async def run():
-            runtime = self.make_runtime(config=voice_config({"interruptions": "on"}))
+            runtime = self.make_runtime(config=voice_config({"interruptions": True}))
             runtime.recognizer.partial_relay = SimpleNamespace(snapshot=lambda: "hello there")
             runtime._floor.allow_duplex_capture = True
             stop = threading.Event()
@@ -678,12 +748,12 @@ class VoiceRuntimeTests(unittest.TestCase):
                     spoken_ledger=SpokenLedger(),
                     reply_buffer=["hello there."],
                 )
-            self.assertIn("interruptions=on", " ".join(logs.output))
+            self.assertIn("interruptions=true", " ".join(logs.output))
             self.assertFalse(runtime._duplex_capture_enabled)
             self.assertFalse(runtime._floor.allow_duplex_capture)
             self.assertTrue(runtime.pause_event.is_set())
             self.assertFalse(stop.is_set())
-            self.assertEqual(runtime.config.to_public_dict()["interruptions"], "on")
+            self.assertIs(runtime.config.to_public_dict()["interruptions"], True)
             await runtime._release_microphone_after_playback()
             self.assertFalse(runtime.pause_event.is_set())
         asyncio.run(run())
@@ -692,7 +762,7 @@ class VoiceRuntimeTests(unittest.TestCase):
         async def run():
             agent = FakeAgent()
             agent.abort = Mock()
-            runtime = self.make_runtime(agent=agent, config=voice_config({"interruptions": "on"}))
+            runtime = self.make_runtime(agent=agent, config=voice_config({"interruptions": True}))
             runtime.recognizer.partial_relay = SimpleNamespace(snapshot=lambda: "wait stop")
             runtime._floor.state = FloorState.SPEAKING
             stop = threading.Event()
@@ -735,10 +805,50 @@ class VoiceRuntimeTests(unittest.TestCase):
         self.assertEqual(player.played, [b"hello ", b"there."])
         self.assertTrue(player.pause_was_set)
         combined = "\n".join(logs.output)
-        self.assertIn("endpoint_to_agent_first_text_ms", combined)
+        self.assertNotIn("endpoint_to_agent_first_text_ms", combined)
         self.assertIn("agent_first_text_to_tts_first_audio_ms", combined)
         self.assertIn("endpoint_to_first_audio_ms", combined)
         self.assertIn("turn_total_ms", combined)
+
+    def test_tool_reply_retries_when_tts_returns_no_audio(self):
+        class ToolAgent:
+            async def chat_events(self, **kwargs):
+                del kwargs
+                yield {"type": "tool_call", "name": "web_fetch"}
+                yield {"type": "message_done", "message_id": "final", "content": "杭州今天有雨。"}
+
+        class SilentOnceSynthesizer(FakeSynthesizer):
+            def __init__(self):
+                super().__init__()
+                self.close_count = 0
+
+            def synthesize_chunks(self, text_chunks, *, language, stop_event, **kwargs):
+                del stop_event, kwargs
+                chunks = list(text_chunks)
+                self.calls.append({"language": language, "chunks": chunks})
+                if len(self.calls) > 1:
+                    yield from (chunk.encode() for chunk in chunks)
+
+            def close(self):
+                self.close_count += 1
+
+        synth = SilentOnceSynthesizer()
+        player = FakePlayer()
+        runtime = self.make_runtime(
+            agent=ToolAgent(),
+            recognizer=FakeRecognizer([VoiceUtterance("杭州天气", "zh")]),
+            synthesizer=synth,
+            player=player,
+        )
+
+        with self.assertLogs("VoiceRuntime", level="WARNING") as logs:
+            asyncio.run(runtime.run_forever())
+
+        self.assertEqual(synth.calls[1]["chunks"], ["杭州今天有雨。"])
+        self.assertNotIn("One moment.", synth.calls[0]["chunks"])
+        self.assertEqual(player.played, ["杭州今天有雨。".encode()])
+        self.assertEqual(synth.close_count, 2)
+        self.assertIn("returned no audio", " ".join(logs.output))
 
     def test_uses_fallback_language_when_stt_has_none(self):
         synth = FakeSynthesizer()
@@ -882,7 +992,7 @@ class VoiceRuntimeTests(unittest.TestCase):
                 near_field=True, echo_managed=True, reason="device name contains 'airpod'"
             ),
         )
-        config = VoiceChannelConfig.from_dict({"api_key": "key", "interruptions": "off"})
+        config = VoiceChannelConfig.from_dict({"api_key": "key", "interruptions": False})
         agent = FakeAgent()
         agent.voice = "Daniel"
         seen: dict[str, object] = {}

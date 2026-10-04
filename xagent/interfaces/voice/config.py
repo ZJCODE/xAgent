@@ -11,6 +11,7 @@ from pydantic import (
     ConfigDict,
     Field,
     PrivateAttr,
+    StrictBool,
     ValidationError,
     field_validator,
     model_validator,
@@ -44,7 +45,6 @@ SONIOX_SHARED_VOICE_OPTIONS = (
 SONIOX_SHARED_VOICE_IDS = frozenset(voice_id for voice_id, _ in SONIOX_SHARED_VOICE_OPTIONS)
 
 VoiceProfileName = Literal["room", "headset"]
-VoiceInterruptionMode = Literal["auto", "on", "off"]
 
 
 @dataclass(frozen=True)
@@ -60,8 +60,8 @@ class VoiceRuntimeProfile:
     name: VoiceProfileName = "room"
     echo_managed: bool = False
     source: str = "default"
-    # A session preference must never overwrite detected hardware capability.
-    interruptions_override: VoiceInterruptionMode | None = None
+    # A session preference does not overwrite detected hardware capability.
+    interruptions_override: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -94,7 +94,7 @@ VOICE_CONFIG_EXAMPLE = """channels:
     api_key: your_soniox_api_key_here
     languages: [zh, en]
     voice: Daniel
-    interruptions: auto"""
+    interruptions: false"""
 
 
 def _suggest_voice_key(bad_key: str) -> str:
@@ -149,12 +149,8 @@ class VoicePerformanceConfigModel(BaseModel):
 
     preemptive_generation: bool = True
     preemptive_min_chars: int = Field(default=8, ge=3, le=500)
-    instant_ack: bool = True
-    ack_delay_ms: float = Field(default=400.0, ge=0.0, le=5_000.0)
-    ack_cooldown_seconds: float = Field(default=45.0, ge=0.0, le=600.0)
     warm_output_device: bool = True
     max_agent_loops: int = Field(default=12, ge=1, le=50)
-    speak_tool_progress: bool = True
 
 
 class VoiceProactiveConfigModel(BaseModel):
@@ -208,19 +204,11 @@ class VoiceChannelConfig(BaseModel):
     # ``voice``; the runtime reads the resolved ``voice`` property instead
     # (set by ``apply_speech_style``), which may differ per session.
     speaking_voice: str = Field(default="Daniel", alias="voice")
-    interruptions: VoiceInterruptionMode = "auto"
+    interruptions: StrictBool = False
     audio: VoiceAudioConfig = Field(default_factory=VoiceAudioConfig)
 
     _runtime_profile: VoiceRuntimeProfile = PrivateAttr(default_factory=VoiceRuntimeProfile)
     _speech_style: VoiceSpeechStyle = PrivateAttr(default_factory=VoiceSpeechStyle)
-
-    @field_validator("interruptions", mode="before")
-    @classmethod
-    def _validate_interruptions(cls, value: Any) -> Any:
-        # PyYAML's YAML 1.1 loader reads unquoted on/off as booleans.
-        if isinstance(value, bool):
-            return "on" if value else "off"
-        return value
 
     @field_validator("api_key")
     @classmethod
@@ -339,16 +327,10 @@ class VoiceChannelConfig(BaseModel):
         return True
 
     @property
-    def interruption_mode(self) -> VoiceInterruptionMode:
-        """Session preference, falling back to the persisted channel policy."""
-        return self._runtime_profile.interruptions_override or self.interruptions
-
-    @property
     def enable_interruptions(self) -> bool:
         """Requested capture mode; the runtime echo guard can still disable it."""
-        if self.interruption_mode == "auto":
-            return self._runtime_profile.echo_managed
-        return self.interruption_mode == "on"
+        override = self._runtime_profile.interruptions_override
+        return self.interruptions if override is None else override
 
     @property
     def attention(self) -> VoiceAttentionConfigModel:

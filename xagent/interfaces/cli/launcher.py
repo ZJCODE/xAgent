@@ -346,7 +346,7 @@ def _voice_resetup_options(config: dict[str, Any]) -> list[MenuOption]:
         MenuOption("api_key", "Configure Voice", "Set the Soniox API key; other settings keep their defaults."),
         MenuOption("voice", "Speaking voice", "Choose the voice used for spoken replies.", disabled=not voice_configured),
         MenuOption("languages", "Spoken languages", "Set the language order used by speech recognition and replies.", disabled=not voice_configured),
-        MenuOption("interruptions", "Allow interruptions", "Choose automatic, always-on, or turn-taking behavior.", disabled=not voice_configured),
+        MenuOption("interruptions", "Allow interruptions", "Enable or disable interruption during replies.", disabled=not voice_configured),
         MenuOption("input_device", "Input device", "Choose the local microphone.", disabled=not voice_configured),
         MenuOption("output_device", "Output device", "Choose the local speaker or headset.", disabled=not voice_configured),
         MenuOption("disable", "Disable", disable_description, disabled=not voice_configured),
@@ -705,7 +705,7 @@ def _voice_summary_subtitle(config: dict[str, Any]) -> str:
         return "Voice is disabled."
     api_key = str(voice.get("api_key") or "").strip()
     credential = "configured" if api_key and not is_placeholder_api_key(api_key) else "placeholder"
-    mode = str(voice.get("interruptions") or "auto")
+    mode = str(voice.get("interruptions", False)).lower()
     return f"Provider: Soniox\nInterruptions: {mode}\nAPI key: {credential}"
 
 
@@ -1373,20 +1373,18 @@ def _run_voice_config_launcher(ui: TerminalUI, config_dir: Path) -> None:
                     item.strip() for item in text_value.replace(",", " ").split() if item.strip()
                 ]
             elif option.key == "interruptions":
-                current_mode = str(current.get("interruptions") or "auto")
                 choice = ui.select_menu(
                     title="Allow interruptions",
-                    subtitle="Auto follows the selected audio devices; echo protection remains active.",
+                    subtitle="Echo protection remains active when interruptions are enabled.",
                     options=[
-                        MenuOption("auto", "Auto", "Follow detected device echo handling."),
-                        MenuOption("on", "On", "Allow barge-in when speech is detected."),
-                        MenuOption("off", "Off", "Use turn-taking during thinking and playback."),
+                        MenuOption("true", "On", "Allow barge-in when speech is detected."),
+                        MenuOption("false", "Off", "Use turn-taking during thinking and playback."),
                     ],
                     footer="↑/↓ Move • Enter Select  •  q Back",
                 )
                 if choice is None:
                     continue
-                update_kwargs["interruptions"] = choice.key or current_mode
+                update_kwargs["interruptions"] = choice.key == "true"
             else:
                 direction = "input" if option.key == "input_device" else "output"
                 rows = [

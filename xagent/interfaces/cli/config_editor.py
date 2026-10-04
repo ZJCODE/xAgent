@@ -511,7 +511,7 @@ def prepare_voice_preset_update(
     api_key: str | None = None,
     voice: str | None = None,
     languages: list[str] | tuple[str, ...] | None = None,
-    interruptions: str | None = None,
+    interruptions: bool | None = None,
     audio_input: str | int | None = None,
     audio_output: str | int | None = None,
 ) -> ConfigUpdate:
@@ -534,6 +534,8 @@ def prepare_voice_preset_update(
         if current:
             updated = dict(current)
             updated["api_key"] = resolved_api_key or SONIOX_KEY_PLACEHOLDER
+            if not isinstance(updated.get("interruptions", False), bool):
+                updated["interruptions"] = False
             if voice is not None:
                 updated["voice"] = voice
             if languages is not None:
@@ -681,7 +683,7 @@ def build_agent_edit_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
             "kind": "agent",
             "label": "Voice",
             "description": "Configure Soniox voice, interruption policy, and audio devices.",
-            "status": f"{'enabled' if voice_ready else 'disabled'} / interruptions={voice_config.interruptions}",
+            "status": f"{'enabled' if voice_ready else 'disabled'} / interruptions={str(voice_config.interruptions).lower()}",
             "disabled": False,
             "disabled_reason": "",
         },

@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import queue
 import threading
+import time
 import uuid
 from collections import Counter
 from dataclasses import dataclass
@@ -35,7 +36,8 @@ _logger = logging.getLogger(__name__)
 
 STT_RECONNECT_BASE_SECONDS = 0.5
 STT_RECONNECT_MAX_SECONDS = 30.0
-TTS_KEEPALIVE_IDLE_SECONDS = 20.0
+TTS_STREAM_IDLE_FLUSH_SECONDS = 1.5
+TTS_CONNECTION_KEEPALIVE_SECONDS = 15.0
 TTS_MAX_AUDIO_DURATION_ERROR = 413
 _RETRYABLE_ERROR_TYPES = frozenset(
     {
@@ -387,7 +389,8 @@ class SonioxRealtimeTTS:
             try:
                 mux.keep_alive()
             except Exception:
-                pass
+                _logger.debug("Soniox TTS connection keepalive failed; resetting connection", exc_info=True)
+                self.close()
 
     def cancel(self) -> None:
         self._cancel_event.set()
@@ -418,17 +421,22 @@ class SonioxRealtimeTTS:
         stop_event: threading.Event,
         spoken_ledger: SpokenLedger | None = None,
     ) -> Iterator[bytes]:
-        if stop_event.is_set() or self._cancel_event.is_set():
+        if stop_event.is_set():
             return
         self._cancel_event.clear()
         pending = _TextChunkFeeder(text_chunks)
-        pending.join(timeout=1.0)
-        first = pending.take(timeout=0.0)
-        if first is None:
-            return
-        pending.requeue_front(first)
+        last_keepalive_at = time.monotonic()
 
-        while pending.has_data() and not self._cancel_event.is_set() and not stop_event.is_set():
+        while not self._cancel_event.is_set() and not stop_event.is_set():
+            first = pending.take(timeout=0.5)
+            if first is None:
+                if not pending.has_data():
+                    return
+                if time.monotonic() - last_keepalive_at >= TTS_CONNECTION_KEEPALIVE_SECONDS:
+                    self.keep_alive()
+                    last_keepalive_at = time.monotonic()
+                continue
+            pending.requeue_front(first)
             stream_id = f"xagent-tts-{uuid.uuid4().hex}"
             sdk_config = RealtimeTTSConfig(
                 stream_id=stream_id,
@@ -442,19 +450,29 @@ class SonioxRealtimeTTS:
             )
             send_errors: queue.Queue[BaseException] = queue.Queue()
             max_duration_hit = threading.Event()
+            idle_rollover = threading.Event()
             mux = self._ensure_mux()
-            stream = mux.open_stream(config=sdk_config)
+            try:
+                stream = mux.open_stream(config=sdk_config)
+            except Exception:
+                self.close()
+                stream = self._ensure_mux().open_stream(config=sdk_config)
             with self._mux_lock:
                 self._active_stream = stream
             sender = threading.Thread(
                 target=self._send_text_loop,
-                args=(stream, pending, stop_event, send_errors, max_duration_hit),
+                args=(stream, pending, stop_event, send_errors, max_duration_hit, idle_rollover),
                 daemon=True,
                 name="xagent-soniox-tts-send",
             )
             sender.start()
+            audio_received = False
+            event_count = 0
+            terminated = False
             try:
                 for event in stream.receive_events():
+                    event_count += 1
+                    terminated = bool(event.terminated)
                     if not send_errors.empty():
                         raise send_errors.get()
                     if max_duration_hit.is_set():
@@ -471,6 +489,7 @@ class SonioxRealtimeTTS:
                     except ValueError as exc:
                         raise SonioxVoiceError(str(exc)) from exc
                     if chunk:
+                        audio_received = True
                         yield chunk
                     if event.error_code == TTS_MAX_AUDIO_DURATION_ERROR:
                         max_duration_hit.set()
@@ -479,15 +498,28 @@ class SonioxRealtimeTTS:
                         break
                 if not send_errors.empty():
                     raise send_errors.get()
+                if not terminated and not max_duration_hit.is_set() and not stop_event.is_set():
+                    raise SonioxVoiceError("Soniox TTS connection closed before stream termination")
+                if not audio_received and not max_duration_hit.is_set() and not stop_event.is_set():
+                    _logger.warning(
+                        "Soniox TTS stream ended without audio: events=%d terminated=%s sender_alive=%s",
+                        event_count,
+                        terminated,
+                        sender.is_alive(),
+                    )
             finally:
                 sender.join(timeout=1.0)
                 with self._mux_lock:
                     if self._active_stream is stream:
                         self._active_stream = None
-                if max_duration_hit.is_set() and pending.has_data():
-                    _logger.info("Soniox TTS stream hit max audio duration; continuing on a new stream")
-                    continue
-                return
+            if max_duration_hit.is_set() and pending.has_data():
+                _logger.info("Soniox TTS stream hit max audio duration; continuing on a new stream")
+                continue
+            if idle_rollover.is_set() and pending.has_data():
+                continue
+            if pending.has_data() and not self._cancel_event.is_set() and not stop_event.is_set():
+                raise SonioxVoiceError("Soniox TTS stream ended before all text was sent")
+            return
 
     def _ensure_mux(self) -> Any:
         with self._mux_lock:
@@ -504,19 +536,19 @@ class SonioxRealtimeTTS:
         stop_event: threading.Event,
         send_errors: queue.Queue[BaseException],
         max_duration_hit: threading.Event,
+        idle_rollover: threading.Event,
     ) -> None:
         try:
             while pending.has_data():
                 if self._cancel_event.is_set() or stop_event.is_set() or max_duration_hit.is_set():
                     stream.cancel()
                     return
-                chunk = pending.take(timeout=TTS_KEEPALIVE_IDLE_SECONDS)
+                chunk = pending.take(timeout=TTS_STREAM_IDLE_FLUSH_SECONDS)
                 if chunk is None:
-                    try:
-                        stream.keep_alive()
-                    except Exception:
-                        pass
-                    continue
+                    if pending.has_data():
+                        idle_rollover.set()
+                    stream.finish()
+                    return
                 for part in _split_text_chunk(chunk):
                     if self._cancel_event.is_set() or stop_event.is_set():
                         stream.cancel()
@@ -535,7 +567,7 @@ class SonioxRealtimeTTS:
 
 
 class _TextChunkFeeder:
-    """Bridge a blocking text iterator into timed reads with keepalive gaps."""
+    """Bridge a blocking text iterator into timed reads across TTS streams."""
 
     _sentinel = object()
 
@@ -556,10 +588,7 @@ class _TextChunkFeeder:
             self._queue.put(self._sentinel)
 
     def has_data(self) -> bool:
-        return not (self._done.is_set() and self._queue.empty())
-
-    def join(self, *, timeout: float = 1.0) -> None:
-        self._thread.join(timeout=timeout)
+        return self._pushback is not None or not (self._done.is_set() and self._queue.empty())
 
     def requeue_front(self, chunk: str) -> None:
         self._pushback = chunk

@@ -125,7 +125,7 @@ export function FeatureSetupModal({ open, feature, schema, onClose, onSaved }: F
   const [voiceApiKey, setVoiceApiKey] = useState("");
   const [voiceName, setVoiceName] = useState("Daniel");
   const [voiceLanguages, setVoiceLanguages] = useState<string[]>(["zh", "en"]);
-  const [voiceInterruptions, setVoiceInterruptions] = useState<"auto" | "on" | "off">("auto");
+  const [voiceInterruptions, setVoiceInterruptions] = useState(false);
   const [voiceInput, setVoiceInput] = useState("auto");
   const [voiceOutput, setVoiceOutput] = useState("auto");
 
@@ -155,7 +155,7 @@ export function FeatureSetupModal({ open, feature, schema, onClose, onSaved }: F
       setVoiceApiKey("");
       setVoiceName(defaults.voice || "Daniel");
       setVoiceLanguages(defaults.languages || ["zh", "en"]);
-      setVoiceInterruptions(defaults.interruptions || "auto");
+      setVoiceInterruptions(defaults.interruptions);
       setVoiceInput(String(defaults.audio_input ?? "auto"));
       setVoiceOutput(String(defaults.audio_output ?? "auto"));
     } else if (isProviderFeature(feature)) {
@@ -371,11 +371,10 @@ export function FeatureSetupModal({ open, feature, schema, onClose, onSaved }: F
               }
             />
           </WizardField>
-          <WizardField label="Allow interruptions" hint="Auto follows detected audio devices; echo protection remains active.">
-            <select value={voiceInterruptions} onChange={(event) => setVoiceInterruptions(event.target.value as "auto" | "on" | "off")}>
-              <option value="auto">Auto</option>
-              <option value="on">On</option>
-              <option value="off">Off</option>
+          <WizardField label="Allow interruptions" hint="Echo protection remains active when enabled.">
+            <select value={String(voiceInterruptions)} onChange={(event) => setVoiceInterruptions(event.target.value === "true")}>
+              <option value="true">On</option>
+              <option value="false">Off</option>
             </select>
           </WizardField>
           <WizardField label="Input device" hint={schema.voice.audio_devices?.error || "Choose the microphone used for speech input."}>

@@ -11,6 +11,7 @@ from typing import Any, List, Optional
 from openai import AsyncOpenAI
 
 from .providers import (
+    PROVIDER_DEEPSEEK,
     PROVIDER_OPENAI,
     ReasoningConfig,
     maintenance_reasoning_config,
@@ -39,6 +40,10 @@ class JournalLLMService:
         self.model_api = model_api
         self.max_tokens = max_tokens
         self.reasoning = maintenance_reasoning_config(reasoning)
+        if self.reasoning is None and provider_name == PROVIDER_DEEPSEEK:
+            # DeepSeek enables thinking by default; bounded maintenance calls
+            # can otherwise spend their entire output limit without text.
+            self.reasoning = ReasoningConfig(enabled=False)
 
     async def format_diary_entry(
         self,

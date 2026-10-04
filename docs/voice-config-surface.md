@@ -45,7 +45,7 @@ channels:
     languages: [zh, en]         # languages actually spoken here; the first is
                                 # also the TTS language when a reply is unclear
     voice: Daniel               # one of six representative English voices
-    interruptions: auto         # auto | "on" | "off"
+    interruptions: false        # true | false
 ```
 
 Why each earns its line:
@@ -62,10 +62,9 @@ Why each earns its line:
   every agent is heard aloud: an agent that never speaks carries no voice
   setting at all, and the one place a voice is actually used is the place it
   is configured.
-- **`interruptions`** — test 4. `auto` follows detected echo handling; `on`
-  attempts to allow interruptions even when detection says otherwise; `off`
-  selects turn-taking. All modes retain runtime echo protection. Unquoted YAML
-  `on`/`off` (and booleans `true`/`false`) are accepted and normalized to strings.
+- **`interruptions`** — test 4. `true` allows the user to interrupt a reply;
+  `false` uses turn-taking and is the default. Runtime echo protection remains
+  active when interruptions are enabled.
 
 `to_public_dict` always writes the curated settings, defaults included —
 `audio` appears only once a device has been pinned. Echoing defaults back into
@@ -80,7 +79,7 @@ boolean conflated:
 - **near-field?** Drives diarization, attention window, participation gating,
   barge-in thresholds and Soniox endpointing.
 - **echo-managed?** Whether playback is prevented from reaching the microphone.
-  This is the precondition for barge-in, and it is a different axis: a
+  This is a different axis: a
   conference speakerphone is far-field but echo-managed, a laptop mic with
   laptop speakers is neither.
 
@@ -90,14 +89,13 @@ measure acoustic echo cancellation. `--profile` can override the near/far-field
 profile for a session.
 
 Interruption policy is separate from those facts. Precedence is an explicitly
-provided `--interruptions auto|on|off`, then `channels.voice.interruptions`, then
-the default `auto`. In particular, `--interruptions auto` overrides a saved
-`on` or `off`, including when using `voice start` or `voice restart`. Session
+provided `--interruptions true|false`, then `channels.voice.interruptions`, then
+the default `false`. Session
 overrides never overwrite the saved preference or the detected echo capability.
 Startup logs report the policy, its source, detected echo handling and whether
 barge-in is enabled.
 
-`off` preserves the existing half-duplex behavior: microphone audio is paused
+`false` preserves the existing half-duplex behavior: microphone audio is paused
 during both thinking and playback, so follow-up steering during thinking is
 also disabled. Separate controls for these two phases are not introduced here.
 Timing and word-count thresholds remain internal profile settings. The current
@@ -169,7 +167,7 @@ and `xagent voice --list-devices` are the escape hatch.
 
 There is no advanced tier of YAML thresholds. Session-level CLI flags override
 the persistent policy without changing it. Existing configurations without
-`interruptions` retain device-based automatic behavior; setup and credential
+`interruptions` default to `false`; setup and credential
 rotation preserve an explicitly saved preference.
 
 ## 7. Goal check (GOAL.md mandatory review)
@@ -216,9 +214,8 @@ Entering voice setup enables the channel and asks only for the Soniox key;
 there is no separate enable checkbox. Edit Setup exposes speaking voice,
 ordered languages, interruption policy, and optional input/output device pins
 when they need to be changed.
-The summary shows the saved interruption policy, while actual runtime
-activation continues to be reported by the voice startup log because `auto`
-depends on the devices selected at that session.
+The summary shows the saved interruption policy, and the voice startup log
+reports the effective value when a session override is used.
 
 The setup surfaces render `Speaking voice` as a dropdown with six representative
 English voices from Soniox's published shared catalogue. `Input device` and

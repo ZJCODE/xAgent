@@ -19,7 +19,6 @@ from .config import (
     SONIOX_TTS_CHANNELS,
     SONIOX_TTS_SAMPLE_RATE,
     VoiceChannelConfig,
-    VoiceInterruptionMode,
     VoiceProfileName,
     VoiceRuntimeProfile,
     VoiceSpeechStyle,
@@ -35,7 +34,7 @@ def resolve_runtime_profile(
     audio_profile: AudioIOProfile,
     *,
     profile_override: VoiceProfileName | None = None,
-    interruptions_override: VoiceInterruptionMode | None = None,
+    interruptions_override: bool | None = None,
 ) -> VoiceRuntimeProfile:
     """Turn detected device topology, plus any session override, into policy."""
     topology = audio_profile.topology
@@ -45,7 +44,7 @@ def resolve_runtime_profile(
     if profile_override is not None:
         sources.append(f"profile={profile_override} (override)")
     if interruptions_override is not None:
-        sources.append(f"interruptions={interruptions_override} (override)")
+        sources.append(f"interruptions={str(interruptions_override).lower()} (override)")
     return VoiceRuntimeProfile(
         name=name,
         echo_managed=topology.echo_managed,
@@ -62,7 +61,7 @@ def create_local_voice_runtime(
     input_device: AudioDevicePreference = None,
     output_device: AudioDevicePreference = None,
     profile_override: VoiceProfileName | None = None,
-    interruptions_override: VoiceInterruptionMode | None = None,
+    interruptions_override: bool | None = None,
     speed_override: float | None = None,
 ) -> VoiceRuntime:
     runtime_holder: list[VoiceRuntime | None] = [None]
@@ -104,7 +103,7 @@ def create_local_voice_runtime(
         "Voice profile: %s, barge-in %s, interruptions=%s (%s), detected echo-managed=%s (%s)",
         runtime_profile.name,
         "on" if config.enable_interruptions else "off",
-        config.interruption_mode,
+        str(config.enable_interruptions).lower(),
         "CLI" if interruptions_override is not None else "config/default",
         runtime_profile.echo_managed,
         runtime_profile.source,

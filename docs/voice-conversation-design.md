@@ -144,10 +144,6 @@ What to do, by payoff:
   `preemptive_generation` (LLM preemptive, TTS deferred) and it removes the
   assembly + TTFT term from the perceived gap almost entirely. Cancel and re-run
   if the final transcript diverges.
-- **Speak an acknowledgement before the answer exists.** What the user feels is
-  time-to-first-*audio*. A 300 ms locally-decided filler covers the remaining
-  window at no model cost, and with v2 audio tags it can sound like a person
-  thinking (`[curious] 嗯…`) rather than a beep.
 - **Keep the pipes warm.** Open the output device once per process. Hold one TTS
   connection open across turns and open a stream per utterance — the API is
   built for this (5 streams per connection), as long as the keepalive in §9 is
@@ -155,9 +151,8 @@ What to do, by payoff:
 - **`reduce_silence: true`.** A v2 flag that trims inter-word and inter-sentence
   pauses without changing pronunciation speed. Free perceived tempo; strictly
   better than raising `speed`, which makes the agent sound rushed.
-- **Enforce the budget.** If first audio has not happened by *N* ms, emit the
-  filler. If a tool loop exceeds *M* seconds, say so. A voice profile should cap
-  `max_agent_loops` far below 50.
+- **Enforce the budget.** If a tool loop exceeds *M* seconds, say so. A voice
+  profile should cap `max_agent_loops` far below 50.
 
 ## 5. Floor control — Soniox ends turns, local VAD starts them
 
@@ -400,11 +395,11 @@ GOAL.md asks for "a consistent self voice as an independent entity". Today that
 is a text-level property that TTS flattens into one register. `tts-rt-v2` audio
 tags — `[warm]`, `[curious]`, `[serious]`, `[laughs]`, `[pause]` — make delivery
 programmable while staying natural. Two uses, in increasing ambition: mark
-runtime-generated speech (fillers, acknowledgements, failure lines) so they
-sound human rather than robotic; and let the agent's own identity carry a
-default tone, with tags emitted sparingly by the model itself. The docs are
-specific about discipline: English tags only regardless of the spoken language,
-one or two before a clause, simple tags only, and let the words carry the rest.
+runtime-generated failure lines so they sound human rather than robotic; and
+let the agent's own identity carry a default tone, with tags emitted sparingly
+by the model itself. The docs are specific about discipline: English tags only
+regardless of the spoken language, one or two before a clause, simple tags
+only, and let the words carry the rest.
 That last point argues for the runtime owning tags for system speech and keeping
 the model's own use rare.
 
@@ -553,7 +548,7 @@ bridge, the join timeouts, and two whole bug classes.
 18. Quiet hours and presence gate for proactive speech (§8).
 
 **Phase 3 — polish and budget.**
-19. Preemptive generation; local acknowledgement; warm TTS connection and output
+19. Preemptive generation; warm TTS connection and output
     stream (§4).
 20. Audio tags for system speech; consider a cloned voice for the agent (§7c).
 21. Voice profile for the agent loop: lower `max_agent_loops`, spoken progress on

@@ -87,20 +87,20 @@ class AgentEditSetupHelperTests(unittest.TestCase):
             config = load_config(agent_dir)
             config["channels"]["voice"] = {
                 "api_key": "voice-key",
-                "interruptions": "off",
+                "interruptions": False,
             }
             (agent_dir / "config.yaml").write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
             schema = build_agent_edit_setup_schema(load_config(agent_dir))
             result = apply_agent_edit_setup(
                 agent_dir,
                 "voice",
-                {"voice": "Maya", "interruptions": "on", "languages": ["en"]},
+                {"voice": "Maya", "interruptions": True, "languages": ["en"]},
             )
             updated = load_config(agent_dir)["channels"]["voice"]
-        self.assertEqual(schema["voice"]["defaults"]["interruptions"], "off")
+        self.assertIs(schema["voice"]["defaults"]["interruptions"], False)
         self.assertTrue(result["changed"])
         self.assertEqual(updated["voice"], "Maya")
-        self.assertEqual(updated["interruptions"], "on")
+        self.assertIs(updated["interruptions"], True)
         self.assertEqual(updated["languages"], ["en"])
 
     def test_observability_disabled_for_anthropic_model_api(self):
@@ -190,7 +190,7 @@ class AgentEditSetupRouteTests(unittest.TestCase):
                     "voice_api_key": "voice-key",
                     "voice": "Maya",
                     "languages": ["en", "zh"],
-                    "interruptions": "on",
+                    "interruptions": True,
                 },
             )
 
@@ -208,7 +208,7 @@ class AgentEditSetupRouteTests(unittest.TestCase):
             self.assertEqual(load_config(agent_dir)["image_generation"]["provider"], "openai")
             voice = load_config(agent_dir)["channels"]["voice"]
             self.assertEqual(voice["voice"], "Maya")
-            self.assertEqual(voice["interruptions"], "on")
+            self.assertIs(voice["interruptions"], True)
 
 
 if __name__ == "__main__":

@@ -3,7 +3,6 @@ import threading
 import unittest
 from unittest.mock import patch
 
-from xagent.interfaces.voice.ack import DEFAULT_ACK_PHRASES, InstantAckConfig, InstantAckSpeaker
 from xagent.interfaces.voice.audio import SoundDevicePlayer
 from xagent.interfaces.voice.preemptive import (
     PreemptiveGenerationController,
@@ -49,20 +48,6 @@ class PreemptiveTests(unittest.TestCase):
         asyncio.run(run_case())
 
 
-class InstantAckTests(unittest.TestCase):
-    def test_default_ack_phrase_is_minimal(self):
-        self.assertEqual(
-            DEFAULT_ACK_PHRASES,
-            ("[thoughtful]Hmm…", "[thoughtful]Mmm…", "[thoughtful]嗯..."),
-        )
-
-    def test_cooldown_blocks_back_to_back(self):
-        speaker = InstantAckSpeaker(InstantAckConfig(cooldown_seconds=60.0))
-        self.assertTrue(speaker.should_play())
-        speaker.pick_phrase()
-        self.assertFalse(speaker.should_play())
-
-
 class WarmPlayerTests(unittest.TestCase):
     def test_close_is_safe_without_stream(self):
         player = SoundDevicePlayer(keep_warm=True)
@@ -81,7 +66,6 @@ class PreemptiveRuntimeTests(unittest.TestCase):
                     yield event
 
         async def run_case():
-            from xagent.interfaces.voice.ack import InstantAckConfig, InstantAckSpeaker
             from xagent.interfaces.voice.preemptive import (
                 PreemptiveGenerationConfig,
                 PreemptiveGenerationController,
@@ -99,7 +83,6 @@ class PreemptiveRuntimeTests(unittest.TestCase):
                 options=VoiceRuntimeOptions(user_id="alice"),
                 output=lambda *args, **kwargs: None,
             )
-            runtime._instant_ack = InstantAckSpeaker(InstantAckConfig(enabled=False))
             abort_turn = getattr(agent, "abort", None)
             runtime._preemptive = PreemptiveGenerationController(
                 PreemptiveGenerationConfig(enabled=True, min_chars=3),

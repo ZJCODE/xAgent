@@ -16,7 +16,6 @@ from typing import Any, Optional
 
 from ...core.runtime import create_runtime_heartbeat
 from ..base import BaseAgentConfig, BaseAgentRunner
-from ..voice.config import VoiceInterruptionMode
 from .agents import AgentRegistryError, management_root, resolve_agent_name
 from .channels import (
     CHANNEL_API,
@@ -174,7 +173,7 @@ def _channel_command(channel: str, args: argparse.Namespace) -> list[str]:
             command.extend(["--profile", str(profile)])
         interruptions = _voice_interruptions_override(args)
         if interruptions is not None:
-            command.extend(["--interruptions", interruptions])
+            command.extend(["--interruptions", str(interruptions).lower()])
         speed = getattr(args, "speech_speed", None)
         if speed is not None:
             command.extend(["--speed", str(speed)])
@@ -471,9 +470,9 @@ def _voice_profile_override(args: argparse.Namespace) -> str | None:
     return None if value == "auto" else value
 
 
-def _voice_interruptions_override(args: argparse.Namespace) -> VoiceInterruptionMode | None:
-    # None inherits config; explicit auto must override a persisted on/off.
-    return getattr(args, "interruptions", None)
+def _voice_interruptions_override(args: argparse.Namespace) -> bool | None:
+    value = getattr(args, "interruptions", None)
+    return None if value is None else value == "true"
 
 
 def _voice_speed_override(args: argparse.Namespace) -> float | None:

@@ -852,16 +852,17 @@ class CLICommandTests(unittest.TestCase):
 
     def test_voice_interruption_override_survives_background_launch(self):
         for action in ([], ["start"], ["restart"]):
-            for mode in (None, "auto", "on", "off"):
+            for mode in (None, "true", "false"):
                 with self.subTest(action=action, mode=mode), patch(
                     "xagent.interfaces.cli.runtime.resolve_agent_name", return_value="work"
                 ):
                     flags = [] if mode is None else ["--interruptions", mode]
                     args = build_parser().parse_args(["voice", *action, "--agent", "work", *flags])
-                    self.assertEqual(_voice_interruptions_override(args), mode)
+                    expected = None if mode is None else mode == "true"
+                    self.assertIs(_voice_interruptions_override(args), expected)
                     command = _channel_command("voice", args)
                     child = build_parser().parse_args(command[3:])
-                    self.assertEqual(_voice_interruptions_override(child), mode)
+                    self.assertIs(_voice_interruptions_override(child), expected)
                     if mode is None:
                         self.assertNotIn("--interruptions", command)
 
@@ -2607,7 +2608,7 @@ class CLICommandTests(unittest.TestCase):
                 "api_key": "voice-key",
                 "languages": ["zh", "en"],
                 "voice": "Daniel",
-                "interruptions": "auto",
+                "interruptions": False,
             },
         )
         output = stdout.getvalue()

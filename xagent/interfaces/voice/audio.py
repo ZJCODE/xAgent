@@ -929,9 +929,26 @@ class SoundDevicePlayer:
         if stream is not None:
             try:
                 stream.stop()
+            except Exception:
+                pass
+            try:
                 stream.close()
             except Exception:
                 pass
+
+    def _discard_stream(self, stream: Any, *, abort: bool = False) -> None:
+        with self._stream_lock:
+            if self._stream is stream:
+                self._stream = None
+        try:
+            if abort:
+                stream.abort()
+        except Exception:
+            logger.debug("Could not abort speaker stream", exc_info=True)
+        try:
+            stream.close()
+        except Exception:
+            logger.debug("Could not close speaker stream", exc_info=True)
 
     def _output_converter(self) -> _PCMOutputConverter:
         if self._converter is None:
@@ -946,7 +963,14 @@ class SoundDevicePlayer:
     def _ensure_stream(self, sd: Any) -> Any:
         with self._stream_lock:
             if self._stream is not None:
-                return self._stream
+                if self._stream.active:
+                    return self._stream
+                stale_stream = self._stream
+                self._stream = None
+                try:
+                    stale_stream.close()
+                except Exception:
+                    logger.debug("Could not close stopped speaker stream", exc_info=True)
             logger.info(
                 "Opening warm speaker stream: device=%s stream=%sch@%sHz source=%sch@%sHz",
                 self.device_name,
@@ -955,14 +979,22 @@ class SoundDevicePlayer:
                 self.channels,
                 self.sample_rate,
             )
-            self._stream = sd.RawOutputStream(
+            stream = sd.RawOutputStream(
                 device=self.device_index,
                 samplerate=self.stream_sample_rate,
                 channels=self.stream_channels,
                 dtype=self.dtype,
             )
-            self._stream.start()
-            return self._stream
+            try:
+                stream.start()
+            except Exception:
+                try:
+                    stream.close()
+                except Exception:
+                    logger.debug("Could not close speaker stream after start failed", exc_info=True)
+                raise
+            self._stream = stream
+            return stream
 
     def play_chunks(self, chunks: Iterator[bytes], *, stop_event: threading.Event) -> None:
         sd = _import_sounddevice()
@@ -971,18 +1003,32 @@ class SoundDevicePlayer:
             stream = self._ensure_stream(sd)
             for chunk in chunks:
                 if stop_event.is_set():
-                    try:
-                        stream.abort()
-                    except Exception:
-                        pass
+                    self._discard_stream(stream, abort=True)
                     break
                 if chunk:
-                    stream.write(converter.convert(chunk))
-                    if stop_event.is_set():
+                    converted = converter.convert(chunk)
+                    try:
+                        stream.write(converted)
+                    except sd.PortAudioError as exc:
+                        if stop_event.is_set():
+                            self._discard_stream(stream, abort=True)
+                            break
+                        if len(exc.args) < 2 or exc.args[1] != -9983:
+                            self._discard_stream(stream)
+                            raise
+                        logger.warning("Speaker stream stopped during playback; reopening it once")
+                        self._discard_stream(stream)
+                        stream = self._ensure_stream(sd)
+                        if stop_event.is_set():
+                            self._discard_stream(stream, abort=True)
+                            break
                         try:
-                            stream.abort()
+                            stream.write(converted)
                         except Exception:
-                            pass
+                            self._discard_stream(stream)
+                            raise
+                    if stop_event.is_set():
+                        self._discard_stream(stream, abort=True)
                         break
             return
 

@@ -195,9 +195,9 @@ def _add_voice_runtime_arguments(
     parser.add_argument(
         "--interruptions",
         dest="interruptions",
-        choices=["auto", "on", "off"],
+        choices=["true", "false"],
         default=None,
-        help="Override channels.voice.interruptions for this session (auto follows detected devices)",
+        help="Override channels.voice.interruptions for this session (true or false)",
     )
     parser.add_argument(
         "--speed",

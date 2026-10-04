@@ -84,7 +84,7 @@ class VoiceConfigSurfaceTests(unittest.TestCase):
                 "api_key": "secret",
                 "languages": ["zh", "en"],
                 "voice": "Daniel",
-                "interruptions": "auto",
+                "interruptions": False,
             },
         )
 
@@ -98,13 +98,13 @@ class VoiceConfigSurfaceTests(unittest.TestCase):
     def test_voice_setup_preserves_tier1_when_rotating_key(self):
         existing = {
             "api_key": "old",
-            "interruptions": "off",
+            "interruptions": False,
             "audio": {"input": "Mic", "output": "Speaker"},
         }
         selection = VoiceInitSelection(voice_api_key="new-key")
         merged = _voice_channel_config(selection, existing=existing)
         self.assertEqual(merged["api_key"], "new-key")
-        self.assertEqual(merged["interruptions"], "off")
+        self.assertIs(merged["interruptions"], False)
         self.assertEqual(merged["audio"]["input"], "Mic")
 
     def test_prepare_voice_preset_update_preserves_block(self):
@@ -113,7 +113,7 @@ class VoiceConfigSurfaceTests(unittest.TestCase):
             "channels": {
                 "voice": {
                     "api_key": "old",
-                    "interruptions": "on",
+                    "interruptions": True,
                     "audio": {"input": "Mic", "output": "Speaker"},
                 }
             },
@@ -121,7 +121,7 @@ class VoiceConfigSurfaceTests(unittest.TestCase):
         update = prepare_voice_preset_update(config, provider="soniox", api_key="new")
         voice = update.data["channels"]["voice"]
         self.assertEqual(voice["api_key"], "new")
-        self.assertEqual(voice["interruptions"], "on")
+        self.assertIs(voice["interruptions"], True)
         self.assertEqual(voice["audio"]["input"], "Mic")
 
     def test_runtime_profile_follows_detected_topology(self):
@@ -137,37 +137,29 @@ class VoiceConfigSurfaceTests(unittest.TestCase):
         profile = resolve_runtime_profile(
             _audio_profile(near_field=True, echo_managed=False),
             profile_override="room",
-            interruptions_override="on",
+            interruptions_override=True,
         )
         self.assertEqual(profile.name, "room")
         self.assertFalse(profile.echo_managed)
-        self.assertEqual(profile.interruptions_override, "on")
+        self.assertIs(profile.interruptions_override, True)
         self.assertIn("override", profile.source)
 
     def test_interruption_precedence_preserves_hardware_and_saved_preference(self):
         for detected in (False, True):
-            for persisted in ("auto", "on", "off"):
-                for override in (None, "auto", "on", "off"):
+            for persisted in (False, True):
+                for override in (None, False, True):
                     with self.subTest(detected=detected, persisted=persisted, override=override):
                         config = VoiceChannelConfig.from_dict({"interruptions": persisted})
                         config.apply_runtime_profile(resolve_runtime_profile(
                             _audio_profile(near_field=False, echo_managed=detected),
                             interruptions_override=override,
                         ))
-                        mode = persisted if override is None else override
-                        self.assertEqual(config.interruption_mode, mode)
-                        self.assertEqual(
-                            config.enable_interruptions,
-                            detected if mode == "auto" else mode == "on",
-                        )
+                        self.assertIs(config.enable_interruptions, persisted if override is None else override)
                         self.assertEqual(config.runtime_profile.echo_managed, detected)
                         self.assertEqual(config.to_public_dict()["interruptions"], persisted)
 
     def test_interruption_yaml_round_trip(self):
-        for literal, expected in (
-            ("auto", "auto"), ("on", "on"), ("off", "off"),
-            ('"on"', "on"), ('"off"', "off"), ("true", "on"), ("false", "off"),
-        ):
+        for literal, expected in (("true", True), ("false", False)):
             with self.subTest(literal=literal):
                 config = VoiceChannelConfig.from_dict(yaml.safe_load(f"interruptions: {literal}"))
                 self.assertEqual(config.interruptions, expected)
@@ -175,7 +167,7 @@ class VoiceConfigSurfaceTests(unittest.TestCase):
                 self.assertEqual(restored.interruptions, expected)
 
     def test_invalid_interruption_modes_are_rejected(self):
-        for value in ("always", "", None, 0, 1, {}):
+        for value in ("auto", "on", "off", "true", "false", "", None, 0, 1, {}):
             with self.subTest(value=value), self.assertRaisesRegex(ValueError, "interruptions"):
                 VoiceChannelConfig.from_dict({"interruptions": value})
 

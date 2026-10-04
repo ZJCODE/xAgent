@@ -201,7 +201,7 @@ export interface VoiceSelectionInput {
   voice_api_key: string;
   languages: string[];
   voice: string;
-  interruptions: "auto" | "on" | "off";
+  interruptions: boolean;
   audio_input: string | number | null;
   audio_output: string | number | null;
 }
@@ -211,7 +211,7 @@ export interface VoiceSetupSchema {
     voice_api_key: string;
     languages: string[];
     voice: string;
-    interruptions: "auto" | "on" | "off";
+    interruptions: boolean;
     audio_input: string | number | null;
     audio_output: string | number | null;
   };
@@ -434,7 +434,7 @@ export interface AgentEditSetupSchema {
       voice_api_key: string;
       languages: string[];
       voice: string;
-      interruptions: "auto" | "on" | "off";
+      interruptions: boolean;
       audio_input: string | number | null;
       audio_output: string | number | null;
     };

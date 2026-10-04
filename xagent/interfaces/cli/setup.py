@@ -104,7 +104,7 @@ class VoiceInitSelection:
     voice_api_key: str = ""
     languages: tuple[str, ...] = ("zh", "en")
     voice: str = "Daniel"
-    interruptions: str = "auto"
+    interruptions: bool = False
     audio_input: str | int | None = "auto"
     audio_output: str | int | None = "auto"
 
@@ -322,7 +322,7 @@ def build_voice_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
         "voice_api_key": "",
         "languages": ["zh", "en"],
         "voice": "Daniel",
-        "interruptions": "auto",
+        "interruptions": False,
         "audio_input": "auto",
         "audio_output": "auto",
     }
@@ -449,14 +449,14 @@ def voice_init_selection_from_mapping(
         raise ChannelSetupError("languages must be a list or comma-separated string")
     if not languages:
         raise ChannelSetupError("languages must include at least one language")
-    interruption_value = data.get("interruptions", schema_defaults.get("interruptions", "auto"))
-    if isinstance(interruption_value, bool):
-        interruption_value = "on" if interruption_value else "off"
+    interruption_value = data.get("interruptions", schema_defaults.get("interruptions", False))
+    if not isinstance(interruption_value, bool):
+        raise ChannelSetupError("interruptions must be true or false")
     return VoiceInitSelection(
         voice_api_key=str(data.get("voice_api_key") or "").strip(),
         languages=tuple(languages),
         voice=str(data.get("voice", schema_defaults.get("voice", "Daniel")) or "Daniel").strip(),
-        interruptions=str(interruption_value or "auto").strip().lower(),
+        interruptions=interruption_value,
         audio_input=data.get("audio_input", schema_defaults.get("audio_input", "auto")),
         audio_output=data.get("audio_output", schema_defaults.get("audio_output", "auto")),
     )
@@ -606,8 +606,7 @@ def _voice_channel_config(
             merged["languages"] = list(selection.languages)
         if selection.voice != "Daniel":
             merged["voice"] = selection.voice
-        if selection.interruptions != "auto":
-            merged["interruptions"] = selection.interruptions
+        merged["interruptions"] = selection.interruptions
         if selection.audio_input != "auto" or selection.audio_output != "auto":
             merged["audio"] = {"input": selection.audio_input, "output": selection.audio_output}
         return VoiceChannelConfig.from_dict(merged).to_public_dict()

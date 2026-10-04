@@ -415,10 +415,6 @@ semantics optimises the wrong thing.
   and hold TTS until the turn is confirmed; cancel and re-run if the final
   transcript diverges. This removes the assembly and TTFT terms from the
   perceived gap, and it is what pays back the aggregation window from 2.1.
-- **Instant acknowledgement.** What the user feels is time-to-first-*audio*. If
-  first audio has not happened by roughly 400 ms, emit a short locally-decided
-  filler. With audio tags it sounds like a person thinking, not a chime. Use
-  sparingly — a filler on every turn becomes a tic.
 - **Warm pipes.** Open the output device once per process instead of per
   playback. Hold one TTS connection across turns and open a stream per segment.
 - **A voice profile for the agent loop.** Cap `max_agent_loops` far below 50,

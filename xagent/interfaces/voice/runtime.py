@@ -24,7 +24,6 @@ from xagent.core.runtime import (
     upsert_contact,
 )
 
-from .ack import InstantAckConfig, InstantAckSpeaker
 from .aggregator import iter_aggregated_utterances
 from .attention import VoiceAttentionConfig, VoiceAttentionGate
 from .barge_in import BargeInConfig, BargeInEvaluator
@@ -69,14 +68,10 @@ class _TurnTiming:
     first_text_at: float | None = None
     first_audio_at: float | None = None
 
-    def mark_first_text(self, logger: logging.Logger) -> None:
+    def mark_first_text(self) -> None:
         if self.first_text_at is not None:
             return
         self.first_text_at = time.monotonic()
-        logger.info(
-            "Voice latency endpoint_to_agent_first_text_ms=%.1f",
-            (self.first_text_at - self.endpoint_at) * 1000,
-        )
 
     def mark_first_audio(self, logger: logging.Logger) -> None:
         if self.first_audio_at is not None:
@@ -212,13 +207,6 @@ class VoiceRuntime:
         self._proactive_limiter = ProactiveSpeechLimiter(self.config.proactive.max_per_hour)
         self._self_interruption = SelfInterruptionGuard()
         performance = self.config.performance
-        self._instant_ack = InstantAckSpeaker(
-            InstantAckConfig(
-                enabled=performance.instant_ack,
-                delay_ms=performance.ack_delay_ms,
-                cooldown_seconds=performance.ack_cooldown_seconds,
-            )
-        )
         abort_turn = getattr(agent, "abort", None)
         self._preemptive = PreemptiveGenerationController(
             PreemptiveGenerationConfig(
@@ -415,6 +403,8 @@ class VoiceRuntime:
                 still_working.cancel()
                 await asyncio.gather(still_working, return_exceptions=True)
                 metrics.turn_end_at = time.monotonic()
+                metrics.first_text_at = timing.first_text_at
+                metrics.first_audio_at = timing.first_audio_at
                 metrics.reply_char_count = sum(len(part) for part in reply_buffer)
                 metrics.tts_language = speak_language["value"]
                 metrics.interrupted = bool(interrupted["value"])
@@ -486,7 +476,7 @@ class VoiceRuntime:
                             self.logger.warning(
                                 "Disabling barge-in for this session: repeated playback echo "
                                 "detected (interruptions=%s); switching to half-duplex capture",
-                                self.config.interruption_mode,
+                                str(self.config.enable_interruptions).lower(),
                             )
                             self._floor.allow_duplex_capture = False
                             self.pause_event.set()
@@ -532,52 +522,6 @@ class VoiceRuntime:
         except asyncio.CancelledError:
             return
 
-    async def _maybe_play_instant_ack(
-        self,
-        first_text: asyncio.Future[None],
-        speak_language: dict[str, str],
-        timing: _TurnTiming | None,
-    ) -> None:
-        performance = self.config.performance
-        if not performance.instant_ack or performance.ack_delay_ms <= 0:
-            return
-        if not self._instant_ack.should_play():
-            return
-        try:
-            await asyncio.sleep(performance.ack_delay_ms / 1000.0)
-            if first_text.done():
-                return
-            phrase = self._instant_ack.pick_phrase()
-            stop = threading.Event()
-            await asyncio.to_thread(
-                self._play_ack_phrase,
-                phrase,
-                speak_language["value"],
-                stop,
-                timing,
-            )
-        except asyncio.CancelledError:
-            return
-
-    def _play_ack_phrase(
-        self,
-        phrase: str,
-        language: str,
-        stop_event: threading.Event,
-        timing: _TurnTiming | None,
-    ) -> None:
-        audio = self.synthesizer.synthesize_chunks([phrase], language=language, stop_event=stop_event)
-
-        def timed_audio() -> Iterator[bytes]:
-            first = True
-            for chunk in audio:
-                if first and chunk and timing is not None:
-                    first = False
-                    timing.mark_first_audio(self.logger)
-                yield chunk
-
-        self.player.play_chunks(timed_audio(), stop_event=stop_event)
-
     async def _annotate_spoken_metadata(self, full_text: str, spoken_ledger: SpokenLedger) -> None:
         if not full_text:
             return
@@ -620,9 +564,6 @@ class VoiceRuntime:
             first_text = asyncio.get_running_loop().create_future()
             playback_task: asyncio.Task[None] | None = None
             barge_task: asyncio.Task[None] | None = None
-            ack_task = asyncio.create_task(
-                self._maybe_play_instant_ack(first_text, speak_language, timing)
-            )
             producer_task = asyncio.create_task(
                 self._feed_text_stream(
                     text_chunks,
@@ -678,6 +619,37 @@ class VoiceRuntime:
                     if failure is not None:
                         raise failure
                     await asyncio.gather(producer_task, playback_task)
+                    if (
+                        metrics is not None
+                        and metrics.playback_audio_bytes == 0
+                        and reply_buffer
+                        and not playback_stop_event.is_set()
+                        and not self.stop_event.is_set()
+                        and not (interrupted_flag or {}).get("value", False)
+                    ):
+                        spoken_reply = sanitize_spoken_text("".join(reply_buffer))
+                        if spoken_reply:
+                            self.logger.warning(
+                                "Voice TTS returned no audio for a %d-character reply; retrying once",
+                                len(spoken_reply),
+                            )
+                            close_synthesizer = getattr(self.synthesizer, "close", None)
+                            if callable(close_synthesizer):
+                                try:
+                                    await asyncio.to_thread(close_synthesizer)
+                                except Exception:
+                                    self.logger.debug("Failed to reset the TTS connection", exc_info=True)
+                            await asyncio.to_thread(
+                                self._play_text_queue,
+                                [spoken_reply],
+                                speak_language,
+                                playback_stop_event,
+                                timing,
+                                metrics,
+                                spoken_ledger,
+                            )
+                            if metrics.playback_audio_bytes == 0:
+                                raise RuntimeError("Voice TTS returned no audio after retry")
                 else:
                     await producer_task
             except BaseException:
@@ -695,8 +667,6 @@ class VoiceRuntime:
                         pass
                 raise
             finally:
-                ack_task.cancel()
-                await asyncio.gather(ack_task, return_exceptions=True)
                 if barge_task is not None:
                     barge_task.cancel()
                     await asyncio.gather(barge_task, return_exceptions=True)
@@ -728,7 +698,7 @@ class VoiceRuntime:
                             "".join(reply_buffer)
                         )
                     if timing is not None:
-                        timing.mark_first_text(self.logger)
+                        timing.mark_first_text()
                     first_text.set_result(None)
                     if self._active_steer_event is not None:
                         self._active_steer_event.set()
@@ -738,7 +708,7 @@ class VoiceRuntime:
 
     def _play_text_queue(
         self,
-        text_queue: "_TextChunkQueue",
+        text_queue: Iterable[str],
         speak_language: dict[str, str],
         playback_stop_event: threading.Event,
         timing: _TurnTiming | None,
@@ -964,7 +934,6 @@ class VoiceRuntime:
         message_delta_seen: set[str] = set()
         sanitizer = StreamingTTSSanitizer()
         raw_reply_parts: list[str] = []
-        tool_progress_spoken = False
         performance = self.config.performance
 
         async def _live_events() -> AsyncIterator[dict[str, Any]]:
@@ -989,10 +958,6 @@ class VoiceRuntime:
             async for event in source:
                 event_type = event.get("type")
                 message_id = str(event.get("message_id") or uuid.uuid4().hex)
-                if event_type == "tool_call" and performance.speak_tool_progress and not tool_progress_spoken:
-                    tool_progress_spoken = True
-                    for spoken in sanitizer.feed("One moment."):
-                        yield spoken
                 if event_type == "message_delta":
                     delta = str(event.get("delta") or "")
                     if not delta:
