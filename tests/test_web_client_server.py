@@ -143,7 +143,7 @@ class WebClientMultiAgentTests(unittest.IsolatedAsyncioTestCase):
         payload = response.json()
         self.assertIn("openai", {row["id"] for row in payload["providers"]})
         self.assertEqual(
-            ["gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-6-astra"],
+            ["gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-6-luna", "gpt-6.1-sol", "gpt-6-astra"],
             payload["models"]["openai"],
         )
         self.assertTrue(all("Decide later" not in models for models in payload["models"].values()))

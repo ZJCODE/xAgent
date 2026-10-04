@@ -130,12 +130,16 @@ OPENAI_MODELS = (
     "gpt-5.6-terra",
     "gpt-5.6-luna",
     "gpt-5.6-sol",
+    "gpt-6-luna",
+    "gpt-6.1-sol",
     "gpt-6-astra",
 )
 OPENAI_MODEL_DESCRIPTIONS = {
     "gpt-5.6-terra": "Recommended everyday default — balances intelligence and cost.",
     "gpt-5.6-luna": "Cost-sensitive / high-volume (heartbeat, diary, light chat).",
     "gpt-5.6-sol": "GPT-5.6 flagship for complex professional work.",
+    "gpt-6-luna": "Latest efficient model for focused, high-volume tasks.",
+    "gpt-6.1-sol": "Latest balanced model for complex work at lower cost than Astra.",
     "gpt-6-astra": "GPT-6 flagship for the hardest reasoning and coding.",
 }
 ANTHROPIC_MODELS = (
