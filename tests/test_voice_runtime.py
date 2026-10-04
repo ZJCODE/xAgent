@@ -161,8 +161,8 @@ class VoiceConfigTests(unittest.TestCase):
         )
 
         self.assertEqual(config.api_key, "key")
-        self.assertEqual(config.languages, ["en", "zh"])
-        self.assertEqual(config.fallback_language, "en")
+        self.assertEqual(config.languages, ["zh", "en"])
+        self.assertEqual(config.fallback_language, "zh")
         self.assertEqual(config.audio.output, 2)
 
     def test_api_key_falls_back_to_environment(self):
@@ -180,9 +180,9 @@ class VoiceConfigTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "SONIOX_API_KEY"):
                 VoiceChannelConfig.from_dict({}).resolved_api_key()
 
-    def test_rejects_empty_languages(self):
-        with self.assertRaisesRegex(ValueError, "languages"):
-            VoiceChannelConfig.from_dict({"languages": [" "]})
+    def test_legacy_languages_do_not_change_runtime_hints(self):
+        config = VoiceChannelConfig.from_dict({"languages": [" "]})
+        self.assertEqual(config.languages, ["zh", "en"])
 
     def test_interruptions_require_explicit_enablement(self):
         config = VoiceChannelConfig.from_dict({"api_key": "key"})

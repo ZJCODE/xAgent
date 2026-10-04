@@ -124,7 +124,6 @@ export function FeatureSetupModal({ open, feature, schema, onClose, onSaved }: F
   const [langfuseBaseUrl, setLangfuseBaseUrl] = useState("");
   const [voiceApiKey, setVoiceApiKey] = useState("");
   const [voiceName, setVoiceName] = useState("Daniel");
-  const [voiceLanguages, setVoiceLanguages] = useState<string[]>(["zh", "en"]);
   const [voiceInterruptions, setVoiceInterruptions] = useState(false);
   const [voiceInput, setVoiceInput] = useState("auto");
   const [voiceOutput, setVoiceOutput] = useState("auto");
@@ -154,7 +153,6 @@ export function FeatureSetupModal({ open, feature, schema, onClose, onSaved }: F
       const defaults = schema.voice.defaults;
       setVoiceApiKey("");
       setVoiceName(defaults.voice || "Daniel");
-      setVoiceLanguages(defaults.languages || ["zh", "en"]);
       setVoiceInterruptions(defaults.interruptions);
       setVoiceInput(String(defaults.audio_input ?? "auto"));
       setVoiceOutput(String(defaults.audio_output ?? "auto"));
@@ -203,7 +201,6 @@ export function FeatureSetupModal({ open, feature, schema, onClose, onSaved }: F
       return (
         Boolean(voiceApiKey.trim()) ||
         voiceName !== current.voice ||
-        JSON.stringify(voiceLanguages) !== JSON.stringify(current.languages) ||
         voiceInterruptions !== current.interruptions ||
         voiceInput !== String(current.audio_input ?? "auto") ||
         voiceOutput !== String(current.audio_output ?? "auto")
@@ -246,7 +243,6 @@ export function FeatureSetupModal({ open, feature, schema, onClose, onSaved }: F
     reasoning,
     voiceApiKey,
     voiceName,
-    voiceLanguages,
     voiceInterruptions,
     voiceInput,
     voiceOutput,
@@ -278,7 +274,6 @@ export function FeatureSetupModal({ open, feature, schema, onClose, onSaved }: F
         selection = {
           voice_api_key: voiceApiKey.trim() || undefined,
           voice: voiceName.trim(),
-          languages: voiceLanguages,
           interruptions: voiceInterruptions,
           audio_input: voiceInput.trim() || "auto",
           audio_output: voiceOutput.trim() || "auto",
@@ -362,14 +357,6 @@ export function FeatureSetupModal({ open, feature, schema, onClose, onSaved }: F
                 </option>
               ))}
             </select>
-          </WizardField>
-          <WizardField label="Spoken languages" hint="Comma-separated codes; the first is the fallback reply language.">
-            <input
-              value={voiceLanguages.join(", ")}
-              onChange={(event) =>
-                setVoiceLanguages(event.target.value.split(",").map((item) => item.trim()).filter(Boolean))
-              }
-            />
           </WizardField>
           <WizardField label="Allow interruptions" hint="Echo protection remains active when enabled.">
             <select value={String(voiceInterruptions)} onChange={(event) => setVoiceInterruptions(event.target.value === "true")}>

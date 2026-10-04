@@ -510,7 +510,6 @@ def prepare_voice_preset_update(
     provider: str,
     api_key: str | None = None,
     voice: str | None = None,
-    languages: list[str] | tuple[str, ...] | None = None,
     interruptions: bool | None = None,
     audio_input: str | int | None = None,
     audio_output: str | int | None = None,
@@ -538,8 +537,6 @@ def prepare_voice_preset_update(
                 updated["interruptions"] = False
             if voice is not None:
                 updated["voice"] = voice
-            if languages is not None:
-                updated["languages"] = list(languages)
             if interruptions is not None:
                 updated["interruptions"] = interruptions
             if audio_input is not None or audio_output is not None:
@@ -549,13 +546,11 @@ def prepare_voice_preset_update(
                 if audio_output is not None:
                     audio["output"] = audio_output
                 updated["audio"] = audio
-            channels["voice"] = updated
+            channels["voice"] = VoiceChannelConfig.from_dict(updated).to_public_dict()
         else:
             payload = VoiceChannelConfig.default_public_dict(api_key=resolved_api_key or SONIOX_KEY_PLACEHOLDER)
             if voice is not None:
                 payload["voice"] = voice
-            if languages is not None:
-                payload["languages"] = list(languages)
             if interruptions is not None:
                 payload["interruptions"] = interruptions
             if audio_input is not None or audio_output is not None:
@@ -766,7 +761,6 @@ def build_agent_edit_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
             "configured": voice_ready,
             "defaults": {
                 "voice_api_key": "",
-                "languages": list(voice_config.languages),
                 "voice": voice_config.speaking_voice,
                 "interruptions": voice_config.interruptions,
                 "audio_input": voice_config.audio.input,
@@ -800,7 +794,6 @@ def apply_agent_edit_setup(
             provider="soniox",
             api_key=selection.get("voice_api_key"),
             voice=selection.get("voice"),
-            languages=selection.get("languages"),
             interruptions=selection.get("interruptions"),
             audio_input=selection.get("audio_input"),
             audio_output=selection.get("audio_output"),

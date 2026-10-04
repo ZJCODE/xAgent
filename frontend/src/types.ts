@@ -199,7 +199,6 @@ export type SetupChannelId = Extract<ChannelId, "voice" | "feishu" | "weixin">;
 
 export interface VoiceSelectionInput {
   voice_api_key: string;
-  languages: string[];
   voice: string;
   interruptions: boolean;
   audio_input: string | number | null;
@@ -209,7 +208,6 @@ export interface VoiceSelectionInput {
 export interface VoiceSetupSchema {
   defaults: {
     voice_api_key: string;
-    languages: string[];
     voice: string;
     interruptions: boolean;
     audio_input: string | number | null;
@@ -432,7 +430,6 @@ export interface AgentEditSetupSchema {
     configured: boolean;
     defaults: {
       voice_api_key: string;
-      languages: string[];
       voice: string;
       interruptions: boolean;
       audio_input: string | number | null;

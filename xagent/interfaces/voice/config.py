@@ -43,6 +43,7 @@ SONIOX_SHARED_VOICE_OPTIONS = (
     ("Isla", "Female · Australian English"),
 )
 SONIOX_SHARED_VOICE_IDS = frozenset(voice_id for voice_id, _ in SONIOX_SHARED_VOICE_OPTIONS)
+VOICE_LANGUAGES = ("zh", "en")
 
 VoiceProfileName = Literal["room", "headset"]
 
@@ -82,7 +83,6 @@ _VOICE_KEY_PLACEHOLDERS = {
 _VOICE_TOP_LEVEL_KEYS = frozenset(
     {
         "api_key",
-        "languages",
         "voice",
         "interruptions",
         "audio",
@@ -92,7 +92,6 @@ _VOICE_TOP_LEVEL_KEYS = frozenset(
 VOICE_CONFIG_EXAMPLE = """channels:
   voice:
     api_key: your_soniox_api_key_here
-    languages: [zh, en]
     voice: Daniel
     interruptions: false"""
 
@@ -198,7 +197,6 @@ class VoiceChannelConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     api_key: str | None = None
-    languages: list[str] = Field(default_factory=lambda: ["zh", "en"])
     # The speaking voice. Not every agent is heard aloud, so the name lives in
     # the voice channel block rather than on the agent itself. YAML key is
     # ``voice``; the runtime reads the resolved ``voice`` property instead
@@ -228,20 +226,14 @@ class VoiceChannelConfig(BaseModel):
             raise ValueError(f"channels.voice.voice must be one of: {choices}")
         return voice
 
-    @field_validator("languages")
-    @classmethod
-    def _validate_languages(cls, value: list[str]) -> list[str]:
-        languages = list(dict.fromkeys(item.strip() for item in value if item.strip()))
-        if not languages:
-            raise ValueError("voice.languages must include at least one language")
-        return languages
-
     @classmethod
     def from_dict(cls, data: Any) -> "VoiceChannelConfig":
         if data is None:
             data = {}
         if not isinstance(data, dict):
             raise ValueError("channels.voice must be a dictionary")
+        # Older configs could set languages; it is now a fixed runtime choice.
+        data = {key: value for key, value in data.items() if key != "languages"}
         try:
             return cls.model_validate(data)
         except ValidationError as exc:
@@ -255,15 +247,11 @@ class VoiceChannelConfig(BaseModel):
     def to_public_dict(self) -> dict[str, Any]:
         """The block to write back to config.yaml.
 
-        The curated settings are always written, defaults included. The
-        speaking voice is written because an agent heard aloud
-        should sound like itself. ``audio`` is different — it is an escape
-        hatch for a pinned device, so it appears only once someone has pinned
-        one.
+        Languages are fixed internally. Audio appears only when a device has
+        been pinned.
         """
         public: dict[str, Any] = {
             "api_key": self.api_key or SONIOX_KEY_PLACEHOLDER,
-            "languages": list(self.languages),
             "voice": self.speaking_voice,
             "interruptions": self.interruptions,
         }
@@ -390,9 +378,14 @@ class VoiceChannelConfig(BaseModel):
         return 0.85 if self.profile == "headset" else 1.0
 
     @property
+    def languages(self) -> list[str]:
+        """Fixed recognition hints for Chinese and English speech."""
+        return list(VOICE_LANGUAGES)
+
+    @property
     def fallback_language(self) -> str:
         """The language to speak when the reply language is unclear."""
-        return self.languages[0]
+        return VOICE_LANGUAGES[0]
 
     def tts_language_for(self, stt_language: str | None) -> str:
         return (stt_language or "").strip() or self.fallback_language

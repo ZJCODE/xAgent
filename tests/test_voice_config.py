@@ -64,7 +64,7 @@ class VoiceConfigSurfaceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "interruptions"):
             VoiceChannelConfig.from_dict({"api_key": "k", "interruptio": "auto"})
 
-    def test_to_public_dict_round_trip(self):
+    def test_legacy_languages_are_ignored_and_removed(self):
         original = VoiceChannelConfig.from_dict(
             {
                 "api_key": "secret",
@@ -73,7 +73,8 @@ class VoiceConfigSurfaceTests(unittest.TestCase):
         )
         public = original.to_public_dict()
         again = VoiceChannelConfig.from_dict(public)
-        self.assertEqual(again.languages, ["en"])
+        self.assertNotIn("languages", public)
+        self.assertEqual(again.languages, ["zh", "en"])
 
     def test_public_dict_is_the_curated_surface(self):
         public = VoiceChannelConfig.from_dict({"api_key": "secret"}).to_public_dict()
@@ -82,7 +83,6 @@ class VoiceConfigSurfaceTests(unittest.TestCase):
             public,
             {
                 "api_key": "secret",
-                "languages": ["zh", "en"],
                 "voice": "Daniel",
                 "interruptions": False,
             },

@@ -345,7 +345,6 @@ def _voice_resetup_options(config: dict[str, Any]) -> list[MenuOption]:
     return [
         MenuOption("api_key", "Configure Voice", "Set the Soniox API key; other settings keep their defaults."),
         MenuOption("voice", "Speaking voice", "Choose the voice used for spoken replies.", disabled=not voice_configured),
-        MenuOption("languages", "Spoken languages", "Set the language order used by speech recognition and replies.", disabled=not voice_configured),
         MenuOption("interruptions", "Allow interruptions", "Enable or disable interruption during replies.", disabled=not voice_configured),
         MenuOption("input_device", "Input device", "Choose the local microphone.", disabled=not voice_configured),
         MenuOption("output_device", "Output device", "Choose the local speaker or headset.", disabled=not voice_configured),
@@ -1343,7 +1342,7 @@ def _run_voice_config_launcher(ui: TerminalUI, config_dir: Path) -> None:
                 ui.print_panel(f"Voice update is invalid: {exc}", title="Setup", border_style="red")
                 continue
             _apply_config_update(ui, config_dir, update, return_home_on_success=True)
-        elif option.key in {"voice", "languages", "interruptions", "input_device", "output_device"}:
+        elif option.key in {"voice", "interruptions", "input_device", "output_device"}:
             current = voice_config(config)
             voice_schema = build_voice_setup_schema(config)
             update_kwargs: dict[str, Any] = {"provider": "soniox"}
@@ -1366,12 +1365,6 @@ def _run_voice_config_launcher(ui: TerminalUI, config_dir: Path) -> None:
                 if choice is None:
                     continue
                 update_kwargs["voice"] = choice.key
-            elif option.key == "languages":
-                default_languages = ", ".join(str(item) for item in (current.get("languages") or ["zh", "en"]))
-                text_value = ui.ask_text("Spoken languages", default=default_languages).strip() or default_languages
-                update_kwargs["languages"] = [
-                    item.strip() for item in text_value.replace(",", " ").split() if item.strip()
-                ]
             elif option.key == "interruptions":
                 choice = ui.select_menu(
                     title="Allow interruptions",

@@ -30,7 +30,6 @@ function defaultVoiceSelection(schema: VoiceSetupSchema): VoiceSelectionInput {
   const defaults = schema.defaults;
   return {
     voice_api_key: defaults.voice_api_key,
-    languages: [...defaults.languages],
     voice: defaults.voice,
     interruptions: defaults.interruptions,
     audio_input: defaults.audio_input,

@@ -102,7 +102,6 @@ class VoiceInitSelection:
     """Interactive choices used to configure the local voice channel."""
 
     voice_api_key: str = ""
-    languages: tuple[str, ...] = ("zh", "en")
     voice: str = "Daniel"
     interruptions: bool = False
     audio_input: str | int | None = "auto"
@@ -320,7 +319,6 @@ def build_voice_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
 
     defaults = {
         "voice_api_key": "",
-        "languages": ["zh", "en"],
         "voice": "Daniel",
         "interruptions": False,
         "audio_input": "auto",
@@ -333,7 +331,6 @@ def build_voice_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
             try:
                 parsed = VoiceChannelConfig.from_dict(voice_raw)
                 defaults.update({
-                    "languages": list(parsed.languages),
                     "voice": parsed.speaking_voice,
                     "interruptions": parsed.interruptions,
                     "audio_input": parsed.audio.input,
@@ -436,25 +433,11 @@ def voice_init_selection_from_mapping(
 ) -> VoiceInitSelection:
     """Build a ``VoiceInitSelection`` from API/JSON input."""
     schema_defaults = build_voice_setup_schema(config).get("defaults") or {}
-    languages_raw = data.get("languages")
-    if languages_raw is None:
-        languages = list(schema_defaults.get("languages") or ["zh", "en"])
-    elif isinstance(languages_raw, str):
-        languages = [
-            part.strip() for part in languages_raw.replace(",", " ").split() if part.strip()
-        ]
-    elif isinstance(languages_raw, (list, tuple)):
-        languages = [str(part).strip() for part in languages_raw if str(part).strip()]
-    else:
-        raise ChannelSetupError("languages must be a list or comma-separated string")
-    if not languages:
-        raise ChannelSetupError("languages must include at least one language")
     interruption_value = data.get("interruptions", schema_defaults.get("interruptions", False))
     if not isinstance(interruption_value, bool):
         raise ChannelSetupError("interruptions must be true or false")
     return VoiceInitSelection(
         voice_api_key=str(data.get("voice_api_key") or "").strip(),
-        languages=tuple(languages),
         voice=str(data.get("voice", schema_defaults.get("voice", "Daniel")) or "Daniel").strip(),
         interruptions=interruption_value,
         audio_input=data.get("audio_input", schema_defaults.get("audio_input", "auto")),
@@ -602,8 +585,6 @@ def _voice_channel_config(
         merged = dict(existing)
         existing_key = str(existing.get("api_key") or "").strip()
         merged["api_key"] = selection.voice_api_key.strip() or existing_key or SONIOX_KEY_PLACEHOLDER
-        if selection.languages != ("zh", "en"):
-            merged["languages"] = list(selection.languages)
         if selection.voice != "Daniel":
             merged["voice"] = selection.voice
         merged["interruptions"] = selection.interruptions
@@ -612,7 +593,6 @@ def _voice_channel_config(
         return VoiceChannelConfig.from_dict(merged).to_public_dict()
     payload = {
         "api_key": selection.voice_api_key.strip() or SONIOX_KEY_PLACEHOLDER,
-        "languages": list(selection.languages),
         "voice": selection.voice,
         "interruptions": selection.interruptions,
         "audio": {"input": selection.audio_input, "output": selection.audio_output},

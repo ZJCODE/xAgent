@@ -94,14 +94,14 @@ class AgentEditSetupHelperTests(unittest.TestCase):
             result = apply_agent_edit_setup(
                 agent_dir,
                 "voice",
-                {"voice": "Maya", "interruptions": True, "languages": ["en"]},
+                {"voice": "Maya", "interruptions": True},
             )
             updated = load_config(agent_dir)["channels"]["voice"]
         self.assertIs(schema["voice"]["defaults"]["interruptions"], False)
         self.assertTrue(result["changed"])
         self.assertEqual(updated["voice"], "Maya")
         self.assertIs(updated["interruptions"], True)
-        self.assertEqual(updated["languages"], ["en"])
+        self.assertNotIn("languages", updated)
 
     def test_observability_disabled_for_anthropic_model_api(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -189,7 +189,6 @@ class AgentEditSetupRouteTests(unittest.TestCase):
                 json={
                     "voice_api_key": "voice-key",
                     "voice": "Maya",
-                    "languages": ["en", "zh"],
                     "interruptions": True,
                 },
             )

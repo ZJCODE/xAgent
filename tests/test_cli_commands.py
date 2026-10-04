@@ -1626,7 +1626,7 @@ class CLICommandTests(unittest.TestCase):
             saved = yaml.safe_load(config_path.read_text(encoding="utf-8"))
 
         self.assertEqual(saved["channels"]["voice"]["api_key"], "new-key")
-        self.assertEqual(saved["channels"]["voice"]["languages"], ["en", "zh"])
+        self.assertNotIn("languages", saved["channels"]["voice"])
         self.assertEqual(saved["channels"]["voice"]["audio"]["input"], "Mic")
         self.assertNotIn("provider", saved["channels"]["voice"])
 
@@ -2032,11 +2032,11 @@ class CLICommandTests(unittest.TestCase):
 
         self.assertEqual(
             set(fake_ui.options_by_key),
-            {"api_key", "voice", "languages", "interruptions", "input_device", "output_device", "disable", "back"},
+            {"api_key", "voice", "interruptions", "input_device", "output_device", "disable", "back"},
         )
         self.assertFalse(fake_ui.options_by_key["api_key"].disabled)
         self.assertTrue(fake_ui.options_by_key["disable"].disabled)
-        for key in ("voice", "languages", "interruptions", "input_device", "output_device"):
+        for key in ("voice", "interruptions", "input_device", "output_device"):
             self.assertTrue(fake_ui.options_by_key[key].disabled)
 
     def test_voice_channel_launcher_shows_setup_when_voice_not_enabled(self):
@@ -2606,7 +2606,6 @@ class CLICommandTests(unittest.TestCase):
             config["channels"]["voice"],
             {
                 "api_key": "voice-key",
-                "languages": ["zh", "en"],
                 "voice": "Daniel",
                 "interruptions": False,
             },

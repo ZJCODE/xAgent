@@ -42,8 +42,6 @@ Two hard exclusions on top:
 channels:
   voice:
     api_key: your_soniox_api_key_here
-    languages: [zh, en]         # languages actually spoken here; the first is
-                                # also the TTS language when a reply is unclear
     voice: Daniel               # one of six representative English voices
     interruptions: false        # true | false
 ```
@@ -51,12 +49,6 @@ channels:
 Why each earns its line:
 
 - **`api_key`** — test 1. Required, no default possible.
-- **`languages`** — test 3. Soniox accuracy depends on it from the first
-  utterance, before there is any conversation to infer it from. A household that
-  speaks one language should not pay the accuracy cost of hints for two. One
-  question, one answer: splitting it into `language_hints` plus
-  `fallback_language` allowed contradictory pairs such as hints `[en]` with
-  fallback `zh`.
 - **`voice`** — GOAL.md asks for a consistent self, and the name still follows
   the agent wherever it is heard. It lives in the channel block because not
   every agent is heard aloud: an agent that never speaks carries no voice
@@ -66,9 +58,10 @@ Why each earns its line:
   `false` uses turn-taking and is the default. Runtime echo protection remains
   active when interruptions are enabled.
 
-`to_public_dict` always writes the curated settings, defaults included —
-`audio` appears only once a device has been pinned. Echoing defaults back into
-the file is how a curated surface grows again on the next `xagent voice setup`.
+Recognition always uses the internal `[zh, en]` hints, with `zh` as the fallback
+reply language. `languages` is no longer a user setting. Existing saved values
+are ignored and removed the next time voice setup is saved. `audio` appears only
+once a device has been pinned.
 
 ## 3. Detected, not configured
 
@@ -157,7 +150,7 @@ person, and the agent has per-person memory. `--speed` remains for a session.
 
 ## 6. Schema shape
 
-`channels.voice` accepts `api_key`, `languages`, `voice`, `interruptions` and
+`channels.voice` accepts `api_key`, `voice`, `interruptions` and
 `audio`; anything else is rejected with a close-match hint. There is no quiet
 hours setting because voice only replies to an explicit user turn.
 `audio` is written only when pinned: on a fixed appliance the selected device is a stable machine-level fact
@@ -212,7 +205,7 @@ overrides. API keys remain masked and blank means “keep the existing key”.
 
 Entering voice setup enables the channel and asks only for the Soniox key;
 there is no separate enable checkbox. Edit Setup exposes speaking voice,
-ordered languages, interruption policy, and optional input/output device pins
+interruption policy, and optional input/output device pins
 when they need to be changed.
 The summary shows the saved interruption policy, and the voice startup log
 reports the effective value when a session override is used.
