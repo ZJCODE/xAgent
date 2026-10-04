@@ -7,6 +7,7 @@ import threading
 import uuid
 from collections import Counter
 from dataclasses import dataclass
+from itertools import chain
 from typing import Any, Callable, Iterable, Iterator
 
 from soniox import SonioxClient
@@ -128,16 +129,29 @@ class SonioxRealtimeSTT:
         stop_event: threading.Event,
     ) -> Iterator[VoiceUtterance]:
         """Yield turns across recoverable session failures until stopped."""
+        audio_iterator = iter(audio_chunks)
         backoff = STT_RECONNECT_BASE_SECONDS
         awaiting_recovery_notice = False
         while not stop_event.is_set():
             if self.lifecycle is not None and self.lifecycle.is_sleeping():
-                self.lifecycle.wait_until_awake(stop_event)
+                _logger.info("Soniox STT sleeping; monitoring microphone locally")
+                wake_chunk = self._wait_for_local_wake(
+                    audio_iterator,
+                    lifecycle=self.lifecycle,
+                    stop_event=stop_event,
+                )
+                if wake_chunk is None:
+                    return
+                _logger.info("Voice activity detected; reopening Soniox STT session")
+                # The chunk that crossed the wake threshold is speech, not just
+                # a trigger. Replay it into the new STT session so the first
+                # syllable is not lost.
+                audio_iterator = chain((wake_chunk,), audio_iterator)
             session_stop = threading.Event()
             produced_utterance = False
             try:
                 for utterance in self._iter_session(
-                    audio_chunks,
+                    audio_iterator,
                     pause_event=pause_event,
                     stop_event=stop_event,
                     session_stop=session_stop,
@@ -153,6 +167,12 @@ class SonioxRealtimeSTT:
             except Exception as exc:
                 if stop_event.is_set():
                     return
+                if self.lifecycle is not None and self.lifecycle.is_sleeping():
+                    # Closing the SDK session from the sender can surface as a
+                    # receive-side connection error. It is still an intentional
+                    # idle shutdown, not a provider failure.
+                    backoff = STT_RECONNECT_BASE_SECONDS
+                    continue
                 if not _is_recoverable_stt_error(exc):
                     raise
                 if isinstance(exc, SonioxVoiceError) and exc.retry_backoff_seconds:
@@ -169,6 +189,12 @@ class SonioxRealtimeSTT:
             else:
                 if stop_event.is_set():
                     return
+                if self.lifecycle is not None and self.lifecycle.is_sleeping():
+                    # This was the intentional idle shutdown. Keep listening
+                    # locally for wake energy instead of announcing a failed
+                    # connection or applying reconnect backoff.
+                    backoff = STT_RECONNECT_BASE_SECONDS
+                    continue
                 reconnecting = self._callbacks.on_reconnecting
                 if reconnecting is not None and not awaiting_recovery_notice:
                     reconnecting()
@@ -183,6 +209,22 @@ class SonioxRealtimeSTT:
                 backoff = STT_RECONNECT_BASE_SECONDS
             else:
                 backoff = min(backoff * 2.0, STT_RECONNECT_MAX_SECONDS)
+
+    @staticmethod
+    def _wait_for_local_wake(
+        audio_chunks: Iterator[bytes],
+        *,
+        lifecycle: SttLifecycleController,
+        stop_event: threading.Event,
+    ) -> bytes | None:
+        """Consume local audio while STT sleeps and return the wake chunk."""
+        for chunk in audio_chunks:
+            if stop_event.is_set():
+                return None
+            lifecycle.observe_audio(chunk)
+            if not lifecycle.is_sleeping():
+                return chunk
+        return None
 
     def _iter_session(
         self,
@@ -293,6 +335,13 @@ class SonioxRealtimeSTT:
                     if lifecycle.should_close_session():
                         lifecycle.enter_sleep()
                         session_stop.set()
+                        try:
+                            # Wake the blocking receive loop and finish the
+                            # remote stream. Local audio remains available to
+                            # the outer wake monitor.
+                            session.close()
+                        except Exception:
+                            pass
                         return
                 should_pause = pause_event.is_set()
                 if should_pause and not paused:

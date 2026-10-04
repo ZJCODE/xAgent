@@ -860,6 +860,17 @@ class SoundDeviceMicrophone:
                 chunks.put_nowait(bytes(indata))
             except queue.Full:
                 dropped_capture_blocks += 1
+                # Realtime speech must favor the newest audio. Keeping the
+                # oldest 3.8 seconds here can hide the words that should wake a
+                # sleeping or reconnecting recognizer.
+                try:
+                    chunks.get_nowait()
+                except queue.Empty:
+                    pass
+                try:
+                    chunks.put_nowait(bytes(indata))
+                except queue.Full:
+                    pass
                 if dropped_capture_blocks == 1 or dropped_capture_blocks % 50 == 0:
                     logger.warning(
                         "Dropped microphone blocks=%s device=%s",

@@ -1,5 +1,6 @@
 import asyncio
 import os
+import queue
 import tempfile
 import threading
 import unittest
@@ -27,12 +28,14 @@ from xagent.interfaces.voice.config import (
 from xagent.interfaces.voice.audio import AudioTopology
 from xagent.interfaces.voice.factory import create_local_voice_runtime
 from xagent.interfaces.voice.floor import FloorState
+from xagent.interfaces.voice.presence import SttLifecycleController, VoicePresenceConfig
 from xagent.interfaces.voice.spoken_ledger import SpokenLedger
 from xagent.interfaces.voice.runtime import VoiceRuntime, VoiceRuntimeOptions
 from xagent.interfaces.voice.types import VoiceUtterance
 from xagent.interfaces.voice.soniox import (
     SonioxRealtimeSTT,
     SonioxRealtimeTTS,
+    SonioxSTTCallbacks,
     SonioxVoiceError,
     _split_text_chunk,
 )
@@ -474,6 +477,71 @@ class SonioxSDKAdapterTests(unittest.TestCase):
                     )
                     self.assertEqual(next(iterator), utterance)
                     iterator.close()
+
+    def test_stt_idle_shutdown_wakes_locally_and_replays_the_wake_chunk(self):
+        lifecycle = SttLifecycleController(
+            VoicePresenceConfig(close_stt_after_idle_seconds=120.0, wake_energy_rms=10.0)
+        )
+        silence = b"\x00\x00" * 100
+        wake_chunk = b"\x00\x10" * 100
+        following_chunk = b"following"
+        seen_chunks = []
+        session_calls = 0
+        reconnecting = Mock()
+        utterance = VoiceUtterance("awake", "en")
+        stt = SonioxRealtimeSTT(
+            api_key="key",
+            config=voice_config(),
+            client=FakeClient(stt_session=FakeSTTSession([])),
+            callbacks=SonioxSTTCallbacks(on_reconnecting=reconnecting),
+            lifecycle=lifecycle,
+        )
+
+        def session(chunks, **kwargs):
+            nonlocal session_calls
+            del kwargs
+            session_calls += 1
+            if session_calls == 1:
+                lifecycle.enter_sleep()
+                return
+            seen_chunks.extend([next(chunks), next(chunks)])
+            yield utterance
+
+        with patch.object(stt, "_iter_session", side_effect=session):
+            iterator = stt.iter_utterances(
+                iter([silence, wake_chunk, following_chunk]),
+                pause_event=threading.Event(),
+                stop_event=threading.Event(),
+            )
+            self.assertEqual(next(iterator), utterance)
+            iterator.close()
+
+        self.assertEqual(seen_chunks, [wake_chunk, following_chunk])
+        self.assertEqual(session_calls, 2)
+        self.assertFalse(lifecycle.is_sleeping())
+        reconnecting.assert_not_called()
+
+    def test_idle_shutdown_closes_session_before_waiting_for_wake(self):
+        lifecycle = SttLifecycleController(
+            VoicePresenceConfig(close_stt_after_idle_seconds=0.01, wake_energy_rms=10.0)
+        )
+        lifecycle._last_activity = 0.0
+        session = FakeSTTSession([])
+        session_stop = threading.Event()
+
+        SonioxRealtimeSTT._send_audio_loop(
+            session,
+            iter([b"\x00\x00" * 100]),
+            threading.Event(),
+            threading.Event(),
+            session_stop,
+            queue.Queue(),
+            lifecycle,
+        )
+
+        self.assertTrue(lifecycle.is_sleeping())
+        self.assertTrue(session_stop.is_set())
+        self.assertTrue(session.closed)
 
     def test_stt_exposes_nonrecoverable_errors(self):
         stt = SonioxRealtimeSTT(

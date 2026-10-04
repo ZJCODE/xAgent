@@ -1,3 +1,4 @@
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -168,6 +169,34 @@ class _FakeStereoUsbSoundDevice:
 
 
 class VoiceAudioTests(unittest.TestCase):
+    def test_microphone_queue_keeps_newest_audio_when_full(self):
+        blocks = [index.to_bytes(2, byteorder="little", signed=True) for index in range(33)]
+
+        class FakeRawInputStream:
+            def __init__(self, **kwargs):
+                self.callback = kwargs["callback"]
+
+            def __enter__(self):
+                for block in blocks:
+                    self.callback(block, 1, None, None)
+                return self
+
+            def __exit__(self, *args):
+                return None
+
+        fake_sd = type("FakeSD", (), {"RawInputStream": FakeRawInputStream})()
+        microphone = voice_audio.SoundDeviceMicrophone(block_ms=120)
+
+        with patch("xagent.interfaces.voice.audio._import_sounddevice", return_value=fake_sd):
+            iterator = microphone.iter_chunks(
+                pause_event=threading.Event(),
+                stop_event=threading.Event(),
+            )
+            first = next(iterator)
+            iterator.close()
+
+        self.assertEqual(first, blocks[1])
+
     def test_default_device_indices_accept_sounddevice_pair(self):
         fake_sd = type("FakeSD", (), {"default": _FakeDefaults(device=_FakeInputOutputPair(2, 3))})()
 
