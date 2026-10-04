@@ -59,14 +59,12 @@ class MemoryHandler:
         max_journal_source_chars: Optional[int] = None,
         relationship_store: Optional["RelationshipStore"] = None,
         note_store: Optional["NoteStore"] = None,
-        notes_auto_distill: bool = AgentConfig.NOTES_AUTO_DISTILL,
     ) -> None:
         self.memory = memory
         self.llm_service = llm_service
         self.message_storage = message_storage
         self.relationship_store = relationship_store
         self.note_store = note_store
-        self.notes_auto_distill = bool(notes_auto_distill)
         self.diary_write_batch = self._positive_int(
             diary_write_batch,
             AgentConfig.DIARY_WRITE_BATCH,
@@ -597,7 +595,7 @@ class MemoryHandler:
         is optional orientation, not the sole upstream. Best-effort: a failure
         here must never roll back the weekly summary.
         """
-        if self.note_store is None or not self.notes_auto_distill:
+        if self.note_store is None:
             return
         if not str(diary_source or "").strip():
             return

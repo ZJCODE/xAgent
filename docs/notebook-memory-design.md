@@ -282,8 +282,7 @@ Two user-facing keys under `agent:` in `config.yaml`:
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `notes_enabled` | `true` | master switch: store, tools, and injection |
-| `notes_auto_distill` | `true` | weekly background distillation; off means tools-only |
+| `notes_enabled` | `true` | master switch: store, tools, injection, and weekly background distillation |
 
 With `notes_enabled: false` the store is never constructed, the four tools are
 not bound, and the prompt section renders empty.

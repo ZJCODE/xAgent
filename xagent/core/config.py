@@ -186,16 +186,12 @@ class AgentConfig:
     # ------------------------------------------------------------------
     # Notebook memory (topic-addressed notes derived from the diary)
     # ------------------------------------------------------------------
-    # Override per agent via config.yaml: agent.notes_enabled,
-    # agent.notes_auto_distill. Everything below is an internal prompt-budget
-    # or quality guard, not user config.
+    # Override per agent via config.yaml: agent.notes_enabled. Everything
+    # below is an internal prompt-budget or quality guard, not user config.
     # The notebook injects an index, not note contents: key-recalled notes
     # carry a title and one snippet line so the model can decide whether to
     # open them with read_note.
     NOTES_ENABLED = True
-    # When true, distil notes after a weekly summary is written. Off means
-    # tools-only.
-    NOTES_AUTO_DISTILL = True
     NOTEBOOK_CONTEXT_MAX_CHARS = 1500
     NOTEBOOK_RECALL_MAX = 4
     NOTEBOOK_SNIPPET_MAX_CHARS = 140

@@ -245,6 +245,7 @@ class BaseAgentRunner:
                 "subconscious_activity",
                 "diary_context_days",
                 "notes_enabled",
+                # Legacy key accepted and ignored; note distillation now follows notes_enabled.
                 "notes_auto_distill",
             }
             unsupported_agent_keys = sorted(set(agent_cfg) - allowed_agent_keys)
@@ -262,7 +263,7 @@ class BaseAgentRunner:
                     )
             if "diary_context_days" in agent_cfg:
                 self._validate_non_negative_int(agent_cfg["diary_context_days"], "agent.diary_context_days")
-            for key in ("notes_enabled", "notes_auto_distill"):
+            for key in ("notes_enabled",):
                 if key in agent_cfg and not isinstance(agent_cfg[key], bool):
                     raise ValueError(
                         f"agent.{key} must be a boolean, got {agent_cfg[key]!r}"
@@ -626,9 +627,6 @@ class BaseAgentRunner:
             diary_write_batch=agent_section.get("diary_write_batch", AgentConfig.DIARY_WRITE_BATCH),
             diary_context_days=agent_section.get("diary_context_days", AgentConfig.DIARY_CONTEXT_DAYS),
             notes_enabled=agent_section.get("notes_enabled", AgentConfig.NOTES_ENABLED),
-            notes_auto_distill=agent_section.get(
-                "notes_auto_distill", AgentConfig.NOTES_AUTO_DISTILL
-            ),
             subconscious_activity=agent_section.get("subconscious_activity", AgentConfig.SUBCONSCIOUS_ACTIVITY),
             voice=voice_name,
         )

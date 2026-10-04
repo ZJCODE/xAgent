@@ -626,7 +626,6 @@ def _config_yaml(selection: InitSelection, port: int) -> str:
             "diary_write_batch": AgentConfig.DIARY_WRITE_BATCH,
             "diary_context_days": AgentConfig.DIARY_CONTEXT_DAYS,
             "notes_enabled": AgentConfig.NOTES_ENABLED,
-            "notes_auto_distill": AgentConfig.NOTES_AUTO_DISTILL,
             "subconscious_activity": AgentConfig.SUBCONSCIOUS_ACTIVITY,
         },
         "channels": {
@@ -666,10 +665,6 @@ def _config_yaml(selection: InitSelection, port: int) -> str:
     yaml_str = yaml_str.replace(
         "notes_enabled: true\n",
         "notes_enabled: true  # The agent's notebook: note tools and notebook injection.\n",
-    )
-    yaml_str = yaml_str.replace(
-        "notes_auto_distill: true\n",
-        "notes_auto_distill: true  # Distil notes after weekly summaries.\n",
     )
     return yaml_str
 

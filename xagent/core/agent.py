@@ -93,7 +93,6 @@ class Agent:
         diary_write_batch: int = AgentConfig.DIARY_WRITE_BATCH,
         diary_context_days: int = AgentConfig.DIARY_CONTEXT_DAYS,
         notes_enabled: bool = AgentConfig.NOTES_ENABLED,
-        notes_auto_distill: bool = AgentConfig.NOTES_AUTO_DISTILL,
         subconscious_activity: float = AgentConfig.SUBCONSCIOUS_ACTIVITY,
         voice: str = AgentConfig.DEFAULT_VOICE,
         provider_name: str = PROVIDER_OPENAI,
@@ -112,7 +111,6 @@ class Agent:
         self.diary_write_batch = diary_write_batch
         self.diary_context_days = diary_context_days
         self.notes_enabled = bool(notes_enabled)
-        self.notes_auto_distill = bool(notes_auto_distill)
         self.subconscious_activity = subconscious_activity
         self.voice = str(voice or AgentConfig.DEFAULT_VOICE).strip() or AgentConfig.DEFAULT_VOICE
         self.observability = observability or NoopObservabilityRuntime()
@@ -181,7 +179,6 @@ class Agent:
             diary_write_batch=self.diary_write_batch,
             relationship_store=self.relationship_store,
             note_store=self.note_store,
-            notes_auto_distill=self.notes_auto_distill,
             diary_context_days=self.diary_context_days,
         )
         self.working_context_compactor = self._build_working_context_compactor(

@@ -631,14 +631,13 @@ class MemoryHandlerNotebookTests(unittest.IsolatedAsyncioTestCase):
     def tearDown(self):
         self._tmpdir.cleanup()
 
-    def _make_handler(self, storage, llm, diary_write_batch=20, notes_auto_distill=True):
+    def _make_handler(self, storage, llm, diary_write_batch=20, notes_enabled=True):
         return MemoryHandler(
             memory=self.memory,
             llm_service=llm,
             message_storage=storage,
             diary_write_batch=diary_write_batch,
-            note_store=self.notes,
-            notes_auto_distill=notes_auto_distill,
+            note_store=self.notes if notes_enabled else None,
         )
 
     def _batch(self, count=20, sender="jun", channel="feishu"):
@@ -807,10 +806,10 @@ class MemoryHandlerNotebookTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await handler._generate_weekly(week_start, week_end))
         self.assertEqual(await self.notes.count(), 2)
 
-    async def test_weekly_distillation_can_be_switched_off(self):
+    async def test_disabling_notebook_also_disables_weekly_distillation(self):
         llm = _FakeDiaryLLMService(drafts=[{"title": "A", "body": "b"}])
         handler = self._make_handler(
-            _FakeMessageStorage(), llm, notes_auto_distill=False
+            _FakeMessageStorage(), llm, notes_enabled=False
         )
         week_start = date(2026, 8, 11)
         week_end = date(2026, 8, 17)

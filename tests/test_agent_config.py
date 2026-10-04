@@ -688,7 +688,7 @@ provider:
             config_text = result.config_path.read_text(encoding="utf-8")
             identity_text = result.identity_path.read_text(encoding="utf-8")
             config = yaml.safe_load(config_text)
-            self.assertEqual(config["agent"], {"recent_messages": 12, "max_agent_loops": 50, "max_concurrent_tools": 4, "diary_write_batch": 32, "diary_context_days": 2, "notes_enabled": True, "notes_auto_distill": True, "subconscious_activity": 0.02})
+            self.assertEqual(config["agent"], {"recent_messages": 12, "max_agent_loops": 50, "max_concurrent_tools": 4, "diary_write_batch": 32, "diary_context_days": 2, "notes_enabled": True, "subconscious_activity": 0.02})
             self.assertEqual(config["provider"]["base_url"], "https://api.openai.com/v1")
             self.assertEqual(config["provider"]["api_key"], "your_api_key_here")
             self.assertEqual(config["provider"]["model"], "gpt-5.6-terra")
@@ -738,7 +738,7 @@ provider:
 
             self.assertTrue(forced.wrote_files)
             config = yaml.safe_load(forced.config_path.read_text(encoding="utf-8"))
-            self.assertEqual(config["agent"], {"recent_messages": 12, "max_agent_loops": 50, "max_concurrent_tools": 4, "diary_write_batch": 32, "diary_context_days": 2, "notes_enabled": True, "notes_auto_distill": True, "subconscious_activity": 0.02})
+            self.assertEqual(config["agent"], {"recent_messages": 12, "max_agent_loops": 50, "max_concurrent_tools": 4, "diary_write_batch": 32, "diary_context_days": 2, "notes_enabled": True, "subconscious_activity": 0.02})
             identity_text = forced.identity_path.read_text(encoding="utf-8")
             self.assertIn("practical collaborator", identity_text)
             self.assertIn("own continuing identity", identity_text)
@@ -800,7 +800,7 @@ provider:
             result = init_agent_directory(tmpdir, selection=selection)
             config = yaml.safe_load(result.config_path.read_text(encoding="utf-8"))
 
-            self.assertEqual(config["agent"], {"recent_messages": 12, "max_agent_loops": 50, "max_concurrent_tools": 4, "diary_write_batch": 32, "diary_context_days": 2, "notes_enabled": True, "notes_auto_distill": True, "subconscious_activity": 0.02})
+            self.assertEqual(config["agent"], {"recent_messages": 12, "max_agent_loops": 50, "max_concurrent_tools": 4, "diary_write_batch": 32, "diary_context_days": 2, "notes_enabled": True, "subconscious_activity": 0.02})
             self.assertEqual(config["provider"]["base_url"], "https://api.deepseek.com")
             self.assertEqual(config["provider"]["api_key"], "secret-key")
             self.assertEqual(config["provider"]["model"], "deepseek-v4-pro")
@@ -1653,7 +1653,6 @@ provider:
             runner = BaseAgentRunner(config_dir=tmpdir)
 
             self.assertTrue(runner.agent.notes_enabled)
-            self.assertTrue(runner.agent.notes_auto_distill)
             self.assertIsNotNone(runner.agent.note_store)
             self.assertIsNotNone(runner.agent.memory_handler.note_store)
             self.assertIn("write_note", runner.agent.tools)
@@ -1689,29 +1688,8 @@ agent:
             self.assertIn("search_memory", runner.agent.tools)
             self.assertIn("see_image", runner.agent.tools)
 
-    def test_config_can_disable_only_note_auto_distillation(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            config_path = Path(tmpdir) / "config.yaml"
-            config_path.write_text(
-                """
-provider:
-  model: "gpt-5.4-mini"
-  api_key: "test-key"
-agent:
-  notes_auto_distill: false
-""",
-                encoding="utf-8",
-            )
-            write_identity(tmpdir)
-
-            runner = BaseAgentRunner(config_dir=tmpdir)
-
-            self.assertTrue(runner.agent.notes_enabled)
-            self.assertFalse(runner.agent.memory_handler.notes_auto_distill)
-            self.assertIn("write_note", runner.agent.tools)
-
     def test_config_rejects_non_boolean_notes_keys(self):
-        for key in ("notes_enabled", "notes_auto_distill"):
+        for key in ("notes_enabled",):
             with self.subTest(key=key):
                 with tempfile.TemporaryDirectory() as tmpdir:
                     config_path = Path(tmpdir) / "config.yaml"
