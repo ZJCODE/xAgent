@@ -1,7 +1,7 @@
 """Room presence and STT session sleep/wake heuristics."""
 from __future__ import annotations
 
-import audioop
+import math
 import struct
 import threading
 import time
@@ -9,21 +9,14 @@ from dataclasses import dataclass
 
 
 def pcm16_rms(chunk: bytes) -> float:
-    if not chunk:
+    """Return integer RMS for signed little-endian PCM16, ignoring a trailing byte."""
+    sample_count = len(chunk) // 2
+    if not sample_count:
         return 0.0
-    if len(chunk) % 2 == 1:
-        chunk = chunk[:-1]
-    if not chunk:
-        return 0.0
-    try:
-        return float(audioop.rms(chunk, 2))
-    except Exception:
-        sample_count = len(chunk) // 2
-        samples = struct.unpack(f"<{sample_count}h", chunk)
-        if not samples:
-            return 0.0
-        mean_sq = sum(sample * sample for sample in samples) / len(samples)
-        return mean_sq**0.5
+    samples = struct.iter_unpack("<h", memoryview(chunk)[:sample_count * 2])
+    sum_squares = sum(sample * sample for (sample,) in samples)
+    # Preserve audioop.rms truncation without its removed module or float rounding.
+    return float(math.isqrt(sum_squares // sample_count))
 
 
 # The recognizer socket bills for as long as it is open and streams the room

@@ -1,4 +1,5 @@
 import asyncio
+import struct
 import tempfile
 import threading
 import unittest
@@ -52,6 +53,30 @@ class SpeakerBindingTests(unittest.TestCase):
 
 
 class PresenceTests(unittest.TestCase):
+    def test_rms_pcm16_boundaries(self):
+        cases = [
+            (b"", 0.0),
+            (b"\xff", 0.0),
+            (b"\x00\x00" * 100, 0.0),
+            (b"\x00\x01", 256.0),
+            (struct.pack("<hh", -450, 450), 450.0),
+            (struct.pack("<hh", -32768, 32767), 32767.0),
+            (struct.pack("<h", -32768), 32768.0),
+            (struct.pack("<hh", 1, 2), 1.0),
+            (struct.pack("<h", 450) + b"\xff", 450.0),
+        ]
+        for chunk, expected in cases:
+            with self.subTest(chunk=chunk):
+                self.assertEqual(pcm16_rms(chunk), expected)
+
+    def test_rms_wake_threshold(self):
+        lifecycle = SttLifecycleController(VoicePresenceConfig(wake_energy_rms=450.0))
+        lifecycle.enter_sleep()
+        lifecycle.observe_audio(struct.pack("<h", 449))
+        self.assertTrue(lifecycle.is_sleeping())
+        lifecycle.observe_audio(struct.pack("<h", -450))
+        self.assertFalse(lifecycle.is_sleeping())
+
     def test_rms_and_idle_close(self):
         chunk = (b"\x00\x10" * 100)
         self.assertGreater(pcm16_rms(chunk), 0.0)
