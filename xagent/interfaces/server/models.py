@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Union
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 
 class ChatImageInput(BaseModel):
@@ -52,6 +52,14 @@ class ChatInput(BaseModel):
     image_source: Optional[Union[str, List[str]]] = None
     images: Optional[List[ChatImageInput]] = None
     attachments: Optional[List[ChatAttachmentInput]] = None
+    event_id: Optional[str] = None
+    turn_id: Optional[str] = None
+    request_id: Optional[str] = None
+
+    @model_validator(mode="after")
+    def resolve_request_id(self):
+        self.event_id = self.event_id or self.request_id
+        return self
 
 
 
@@ -68,6 +76,7 @@ class ObserveInput(BaseModel):
     source: Optional[str] = "environment"
     event_type: Optional[str] = "observation"
     metadata: Optional[Dict[str, Any]] = None
+    event_id: Optional[str] = None
 
 
 class IdentityInput(BaseModel):

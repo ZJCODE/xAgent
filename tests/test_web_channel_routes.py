@@ -5,13 +5,12 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import yaml
 
 from xagent.interfaces.cli.agents import register_agent
-from xagent.interfaces.cli.processes import StartResult
 from xagent.interfaces.web.server import WebClientServer
 
 
@@ -63,7 +62,10 @@ class WebChannelRouteTests(unittest.IsolatedAsyncioTestCase):
         return httpx.AsyncClient(transport=transport, base_url="http://testserver")
 
     async def test_list_channels_reports_unconfigured_integrations(self):
-        with patch("xagent.interfaces.web.channel_routes.running_pid", return_value=None):
+        with patch("xagent.interfaces.web.channel_routes.running_pid", return_value=None), patch(
+            "xagent.interfaces.cli.agent_runtime.runtime_status", new_callable=AsyncMock,
+            return_value={"status": "stopped", "runtime_running": False, "channels": {}},
+        ):
             async with await self._client() as client:
                 response = await client.get("/api/channels")
 
@@ -75,58 +77,109 @@ class WebChannelRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rows["voice"]["status"], "disabled")
         self.assertEqual(rows["feishu"]["setup_hint"], "")
         self.assertEqual(rows["weixin"]["setup_hint"], "")
+        for row in rows.values():
+            self.assertFalse(row["can_start"])
+            self.assertFalse(row["can_stop"])
+            self.assertFalse(row["can_restart"])
+        self.assertFalse(payload["runtime"]["runtime_running"])
 
-    async def test_start_uses_selected_agent_config_dir(self):
+    async def test_start_runtime_uses_selected_agent_config_dir(self):
         self.server.session.select("agent_b")
         with patch(
-            "xagent.interfaces.web.channel_routes.running_pid",
-            side_effect=[None, 4321],
-        ), patch(
-            "xagent.interfaces.web.channel_routes.start_background",
-            return_value=StartResult(ok=True, pid=4321),
+            "xagent.interfaces.cli.agent_runtime.start_runtime",
+            return_value={"status": "running", "runtime_running": True, "pid": 4321},
         ) as start:
             async with await self._client() as client:
-                response = await client.post("/api/channels/api/start")
+                response = await client.post("/api/runtime/start")
 
         self.assertEqual(response.status_code, 200)
-        args, kwargs = start.call_args
-        self.assertIn(str(self.agent_b_path.resolve()), args[0])
-        self.assertEqual(kwargs["pid_path"], self.agent_b_path.resolve() / "run" / "api.pid")
-        self.assertEqual(kwargs["log_path"], self.agent_b_path.resolve() / "logs" / "api.log")
+        self.assertEqual(response.json()["pid"], 4321)
+        start.assert_called_once_with(self.agent_b_path.resolve())
 
-    async def test_stop_uses_selected_agent_pid_path(self):
+    async def test_stop_runtime_uses_selected_agent_config_dir(self):
         self.server.session.select("agent_b")
         with patch(
-            "xagent.interfaces.web.channel_routes.running_pid",
-            return_value=None,
-        ), patch(
-            "xagent.interfaces.web.channel_routes.stop_managed_process",
-            return_value=(True, "stopped (pid=4321)"),
+            "xagent.interfaces.cli.agent_runtime.stop_runtime", new_callable=AsyncMock,
+            return_value={"status": "stopped", "runtime_running": False},
         ) as stop:
             async with await self._client() as client:
-                response = await client.post("/api/channels/voice/stop")
+                response = await client.post("/api/runtime/stop")
 
         self.assertEqual(response.status_code, 200)
-        stop.assert_called_once_with(self.agent_b_path.resolve() / "run" / "voice.pid")
+        stop.assert_awaited_once_with(self.agent_b_path.resolve())
+        self.assertFalse(response.json()["runtime_running"])
 
-    async def test_restart_stops_then_starts_selected_channel(self):
+    async def test_restart_stops_then_starts_selected_runtime(self):
         self.server.session.select("agent_b")
+        calls = []
+        async def stop_runtime(root):
+            calls.append(("stop", root))
+            return {"status": "stopped"}
+        def start_runtime(root):
+            calls.append(("start", root))
+            return {"status": "running", "pid": 2222}
         with patch(
-            "xagent.interfaces.web.channel_routes.running_pid",
-            side_effect=[1111, 2222],
-        ), patch(
-            "xagent.interfaces.web.channel_routes.stop_managed_process",
-            return_value=(True, "stopped (pid=1111)"),
-        ) as stop, patch(
-            "xagent.interfaces.web.channel_routes.start_background",
-            return_value=StartResult(ok=True, pid=2222),
+            "xagent.interfaces.cli.agent_runtime.stop_runtime", side_effect=stop_runtime,
+        ), patch("xagent.interfaces.cli.agent_runtime.start_runtime", side_effect=start_runtime):
+            async with await self._client() as client:
+                response = await client.post("/api/runtime/restart")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(calls, [("stop", self.agent_b_path.resolve()), ("start", self.agent_b_path.resolve())])
+
+    async def test_restart_does_not_start_after_runtime_stop_failure(self):
+        with patch("xagent.interfaces.cli.agent_runtime.stop_runtime", new_callable=AsyncMock,
+                   side_effect=RuntimeError("owner has not released runtime")), patch(
+            "xagent.interfaces.cli.agent_runtime.start_runtime",
         ) as start:
             async with await self._client() as client:
-                response = await client.post("/api/channels/feishu/restart")
+                response = await client.post("/api/runtime/restart")
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("owner has not released", response.json()["detail"])
+        start.assert_not_called()
 
-        self.assertEqual(response.status_code, 200)
-        stop.assert_called_once_with(self.agent_b_path.resolve() / "run" / "feishu.pid")
-        self.assertEqual(start.call_args.kwargs["pid_path"], self.agent_b_path.resolve() / "run" / "feishu.pid")
+    async def test_channel_lifecycle_routes_are_unavailable(self):
+        with patch("xagent.interfaces.cli.agent_runtime.start_runtime") as start, patch(
+            "xagent.interfaces.cli.agent_runtime.stop_runtime", new_callable=AsyncMock,
+        ) as stop:
+            async with await self._client() as client:
+                for channel in ("api", "voice", "feishu", "weixin"):
+                    for action in ("start", "stop", "restart"):
+                        response = await client.post(f"/api/channels/{channel}/{action}")
+                        self.assertEqual(response.status_code, 404)
+        start.assert_not_called()
+        stop.assert_not_awaited()
+
+    async def test_channels_and_runtime_report_degraded_state_and_task_review_count(self):
+        runtime = {"status": "degraded", "runtime_running": True, "runtime_ready": True,
+                   "channels": {"api": {"status": "running"},
+                                "feishu": {"status": "failed", "error": "connection lost"}},
+                   "tasks": {"pending": 2, "failed": 1, "needs_review": 3}}
+        with patch("xagent.interfaces.cli.agent_runtime.runtime_status", new_callable=AsyncMock,
+                   return_value=runtime) as status:
+            async with await self._client() as client:
+                response = await client.get("/api/channels")
+                runtime_response = await client.get("/api/runtime")
+        rows = {row["id"]: row for row in response.json()["channels"]}
+        self.assertEqual(rows["api"]["status"], "running")
+        self.assertEqual(rows["feishu"]["status"], "error")
+        self.assertEqual(rows["feishu"]["detail"], "connection lost")
+        self.assertEqual(response.json()["runtime"]["tasks"]["needs_review"], 3)
+        self.assertEqual(runtime_response.json(), runtime)
+        self.assertEqual(status.await_count, 2)
+
+    async def test_channel_log_view_uses_selected_runtime_log(self):
+        self.server.session.select("agent_b")
+        with patch("xagent.interfaces.web.channel_routes.tail_text", return_value="Agent startup complete") as tail:
+            async with await self._client() as client:
+                runtime_response = await client.get("/api/runtime/logs?lines=15")
+                channel_response = await client.get("/api/channels/voice/logs?lines=15")
+        expected_path = self.agent_b_path.resolve() / "logs" / "runtime.log"
+        self.assertEqual(runtime_response.json()["log_path"], str(expected_path))
+        self.assertEqual(channel_response.json()["log_path"], str(expected_path))
+        self.assertEqual(channel_response.json()["text"], "Agent startup complete")
+        self.assertEqual(tail.call_args.args, (expected_path,))
+        self.assertEqual(tail.call_args.kwargs, {"max_lines": 15})
 
     async def test_voice_setup_schema_reports_unconfigured_state(self):
         async with await self._client() as client:

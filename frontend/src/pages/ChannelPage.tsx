@@ -1,160 +1,81 @@
-import { FileText, Play, RefreshCw, Square, Wrench, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { ArrowUpRight, FileText, Globe2, MessageCircle, Mic, Play, RefreshCw, Square, X } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
 import { ChannelSetupWizard } from "../components/ChannelSetupWizard";
 import { Button, IconButton, PageShell, PageToolbar, Panel, StatusBadge } from "../components/ui";
 import { useAgentSession } from "../context/AgentSessionContext";
-import {
-  getChannelLogs,
-  getChannels,
-  startChannel,
-  stopChannel,
-} from "../lib/api";
-import type { ChannelId, ChannelStatus, ChannelsResponse, ChannelRuntimeStatus, SetupChannelId } from "../types";
+import { getRuntimeLogs, getChannels, restartRuntime, startRuntime, stopRuntime } from "../lib/api";
+import type { AgentRuntimeStatus, ChannelId, ChannelStatus, ChannelsResponse, SetupChannelId } from "../types";
 
-type PendingAction = "start" | "stop" | "logs";
-
+type RuntimeAction = "start" | "stop" | "restart";
 const SETUP_CHANNELS = new Set<ChannelId>(["voice", "feishu", "weixin"]);
 
 function isSetupChannel(channel: ChannelId): channel is SetupChannelId {
   return SETUP_CHANNELS.has(channel);
 }
 
-function statusTone(status: ChannelRuntimeStatus): "good" | "danger" | "muted" | "info" {
-  if (status === "running") return "good";
-  if (status === "error") return "danger";
-  if (status === "stopped") return "muted";
-  return "muted";
+function channelLabel(channel: ChannelStatus): string {
+  if (channel.status === "running" || channel.status === "connected") return "Connected";
+  if (["starting", "connecting"].includes(channel.status)) return "Connecting";
+  if (channel.status === "reconnecting") return "Reconnecting";
+  if (channel.status === "error" || channel.status === "failed") return "Needs attention";
+  if (channel.status === "disabled") return "Disabled";
+  return "Stopped";
 }
 
-function statusLabel(channel: ChannelStatus): string {
-  if (channel.status === "running") return "Running";
-  if (channel.status === "stopped") return "Stopped";
-  if (channel.status === "error") return "Needs attention";
-  return "Disabled";
-}
+const CHANNEL_ICONS = { api: Globe2, voice: Mic, feishu: MessageCircle, weixin: MessageCircle };
+const CHANNEL_DESCRIPTIONS = {
+  api: "Connect your apps over HTTP and WebSocket",
+  voice: "Listen and speak on this device",
+  feishu: "Private and group conversations in Feishu",
+  weixin: "Conversations through your WeChat account",
+};
 
-function ChannelStatusMeta({
-  channel,
-  onSetup,
-}: {
-  channel: ChannelStatus;
-  onSetup: (channel: SetupChannelId) => void;
-}) {
-  if (isSetupChannel(channel.id)) {
-    const setupId = channel.id;
-    return (
-      <div className="channel-status-actions">
-        {channel.ready ? <StatusBadge tone={statusTone(channel.status)}>{statusLabel(channel)}</StatusBadge> : null}
-        {!channel.ready ? <StatusBadge tone="muted">Not configured</StatusBadge> : null}
-        <Button
-          type="button"
-          variant={channel.ready ? "secondary" : "primary"}
-          className="channel-setup-button"
-          onClick={() => onSetup(setupId)}
-        >
-          <Wrench size={13} />
-          {channel.ready ? "Configure" : "Set up"}
-        </Button>
-      </div>
-    );
-  }
-
-  if (!channel.ready) {
-    return <StatusBadge tone="muted">Not configured</StatusBadge>;
-  }
-
-  return <StatusBadge tone={statusTone(channel.status)}>{statusLabel(channel)}</StatusBadge>;
-}
-
-function ChannelRow({
-  channel,
-  pending,
-  logs,
-  onStart,
-  onStop,
-  onLogs,
-  onRefreshLogs,
-  onCloseLogs,
-  onSetup,
-}: {
-  channel: ChannelStatus;
-  pending?: PendingAction;
-  logs?: string;
-  onStart: (channel: ChannelId) => void;
-  onStop: (channel: ChannelId) => void;
-  onLogs: (channel: ChannelId) => void;
-  onRefreshLogs: (channel: ChannelId) => void;
-  onCloseLogs: (channel: ChannelId) => void;
-  onSetup: (channel: SetupChannelId) => void;
-}) {
-  const actionBusy = Boolean(pending && pending !== "logs");
-  const logsBusy = pending === "logs";
-  const logsOpen = logs !== undefined;
+function ChannelRow({ channel, onSetup }: { channel: ChannelStatus; onSetup: (channel: SetupChannelId) => void }) {
+  const failed = channel.status === "error" || channel.status === "failed";
+  const connected = channel.status === "running" || channel.status === "connected";
+  const Icon = CHANNEL_ICONS[channel.id];
   return (
-    <Panel className={`channel-row channel-row-${channel.status}`} aria-busy={Boolean(pending)}>
-      <header className="channel-row-header">
-        <h3 className="channel-row-title">{channel.label}</h3>
-        <div className="channel-row-meta">
-          <ChannelStatusMeta channel={channel} onSetup={onSetup} />
-        </div>
-      </header>
-
-      <div className="channel-row-actions">
-        <Button
-          type="button"
-          variant="primary"
-          disabled={!channel.can_start || actionBusy}
-          onClick={() => onStart(channel.id)}
-        >
-            <Play size={13} />
-            {pending === "start" ? "Starting" : "Start"}
-          </Button>
-          <Button
-            type="button"
-            disabled={!channel.can_stop || actionBusy}
-            onClick={() => onStop(channel.id)}
-          >
-            <Square size={13} />
-            {pending === "stop" ? "Stopping" : "Stop"}
-          </Button>
-          <Button
-            type="button"
-            disabled={logsBusy}
-            onClick={() => onLogs(channel.id)}
-          >
-            <FileText size={13} />
-          {logsBusy ? "Loading" : "Logs"}
-        </Button>
+    <div className={`connection-row connection-row-${channel.status}`}>
+      <span className="connection-icon" aria-hidden="true"><Icon size={19} strokeWidth={1.65} /></span>
+      <div className="connection-copy">
+        <h3>{channel.label}</h3>
+        <p>{failed && channel.detail ? channel.detail : CHANNEL_DESCRIPTIONS[channel.id]}</p>
       </div>
+      <span className={`connection-state ${failed ? "is-failed" : connected ? "is-connected" : ""}`}>
+        <span aria-hidden="true" />{channel.ready ? channelLabel(channel) : "Not configured"}
+      </span>
+      <div className="connection-action">
+        {isSetupChannel(channel.id) ? (
+          <Button type="button" variant="ghost" onClick={() => onSetup(channel.id as SetupChannelId)}>
+            {channel.ready ? "Configure" : "Set up"}<ArrowUpRight size={14} />
+          </Button>
+        ) : <span className="connection-local-note">Optional access</span>}
+      </div>
+    </div>
+  );
+}
 
-      {logsOpen ? (
-        <div className="channel-log-panel">
-          <div className="channel-log-header">
-            <span>Recent logs · Auto refresh</span>
-            <div className="channel-log-actions">
-              <IconButton
-                type="button"
-                disabled={logsBusy}
-                onClick={() => onRefreshLogs(channel.id)}
-                title="Refresh logs"
-                aria-label={`Refresh ${channel.label} logs`}
-              >
-                <RefreshCw size={15} />
-              </IconButton>
-              <IconButton
-                type="button"
-                onClick={() => onCloseLogs(channel.id)}
-                title="Close logs"
-                aria-label={`Close ${channel.label} logs`}
-              >
-                <X size={15} />
-              </IconButton>
-            </div>
-          </div>
-          <pre className="channel-log-output">{logs.trim() || "(no log output)"}</pre>
-        </div>
-      ) : null}
-    </Panel>
+function RuntimeDetails({ runtime }: { runtime: AgentRuntimeStatus }) {
+  const memory = runtime.memory || runtime.journal;
+  const review = runtime.tasks?.needs_review;
+  const taskReviewCount = Array.isArray(review) ? review.length : review || 0;
+  const last = memory?.last_maintenance;
+  const maintenanceLabels: Record<string, string> = {
+    running: "Updating", completed: "Up to date", idle: "Waiting",
+    failed: "Needs attention", needs_review: "Needs checking", interrupted: "Interrupted", prepared: "Finishing an update",
+  };
+  return (
+    <>
+      <dl className="runtime-summary-grid">
+        <div><dt>Reply</dt><dd title={runtime.queue?.active_turn_id || undefined}>{runtime.queue?.active_turn_id ? "In progress" : "Idle"}</dd></div>
+        <div><dt>In queue</dt><dd>{runtime.queue?.pending ?? 0}</dd></div>
+        <div><dt>Diary backlog</dt><dd>{memory?.backlog ?? 0}</dd></div>
+        <div><dt>Last update</dt><dd title={last?.finished_at ? new Date(last.finished_at).toLocaleString() : undefined}>{last?.status ? maintenanceLabels[last.status] || last.status : "No update yet"}{last?.finished_at ? "" : ""}</dd></div>
+      </dl>
+      {taskReviewCount ? <div className="warning-strip"><a href="/tasks">{taskReviewCount} task{taskReviewCount === 1 ? "" : "s"} need checking.</a> Review the result before retrying.</div> : null}
+      {memory?.needs_review?.map((item, index) => <div className="warning-strip" key={index}>A diary update needs checking. {item.reason}</div>)}
+      {last?.error ? <p className="task-error-copy">Diary update: {last.error}</p> : null}
+    </>
   );
 }
 
@@ -163,144 +84,95 @@ export function ChannelPage() {
   const [data, setData] = useState<ChannelsResponse | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [pending, setPending] = useState<Partial<Record<ChannelId, PendingAction>>>({});
-  const [logs, setLogs] = useState<Partial<Record<ChannelId, string>>>({});
+  const [pending, setPending] = useState<RuntimeAction | null>(null);
+  const [logs, setLogs] = useState<string | null>(null);
+  const [logsBusy, setLogsBusy] = useState(false);
   const [setupChannelId, setSetupChannelId] = useState<SetupChannelId | null>(null);
-  const logRequestsRef = useRef<Partial<Record<ChannelId, boolean>>>({});
 
-  const channels = useMemo(() => data?.channels || [], [data]);
-
-  const load = async () => {
-    setError("");
-    try {
-      const next = await getChannels();
-      setData(next);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
-  };
+  const load = useCallback(async (silent = false) => {
+    if (!silent) setError("");
+    try { setData(await getChannels()); }
+    catch (err) { if (!silent) setError(err instanceof Error ? err.message : String(err)); }
+  }, []);
 
   useEffect(() => {
     void load();
-  }, []);
+    const interval = window.setInterval(() => void load(true), 5000);
+    return () => window.clearInterval(interval);
+  }, [load, selectedAgent]);
 
-  const runAction = async (channel: ChannelId, action: Exclude<PendingAction, "logs">) => {
-    setPending((current) => ({ ...current, [channel]: action }));
+  const runAction = async (action: RuntimeAction) => {
+    setPending(action);
     setError("");
     setNotice("");
     try {
-      if (action === "start") await startChannel(channel);
-      if (action === "stop") await stopChannel(channel);
+      if (action === "start") await startRuntime();
+      if (action === "stop") await stopRuntime();
+      if (action === "restart") await restartRuntime();
       await load();
       await refreshAgents();
-      setNotice(`${channel} ${action} complete.`);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setPending((current) => {
-        const next = { ...current };
-        delete next[channel];
-        return next;
-      });
-    }
+      setNotice(action === "stop" ? "Agent stopped." : action === "restart" ? "Agent restarted." : "Agent started.");
+    } catch (err) { setError(err instanceof Error ? err.message : String(err)); }
+    finally { setPending(null); }
   };
 
-  const loadLogs = async (channel: ChannelId, options?: { silent?: boolean }) => {
-    if (logRequestsRef.current[channel]) return;
-    logRequestsRef.current[channel] = true;
-    const silent = Boolean(options?.silent);
-    if (!silent) {
-      setPending((current) => ({ ...current, [channel]: "logs" }));
-      setError("");
-    }
-    try {
-      const result = await getChannelLogs(channel);
-      setLogs((current) => ({ ...current, [channel]: result.text }));
-    } catch (err) {
-      if (!silent) setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      delete logRequestsRef.current[channel];
-      if (!silent) {
-        setPending((current) => {
-          const next = { ...current };
-          delete next[channel];
-          return next;
-        });
-      }
-    }
-  };
+  const loadLogs = useCallback(async () => {
+    setLogsBusy(true);
+    try { setLogs((await getRuntimeLogs()).text); }
+    catch (err) { setError(err instanceof Error ? err.message : String(err)); }
+    finally { setLogsBusy(false); }
+  }, []);
 
-  const toggleLogs = async (channel: ChannelId) => {
-    if (logs[channel] !== undefined) {
-      setLogs((current) => {
-        const next = { ...current };
-        delete next[channel];
-        return next;
-      });
-      return;
-    }
-    await loadLogs(channel);
-  };
-
-  const closeLogs = (channel: ChannelId) => {
-    setLogs((current) => {
-      const next = { ...current };
-      delete next[channel];
-      return next;
-    });
-  };
-
+  const logsOpen = logs !== null;
   useEffect(() => {
-    const openChannels = Object.keys(logs) as ChannelId[];
-    if (!openChannels.length) return undefined;
-
-    const interval = window.setInterval(() => {
-      openChannels.forEach((channel) => {
-        void loadLogs(channel, { silent: true });
-      });
-    }, 3000);
-
+    if (!logsOpen) return;
+    const interval = window.setInterval(() => void loadLogs(), 3000);
     return () => window.clearInterval(interval);
-  }, [logs]);
+  }, [logsOpen, loadLogs]);
+
+  const runtime = data?.runtime;
+  const running = Boolean(runtime?.runtime_running);
+  const state = runtime?.status || "stopped";
+  const transitioning = state === "starting" || state === "stopping";
+  const busy = Boolean(pending) || transitioning;
 
   return (
     <PageShell className="channels-page">
-      <PageToolbar
-        title="Channels"
-        subtitle={selectedAgent ? `Selected agent: ${selectedAgent}` : data?.config_dir}
-      />
-      {error ? <div className="error-strip">{error}</div> : null}
+      <PageToolbar title="Channels" subtitle="One Agent, connected everywhere."
+        actions={<IconButton type="button" onClick={() => void load()} title="Refresh status"><RefreshCw size={16} /></IconButton>} />
+      <div className="channels-content">
+      {error ? <div className="error-strip" role="alert">{error}</div> : null}
       {notice ? <div className="success-strip">{notice}</div> : null}
-
-      <div className="channel-list">
-        {channels.map((channel) => (
-          <ChannelRow
-            key={channel.id}
-            channel={channel}
-            pending={pending[channel.id]}
-            logs={logs[channel.id]}
-            onStart={(id) => void runAction(id, "start")}
-            onStop={(id) => void runAction(id, "stop")}
-            onLogs={(id) => void toggleLogs(id)}
-            onRefreshLogs={(id) => void loadLogs(id)}
-            onCloseLogs={closeLogs}
-            onSetup={setSetupChannelId}
-          />
-        ))}
+      <Panel className="runtime-overview">
+        <div className="runtime-heading">
+          <div className="runtime-heading-copy"><span className="runtime-eyebrow">AGENT</span><h3>{selectedAgent || "Your Agent"}</h3><p>A shared home for conversations, tasks and memory.</p></div>
+          <StatusBadge tone={state === "degraded" ? "info" : running && runtime?.runtime_ready ? "good" : "muted"}>
+            <span className="runtime-status-dot" aria-hidden="true" />
+            {state === "degraded" ? "Needs attention" : state === "starting" ? "Starting" : state === "stopping" ? "Stopping" : running ? "Running" : "Offline"}
+          </StatusBadge>
+        </div>
+        <div className="runtime-controls">
+          {running ? <Button type="button" disabled={busy} onClick={() => void runAction("stop")}><Square size={13} />{pending === "stop" ? "Stopping…" : "Stop Agent"}</Button>
+          : <Button type="button" variant="primary" disabled={!runtime || busy} onClick={() => void runAction("start")}><Play size={13} />{pending === "start" ? "Starting…" : "Start Agent"}</Button>}
+          {running ? <Button type="button" variant="ghost" disabled={busy} onClick={() => void runAction("restart")}><RefreshCw size={14} />{pending === "restart" ? "Restarting…" : "Restart"}</Button> : null}
+          <Button type="button" variant="ghost" className="runtime-log-toggle" title={logsOpen ? "Hide logs" : "View logs"} aria-label={logsOpen ? "Hide logs" : "View logs"} disabled={logsBusy} onClick={() => logsOpen ? setLogs(null) : void loadLogs()}><FileText size={14} /><span>{logsOpen ? "Hide logs" : "View logs"}</span></Button>
+        </div>
+        {runtime?.needs_restart ? <div className="warning-strip">Settings saved. Restart the Agent to apply them.</div> : null}
+        {runtime?.error ? <p className="task-error-copy">{runtime.error}</p> : null}
+        {running && runtime ? <RuntimeDetails runtime={runtime} /> : null}
+        {logsOpen ? <div className="channel-log-panel">
+          <div className="channel-log-header"><span>Agent logs · Auto refresh</span><IconButton title="Close logs" onClick={() => setLogs(null)}><X size={15} /></IconButton></div>
+          <pre className="channel-log-output">{logs?.trim() || "No log output yet."}</pre>
+        </div> : null}
+      </Panel>
+      <div className="connections-heading"><h3>Connections</h3><p>Enabled channels start with your Agent.</p></div>
+      <div className="connection-list">{data?.channels.map((channel) => <ChannelRow key={channel.id} channel={channel} onSetup={setSetupChannelId} />)}</div>
+      <p className="connections-footnote">Local chat stays available when the public API is disabled. Channel changes apply after a restart.</p>
       </div>
-
-      {setupChannelId ? (
-        <ChannelSetupWizard
-          channel={setupChannelId}
-          open={Boolean(setupChannelId)}
-          onClose={() => setSetupChannelId(null)}
-          onComplete={() => {
-            setNotice(`${setupChannelId} setup complete.`);
-            void load();
-            void refreshAgents();
-          }}
-        />
-      ) : null}
+      {setupChannelId ? <ChannelSetupWizard channel={setupChannelId} open onClose={() => setSetupChannelId(null)} onComplete={() => {
+        setNotice("Channel settings saved. Restart the Agent to apply them.");
+        void load(); void refreshAgents();
+      }} /> : null}
     </PageShell>
   );
 }

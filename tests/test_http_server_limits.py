@@ -246,8 +246,9 @@ class AgentHTTPServerLimitTests(unittest.IsolatedAsyncioTestCase):
         server = AgentHTTPServer(agent=agent)
 
         async with await self._client(server) as client:
-            response = await client.post("/chat/stop")
-            idle = await client.post("/chat/stop")
+            self.assertEqual((await client.post("/chat/stop")).status_code, 422)
+            response = await client.post("/chat/stop", json={"turn_id": "test-turn"})
+            idle = await client.post("/chat/stop", json={"turn_id": "test-turn"})
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"stopped": True})
@@ -257,7 +258,7 @@ class AgentHTTPServerLimitTests(unittest.IsolatedAsyncioTestCase):
 
 
 class AgentWebSocketServerTests(unittest.TestCase):
-    def test_lifespan_starts_and_stops_runtime_heartbeat(self):
+    def test_http_lifespan_leaves_shared_background_work_to_runtime_host(self):
         class FakeHeartbeat:
             interval_seconds = 300
 
@@ -279,9 +280,9 @@ class AgentWebSocketServerTests(unittest.TestCase):
             with TestClient(server.app):
                 pass
 
-        factory.assert_called_once()
-        self.assertTrue(heartbeat.started)
-        self.assertTrue(heartbeat.stopped)
+        factory.assert_not_called()
+        self.assertFalse(heartbeat.started)
+        self.assertFalse(heartbeat.stopped)
         self.assertFalse(agent.flushed)
 
     def test_websocket_chat_stream_false_returns_done_boundaries(self):

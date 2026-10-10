@@ -72,6 +72,8 @@ class DeliveryBus:
             "content": content,
             "task": task.to_dict(),
         }
+        if stored_message is not None:
+            payload["run_id"] = (stored_message.metadata or {}).get("scheduled_run_id")
         if normalized_attachments:
             payload["attachments"] = normalized_attachments
         if stored_message is not None:

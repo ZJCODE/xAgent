@@ -5,9 +5,11 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import yaml
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
 from xagent.interfaces.cli.agents import register_agent
 from xagent.interfaces.web import WebClientServer
@@ -133,6 +135,20 @@ class WebClientMultiAgentTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "success")
+
+    async def test_offline_browsing_and_task_subscription_do_not_bootstrap_agent(self):
+        with patch("xagent.interfaces.base.BaseAgentRunner.__init__", side_effect=AssertionError("model bootstrap")), patch(
+            "xagent.interfaces.cli.agent_runtime.ensure_runtime"
+        ) as ensure:
+            with TestClient(self._server().app) as client:
+                for path in ("/api/agent/info", "/api/agent/config", "/api/channels", "/api/tasks"):
+                    response = client.get(path)
+                    self.assertEqual(response.status_code, 200, (path, response.text))
+                with client.websocket_connect("/ws/tasks") as socket:
+                    with self.assertRaises(WebSocketDisconnect) as closed:
+                        socket.receive_json()
+                    self.assertEqual(closed.exception.code, 1013)
+        ensure.assert_not_called()
 
     async def test_setup_schema_endpoint_returns_providers_and_models(self):
         client = TestClient(self._server().app)

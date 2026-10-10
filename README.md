@@ -42,6 +42,22 @@ xagent
 
 The interactive launcher will guide you through creating and managing your agents.
 
+Each Agent runs one persistent core shared by its enabled channels:
+
+```bash
+xagent run --agent atlas       # foreground
+xagent start --agent atlas     # background
+xagent status --agent atlas
+xagent logs --agent atlas --follow
+xagent restart --agent atlas
+xagent stop --agent atlas
+```
+
+CLI and local Web chat connect to that core, even with the public API disabled.
+Configuration and identity edits take effect after restart. Interrupted tasks
+with uncertain execution or delivery wait for review instead of replaying.
+See [runtime operation and recovery](docs/runtime-core.md) for details and validation.
+
 ## Updating
 
 Update xAgent without changing how it was installed:

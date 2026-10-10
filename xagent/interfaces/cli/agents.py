@@ -384,7 +384,7 @@ def delete_managed_agent(
         raise AgentRegistryError(f"Unknown agent {normalized!r}. Run `xagent agents list` to see available agents.")
 
     if stop_channels:
-        for channel in (CHANNEL_API, CHANNEL_VOICE, CHANNEL_FEISHU, CHANNEL_WEIXIN):
+        for channel in ("runtime", CHANNEL_API, CHANNEL_VOICE, CHANNEL_FEISHU, CHANNEL_WEIXIN):
             pid_path = managed_paths(entry.path, channel).pid_path
             if running_pid(pid_path) is None:
                 continue
@@ -392,8 +392,13 @@ def delete_managed_agent(
             if not stopped:
                 raise AgentRegistryError(f"Failed to stop {channel} channel: {message}")
 
-    delete_agent_directory(entry.path, root=root_path)
-    return remove_agent(normalized, root=root_path)
+    from ...core.runtime.ownership import RuntimeOwnership
+    try:
+        with RuntimeOwnership(entry.path):
+            delete_agent_directory(entry.path, root=root_path)
+            return remove_agent(normalized, root=root_path)
+    except RuntimeError as exc:
+        raise AgentRegistryError(f"Agent acquired runtime ownership during deletion: {exc}") from exc
 
 
 def agent_registry_rows(registry: AgentRegistry) -> list[dict[str, Any]]:

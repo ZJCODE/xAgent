@@ -2,6 +2,7 @@
 
 import asyncio
 import tempfile
+import threading
 import unittest
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -225,6 +226,34 @@ class MarkdownMemoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Native append", text)
         self.assertIn(f"[weekly {start.isoformat()} to {end.isoformat()}]", files)
         self.assertIn(f"[daily {d.isoformat()}]", files)
+
+    async def test_cancelled_append_drains_worker_before_releasing_write_lock(self):
+        started, release = threading.Event(), threading.Event()
+        original_append = MarkdownMemory._append_file_sync
+
+        def delayed_append(path, content):
+            started.set()
+            if not release.wait(2):
+                raise TimeoutError("test did not release file write")
+            original_append(path, content)
+
+        with patch.object(MarkdownMemory, "_append_file_sync", side_effect=delayed_append):
+            first = asyncio.create_task(self.memory.append_daily("cancelled caller's entry"))
+            self.assertTrue(await asyncio.to_thread(started.wait, 1))
+            first.cancel()
+            second = asyncio.create_task(self.memory.append_daily("next entry"))
+            await asyncio.sleep(0.05)
+            self.assertFalse(first.done())
+            self.assertFalse(second.done())
+            self.assertTrue(self.memory._write_lock.locked())
+            release.set()
+            with self.assertRaises(asyncio.CancelledError):
+                await first
+            await asyncio.wait_for(second, 1)
+        text = await self.memory.read_file(self.memory.daily_path(date.today()))
+        self.assertEqual(text.count("cancelled caller's entry"), 1)
+        self.assertEqual(text.count("next entry"), 1)
+        self.assertLess(text.index("cancelled caller's entry"), text.index("next entry"))
 
 
 if __name__ == "__main__":

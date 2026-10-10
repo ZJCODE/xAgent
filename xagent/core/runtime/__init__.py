@@ -30,6 +30,7 @@ from .tasks import (
     pause_scheduled_task,
     resolve_scheduled_task_run_at,
     resume_scheduled_task,
+    retry_scheduled_task,
     scheduled_delivery_context,
     update_scheduled_task,
 )
@@ -64,6 +65,7 @@ __all__ = [
     "pause_scheduled_task",
     "resolve_scheduled_task_run_at",
     "resume_scheduled_task",
+    "retry_scheduled_task",
     "scheduled_delivery_context",
     "update_scheduled_task",
 ]

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import tempfile
+from types import SimpleNamespace
 from pathlib import Path
 from typing import List, Optional
 
@@ -41,8 +42,13 @@ class AdminService(BaseAgentRunner):
     ):
         if agent is not None:
             self.agent = agent
+            workspace_dir = getattr(agent, "workspace_dir", None)
+            memory_root = getattr(getattr(agent, "markdown_memory", None), "root", None)
             config_dir_path = Path(
-                getattr(agent, "config_dir", None) or config_dir or BaseAgentConfig.DEFAULT_CONFIG_DIR
+                getattr(agent, "config_dir", None) or config_dir or getattr(agent, "workspace", None)
+                or (Path(workspace_dir).parent if workspace_dir else None)
+                or (Path(memory_root).parent if memory_root else None)
+                or BaseAgentConfig.DEFAULT_CONFIG_DIR
             ).expanduser().resolve()
             self.config_dir = config_dir_path
             self.config_path = config_dir_path / BaseAgentConfig.CONFIG_FILENAME
@@ -70,7 +76,48 @@ class AdminService(BaseAgentRunner):
             self.tasks_dir.mkdir(parents=True, exist_ok=True)
             self.logger = logging.getLogger(self.__class__.__name__)
         else:
-            super().__init__(config_dir=config_dir)
+            # Offline data inspection must never construct an Agent, model
+            # client, attention loop, or background maintenance task.
+            from ...components import MessageStorage
+            from ...components.memory import MarkdownMemory
+            from ...core.runtime.ownership import RuntimeOwnership, runtime_is_active
+
+            self.logger = logging.getLogger(self.__class__.__name__)
+            self.config_dir = Path(config_dir or BaseAgentConfig.DEFAULT_CONFIG_DIR).expanduser().resolve()
+            self.config_path = self.config_dir / BaseAgentConfig.CONFIG_FILENAME
+            self.identity_path = self.config_dir / BaseAgentConfig.IDENTITY_FILENAME
+            import yaml
+            self.config = yaml.safe_load(self.config_path.read_text(encoding="utf-8")) if self.config_path.exists() else {}
+            self.config = self.config if isinstance(self.config, dict) else {}
+            self.identity = self.identity_path.read_text(encoding="utf-8") if self.identity_path.exists() else ""
+            self.workspace = self.config_dir
+            self.workspace_dir = self.workspace / BaseAgentConfig.WORKSPACE_DIRNAME
+            self.tasks_dir = self.workspace / BaseAgentConfig.TASKS_DIRNAME
+            self.skills_dir = self.workspace / BaseAgentConfig.SKILLS_DIRNAME
+            message_path = self._get_message_storage_path()
+            if runtime_is_active(self.config_dir):
+                # The live host has already initialized the database. Opening a
+                # data view must not perform schema writes behind its back.
+                self.message_storage = MessageStorage.__new__(MessageStorage)
+                self.message_storage.path = message_path
+                self.message_storage.logger = self.logger
+            else:
+                ownership = RuntimeOwnership(self.config_dir)
+                ownership.acquire()
+                try:
+                    self.message_storage = MessageStorage(path=str(message_path))
+                finally:
+                    ownership.release()
+            self.skills_storage = SkillsStorageLocal(self.skills_dir)
+            provider = self.config.get("provider") or {}
+            self.agent = SimpleNamespace(
+                identity=self.identity, system_prompt=self.identity,
+                model=provider.get("model", BaseAgentConfig.DEFAULT_MODEL), tools={},
+                supports_vision=True, markdown_memory=MarkdownMemory(str(self.workspace / BaseAgentConfig.MEMORY_DIRNAME)),
+                message_storage=self.message_storage, skills_storage=self.skills_storage,
+                workspace=self.workspace, workspace_dir=self.workspace_dir,
+            )
+            self._temporary_runtime = None
 
     def _get_memory_root(self) -> Path:
         memory = self.agent.markdown_memory
@@ -173,17 +220,14 @@ class AdminService(BaseAgentRunner):
         return Path(identity_path).expanduser().resolve()
 
     def _get_agent_identity(self) -> str:
+        if self.identity_path.is_file():
+            return self.identity_path.read_text(encoding="utf-8").strip()
         identity = getattr(self.agent, "identity", None)
         if identity is None:
             identity = getattr(self.agent, "system_prompt", "")
         return identity or ""
 
     def _set_agent_identity(self, identity: str) -> None:
-        if hasattr(self.agent, "set_identity"):
-            self.agent.set_identity(identity)
-        else:
-            self.agent.system_prompt = identity
-            message_handler = getattr(self.agent, "message_handler", None)
-            if message_handler is not None:
-                message_handler.system_prompt = identity
+        # Identity is a startup snapshot. Saving it does not mutate a live
+        # prompt partway through a conversation.
         self.identity = identity

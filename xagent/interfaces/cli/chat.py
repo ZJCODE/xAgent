@@ -10,7 +10,49 @@ from ...core.runtime import ScheduledDeliveryContext, scheduled_delivery_context
 from ...integrations.api.constants import CHANNEL_API
 from ...schemas.attachment import dedupe_attachments
 from ...utils.image_utils import workspace_blob_relative_path
-from ..base import BaseAgentRunner
+from ..base import BaseAgentConfig
+
+
+class LocalRuntimeAgent:
+    """Small terminal client; model execution remains in RuntimeHost."""
+
+    def __init__(self, root: Path):
+        self.root = root
+        self.model = BaseAgentConfig.DEFAULT_MODEL
+        self.tools: dict = {}
+
+    async def _client(self):
+        from .agent_runtime import ensure_runtime
+        client = await ensure_runtime(self.root)
+        status = await client.status()
+        self.model = str(status.get("model") or self.model)
+        self.tools = dict.fromkeys(status.get("tools") or [])
+        return client
+
+    async def chat_events(self, **kwargs):
+        client = await self._client()
+        kwargs.setdefault("channel", "cli")
+        async for event in client.chat_events(**kwargs):
+            yield event
+
+    async def __call__(self, **kwargs):
+        content = ""
+        async for event in self.chat_events(**kwargs):
+            if event.get("type") == "error":
+                raise RuntimeError(event.get("error") or "Agent turn failed")
+            if event.get("type") == "message_done":
+                content = str(event.get("content") or "")
+        return content
+
+
+class LocalRuntimeMessages:
+    def __init__(self, agent: LocalRuntimeAgent):
+        self.agent = agent
+
+    async def clear_messages(self):
+        client = await self.agent._client()
+        response = await client.request("POST", "/clear_messages")
+        response.raise_for_status()
 
 
 def _terminal_ui_class():
@@ -85,7 +127,7 @@ def _cli_delivery_context(user_id: str):
     )
 
 
-class AgentCLI(BaseAgentRunner):
+class AgentCLI:
     """CLI Agent for xAgent."""
 
     def __init__(
@@ -105,7 +147,11 @@ class AgentCLI(BaseAgentRunner):
             logging.getLogger().setLevel(logging.INFO)
             logging.getLogger("xagent").setLevel(logging.INFO)
 
-        super().__init__(config_dir=config_dir)
+        self.config_dir = Path(config_dir or BaseAgentConfig.DEFAULT_CONFIG_DIR).expanduser().resolve()
+        self.config_path = self.config_dir / BaseAgentConfig.CONFIG_FILENAME
+        self.workspace_dir = self.config_dir / BaseAgentConfig.WORKSPACE_DIRNAME
+        self.agent = LocalRuntimeAgent(self.config_dir)
+        self.message_storage = LocalRuntimeMessages(self.agent)
 
     async def chat_interactive(
         self,

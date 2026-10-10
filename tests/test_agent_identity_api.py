@@ -72,7 +72,7 @@ class AgentIdentityApiTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(payload["identity_path"], str((root / "identity.md").resolve()))
             self.assertTrue(payload["identity_editable"])
 
-    async def test_update_identity_saves_file_and_runtime_agent(self):
+    async def test_update_identity_saves_file_pending_restart(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             server = self._server(root, "# Identity\n\nOld agent.")
@@ -87,8 +87,9 @@ class AgentIdentityApiTests(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(response.status_code, 200)
             self.assertEqual((root / "identity.md").read_text(encoding="utf-8"), f"{new_identity}\n")
-            self.assertEqual(server.agent.system_prompt, new_identity)
-            self.assertEqual(server.agent.message_handler.system_prompt, new_identity)
+            self.assertTrue(response.json()["needs_restart"])
+            self.assertEqual(server.agent.system_prompt, "# Identity\n\nOld agent.")
+            self.assertEqual(server.agent.message_handler.system_prompt, "# Identity\n\nOld agent.")
             self.assertEqual(read_response.json()["identity"], f"{new_identity}\n")
 
     async def test_update_identity_rejects_empty_content(self):

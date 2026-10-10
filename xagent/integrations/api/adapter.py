@@ -54,21 +54,10 @@ class ApiChannelAdapter:
         self._task_scheduler: Optional[AsyncTaskScheduler] = None
 
     async def start(self) -> None:
-        scheduler = AsyncTaskScheduler(
-            self.tasks_dir,
-            can_handle=self.tasks.can_handle,
-            dispatch=self.tasks.dispatch,
-            logger_=self.logger,
-        )
-        self._task_scheduler = scheduler
-        await scheduler.start()
-        self.logger.info("Scheduled task runtime started: tasks=%s", self.tasks_dir)
+        """Transport setup only; the RuntimeHost owns scheduled work."""
 
     async def stop(self) -> None:
-        if self._task_scheduler is not None:
-            await self._task_scheduler.stop()
-            self._task_scheduler = None
-            self.logger.info("Scheduled task runtime stopped")
+        """Transport teardown only; the RuntimeHost owns scheduled work."""
 
     async def deliver_subconscious_message(self, delivery: SubconsciousDelivery) -> None:
         await self.delivery.deliver_subconscious(delivery, agent=self.agent)

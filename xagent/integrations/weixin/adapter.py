@@ -15,9 +15,11 @@ from urllib.parse import parse_qs, unquote, urlparse
 from ...core.agent import Agent
 from ...core.attention import make_room_key, message_storage_cursor
 from ...core.config import AgentConfig
+from ...core.runtime.task_receipts import DeliveryUncertainError, is_strict_task_delivery
 from ...core.runtime import (
     AsyncTaskScheduler,
     ScheduledDeliveryContext,
+    current_delivery_context,
     SubconsciousDelivery,
     resolve_contacts_path,
     scheduled_delivery_context,
@@ -167,29 +169,14 @@ class WeixinAdapter:
         else:
             self.client.with_credentials(credentials)
 
-        task_scheduler = AsyncTaskScheduler(
-            self._tasks_dir,
-            can_handle=self._can_handle_scheduled_task,
-            dispatch=self._dispatch_scheduled_task,
-            logger_=self.logger,
-        )
-        self._task_scheduler = task_scheduler
-        await task_scheduler.start()
         attention = self._attention_loop()
-        if attention is not None:
-            await attention.reset_to_present(getattr(self.agent, "message_storage", None))
 
         try:
             await self._poll_loop()
         finally:
-            await task_scheduler.stop()
-            self._task_scheduler = None
             await self._cancel_processing_tasks()
             if self._owns_client and self.client is not None:
                 await self.client.aclose()
-            flusher = getattr(self.agent, "run_memory_maintenance", None)
-            if callable(flusher):
-                await flusher()
 
     async def stop(self) -> None:
         self._stop_event.set()
@@ -236,6 +223,9 @@ class WeixinAdapter:
 
                 consecutive_failures = 0
                 new_sync_buf = str(response.get("get_updates_buf") or "")
+                callback = getattr(self, "runtime_status", None)
+                if callback:
+                    callback("connected")
                 if new_sync_buf:
                     sync_buf = new_sync_buf
                     self.state_store.save_sync_buf(self._credentials.account_id, sync_buf)
@@ -260,6 +250,9 @@ class WeixinAdapter:
                     consecutive_failures = 0
 
     async def _poll_backoff(self, consecutive_failures: int) -> None:
+        callback = getattr(self, "runtime_status", None)
+        if callback:
+            callback("reconnecting")
         delay = self.config.backoff_delay_seconds if consecutive_failures >= self.config.max_consecutive_failures else self.config.retry_delay_seconds
         try:
             await asyncio.wait_for(self._stop_event.wait(), timeout=delay)
@@ -740,6 +733,8 @@ class WeixinAdapter:
             )
         except Exception as exc:
             self.logger.warning("Weixin attachment send failed path=%s: %s", attachment.path, exc)
+            if is_strict_task_delivery():
+                raise DeliveryUncertainError(f"Weixin attachment delivery was not confirmed: {exc}") from exc
             await self._send_text(
                 user_id=user_id,
                 context_token=context_token,
@@ -749,7 +744,7 @@ class WeixinAdapter:
 
     async def _call_send_with_retries(self, call, *, label: str) -> dict[str, Any]:
         last_error: Optional[Exception] = None
-        attempts = max(1, self.config.send_retries + 1)
+        attempts = 1 if is_strict_task_delivery() else max(1, self.config.send_retries + 1)
         for attempt in range(1, attempts + 1):
             try:
                 response = await call()
@@ -795,13 +790,32 @@ class WeixinAdapter:
         return task.kind == "task" and task.delivery_channel == "weixin" and self.client is not None
 
     async def _dispatch_scheduled_task(self, task) -> None:
+        from ...core.runtime.task_receipts import occurrence_run_id
+        result = await self.execute_scheduled_task(task)
+        await self.deliver_scheduled_task(task, result, occurrence_run_id(task.task_id, task.run_at))
+
+    async def execute_scheduled_task(self, task) -> dict[str, Any]:
+        user_id = str(task.target.get("user_id") or task.delivery_user_id or "").strip()
+        result = await self._scheduled_task_result(task, user_id=user_id)
+        if not result.content and not result.attachments:
+            raise ValueError("scheduled Weixin task produced no content")
+        return {"content": result.content, "attachments": [
+            {"kind": attachment.kind, "path": str(attachment.path), "caption": attachment.caption,
+             "blob_url": attachment.blob_url} for attachment in result.attachments
+        ]}
+
+    async def deliver_scheduled_task(self, task, prepared: dict[str, Any], run_id: str) -> dict[str, Any]:
         user_id = str(task.target.get("user_id") or task.delivery_user_id or "").strip()
         if not user_id:
             raise ValueError("scheduled Weixin task is missing user_id")
         context_token = self._context_tokens.get(user_id)
         if not context_token:
             raise ValueError(f"scheduled Weixin task cannot send to {user_id}: no cached context_token")
-        result = await self._scheduled_task_result(task, user_id=user_id)
+        result = _WeixinScheduledTaskResult(str(prepared.get("content") or ""), [
+            _WeixinOutboundAttachment(kind=item["kind"], path=Path(item["path"]),
+                                      caption=str(item.get("caption") or ""), blob_url=str(item.get("blob_url") or ""))
+            for item in prepared.get("attachments", [])
+        ])
         if not result.content and not result.attachments:
             raise ValueError("scheduled Weixin task produced no content")
         await self._send_text_and_attachments(
@@ -811,6 +825,7 @@ class WeixinAdapter:
             attachments=result.attachments,
             stable_key=f"scheduled:{task.task_id}:{task.run_at.isoformat(sep=' ')}",
         )
+        return {"accepted": True, "transport": "weixin", "request_id": run_id}
 
     async def deliver_subconscious_message(self, delivery: SubconsciousDelivery) -> None:
         if delivery.recipient.channel != "weixin":
@@ -865,9 +880,11 @@ class WeixinAdapter:
             channel="weixin",
             user_id=user_id,
             target=task.target,
-            metadata={"source": "scheduled_task", "task_id": task.task_id},
+            metadata={**(current_delivery_context().metadata if current_delivery_context() else {}),
+                      "source": "scheduled_task", "task_id": task.task_id},
         )
         content = ""
+        last_error = ""
         attachments: list[_WeixinOutboundAttachment] = []
         with scheduled_delivery_context(context):
             async for event in chat_events(
@@ -877,11 +894,17 @@ class WeixinAdapter:
                 channel="weixin",
                 inbox_kind="scheduled_turn",
             ):
+                if event.get("type") in {"error", "aborted"} and event.get("needs_review"):
+                    raise DeliveryUncertainError(str(event.get("error") or "scheduled tool outcome is unknown"))
                 if event.get("type") == "message_done" and str(event.get("phase") or "final") == "final":
                     content = str(event.get("content") or "").strip()
                     attachments = self._outbound_attachments_from_event(event)
                 elif event.get("type") == "error" and not content:
-                    content = str(event.get("error") or "").strip()
+                    last_error = str(event.get("error") or "").strip()
+        if not content and not attachments:
+            if last_error:
+                raise RuntimeError(last_error)
+            raise ValueError("scheduled Weixin task produced no final result")
         return _WeixinScheduledTaskResult(content, attachments)
 
     def _split_outbound_attachments(self, text: str, *, seen_paths: Optional[set[Path]] = None) -> tuple[str, list[_WeixinOutboundAttachment]]:

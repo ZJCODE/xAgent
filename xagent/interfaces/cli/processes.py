@@ -11,10 +11,10 @@ from typing import Iterator, Mapping, Optional, Sequence
 
 
 DEFAULT_STARTUP_TIMEOUT = 2.0
-DEFAULT_STOP_TIMEOUT = 5.0
+DEFAULT_STOP_TIMEOUT = 35.0
 STOP_POLL_INTERVAL = 0.1
 
-MANAGED_AGENT_CHANNELS = ("api", "feishu", "weixin", "voice")
+MANAGED_AGENT_CHANNELS = ("runtime",)
 
 
 @dataclass(frozen=True)

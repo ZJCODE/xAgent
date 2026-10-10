@@ -8,7 +8,7 @@ import type {
   AgentSetupSchema,
   AgentsResponse,
   CreateAgentInput,
-  ChannelActionResponse,
+  AgentRuntimeStatus,
   ChannelId,
   ChannelLogsResponse,
   ChannelSetupInput,
@@ -77,8 +77,11 @@ export async function getHealth(): Promise<{ status: string; service: string }> 
   return requestJson("/health", { signal: AbortSignal.timeout(5000) });
 }
 
-export async function stopChat(): Promise<{ stopped: boolean }> {
-  return requestJson("/chat/stop", { method: "POST" });
+export async function stopChat(turnId: string): Promise<{ stopped: boolean }> {
+  return requestJson("/chat/stop", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ turn_id: turnId }),
+  });
 }
 
 export async function getWebHealth(): Promise<{ status: string; web: boolean; api_reachable: boolean }> {
@@ -343,6 +346,10 @@ export async function resumeTask(taskId: string): Promise<{ status: string; task
   return requestJson(`/api/tasks/${encodeURIComponent(taskId)}/resume`, { method: "POST" });
 }
 
+export async function retryTask(taskId: string): Promise<{ status: string; task: ScheduledTaskItem }> {
+  return requestJson(`/api/tasks/${encodeURIComponent(taskId)}/retry`, { method: "POST" });
+}
+
 export async function updateTask(taskId: string, input: TaskUpdateInput): Promise<{ status: string; task: ScheduledTaskItem }> {
   return requestJson(`/api/tasks/${encodeURIComponent(taskId)}`, {
     method: "PATCH",
@@ -367,16 +374,24 @@ export async function getChannels(): Promise<ChannelsResponse> {
   return requestJson("/api/channels");
 }
 
-export async function startChannel(channel: ChannelId): Promise<ChannelActionResponse> {
-  return requestJson(`/api/channels/${channel}/start`, { method: "POST" });
+export async function getRuntime(): Promise<AgentRuntimeStatus> {
+  return requestJson("/api/runtime");
 }
 
-export async function stopChannel(channel: ChannelId): Promise<ChannelActionResponse> {
-  return requestJson(`/api/channels/${channel}/stop`, { method: "POST" });
+export async function startRuntime(): Promise<AgentRuntimeStatus> {
+  return requestJson("/api/runtime/start", { method: "POST" });
 }
 
-export async function restartChannel(channel: ChannelId): Promise<ChannelActionResponse> {
-  return requestJson(`/api/channels/${channel}/restart`, { method: "POST" });
+export async function stopRuntime(): Promise<AgentRuntimeStatus> {
+  return requestJson("/api/runtime/stop", { method: "POST" });
+}
+
+export async function restartRuntime(): Promise<AgentRuntimeStatus> {
+  return requestJson("/api/runtime/restart", { method: "POST" });
+}
+
+export async function getRuntimeLogs(lines = 80): Promise<Omit<ChannelLogsResponse, "channel">> {
+  return requestJson(`/api/runtime/logs?lines=${lines}`);
 }
 
 export async function getChannelLogs(channel: ChannelId, lines = 80): Promise<ChannelLogsResponse> {

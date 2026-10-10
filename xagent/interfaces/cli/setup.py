@@ -515,6 +515,24 @@ def _load_agent_config_file(config_dir: Path) -> tuple[Path, dict[str, Any]]:
 
 
 def apply_channel_setup(
+    *, channel: str, config_dir: Path, selection_data: Mapping[str, Any], force: bool = False,
+) -> dict[str, Any]:
+    from ...core.runtime.ownership import RuntimeOwnership, runtime_is_active, runtime_owned_here, runtime_paths
+    root = config_dir.expanduser().resolve()
+    if runtime_owned_here(root):
+        return _apply_channel_setup(channel=channel, config_dir=root, selection_data=selection_data, force=force)
+    if runtime_is_active(root):
+        import httpx
+        transport = httpx.HTTPTransport(uds=str(runtime_paths(root).socket_path))
+        with httpx.Client(transport=transport, base_url="http://runtime", timeout=15, trust_env=False) as client:
+            response = client.post(f"/api/channels/{channel}/setup", json={"selection": dict(selection_data), "force": force})
+            response.raise_for_status()
+            return response.json()
+    with RuntimeOwnership(root):
+        return _apply_channel_setup(channel=channel, config_dir=root, selection_data=selection_data, force=force)
+
+
+def _apply_channel_setup(
     *,
     channel: str,
     config_dir: Path,
@@ -1159,6 +1177,20 @@ def collect_init_selection(
 
 
 def init_agent_directory(
+    config_dir: Optional[str] = None, *, force: bool = False,
+    selection: Optional[InitSelection] = None, clear_runtime_data: bool = False,
+    quiet: bool = False, registry_root: Optional[Path] = None,
+) -> InitResult:
+    from ...core.runtime.ownership import RuntimeOwnership, runtime_owned_here
+    root = Path(config_dir or BaseAgentConfig.DEFAULT_CONFIG_DIR).expanduser().resolve()
+    if runtime_owned_here(root):
+        raise ValueError("Stop the Agent before replacing its setup or data.")
+    with RuntimeOwnership(root):
+        return _init_agent_directory(str(root), force=force, selection=selection,
+            clear_runtime_data=clear_runtime_data, quiet=quiet, registry_root=registry_root)
+
+
+def _init_agent_directory(
     config_dir: Optional[str] = None,
     *,
     force: bool = False,
@@ -1218,7 +1250,7 @@ def init_agent_directory(
     selection = selection or _default_init_selection()
     port = allocate_api_port(root=registry_root)
     write_secret_file(config_file, _config_yaml(selection, port=port))
-    identity_file.write_text(selection.identity, encoding="utf-8")
+    write_secret_file(identity_file, selection.identity)
 
     if not quiet:
         TerminalUI().print_panel(
@@ -1272,21 +1304,21 @@ def _print_init_next_steps(*, config_dir: Path, agent_name: str | None = None) -
         (
             "web",
             _format_init_command("xagent web start", config_dir=config_dir, agent_name=agent_name),
-            "Start the browser web client (requires a running api channel).",
+            "Start the browser web client; local chat connects to the Agent runtime.",
         ),
         (
             "api",
-            _format_init_command("xagent api start", config_dir=config_dir, agent_name=agent_name),
+            _format_init_command("xagent start", config_dir=config_dir, agent_name=agent_name),
             "Run the HTTP / SSE / WebSocket channel in the background.",
         ),
     ]
 
     voice_init = _format_init_command("xagent voice setup", config_dir=config_dir, agent_name=agent_name)
-    voice_start = _format_init_command("xagent voice start", config_dir=config_dir, agent_name=agent_name)
+    voice_start = _format_init_command("xagent start", config_dir=config_dir, agent_name=agent_name)
     feishu_init = _format_init_command("xagent feishu setup", config_dir=config_dir, agent_name=agent_name)
-    feishu_start = _format_init_command("xagent feishu start", config_dir=config_dir, agent_name=agent_name)
+    feishu_start = _format_init_command("xagent start", config_dir=config_dir, agent_name=agent_name)
     weixin_init = _format_init_command("xagent weixin setup", config_dir=config_dir, agent_name=agent_name)
-    weixin_start = _format_init_command("xagent weixin start", config_dir=config_dir, agent_name=agent_name)
+    weixin_start = _format_init_command("xagent start", config_dir=config_dir, agent_name=agent_name)
 
     content = Text()
     content.append("Pick how you want to use it next.\n\n")
@@ -1410,20 +1442,20 @@ def _print_voice_post_setup(
     summary.append("- Mode: Reply to user turns only\n")
     ui.print_panel(summary, title="Voice Ready", leading_blank_line=True)
 
-    start = _format_init_command("xagent voice start", config_dir=config_dir, agent_name=agent_name)
-    status = _format_init_command("xagent voice status", config_dir=config_dir, agent_name=agent_name)
-    logs = _format_init_command("xagent voice logs -f", config_dir=config_dir, agent_name=agent_name)
+    start = _format_init_command("xagent start", config_dir=config_dir, agent_name=agent_name)
+    status = _format_init_command("xagent status", config_dir=config_dir, agent_name=agent_name)
+    logs = _format_init_command("xagent logs -f", config_dir=config_dir, agent_name=agent_name)
     next_steps = Text()
     next_steps.append("Run next:\n")
     next_steps.append("start   ")
     next_steps.append(start, style="cyan")
-    next_steps.append("\n        Start only the voice channel.\n")
+    next_steps.append("\n        Start the Agent and its configured channels.\n")
     next_steps.append("status  ")
     next_steps.append(status, style="cyan")
-    next_steps.append("\n        Check PID, logs, and whether the channel is running.\n")
+    next_steps.append("\n        Check Agent readiness and channel health.\n")
     next_steps.append("logs    ")
     next_steps.append(logs, style="cyan")
-    next_steps.append("\n        Follow the voice channel log live.\n")
+    next_steps.append("\n        Follow the Agent runtime log.\n")
     ui.print_panel(next_steps, title="Next Steps")
 
 
@@ -1737,21 +1769,21 @@ def _print_feishu_post_setup(
     ui.print_panel(summary, title="Feishu Ready", leading_blank_line=True)
 
     if show_next_steps:
-        feishu_start = _format_init_command("xagent feishu start", config_dir=config_dir, agent_name=agent_name)
-        status = _format_init_command("xagent feishu status", config_dir=config_dir, agent_name=agent_name)
-        logs = _format_init_command("xagent feishu logs -f", config_dir=config_dir, agent_name=agent_name)
+        feishu_start = _format_init_command("xagent start", config_dir=config_dir, agent_name=agent_name)
+        status = _format_init_command("xagent status", config_dir=config_dir, agent_name=agent_name)
+        logs = _format_init_command("xagent logs -f", config_dir=config_dir, agent_name=agent_name)
 
         next_steps = Text()
         next_steps.append("Run next:\n")
         next_steps.append("start   ")
         next_steps.append(feishu_start, style="cyan")
-        next_steps.append("\n        Start only the Feishu channel.\n")
+        next_steps.append("\n        Start the Agent and its configured channels.\n")
         next_steps.append("status  ")
         next_steps.append(status, style="cyan")
-        next_steps.append("\n        Check PID, logs, and whether the bot is already running.\n")
+        next_steps.append("\n        Check Agent readiness and channel health.\n")
         next_steps.append("logs    ")
         next_steps.append(logs, style="cyan")
-        next_steps.append("\n        Follow the Feishu channel log live.\n")
+        next_steps.append("\n        Follow the Agent runtime log.\n")
 
         ui.print_panel(next_steps, title="Next Steps")
 
@@ -2074,9 +2106,9 @@ def _print_weixin_post_setup(
     ui.print_panel(summary, title="Weixin Ready", leading_blank_line=True)
 
     if show_next_steps:
-        start = _format_init_command("xagent weixin start", config_dir=config_dir, agent_name=agent_name)
-        status = _format_init_command("xagent weixin status", config_dir=config_dir, agent_name=agent_name)
-        logs = _format_init_command("xagent weixin logs -f", config_dir=config_dir, agent_name=agent_name)
+        start = _format_init_command("xagent start", config_dir=config_dir, agent_name=agent_name)
+        status = _format_init_command("xagent status", config_dir=config_dir, agent_name=agent_name)
+        logs = _format_init_command("xagent logs -f", config_dir=config_dir, agent_name=agent_name)
         next_steps = Text()
         next_steps.append("Run next:\n")
         next_steps.append("start   ")
@@ -2084,10 +2116,10 @@ def _print_weixin_post_setup(
         next_steps.append("\n        Start only the Weixin DM channel.\n")
         next_steps.append("status  ")
         next_steps.append(status, style="cyan")
-        next_steps.append("\n        Check PID, logs, and whether the channel is running.\n")
+        next_steps.append("\n        Check Agent readiness and channel health.\n")
         next_steps.append("logs    ")
         next_steps.append(logs, style="cyan")
-        next_steps.append("\n        Follow the Weixin channel log live.\n")
+        next_steps.append("\n        Follow the Agent runtime log.\n")
         next_steps.append("\nOnly direct messages are supported. Group messages are ignored.")
         ui.print_panel(next_steps, title="Next Steps")
 

@@ -1,6 +1,9 @@
+import asyncio
+import hashlib
 import json
 import logging
 import time
+import uuid
 from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, List, Optional, Union
 
@@ -46,6 +49,9 @@ from .inbox import (
     InboxKind,
     is_scheduled_work,
     normalize_inbox_kind,
+    InboxCapacityError,
+    InboxQueueTimeout,
+    InboxCancelledError,
 )
 from .attention import AttentionLoop, ADDRESSED_METADATA_KEY, ROOM_KEY_METADATA_KEY
 from .handlers import MemoryHandler, MessageHandler, ModelClient
@@ -264,14 +270,36 @@ class Agent:
             self._attention = current
         return current
 
-    def abort(self) -> bool:
+    def abort(self, turn_id: Optional[str] = None, *, channel: Optional[str] = None) -> bool:
         """Stop the in-flight turn after the current model call or tool batch.
 
         Returns True when a turn was busy and will stop at the next boundary.
         Does not roll back tools that already ran, and does not kill a running
         shell command.
         """
-        return self.inbox.request_abort()
+        return self.inbox.request_abort(turn_id, channel=channel)
+
+    async def steer(self, turn_id: Optional[str], content: str, *, channel: Optional[str] = None) -> bool:
+        if not content.strip() or not turn_id or self.inbox.current_turn_id != turn_id:
+            return False
+        current = self.inbox._current
+        if channel is not None and current is not None and current.channel != channel:
+            return False
+        await self.message_handler.store_context_event(content, source="runtime", event_type="steer",
+            channel=channel, metadata={"turn_id": turn_id, "inbox_kind": "steer"})
+        return self.inbox.request_steer(turn_id, content, channel=channel)
+
+    @property
+    def turn_store(self):
+        from .runtime.turns import TurnStore
+
+        current = getattr(self, "_turn_store", None)
+        if current is None:
+            root = getattr(self, "workspace", None)
+            path = Path(root) / ".runtime" / "turns.sqlite3" if root is not None else None
+            current = TurnStore(path)
+            self._turn_store = current
+        return current
 
     @classmethod
     def _message_storage_path(cls, workspace: Path) -> Path:
@@ -577,6 +605,9 @@ class Agent:
         sender_name: str = "",
         extra_message_metadata: Optional[Dict[str, Any]] = None,
         max_agent_loops: Optional[int] = None,
+        event_id: Optional[str] = None,
+        turn_id: Optional[str] = None,
+        request_id: Optional[str] = None,
     ) -> AsyncGenerator[dict, None]:
         """Emit one agent turn as structured message/tool events.
 
@@ -612,18 +643,11 @@ class Agent:
             delivery_context=delivery_context,
             extra_message_metadata=extra_message_metadata,
         )
-        user_metadata = inbox_item.message_metadata()
-        await self.inbox.acquire_turn()
-        try:
-            async for event in self._drive_claimed_turn(
-                inbox_item=inbox_item,
-                user_metadata=user_metadata,
-                stream=stream,
-                max_agent_loops=max_agent_loops,
-            ):
-                yield event
-        finally:
-            self.inbox.release_turn()
+        async for event in self._run_inbox_turn(
+            inbox_item, stream=stream, max_agent_loops=max_agent_loops,
+            event_id=event_id, turn_id=turn_id, request_id=request_id,
+        ):
+            yield event
 
     async def respond(
         self,
@@ -673,17 +697,132 @@ class Agent:
             metadata=dict(last_user.metadata or {}),
             stream=stream,
         )
-        await self.inbox.acquire_turn()
+        async for event in self._run_inbox_turn(
+            inbox_item, stream=stream, existing_user_msg=user_msg,
+            event_id=f"respond:{room_key}:{through_cursor}",
+        ):
+            yield event
+
+    async def _run_inbox_turn(
+        self, item: InboxItem, *, stream: bool, max_agent_loops: Optional[int] = None,
+        existing_user_msg: Optional[Message] = None, event_id: Optional[str] = None,
+        turn_id: Optional[str] = None, request_id: Optional[str] = None,
+    ) -> AsyncGenerator[dict, None]:
+        """Persist accepted input, then serialize every channel through one queue."""
+        metadata = item.message_metadata()
+        source_event = event_id or metadata.get("event_id") or metadata.get("message_id")
+        if metadata.get("run_id"):
+            source_event = f"scheduled:{metadata['run_id']}:{metadata.get('attempt_id') or 'initial'}"
+        event_id = str(source_event or uuid.uuid4().hex)
+        request_id = request_id or str(metadata.get("request_id") or event_id)
+        scope = json.dumps([item.channel or "local", item.user_id, item.room_name], ensure_ascii=False)
+        event_key = hashlib.sha256((scope + "\0" + event_id).encode()).hexdigest()
         try:
-            async for event in self._drive_claimed_turn(
-                inbox_item=inbox_item,
-                user_metadata=inbox_item.message_metadata(),
-                stream=stream,
-                existing_user_msg=user_msg,
-            ):
+            ticket = self.inbox.reserve_turn(turn_id=turn_id, channel=item.channel)
+        except InboxCapacityError as exc:
+            yield build_public_error(code="capacity", cause=exc)
+            yield {"type": "done"}
+            return
+        record = None
+        claimed = False
+        finished = False
+        iterator = None
+        final_events = []
+        terminal = "completed"
+        side_effect_started = False
+        try:
+            record, fresh = await self.turn_store.begin(
+                event_key=event_key, turn_id=ticket.turn_id, event_id=event_id,
+                channel=item.channel, user_id=item.user_id, room_name=item.room_name,
+                request_id=request_id,
+            )
+            if not fresh:
+                self.inbox.discard(ticket)
+                for saved in record.get("events") or []:
+                    yield saved
+                if not record.get("events"):
+                    yield {"type": "duplicate", "turn_id": record["turn_id"], "event_id": event_id, "state": record["state"]}
+                    yield {"type": "done", "turn_id": record["turn_id"], "event_id": event_id}
+                finished = True
+                return
+            metadata.update(turn_id=ticket.turn_id, event_id=event_id, event_scope=scope, request_id=request_id)
+            if existing_user_msg is None:
+                existing_user_msg = await self.message_handler.store_user_message(
+                    item.content, item.user_id, item.image_source, attachments=item.attachments,
+                    room_name=item.room_name, channel=item.channel, metadata=metadata,
+                )
+            await self.turn_store.update(ticket.turn_id, state="accepted", input_cursor=(existing_user_msg.metadata or {}).get("storage_cursor"))
+            logger.info("Input accepted request_id=%s turn_id=%s channel=%s user_id=%s", request_id, ticket.turn_id, item.channel, item.user_id)
+            yield {"type": "accepted", "turn_id": ticket.turn_id, "event_id": event_id, "request_id": request_id}
+            await self.inbox.acquire_turn(ticket)
+            claimed = True
+            await self.turn_store.update(ticket.turn_id, state="running")
+            deadline = time.monotonic() + self.inbox.run_timeout
+            iterator = self._drive_claimed_turn(
+                inbox_item=item, user_metadata=metadata, stream=stream,
+                max_agent_loops=max_agent_loops, existing_user_msg=existing_user_msg,
+            )
+            while True:
+                try:
+                    event = await asyncio.wait_for(iterator.__anext__(), timeout=max(0.001, deadline - time.monotonic()))
+                except StopAsyncIteration:
+                    break
+                event = {**event, "turn_id": ticket.turn_id, "event_id": event_id, "request_id": request_id}
+                if event.get("type") == "tool_call":
+                    side_effect_started = True
+                    await self.turn_store.update(ticket.turn_id, side_effect_started=True)
+                if event.get("type") == "error":
+                    terminal = "failed"
+                elif event.get("type") == "aborted":
+                    terminal = "cancelled"
+                if event.get("type") in {"error", "aborted"} and side_effect_started:
+                    event["needs_review"] = True
+                if event.get("type") in {"message_done", "error", "aborted", "done"}:
+                    final_events.append(event)
+                if event.get("type") == "done":
+                    await self.turn_store.update(ticket.turn_id, state=terminal, events=final_events,
+                        needs_review=side_effect_started and terminal != "completed")
+                    finished = True
+                    logger.info("Turn finished request_id=%s turn_id=%s state=%s", request_id, ticket.turn_id, terminal)
                 yield event
+            if not finished:
+                await self.turn_store.update(ticket.turn_id, state=terminal, events=final_events)
+                finished = True
+        except (InboxQueueTimeout, asyncio.TimeoutError) as exc:
+            event = {**build_public_error(code="timeout", cause=exc), "turn_id": ticket.turn_id,
+                     "event_id": event_id, "request_id": request_id, "needs_review": side_effect_started}
+            done = {"type": "done", "turn_id": ticket.turn_id, "event_id": event_id, "request_id": request_id}
+            await self.turn_store.update(ticket.turn_id, state="timeout", events=[event, done], needs_review=side_effect_started)
+            finished = True
+            yield event
+            yield done
+        except InboxCancelledError:
+            event = {"type": "aborted", "turn_id": ticket.turn_id, "event_id": event_id, "request_id": request_id}
+            done = {"type": "done", "turn_id": ticket.turn_id, "event_id": event_id, "request_id": request_id}
+            await self.turn_store.update(ticket.turn_id, state="cancelled", events=[event, done])
+            finished = True
+            yield event
+            yield done
+        except ValueError as exc:
+            event = {**build_public_error(code="invalid_input", message=str(exc), cause=exc),
+                     "turn_id": ticket.turn_id, "event_id": event_id,
+                     "request_id": request_id, "needs_review": side_effect_started}
+            done = {"type": "done", "turn_id": ticket.turn_id, "event_id": event_id, "request_id": request_id}
+            if record is not None:
+                await self.turn_store.update(ticket.turn_id, state="failed", events=[event, done], needs_review=side_effect_started)
+            finished = True
+            yield event
+            yield done
         finally:
-            self.inbox.release_turn()
+            try:
+                if iterator is not None:
+                    await iterator.aclose()
+            finally:
+                self.inbox.discard(ticket)
+                if claimed:
+                    self.inbox.release_turn()
+                if record is not None and not finished:
+                    await asyncio.shield(self.turn_store.update(ticket.turn_id, state="interrupted", needs_review=True))
 
     async def _drive_claimed_turn(
         self,
@@ -702,6 +841,9 @@ class Agent:
         channel_instructions = inbox_item.channel_instructions
         room_name = inbox_item.room_name
         channel = inbox_item.channel
+        trace_metadata = {key: user_metadata[key] for key in (
+            "turn_id", "event_id", "run_id", "scheduled_run_id", "attempt_id", "task_id", "source",
+        ) if key in user_metadata}
         msg_handler = self.message_handler
         model_name = getattr(self, "model", AgentConfig.DEFAULT_MODEL)
         channel_name = str(channel or "local")
@@ -765,6 +907,9 @@ class Agent:
                     yield self._aborted_event()
                     yield {"type": "done"}
                     return
+
+                for instruction in self.inbox.take_steering():
+                    input_messages.append({"role": "user", "content": f"Additional instruction for this turn:\n{instruction}"})
 
                 message_id = self._turn_message_id(user_msg, iteration_index)
                 text_parts: list[str] = []
@@ -834,7 +979,7 @@ class Agent:
                         await msg_handler.store_model_reply(
                             visible_text,
                             self._assistant_sender_id,
-                            metadata={"turn_phase": "preface"},
+                            metadata={**trace_metadata, "turn_phase": "preface"},
                             room_name=room_name,
                             channel=channel,
                             recipient_id=room_name or user_id,
@@ -914,7 +1059,7 @@ class Agent:
                     assistant_msg = await msg_handler.store_model_reply(
                         visible_text,
                         self._assistant_sender_id,
-                        metadata={"turn_phase": "final"},
+                        metadata={**trace_metadata, "turn_phase": "final"},
                         room_name=room_name,
                         channel=channel,
                         recipient_id=room_name or user_id,
@@ -978,6 +1123,7 @@ class Agent:
         kind = normalize_inbox_kind(inbox_kind)
         extra_metadata: Dict[str, Any] = dict(extra_message_metadata or {})
         if delivery_context is not None:
+            extra_metadata.update(dict(delivery_context.metadata or {}))
             source = str((delivery_context.metadata or {}).get("source") or "").strip()
             if source:
                 extra_metadata["source"] = source
@@ -1037,6 +1183,7 @@ class Agent:
         room_name: Optional[str] = None,
         channel: Optional[str] = None,
         user_id: Optional[str] = None,
+        event_id: Optional[str] = None,
     ) -> AgentTurnResult:
         """Record environmental context without generating a reply."""
         event_metadata = dict(metadata or {})
@@ -1047,6 +1194,16 @@ class Agent:
             or str(event_metadata.get("sender_name") or "").strip()
             or None
         )
+        event_metadata = self._attributed_event_metadata(
+            event_metadata, channel=channel, user_id=sender_id, room=room_name,
+            event_id=event_id, source=source,
+        )
+        lookup = getattr(self.message_storage, "get_message_by_metadata", None)
+        if callable(lookup):
+            existing = await lookup("event_key", event_metadata["event_key"])
+            if existing is not None:
+                return AgentTurnResult(kind="observe", replied=False, event_id=existing.timestamp,
+                    event_type=(existing.metadata or {}).get("event_type"), source=(existing.metadata or {}).get("source"))
         event_msg = await self.message_handler.store_context_event(
             context=context,
             source=source,
@@ -1082,6 +1239,7 @@ class Agent:
         metadata: Optional[Dict[str, Any]] = None,
         image_source: Optional[Union[str, List[str]]] = None,
         attachments: Optional[List[Dict[str, Any]]] = None,
+        event_id: Optional[str] = None,
     ) -> Message:
         """Persist an inbound utterance without starting a turn."""
         payload = dict(metadata or {})
@@ -1090,6 +1248,8 @@ class Agent:
         if sender_name:
             payload.setdefault("sender_name", sender_name)
         channel_name = str(channel or payload.get("source") or "").strip() or None
+        payload = self._attributed_event_metadata(payload, channel=channel_name,
+            user_id=user_id, room=room_key, event_id=event_id)
         return await self.message_handler.store_user_message(
             content,
             user_id,
@@ -1099,6 +1259,15 @@ class Agent:
             channel=channel_name,
             metadata=payload,
         )
+
+    @staticmethod
+    def _attributed_event_metadata(metadata, *, channel=None, user_id=None, room=None, event_id=None, source=None):
+        payload = dict(metadata or {})
+        identity = event_id or payload.get("event_id") or payload.get("message_id") or payload.get("source_message_id") or uuid.uuid4().hex
+        scope = json.dumps([channel or source or "local", user_id, room], ensure_ascii=False)
+        payload.update(event_id=str(identity), event_scope=scope,
+            event_key=hashlib.sha256((scope + "\0" + str(identity)).encode()).hexdigest())
+        return payload
 
     async def record_subconscious_thought(
         self,

@@ -146,9 +146,36 @@ def register_admin_routes(
     workspace_text_limit: int = WORKSPACE_TEXT_READ_LIMIT,
     workspace_search_text_limit: int = WORKSPACE_SEARCH_TEXT_LIMIT,
 ) -> None:
+    from .admin_access import register_admin_access
+    register_admin_access(app, resolve_admin)
     def _notify_config_written() -> None:
         if on_config_written is not None:
             on_config_written()
+
+    @app.post("/api/channels/{channel}/setup", tags=["Setup"])
+    async def owned_channel_setup(channel: str, input_data: Dict[str, Any] = Body(default_factory=dict)):
+        from ..cli.setup import apply_channel_setup
+        server = resolve_admin()
+        try:
+            result = apply_channel_setup(channel=channel, config_dir=Path(server.config_dir),
+                                         selection_data=input_data.get("selection") or {},
+                                         force=bool(input_data.get("force", False)))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        _notify_config_written()
+        return {"status": "ok", "setup": result, "needs_restart": True}
+
+    @app.post("/api/tasks/{task_id}/retry", tags=["Monitoring"])
+    async def tasks_retry(task_id: str):
+        from ...core.runtime.tasks import retry_scheduled_task
+        server = resolve_admin()
+        try:
+            task = retry_scheduled_task(server.tasks_dir, task_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"status": "ok", "task": task.to_task_view()}
     @app.get("/api/agent/info", tags=["Monitoring"])
     async def agent_info():
         server = resolve_admin()
@@ -199,7 +226,7 @@ def register_admin_routes(
         server = resolve_admin()
         current_records = list_task_records(server.tasks_dir, include_running=True)
         scheduled_records = [record for record in current_records if record.status in {"active", "paused"}]
-        attention_records = [record for record in current_records if record.status == "failed"]
+        attention_records = [record for record in current_records if record.status in {"failed", "needs_review"}]
         archive_records = list_archived_task_records(server.tasks_dir) if scope == "archive" else []
         archive_count = len(archive_records) if scope == "archive" else count_archived_task_records(server.tasks_dir)
         selected = {
@@ -378,12 +405,14 @@ def register_admin_routes(
         identity_path = server._get_identity_path()
         identity_path.parent.mkdir(parents=True, exist_ok=True)
         file_content = f"{identity}\n"
-        identity_path.write_text(file_content, encoding="utf-8")
+        from ..cli.config_editor import write_secret_file
+        write_secret_file(identity_path, file_content)
         server._set_agent_identity(identity)
 
         return {
             "status": "ok",
             "identity": file_content,
+            "needs_restart": True,
             "path": str(identity_path),
             "filename": identity_path.name,
             "modified": identity_path.stat().st_mtime,
@@ -396,6 +425,7 @@ def register_admin_routes(
         if not config_path.is_file():
             raise HTTPException(status_code=404, detail="config.yaml not found")
 
+        server.config = load_config(Path(server.config_dir))
         masked = _mask_sensitive_fields(server.config)
         yaml_str = pyyaml.safe_dump(masked, sort_keys=False, allow_unicode=False)
 
@@ -417,6 +447,7 @@ def register_admin_routes(
         if not isinstance(new_data, dict):
             raise HTTPException(status_code=400, detail="Config must be a mapping (dictionary)")
 
+        server.config = load_config(Path(server.config_dir))
         _unmask_sensitive_fields(new_data, server.config)
 
         try:
@@ -439,6 +470,7 @@ def register_admin_routes(
         return {
             "status": "ok",
             "config": masked_yaml,
+            "needs_restart": True,
             "path": str(config_path),
             "filename": config_path.name,
             "modified": config_path.stat().st_mtime,
@@ -879,14 +911,15 @@ def register_admin_routes(
         return {"query": query, "results": results}
 
     @app.post("/api/memory/clear", tags=["Monitoring"])
-    async def memory_clear():
+    async def memory_clear(scope: str = "all"):
         server = resolve_admin()
         memory_dir = server._get_memory_root()
-        try:
-            shutil.rmtree(memory_dir)
-        except OSError:
-            pass
-        memory_dir.mkdir(parents=True, exist_ok=True)
+        if scope not in {"all", "daily", "weekly", "monthly", "yearly", "relationships", "notes"}:
+            raise HTTPException(400, "Unknown memory scope")
+        target = memory_dir if scope == "all" else memory_dir / scope
+        if target.exists():
+            shutil.rmtree(target)
+        target.mkdir(parents=True, exist_ok=True)
         return {"status": "ok"}
 
     @app.get("/api/messages/stats", tags=["Monitoring"])

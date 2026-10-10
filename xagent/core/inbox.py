@@ -7,6 +7,8 @@ long-term memory carrier. Observations persist without waking a turn.
 from __future__ import annotations
 
 import asyncio
+import time
+import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional, Union
@@ -110,9 +112,16 @@ class InboxItem:
 class AgentInbox:
     """Per-agent turn lock so one identity never interleaves two live turns."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, max_pending: int = 32, queue_timeout: float = 30.0, run_timeout: float = 600.0) -> None:
         self._turn_lock = asyncio.Lock()
         self._abort = asyncio.Event()
+        self.max_pending = max_pending
+        self.queue_timeout = queue_timeout
+        self.run_timeout = run_timeout
+        self._pending: dict[str, TurnTicket] = {}
+        self._current: TurnTicket | None = None
+        self._steering: list[str] = []
+        self.accepting = True
 
     @property
     def busy(self) -> bool:
@@ -121,22 +130,112 @@ class AgentInbox:
     def abort_requested(self) -> bool:
         return self._abort.is_set()
 
-    def request_abort(self) -> bool:
+    def request_abort(self, turn_id: str | None = None, *, channel: str | None = None) -> bool:
         """Ask the in-flight turn to stop at the next iteration boundary.
 
         Returns True when a turn is busy and the request was recorded.
         Idle calls are a no-op.
         """
-        if not self._turn_lock.locked():
+        current = self._current
+        if current is not None and (turn_id is None or current.turn_id == turn_id) and (channel is None or current.channel == channel):
+            self._abort.set()
+            return True
+        if turn_id is not None:
+            ticket = self._pending.get(turn_id)
+            if ticket is not None and (channel is None or ticket.channel == channel):
+                ticket.cancelled.set()
+                return True
+        return False
+
+    @property
+    def current_turn_id(self) -> str | None:
+        return self._current.turn_id if self._current else None
+
+    @property
+    def pending_count(self) -> int:
+        return len(self._pending)
+
+    def reserve_turn(self, *, turn_id: str | None = None, channel: str | None = None) -> "TurnTicket":
+        if not self.accepting:
+            raise InboxCapacityError("Agent runtime is stopping")
+        if len(self._pending) >= self.max_pending:
+            raise InboxCapacityError("Agent pending queue is full")
+        ticket = TurnTicket(turn_id=turn_id or uuid.uuid4().hex, channel=channel)
+        if ticket.turn_id in self._pending or ticket.turn_id == self.current_turn_id:
+            ticket.turn_id = uuid.uuid4().hex
+        self._pending[ticket.turn_id] = ticket
+        return ticket
+
+    def discard(self, ticket: "TurnTicket") -> None:
+        self._pending.pop(ticket.turn_id, None)
+
+    def stop_accepting(self) -> None:
+        self.accepting = False
+
+    def cancel_pending(self) -> None:
+        for ticket in self._pending.values():
+            ticket.cancelled.set()
+
+    def request_steer(self, turn_id: str, content: str, *, channel: str | None = None) -> bool:
+        current = self._current
+        if current is None or current.turn_id != turn_id or (channel is not None and channel != current.channel):
             return False
-        self._abort.set()
+        self._steering.append(content)
         return True
 
-    async def acquire_turn(self) -> None:
-        await self._turn_lock.acquire()
+    def take_steering(self) -> list[str]:
+        items, self._steering = self._steering, []
+        return items
+
+    async def acquire_turn(self, ticket: "TurnTicket | None" = None) -> None:
+        ticket = ticket or self.reserve_turn()
+        acquire = asyncio.create_task(self._turn_lock.acquire())
+        cancelled = asyncio.create_task(ticket.cancelled.wait())
+        obtained = False
+        try:
+            remaining = max(0.0, self.queue_timeout - (time.monotonic() - ticket.created_at))
+            done, _ = await asyncio.wait({acquire, cancelled}, timeout=remaining, return_when=asyncio.FIRST_COMPLETED)
+            obtained = acquire in done and acquire.result()
+            if ticket.cancelled.is_set():
+                raise InboxCancelledError("Queued turn was cancelled")
+            if not obtained:
+                raise InboxQueueTimeout("Agent turn queue timed out")
+        except BaseException:
+            if obtained or (acquire.done() and not acquire.cancelled() and acquire.result()):
+                self._turn_lock.release()
+            raise
+        finally:
+            self.discard(ticket)
+            acquire.cancel()
+            cancelled.cancel()
+            await asyncio.gather(acquire, cancelled, return_exceptions=True)
+        self._current = ticket
+        self._steering.clear()
         self._abort.clear()
 
     def release_turn(self) -> None:
         self._abort.clear()
+        self._current = None
+        self._steering.clear()
         if self._turn_lock.locked():
             self._turn_lock.release()
+
+
+class InboxCapacityError(RuntimeError):
+    pass
+
+
+class InboxQueueTimeout(TimeoutError):
+    pass
+
+
+class InboxCancelledError(RuntimeError):
+    pass
+
+
+@dataclass
+class TurnTicket:
+    turn_id: str
+    channel: str | None = None
+    created_at: float = field(default_factory=time.monotonic)
+    cancelled: asyncio.Event = field(default_factory=asyncio.Event)

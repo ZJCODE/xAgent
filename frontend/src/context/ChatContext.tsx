@@ -34,6 +34,7 @@ interface ChatContextValue {
   panel: ChatPanelState;
   status: "idle" | "sending";
   capabilities: AgentCapabilities;
+  currentTurnId: string | null;
   updateSettings: (panelId: PanelId, settings: Partial<ChatSettings>) => void;
   addAttachments: (panelId: PanelId, files: FileList | File[]) => void;
   removeAttachment: (panelId: PanelId, index: number) => void;
@@ -188,6 +189,7 @@ function persistSettings(panel: ChatPanelState) {
 export function ChatProvider({ children }: { children: ReactNode }) {
   const [panel, setPanel] = useState<ChatPanelState>(() => createPanel("single"));
   const [capabilities, setCapabilities] = useState<AgentCapabilities>(DEFAULT_CAPABILITIES);
+  const [currentTurnId, setCurrentTurnId] = useState<string | null>(null);
   const socketsRef = useRef<Record<string, WebSocket>>({});
 
   const patchPanel = useCallback((panelId: PanelId, updater: (panel: ChatPanelState) => ChatPanelState) => {
@@ -389,6 +391,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         if (settled) return;
         settled = true;
         delete socketsRef.current[socketKey];
+        setCurrentTurnId(null);
         if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
           socket.close(1000);
         }
@@ -423,6 +426,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           return;
         }
 
+        if (parsed.type === "accepted") {
+          setCurrentTurnId(parsed.turn_id || null);
+          return;
+        }
         if (parsed.type === "aborted") {
           aborted = true;
           return;
@@ -537,6 +544,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         user_id: panel.settings.userId,
         user_message: text,
         stream: panel.settings.stream,
+        event_id: userMessage.id,
       };
       if (attachments.length) payload.attachments = attachments;
       if (canUseVision(capabilities)) {
@@ -551,9 +559,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   );
 
   const stopTurn = useCallback(async () => {
-    if (!panel.sending) return;
-    await stopChat().catch(() => undefined);
-  }, [panel.sending]);
+    if (!panel.sending || !currentTurnId) return;
+    await stopChat(currentTurnId).catch(() => undefined);
+  }, [panel.sending, currentTurnId]);
 
   const sendObservation = useCallback(
     async (panelId: PanelId, rawText: string) => {
@@ -584,7 +592,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             else resolve();
           };
           socket.addEventListener("open", () => {
-            socket.send(JSON.stringify({ context: text, source: "web", event_type: "observation" }));
+            socket.send(JSON.stringify({ context: text, source: "web", event_type: "observation", event_id: observationMessage.id }));
           });
           socket.addEventListener("message", (event) => {
             let parsed: ChatEvent;
@@ -634,6 +642,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       panel,
       status,
       capabilities,
+      currentTurnId,
       updateSettings,
       addAttachments,
       removeAttachment,
@@ -647,6 +656,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       panel,
       status,
       capabilities,
+      currentTurnId,
       updateSettings,
       addAttachments,
       removeAttachment,

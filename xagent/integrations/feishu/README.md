@@ -113,26 +113,21 @@ channels:
 
 ## Run
 
+Configure the channel, then start the Agent's shared core:
+
 ```bash
-# background: managed process with PID and log files
-xagent feishu start
-
-# stop the managed Feishu process for this agent
-xagent feishu stop
-
-# inspect PID, log path, and running state
-xagent feishu status
-
-# follow logs
-xagent feishu logs -f
-
-# explicit agent:
-xagent feishu start --agent work
+xagent feishu setup --agent work
+xagent start --agent work
+xagent status --agent work
+xagent logs --agent work --follow
+xagent stop --agent work
 ```
 
-`xagent feishu start` starts a detached process, writes its PID to
-the selected agent's `run/feishu.pid`, and appends logs to `logs/feishu.log`.
-Use `xagent feishu logs -f` when you want to watch logs live.
+Feishu runs alongside the Agent's other enabled channels. Use
+`xagent run --agent work --channels feishu` for a foreground launch with only
+Feishu selected. There is one owner, scheduler and runtime log per Agent;
+channel connection or reconnect does not recover tasks or reset attention.
+Settings apply after `xagent restart --agent work`.
 
 ## Routing rules
 
@@ -259,20 +254,16 @@ Feishu card; segmented message boundaries are always enabled.
 
 ```python
 import asyncio
-from xagent.interfaces.base import BaseAgentRunner
-from xagent.integrations.feishu import FeishuAdapter, FeishuAdapterConfig
+from xagent.core.runtime.host import RuntimeHost
 
-runner = BaseAgentRunner(config_dir="~/.xagent/agents/default")
-cfg = FeishuAdapterConfig.from_dict(runner.config["channels"]["feishu"])
-adapter = FeishuAdapter(agent=runner.agent, config=cfg)
-asyncio.run(adapter.run())
+asyncio.run(RuntimeHost("~/.xagent/agents/default", channels=["feishu"]).run())
 ```
 
 ## Operational notes
 
 - xAgent runs **in-process** with the adapter. Nothing listens on a public
-  port. Even when you keep the API channel (`xagent api start`) running, it
-  stays bound to `127.0.0.1` — the adapter never goes through HTTP.
+  port unless the public API is enabled. All configured channels share
+  `RuntimeHost`; the Feishu adapter calls the core directly.
 - `run_command` is a built-in xAgent tool with shell-execution capability.
   Audit your `identity.md` and consider running the adapter in a container
   or under a restricted user when exposing the bot to a real Feishu tenant.

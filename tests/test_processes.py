@@ -52,22 +52,28 @@ class ManagedProcessTests(unittest.TestCase):
                 }
 
                 self.assertIn(("web", None, None), labels)
-                self.assertIn(("agent", "default", "api"), labels)
-                self.assertIn(("agent", "work", "feishu"), labels)
+                self.assertEqual(labels, {("web", None, None),
+                                          ("agent", "default", "runtime"),
+                                          ("agent", "work", "runtime")})
+                for ref in refs:
+                    if ref.scope == "agent":
+                        self.assertEqual(ref.pid_path, ref.config_dir / "run" / "runtime.pid")
+                        self.assertEqual(ref.log_path, ref.config_dir / "logs" / "runtime.log")
 
     def test_iter_managed_process_refs_falls_back_to_agents_directory(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir).resolve()
             agent_dir = root / "agents" / "legacy"
-            pid_path = agent_dir / "run" / "api.pid"
+            pid_path = agent_dir / "run" / "runtime.pid"
             pid_path.parent.mkdir(parents=True)
             pid_path.write_text("42\n", encoding="utf-8")
 
             refs = iter_managed_process_refs(root=root)
-            api_refs = [ref for ref in refs if ref.agent == "legacy" and ref.channel == "api"]
+            runtime_refs = [ref for ref in refs if ref.agent == "legacy" and ref.channel == "runtime"]
 
-            self.assertEqual(len(api_refs), 1)
-            self.assertEqual(api_refs[0].config_dir, agent_dir.resolve())
+            self.assertEqual(len(runtime_refs), 1)
+            self.assertEqual(runtime_refs[0].config_dir, agent_dir.resolve())
+            self.assertEqual(runtime_refs[0].pid_path, pid_path)
 
     def test_processes_status_json_reports_running_count_and_exit_code(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -99,10 +105,6 @@ class ManagedProcessTests(unittest.TestCase):
             web_pid = root / "run" / "web.pid"
             web_pid.parent.mkdir(parents=True)
             web_pid.write_text("99\n", encoding="utf-8")
-            api_pid = root / "agents" / "default" / "run" / "api.pid"
-            api_pid.parent.mkdir(parents=True)
-            api_pid.write_text("100\n", encoding="utf-8")
-
             from xagent.interfaces.cli.processes import ManagedProcessRef
 
             running_ref = ManagedProcessRef(
@@ -110,15 +112,6 @@ class ManagedProcessTests(unittest.TestCase):
                 pid_path=web_pid,
                 log_path=root / "logs" / "web.log",
             )
-            stopped_ref = ManagedProcessRef(
-                scope="agent",
-                agent="default",
-                channel="api",
-                config_dir=root / "agents" / "default",
-                pid_path=api_pid,
-                log_path=root / "agents" / "default" / "logs" / "api.log",
-            )
-
             args = argparse.Namespace(json_output=False)
             with patch("xagent.interfaces.cli.processes_status.iter_running_process_refs", return_value=[running_ref]):
                 with patch("xagent.interfaces.cli.processes_status.stop_managed_process", return_value=(True, "stopped")):
@@ -126,13 +119,56 @@ class ManagedProcessTests(unittest.TestCase):
                         "xagent.interfaces.cli.processes_status._start_background_web",
                         return_value=(True, False),
                     ) as web_restart:
-                        with patch("xagent.interfaces.cli.processes_status._start_background_channel") as channel_restart:
+                        with patch("xagent.interfaces.cli.processes_status.start_runtime") as runtime_restart:
                             with patch("sys.stdout", new_callable=io.StringIO):
                                 exit_code = handle_processes_restart(args)
 
             self.assertEqual(exit_code, 0)
             web_restart.assert_called_once()
-            channel_restart.assert_not_called()
+            runtime_restart.assert_not_called()
+
+    def test_processes_restart_restarts_one_runtime_per_agent(self):
+        import argparse
+        from xagent.interfaces.cli.processes import ManagedProcessRef
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_dir = Path(tmpdir).resolve() / "agents" / "work"
+            ref = ManagedProcessRef(scope="agent", agent="work", channel="runtime",
+                                    config_dir=config_dir, pid_path=config_dir / "run" / "runtime.pid",
+                                    log_path=config_dir / "logs" / "runtime.log")
+            calls = []
+            def stop(path):
+                calls.append(("stop", path))
+                return True, "stopped"
+            def start(root):
+                calls.append(("start", root))
+                return {"status": "running"}
+            with patch("xagent.interfaces.cli.processes_status.iter_running_process_refs", return_value=[ref]), patch(
+                "xagent.interfaces.cli.processes_status.stop_managed_process", side_effect=stop,
+            ), patch("xagent.interfaces.cli.processes_status.start_runtime", side_effect=start), patch(
+                "xagent.interfaces.cli.processes_status._start_background_web",
+            ) as web_restart, patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = handle_processes_restart(argparse.Namespace(json_output=True))
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(calls, [("stop", ref.pid_path), ("start", config_dir)])
+            self.assertEqual(json.loads(stdout.getvalue())["restarted"][0]["label"], "work/runtime")
+            web_restart.assert_not_called()
+
+    def test_processes_restart_does_not_start_runtime_if_shutdown_fails(self):
+        import argparse
+        from xagent.interfaces.cli.processes import ManagedProcessRef
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            ref = ManagedProcessRef(scope="agent", agent="work", channel="runtime", config_dir=root,
+                                    pid_path=root / "runtime.pid", log_path=root / "runtime.log")
+            with patch("xagent.interfaces.cli.processes_status.iter_running_process_refs", return_value=[ref]), patch(
+                "xagent.interfaces.cli.processes_status.stop_managed_process", return_value=(False, "still draining"),
+            ), patch("xagent.interfaces.cli.processes_status.start_runtime") as start, patch(
+                "sys.stdout", new_callable=io.StringIO,
+            ) as stdout:
+                exit_code = handle_processes_restart(argparse.Namespace(json_output=True))
+            self.assertEqual(exit_code, 1)
+            self.assertEqual(json.loads(stdout.getvalue())["restarted"][0]["message"], "still draining")
+            start.assert_not_called()
 
     def test_process_status_row_marks_running_and_stopped(self):
         with tempfile.TemporaryDirectory() as tmpdir:

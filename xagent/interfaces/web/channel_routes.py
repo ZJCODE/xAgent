@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import asyncio
 from pathlib import Path
 from typing import Any, Callable, Literal
 
@@ -66,10 +67,18 @@ def register_channel_routes(
     async def list_channels():
         config_dir = resolve_config_dir().expanduser().resolve()
         config = _safe_load_config(config_dir)
-        return {
-            "config_dir": str(config_dir),
-            "channels": [_channel_status(config_dir, config, channel) for channel in MANAGED_CHANNELS],
-        }
+        from ..cli.agent_runtime import runtime_status
+        runtime = await runtime_status(config_dir)
+        rows = [_channel_status(config_dir, config, channel) for channel in MANAGED_CHANNELS]
+        states = runtime.get("channels", {})
+        for row in rows:
+            state = states.get(row["id"], {})
+            if isinstance(state, dict) and state:
+                raw_status = state.get("status", "stopped")
+                row["status"] = {"connected": "running", "failed": "error"}.get(raw_status, raw_status)
+                row["detail"] = state.get("error") or row["detail"]
+            row.update(can_start=False, can_stop=False, can_restart=False)
+        return {"config_dir": str(config_dir), "channels": rows, "runtime": runtime}
 
     if session is not None:
         @app.get("/api/channels/{channel}/setup-schema", tags=["Channels"])
@@ -124,88 +133,42 @@ def register_channel_routes(
             manager.cancel(session_id)
             return {"status": "ok", "session_id": session_id}
 
-    @app.post("/api/channels/{channel}/start", tags=["Channels"])
-    async def start_channel(channel: str):
-        channel = _normalize_channel(channel)
-        config_dir = resolve_config_dir().expanduser().resolve()
-        config = _safe_load_config(config_dir)
-        status = _channel_status(config_dir, config, channel)
-        if not status["ready"]:
-            raise HTTPException(
-                status_code=400,
-                detail=f"{status['label']} is not configured. Set it up from the Channels page.",
-            )
-        if status["pid"] is not None:
-            return {"status": "ok", "message": f"{channel} already running", "channel": status}
+    @app.get("/api/runtime", tags=["Runtime"])
+    async def get_runtime():
+        from ..cli.agent_runtime import runtime_status
+        return await runtime_status(resolve_config_dir())
 
-        paths = managed_paths(config_dir, channel)
-        result = start_background(
-            _channel_command(channel, config_dir),
-            pid_path=paths.pid_path,
-            log_path=paths.log_path,
-        )
-        if not result.ok:
-            detail = result.error or f"Failed to start {channel}"
-            if result.recent_output:
-                detail = f"{detail}\n{result.recent_output}"
-            raise HTTPException(status_code=500, detail=detail)
+    @app.post("/api/runtime/start", tags=["Runtime"])
+    async def start_agent():
+        from ..cli.agent_runtime import start_runtime
+        try:
+            return await asyncio.to_thread(start_runtime, resolve_config_dir())
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
 
-        updated = _channel_status(config_dir, _safe_load_config(config_dir), channel)
-        return {"status": "ok", "message": f"started {channel}", "channel": updated}
+    @app.post("/api/runtime/stop", tags=["Runtime"])
+    async def stop_agent():
+        from ..cli.agent_runtime import stop_runtime
+        try:
+            return await stop_runtime(resolve_config_dir())
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
 
-    @app.post("/api/channels/{channel}/stop", tags=["Channels"])
-    async def stop_channel(channel: str):
-        channel = _normalize_channel(channel)
-        config_dir = resolve_config_dir().expanduser().resolve()
-        paths = managed_paths(config_dir, channel)
-        stopped, message = stop_managed_process(paths.pid_path)
-        if not stopped:
-            raise HTTPException(status_code=500, detail=message)
-        updated = _channel_status(config_dir, _safe_load_config(config_dir), channel)
-        return {"status": "ok", "message": message, "channel": updated}
+    @app.post("/api/runtime/restart", tags=["Runtime"])
+    async def restart_agent():
+        await stop_agent()
+        return await start_agent()
 
-    @app.post("/api/channels/{channel}/restart", tags=["Channels"])
-    async def restart_channel(channel: str):
-        channel = _normalize_channel(channel)
-        config_dir = resolve_config_dir().expanduser().resolve()
-        config = _safe_load_config(config_dir)
-        status = _channel_status(config_dir, config, channel)
-        if not status["ready"]:
-            raise HTTPException(
-                status_code=400,
-                detail=f"{status['label']} is not configured. Set it up from the Channels page.",
-            )
-
-        paths = managed_paths(config_dir, channel)
-        stopped, message = stop_managed_process(paths.pid_path)
-        if not stopped:
-            raise HTTPException(status_code=500, detail=message)
-
-        result = start_background(
-            _channel_command(channel, config_dir),
-            pid_path=paths.pid_path,
-            log_path=paths.log_path,
-        )
-        if not result.ok:
-            detail = result.error or f"Failed to restart {channel}"
-            if result.recent_output:
-                detail = f"{detail}\n{result.recent_output}"
-            raise HTTPException(status_code=500, detail=detail)
-
-        updated = _channel_status(config_dir, _safe_load_config(config_dir), channel)
-        return {"status": "ok", "message": f"restarted {channel}", "channel": updated}
+    @app.get("/api/runtime/logs", tags=["Runtime"])
+    async def runtime_logs(lines: int = Query(80, ge=1, le=1000)):
+        from ...core.runtime.ownership import runtime_paths
+        path = runtime_paths(resolve_config_dir()).log_path
+        return {"log_path": str(path), "text": tail_text(path, max_lines=lines), "lines": lines}
 
     @app.get("/api/channels/{channel}/logs", tags=["Channels"])
-    async def channel_logs(channel: str, lines: int = Query(80, ge=1, le=500)):
-        channel = _normalize_channel(channel)
-        config_dir = resolve_config_dir().expanduser().resolve()
-        paths = managed_paths(config_dir, channel)
-        return {
-            "channel": channel,
-            "log_path": str(paths.log_path),
-            "text": tail_text(paths.log_path, max_lines=lines),
-            "lines": lines,
-        }
+    async def channel_logs(channel: str, lines: int = Query(80, ge=1, le=1000)):
+        _normalize_channel(channel)
+        return {"channel": channel, **await runtime_logs(lines)}
 
 
 def _normalize_channel(channel: str) -> str:
@@ -242,7 +205,7 @@ def _channel_command(channel: str, config_dir: Path) -> list[str]:
 
 
 def _channel_status(config_dir: Path, config: dict[str, Any], channel: str) -> dict[str, Any]:
-    paths = managed_paths(config_dir, channel)
+    paths = managed_paths(config_dir, "runtime")
     pid = running_pid(paths.pid_path)
     configured, ready, detail, _setup_hint = _readiness(config, channel)
     runtime_status = "running" if pid is not None else "stopped"

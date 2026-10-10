@@ -85,11 +85,12 @@ class WebAgentSession:
         return self._current_name
 
     def list_agents(self) -> List[Dict[str, Any]]:
+        from ...core.runtime.ownership import runtime_is_active
         registry = self._load_registry()
         current = self._current_name
         rows: List[Dict[str, Any]] = []
         for name, entry in sorted(registry.agents.items()):
-            pid = running_pid(managed_paths(entry.path, CHANNEL_API).pid_path)
+            active = runtime_is_active(entry.path)
             rows.append({
                 "name": name,
                 "title": entry.title,
@@ -98,7 +99,8 @@ class WebAgentSession:
                 "active": name == registry.active_agent,
                 "selected": name == current,
                 "initialized": _is_agent_initialized(entry.path),
-                "channel_running": pid is not None,
+                "channel_running": active,
+                "runtime_running": active,
             })
         return rows
 
@@ -228,6 +230,16 @@ class WebAgentSession:
         if name is None:
             return self._initial_api_url
         return self._api_url_for_agent(name, self._entry_path(name))
+
+    def get_current_runtime_root(self) -> Optional[Path]:
+        from urllib.parse import urlparse
+        host = urlparse(self.get_current_api_url()).hostname
+        if host not in {"localhost", "127.0.0.1", "0.0.0.0", "::1"}:
+            return None
+        try:
+            return self.get_current_config_dir()
+        except HTTPException:
+            return None
 
     def _api_url_for_agent(self, name: str, entry_path: Path) -> str:
         if name == self._initial_agent_name and self._initial_api_url:

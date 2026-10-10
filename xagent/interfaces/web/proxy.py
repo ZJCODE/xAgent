@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import json
+from pathlib import Path
 from typing import Callable
 from urllib.parse import urljoin
 
 import httpx
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
-from starlette.responses import Response
+from starlette.responses import JSONResponse, Response
 
 from ..cli.web_client import api_url_to_ws_url
 
@@ -29,6 +31,7 @@ def register_api_proxy(
     app: FastAPI,
     *,
     resolve_api_url: Callable[[], str],
+    resolve_runtime_root: Callable[[], Path | None] | None = None,
     logger: logging.Logger | None = None,
 ) -> None:
     """Forward chat/observe/health traffic to whichever agent is currently selected.
@@ -43,6 +46,9 @@ def register_api_proxy(
 
     def _make_root_proxy(route_path: str):
         async def handler(request: Request):
+            root = resolve_runtime_root() if resolve_runtime_root is not None else None
+            if root is not None:
+                return await _local_http_request(request, route_path, root)
             upstream = resolve_api_url().rstrip("/")
             return await _proxy_http_request(request, f"{upstream}{route_path}")
 
@@ -66,6 +72,10 @@ def register_api_proxy(
     @app.websocket("/ws/{path:path}")
     async def proxy_websocket(websocket: WebSocket, path: str):
         await websocket.accept()
+        root = resolve_runtime_root() if resolve_runtime_root is not None else None
+        if root is not None:
+            await _local_websocket(websocket, path, root, logger)
+            return
         upstream = resolve_api_url().rstrip("/")
         ws_upstream = api_url_to_ws_url(upstream)
         query = websocket.scope.get("query_string", b"").decode()
@@ -94,6 +104,100 @@ def register_api_proxy(
                 await websocket.close(code=1011, reason=str(exc))
 
     logger.info("Proxying chat/observe traffic to the currently selected agent's api channel")
+
+
+def _chat_kwargs(payload: dict) -> dict:
+    from ..server.models import AgentInput
+    from ...integrations.api.input_normalization import input_attachments, input_image_sources
+    data = AgentInput.model_validate(payload)
+    attachments = input_attachments(data)
+    return {
+        "user_message": data.user_message, "user_id": data.user_id,
+        "channel": "api", "stream": bool(data.stream), "attachments": attachments,
+        "image_source": input_image_sources(data, attachments=attachments),
+        "event_id": getattr(data, "event_id", None) or getattr(data, "request_id", None),
+        "turn_id": getattr(data, "turn_id", None),
+        "request_id": getattr(data, "request_id", None),
+    }
+
+
+async def _local_http_request(request: Request, path: str, root: Path) -> Response:
+    from ...core.runtime.client import RuntimeClient
+    from ..cli.agent_runtime import ensure_runtime
+    try:
+        client = RuntimeClient(root)
+        if path in {"/health", "/i/health"}:
+            status = await client.status()
+            return JSONResponse({**status, "status": status.get("status") or status.get("state", "unknown"),
+                                 "service": "xAgent Runtime"})
+        payload = await request.json()
+        if path == "/chat/stop":
+            if not payload.get("turn_id"):
+                return JSONResponse({"detail": "turn_id is required"}, status_code=422)
+            return JSONResponse(await client.abort(turn_id=payload["turn_id"], channel="api"))
+        client = await ensure_runtime(root)
+        if path == "/observe":
+            return JSONResponse(await client.observe(**payload))
+        final = ""
+        identifiers = {}
+        async for event in client.chat_events(**_chat_kwargs(payload)):
+            identifiers.update({key: event[key] for key in ("turn_id", "event_id", "request_id") if event.get(key)})
+            if event.get("type") == "error":
+                return JSONResponse(event, status_code=int(event.get("status_code") or 500))
+            if event.get("type") == "message_done":
+                final = str(event.get("content") or "")
+        return JSONResponse({"reply": final, **identifiers})
+    except httpx.HTTPStatusError as exc:
+        return Response(exc.response.content, status_code=exc.response.status_code, media_type="application/json")
+    except ValueError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=422)
+    except Exception as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=503)
+
+
+async def _local_websocket(websocket: WebSocket, path: str, root: Path, logger) -> None:
+    from ..cli.agent_runtime import ensure_runtime
+    from ...core.runtime.client import RuntimeClient
+    from ...core.runtime.ownership import runtime_is_active
+    try:
+        if path == "tasks":
+            # Passive subscriptions must keep offline browsing model-free.
+            if not runtime_is_active(root):
+                await websocket.close(code=1013, reason="Agent is offline")
+                return
+            client = RuntimeClient(root)
+            user_id = websocket.query_params.get("user_id") or "web_user"
+            async with client._client(timeout=None) as transport:
+                async with transport.stream("GET", "/runtime/events", params={"user_id": user_id}) as response:
+                    response.raise_for_status()
+                    async for line in response.aiter_lines():
+                        if line.strip():
+                            event = json.loads(line)
+                            if event.get("type") != "keepalive":
+                                await websocket.send_json(event)
+            return
+        if path not in {"chat", "observe"}:
+            await websocket.close(code=1008, reason="Unknown runtime stream")
+            return
+        client = await ensure_runtime(root)
+        while True:
+            payload = await websocket.receive_json()
+            try:
+                if path == "chat":
+                    async for event in client.chat_events(**_chat_kwargs(payload)):
+                        await websocket.send_json(event)
+                else:
+                    await websocket.send_json({"type": "result", "result": await client.observe(**payload)})
+                    await websocket.send_json({"type": "done"})
+            except ValueError as exc:
+                await websocket.send_json({"type": "error", "error": str(exc), "status_code": 422})
+                await websocket.send_json({"type": "done"})
+    except WebSocketDisconnect:
+        return
+    except Exception as exc:
+        logger.warning("Local Agent stream failed: %s", exc)
+        if websocket.client_state.name == "CONNECTED":
+            await websocket.close(code=1011, reason="Agent runtime unavailable")
 
 
 async def _proxy_http_request(request: Request, target: str) -> Response:
@@ -158,6 +262,7 @@ async def _relay_websockets(client_ws: WebSocket, upstream_ws) -> None:
     done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
     for task in pending:
         task.cancel()
+    await asyncio.gather(*pending, return_exceptions=True)
     for task in done:
         exc = task.exception()
         if exc and not isinstance(exc, WebSocketDisconnect):

@@ -18,6 +18,7 @@ from xagent.core.runtime import (
     AsyncTaskScheduler,
     ScheduledDeliveryContext,
     ScheduledTaskRecord,
+    current_delivery_context,
     SubconsciousDelivery,
     resolve_contacts_path,
     scheduled_delivery_context,
@@ -182,15 +183,12 @@ class VoiceRuntime:
         self._floor = ConversationFloor()
         self._utterance_queue: asyncio.Queue[VoiceUtterance | None] | None = None
         self._steer_result: asyncio.Future[str] | None = None
+        self._active_voice_turn_id: str | None = None
+        self._preemptive_turn_id: str | None = None
         self.task_scheduler: AsyncTaskScheduler | None = None
-        self._allow_proactive_output = bool(options.allow_proactive_output)
+        self._allow_proactive_output = bool(self.options.allow_proactive_output)
         self._contacts_file: Optional[Path] = None
         if self._allow_proactive_output and self.options.tasks_dir is not None:
-            self.task_scheduler = AsyncTaskScheduler(
-                self.options.tasks_dir,
-                can_handle=self._can_handle_scheduled_task,
-                dispatch=self._dispatch_scheduled_task,
-            )
             runtime_root = Path(self.options.tasks_dir).parent
             self._contacts_file = resolve_contacts_path(runtime_root)
         attention_cfg = VoiceAttentionConfig(
@@ -213,10 +211,10 @@ class VoiceRuntime:
                 enabled=performance.preemptive_generation,
                 min_chars=performance.preemptive_min_chars,
             ),
-            on_abort=abort_turn if callable(abort_turn) else None,
+            on_abort=self._abort_preemptive_turn if callable(abort_turn) else None,
         )
         self._preemptive.configure(
-            self.agent.chat_events,
+            self._preemptive_events,
             stream=self.options.stream,
             channel="voice",
             inbox_kind="user_turn",
@@ -244,6 +242,9 @@ class VoiceRuntime:
         self._event_loop = asyncio.get_running_loop()
         await self._refresh_stt_context_terms()
         self.output("xAgent voice ready. Speak to the microphone; press Ctrl+C to stop.")
+        callback = getattr(self, "runtime_status", None)
+        if callback:
+            callback("connected")
         audio_chunks = self.microphone.iter_chunks(
             pause_event=self.pause_event,
             stop_event=self.stop_event,
@@ -265,8 +266,6 @@ class VoiceRuntime:
         utterance_worker = asyncio.create_task(self._utterance_worker(utterances))
         preemptive_worker = asyncio.create_task(self._preemptive_partial_loop())
         try:
-            if self.task_scheduler is not None:
-                await self.task_scheduler.start()
             while not self.stop_event.is_set():
                 utterance = await self._utterance_queue.get()
                 if utterance is None:
@@ -303,8 +302,6 @@ class VoiceRuntime:
             if callable(close_player):
                 close_player()
             await self._preemptive.cancel()
-            if self.task_scheduler is not None:
-                await self.task_scheduler.stop()
             preemptive_worker.cancel()
             utterance_worker.cancel()
             await asyncio.gather(preemptive_worker, utterance_worker, return_exceptions=True)
@@ -321,6 +318,33 @@ class VoiceRuntime:
     def _duplex_capture_enabled(self) -> bool:
         return bool(self.config.enable_interruptions) and not self._self_interruption.tripped
 
+    def _abort_voice_turn(self) -> None:
+        self._abort_matching_voice_turn(self._active_voice_turn_id)
+
+    def _abort_preemptive_turn(self) -> None:
+        self._abort_matching_voice_turn(self._preemptive_turn_id)
+
+    def _abort_matching_voice_turn(self, turn_id: str | None) -> None:
+        abort = getattr(self.agent, "abort", None)
+        if callable(abort):
+            if hasattr(self.agent, "inbox"):
+                if turn_id:
+                    abort(turn_id, channel="voice")
+            else:
+                abort()
+
+    async def _preemptive_events(self, **kwargs):
+        own_id = None
+        try:
+            async for event in self.agent.chat_events(**kwargs):
+                if event.get("type") == "accepted":
+                    own_id = event.get("turn_id")
+                    self._preemptive_turn_id = own_id
+                yield event
+        finally:
+            if self._preemptive_turn_id == own_id:
+                self._preemptive_turn_id = None
+
     async def _execute_floor_commands(self, commands) -> None:
         for command in commands:
             if command.kind is FloorCommandKind.MIC_MUTE:
@@ -328,9 +352,7 @@ class VoiceRuntime:
             elif command.kind is FloorCommandKind.MIC_OPEN:
                 self.pause_event.clear()
             elif command.kind is FloorCommandKind.CANCEL_AGENT:
-                abort = getattr(self.agent, "abort", None)
-                if callable(abort):
-                    abort()
+                self._abort_voice_turn()
             elif command.kind is FloorCommandKind.CANCEL_TTS:
                 self.synthesizer.cancel()
             elif command.kind is FloorCommandKind.EMIT_NOTICE:
@@ -437,6 +459,10 @@ class VoiceRuntime:
             addition = nxt.text.strip()
             if not addition:
                 continue
+            steer = getattr(self.agent, "steer", None)
+            if self._active_voice_turn_id and callable(steer):
+                if await steer(self._active_voice_turn_id, addition, channel="voice"):
+                    return
             merged = f"{merged} {addition}".strip()
             await self._execute_floor_commands(
                 self._floor.handle(FloorEvent(FloorEventKind.STT_ENDPOINT, text=merged))
@@ -957,6 +983,10 @@ class VoiceRuntime:
             source = event_source if event_source is not None else _live_events()
             async for event in source:
                 event_type = event.get("type")
+                if event_type == "accepted":
+                    self._active_voice_turn_id = event.get("turn_id")
+                elif event_type in {"done", "aborted", "error"}:
+                    self._active_voice_turn_id = None
                 message_id = str(event.get("message_id") or uuid.uuid4().hex)
                 if event_type == "message_delta":
                     delta = str(event.get("delta") or "")
@@ -1005,6 +1035,7 @@ class VoiceRuntime:
             user_id=task.delivery_user_id or self.options.user_id,
             target=task.delivery.get("target") if isinstance(task.delivery.get("target"), dict) else {},
             metadata={
+                **(current_delivery_context().metadata if current_delivery_context() else {}),
                 "source": "scheduled_task",
                 "task_id": task.task_id,
                 "task_name": task.name,
@@ -1016,19 +1047,37 @@ class VoiceRuntime:
         return self._allow_proactive_output and task.kind == "task" and task.delivery_channel == "voice"
 
     async def _dispatch_scheduled_task(self, task: ScheduledTaskRecord) -> None:
+        from xagent.core.runtime.task_receipts import occurrence_run_id
+        result = await self.execute_scheduled_task(task)
+        await self.deliver_scheduled_task(task, result, occurrence_run_id(task.task_id, task.run_at))
+
+    async def execute_scheduled_task(self, task: ScheduledTaskRecord) -> dict[str, Any]:
+        text = await self._scheduled_task_text(task)
+        if not text:
+            raise ValueError("scheduled voice task produced no content")
+        return {"content": text, "attachments": []}
+
+    async def deliver_scheduled_task(self, task: ScheduledTaskRecord, result: dict[str, Any], run_id: str) -> dict[str, Any]:
         if not self._proactive_speech_allowed():
             raise ValueError("proactive voice output blocked by floor or rate cap")
-        text = await self._scheduled_task_text(task)
+        text = str(result.get("content") or "")
         if not text:
             raise ValueError("scheduled voice task produced no content")
         self.output(f"\nScheduled task: {task.title or task.task_type or 'Reminder'}")
         spoken = sanitize_spoken_text(text)
         self._language_tracker.observe_reply(spoken)
+        metrics = VoiceTurnMetrics(transcript="scheduled task", reply_char_count=len(spoken))
         await self._speak(
             _single_text_stream(spoken),
             language=self._language_tracker.language_before_turn(),
+            reply_buffer=[spoken], metrics=metrics,
         )
+        if metrics.playback_audio_bytes <= 0 or self.stop_event.is_set():
+            from xagent.core.runtime.task_receipts import DeliveryUncertainError
+            raise DeliveryUncertainError("scheduled voice playback was not confirmed")
         self._proactive_limiter.record()
+        return {"accepted": True, "transport": "voice", "playback_completed": True,
+                "audio_bytes": metrics.playback_audio_bytes, "run_id": run_id}
 
     async def deliver_subconscious_message(self, delivery: SubconsciousDelivery) -> None:
         if delivery.recipient.channel != "voice":
@@ -1123,30 +1172,24 @@ class VoiceRuntime:
 
         prompt = str(task.content or "").strip()
         with scheduled_delivery_context(self._delivery_context(task=task)):
-            parts: list[str] = []
-            message_delta_seen: set[str] = set()
+            final_content = ""
             async for event in self.agent.chat_events(
                 user_message=prompt,
                 user_id=task.delivery_user_id or self.options.user_id or AgentConfig.DEFAULT_USER_ID,
-                stream=self.options.stream,
+                stream=False,
                 channel="voice",
                 inbox_kind="scheduled_turn",
                 channel_instructions=VOICE_CHANNEL_INSTRUCTIONS,
             ):
                 event_type = event.get("type")
-                message_id = str(event.get("message_id") or uuid.uuid4().hex)
-                if event_type == "message_delta":
-                    delta = str(event.get("delta") or "")
-                    if delta:
-                        message_delta_seen.add(message_id)
-                        parts.append(delta)
-                elif event_type == "message_done" and message_id not in message_delta_seen:
-                    content = str(event.get("content") or "")
-                    if content:
-                        parts.append(content)
+                if event_type in {"error", "aborted"} and event.get("needs_review"):
+                    from xagent.core.runtime.task_receipts import DeliveryUncertainError
+                    raise DeliveryUncertainError(str(event.get("error") or "scheduled tool outcome is unknown"))
+                if event_type == "message_done" and str(event.get("phase") or "final") == "final":
+                    final_content = str(event.get("content") or "").strip()
                 elif event_type == "error":
                     raise RuntimeError(str(event.get("error") or "Agent processing error."))
-            return "".join(parts).strip()
+            return final_content
 
 
 async def _single_text_stream(text: str) -> AsyncIterator[str]:

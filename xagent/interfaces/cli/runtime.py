@@ -90,28 +90,12 @@ def handle_chat(args: argparse.Namespace) -> int:
 
 
 def handle_voice(args: argparse.Namespace) -> int:
-    if getattr(args, "verbose", False):
-        logging.getLogger().setLevel(logging.INFO)
-        logging.getLogger("xagent").setLevel(logging.INFO)
-    else:
-        logging.getLogger().setLevel(logging.CRITICAL)
-        logging.getLogger("xagent").setLevel(logging.CRITICAL)
-
-    try:
-        if getattr(args, "list_devices", False):
-            from ..voice.audio import list_audio_devices_text
-
-            print(list_audio_devices_text())
-            return 0
-
-        config = load_runtime_config(args)
-    except ChannelSelectionError as exc:
-        return _handle_channel_error(exc)
-    except Exception as exc:
-        print(f"Failed to start voice channel: {exc}")
-        return 1
-
-    return _run_voice_channel(args, config)
+    if getattr(args, "list_devices", False):
+        from ..voice.audio import list_audio_devices_text
+        print(list_audio_devices_text())
+        return 0
+    print("Configure voice with xagent voice setup; run it with xagent run --channels voice.")
+    return 0
 
 
 def _channel_arg_values(args: argparse.Namespace) -> Optional[list[str]]:
@@ -588,24 +572,13 @@ def _run_voice_channel(args: argparse.Namespace, config: dict[str, Any]) -> int:
 
 
 def _run_channel(channel: str, args: argparse.Namespace, config: dict[str, Any]) -> int:
-    if channel == CHANNEL_API:
-        return _run_api_channel(args, config)
-    if channel == CHANNEL_FEISHU:
-        return _run_feishu_channel(args, config)
-    if channel == CHANNEL_WEIXIN:
-        return _run_weixin_channel(args, config)
-    if channel == CHANNEL_VOICE:
-        return _run_voice_channel(args, config)
-    print(f"Unknown channel: {channel}")
+    print("Independent channel processes have been removed. Use xagent run --agent <name>.")
     return 1
 
 
 def handle_run_channel_internal(args: argparse.Namespace) -> int:
-    try:
-        config = load_runtime_config(args)
-    except ChannelSelectionError as exc:
-        return _handle_channel_error(exc)
-    return _run_channel(args.channel, args, config)
+    print("Independent channel processes have been removed. Use xagent run --agent <name>.")
+    return 1
 
 
 def handle_run_web_internal(args: argparse.Namespace) -> int:
@@ -617,202 +590,47 @@ def handle_run_web_internal(args: argparse.Namespace) -> int:
 
 
 def handle_run(args: argparse.Namespace) -> int:
-    try:
-        channels, config = _select_channels(args, default="auto")
-    except ChannelSelectionError as exc:
-        return _handle_channel_error(exc)
-
-    if len(channels) == 1:
-        return _run_channel(channels[0], args, config)
-
-    processes: list[subprocess.Popen] = []
-    try:
-        for channel in channels:
-            print(f"Starting {channel} channel in foreground...")
-            process = subprocess.Popen(_channel_command(channel, args))
-            processes.append(process)
-        while processes:
-            for process in list(processes):
-                return_code = process.poll()
-                if return_code is not None:
-                    processes.remove(process)
-                    if return_code != 0:
-                        return return_code
-            time.sleep(0.2)
-    except KeyboardInterrupt:
-        print("Stopping foreground channels...")
-        for process in processes:
-            if process.poll() is None:
-                process.terminate()
-        for process in processes:
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                process.kill()
-        return 0
-    return 0
-
+    from .agent_runtime import handle_run as handler
+    return handler(args)
 
 def _start_background_channels(args: argparse.Namespace, channels: list[str]) -> int:
-    ok = True
-    config_dir = runtime_dir(args)
-    for channel in channels:
-        if not _start_background_channel(args, channel=channel, config_dir=config_dir):
-            ok = False
-    return 0 if ok else 1
+    from .agent_runtime import start_runtime
+    try:
+        start_runtime(runtime_dir(args), channels=channels)
+        return 0
+    except Exception as exc:
+        print(f"Cannot start Agent: {exc}")
+        return 1
 
 
 def _start_background_channel(args: argparse.Namespace, *, channel: str, config_dir: Path | None = None) -> bool:
-    runtime_root = config_dir or runtime_dir(args)
-    paths = managed_paths(runtime_root, channel)
-    result = start_background(
-        _channel_command(channel, args),
-        pid_path=paths.pid_path,
-        log_path=paths.log_path,
-    )
-    if result.ok:
-        print(f"Started {channel} channel in background (pid={result.pid}).")
-        print(f"Logs: {paths.log_path}")
+    from .agent_runtime import start_runtime
+    try:
+        start_runtime(config_dir or runtime_dir(args), channels=[channel])
         return True
-
-    print(f"Failed to start {channel} channel: {result.error}")
-    if result.recent_output:
-        print(result.recent_output)
-    return False
+    except Exception as exc:
+        print(f"Cannot start Agent: {exc}")
+        return False
 
 
 def handle_start(args: argparse.Namespace) -> int:
-    try:
-        channels, _config = _select_channels(args, default="auto")
-    except ChannelSelectionError as exc:
-        return _handle_channel_error(exc)
-
-    return _start_background_channels(args, channels)
-
+    from .agent_runtime import handle_start as handler
+    return handler(args)
 
 def handle_stop(args: argparse.Namespace) -> int:
-    try:
-        channels, _config = _select_channels(args, default="auto")
-    except ChannelSelectionError as exc:
-        return _handle_channel_error(exc)
-
-    ok = True
-    config_dir = runtime_dir(args)
-    for channel in channels:
-        paths = managed_paths(config_dir, channel)
-        stopped, message = stop_managed_process(paths.pid_path)
-        ok = ok and stopped
-        print(f"{channel}: {message}")
-    return 0 if ok else 1
-
+    from .agent_runtime import handle_stop as handler
+    return handler(args)
 
 def handle_restart(args: argparse.Namespace) -> int:
-    try:
-        channels, _config = _select_channels(args, default="auto")
-    except ChannelSelectionError as exc:
-        return _handle_channel_error(exc)
-
-    ok = True
-    config_dir = runtime_dir(args)
-    restart_values = dict(vars(args))
-
-    for channel in channels:
-        paths = managed_paths(config_dir, channel)
-        stopped, message = stop_managed_process(paths.pid_path)
-        print(f"{channel}: {message}")
-        if not stopped:
-            ok = False
-            continue
-        restart_values["channels"] = [channel]
-        restart_args = argparse.Namespace(**restart_values)
-        if not _start_background_channel(restart_args, channel=channel, config_dir=config_dir):
-            ok = False
-
-    return 0 if ok else 1
-
+    from .agent_runtime import handle_restart as handler
+    return handler(args)
 
 def handle_status(args: argparse.Namespace) -> int:
-    try:
-        channels, _config = _select_channels(args, default="auto")
-    except ChannelSelectionError as exc:
-        return _handle_channel_error(exc)
-
-    config_dir = runtime_dir(args)
-    rows: list[dict[str, Any]] = []
-    for channel in channels:
-        paths = managed_paths(config_dir, channel)
-        pid = running_pid(paths.pid_path)
-        rows.append({
-            "channel": channel,
-            "status": "running" if pid is not None else "stopped",
-            "pid": pid,
-            "pid_path": str(paths.pid_path),
-            "log_path": str(paths.log_path),
-        })
-
-    if getattr(args, "json_output", False):
-        print(json.dumps({"channels": rows}, indent=2, sort_keys=True))
-        return 0
-
-    for row in rows:
-        pid_text = f" pid={row['pid']}" if row["pid"] is not None else ""
-        print(f"{row['channel']}: {row['status']}{pid_text}")
-        print(f"  pid: {row['pid_path']}")
-        print(f"  log: {row['log_path']}")
-    return 0
-
+    from .agent_runtime import handle_status as handler
+    return handler(args)
 
 def handle_status_all(args: argparse.Namespace) -> int:
-    """Show status of all configured channels at a glance."""
-    try:
-        config = load_runtime_config(args)
-        channels = enabled_channels_from_config(config)
-    except ChannelSelectionError as exc:
-        return _handle_channel_error(exc)
-
-    if not channels:
-        print("No channels are enabled.")
-        return 0
-
-    config_dir = runtime_dir(args)
-    rows: list[dict[str, Any]] = []
-    for channel in channels:
-        paths = managed_paths(config_dir, channel)
-        pid = running_pid(paths.pid_path)
-        rows.append({
-            "channel": channel,
-            "status": "running" if pid is not None else "stopped",
-            "pid": pid,
-            "pid_path": str(paths.pid_path),
-            "log_path": str(paths.log_path),
-        })
-
-    if getattr(args, "json_output", False):
-        print(json.dumps({"channels": rows}, indent=2, sort_keys=True))
-        return 0
-
-    print(f"Runtime: {config_dir}")
-    print()
-    for row in rows:
-        pid_text = f" pid={row['pid']}" if row["pid"] is not None else ""
-        print(f"{row['channel']}: {row['status']}{pid_text}")
-        print(f"  pid: {row['pid_path']}")
-        print(f"  log: {row['log_path']}")
-
-    web_cfg = web_client_config(config)
-    if web_cfg.get("enabled", True):
-        paths = web_client_paths()
-        pid = running_pid(paths.pid_path)
-        print()
-        print("Web client:")
-        pid_text = f" pid={pid}" if pid is not None else ""
-        status = "running" if pid is not None else "stopped"
-        print(f"  status: {status}{pid_text}")
-        print(f"  url: {web_client_public_url(config)}")
-        print(f"  pid: {paths.pid_path}")
-        print(f"  log: {paths.log_path}")
-    return 0
-
+    return handle_status(args)
 
 def _start_background_web(args: argparse.Namespace) -> tuple[bool, bool]:
     """Start the web client. Returns (success, already_running)."""
@@ -947,79 +765,23 @@ def _follow_log(path: Path) -> None:
 
 
 def handle_logs(args: argparse.Namespace) -> int:
-    if getattr(args, "follow", False):
-        raw_channels = _channel_arg_values(args)
-        explicit_tokens = [
-            token.strip().lower()
-            for raw_channel in (raw_channels or [])
-            for token in str(raw_channel).split(",")
-            if token.strip()
-        ]
-        if len(explicit_tokens) != 1 or explicit_tokens[0] not in {
-            CHANNEL_API,
-            CHANNEL_FEISHU,
-            CHANNEL_WEIXIN,
-            CHANNEL_VOICE,
-        }:
-            print("--follow requires an explicit single channel")
-            return 1
-
-    try:
-        channels, _config = _select_channels(args, default="auto")
-    except ChannelSelectionError as exc:
-        return _handle_channel_error(exc)
-
-    if getattr(args, "follow", False) and len(channels) != 1:
-        print("--follow requires exactly one channel")
-        return 1
-
-    config_dir = runtime_dir(args)
-    for index, channel in enumerate(channels):
-        paths = managed_paths(config_dir, channel)
-        if len(channels) > 1:
-            if index:
-                print("")
-            print(f"==> {channel}: {paths.log_path} <==")
-        output = tail_text(paths.log_path, max_lines=max(1, int(args.lines)))
-        if output:
-            print(output)
-        elif not paths.log_path.exists():
-            print(f"No log file: {paths.log_path}")
-
-    if getattr(args, "follow", False):
-        _follow_log(managed_paths(config_dir, channels[0]).log_path)
-    return 0
-
+    from .agent_runtime import handle_logs as handler
+    return handler(args)
 
 def handle_observe(args: argparse.Namespace) -> int:
-    metadata = None
-    if args.metadata:
-        try:
-            metadata = json.loads(args.metadata)
-        except json.JSONDecodeError as exc:
-            print(f"Invalid metadata JSON: {exc}")
-            return 1
-        if not isinstance(metadata, dict):
-            print("--metadata must be a JSON object")
-            return 1
-
-    runner = BaseAgentRunner(config_dir=str(runtime_dir(args)))
-
-    async def _run_observe():
-        result = await runner.agent.observe(
-            context=args.text,
-            source=args.source,
-            event_type=args.event_type,
-            metadata=metadata,
-        )
-        if hasattr(result, "model_dump"):
-            print(json.dumps(result.model_dump(), indent=2, sort_keys=True))
-        else:
-            print(result)
-
-    asyncio.run(_run_observe())
-    return 0
-
+    from .agent_runtime import ensure_runtime
+    try:
+        metadata = json.loads(args.metadata) if args.metadata else None
+        if metadata is not None and not isinstance(metadata, dict):
+            raise ValueError("--metadata must be a JSON object")
+        async def submit():
+            client = await ensure_runtime(runtime_dir(args))
+            return await client.observe(context=args.text, source=args.source, event_type=args.event_type, metadata=metadata)
+        print(json.dumps(asyncio.run(submit()), ensure_ascii=False, indent=2, default=str))
+        return 0
+    except Exception as exc:
+        print(f"Cannot observe: {exc}")
+        return 1
 
 def handle_config(args: argparse.Namespace) -> int:
     path = config_path(args)
@@ -1033,7 +795,8 @@ def handle_config(args: argparse.Namespace) -> int:
         print(path.read_text(encoding="utf-8"), end="")
         return 0
     if args.config_command == "validate":
-        BaseAgentRunner(config_dir=str(runtime_dir(args)))
+        from .config_editor import load_config, validate_config
+        validate_config(load_config(runtime_dir(args)))
         print(f"Config OK: {path}")
         return 0
     print(f"Unknown config command: {args.config_command}")
@@ -1117,14 +880,23 @@ def handle_memory(args: argparse.Namespace) -> int:
 
     if args.memory_command == "clear":
         import shutil
+        from ...core.runtime.ownership import RuntimeOwnership, runtime_is_active
+        from ...core.runtime.client import RuntimeClient
 
         if not getattr(args, "yes", False):
             print("Refusing to clear memory without --yes")
             return 1
-        target = scope_root
-        if target.exists():
-            shutil.rmtree(target)
-        target.mkdir(parents=True, exist_ok=True)
+        if runtime_is_active(runtime_dir(args)):
+            async def clear():
+                await RuntimeClient(runtime_dir(args)).request("POST", "/api/memory/clear",
+                    params={"scope": getattr(args, "scope", "all")})
+            asyncio.run(clear())
+        else:
+            with RuntimeOwnership(runtime_dir(args)):
+                target = scope_root
+                if target.exists():
+                    shutil.rmtree(target)
+                target.mkdir(parents=True, exist_ok=True)
         print(f"Cleared memory scope: {getattr(args, 'scope', 'all')}")
         return 0
 
@@ -1133,7 +905,8 @@ def handle_memory(args: argparse.Namespace) -> int:
 
 
 def handle_messages(args: argparse.Namespace) -> int:
-    runner = BaseAgentRunner(config_dir=str(runtime_dir(args)))
+    from ..server.admin_service import AdminService
+    runner = AdminService(config_dir=str(runtime_dir(args)))
     storage = runner.message_storage
 
     async def _run_messages() -> int:
@@ -1156,7 +929,13 @@ def handle_messages(args: argparse.Namespace) -> int:
             if not getattr(args, "yes", False):
                 print("Refusing to clear messages without --yes")
                 return 1
-            await storage.clear_messages()
+            from ...core.runtime.ownership import RuntimeOwnership, runtime_is_active
+            from ...core.runtime.client import RuntimeClient
+            if runtime_is_active(runtime_dir(args)):
+                await RuntimeClient(runtime_dir(args)).request("POST", "/clear_messages")
+            else:
+                with RuntimeOwnership(runtime_dir(args)):
+                    await storage.clear_messages()
             print("Cleared message stream")
             return 0
 
@@ -1314,7 +1093,7 @@ def print_quick_start() -> None:
     print("  xagent web start                Start the browser web client")
     print("  xagent voice start              Start voice channel")
     print("  xagent status                   Show channel and client status")
-    print("  xagent api logs -f              Follow api channel logs")
+    print("  xagent logs -f              Follow the Agent runtime log")
     print("  xagent web logs -f              Follow web client logs")
     print("")
     print("Setup and inspect:")

@@ -946,7 +946,7 @@ provider:
     def test_collect_init_selection_supports_custom_model_name(self):
         answers = iter([
             "1",
-            "5",
+            str(len(__import__('xagent.interfaces.cli.setup', fromlist=['OPENAI_MODELS']).OPENAI_MODELS) + 1),
             "gpt-5.4-lab",
             ".",
         ])

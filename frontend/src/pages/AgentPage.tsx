@@ -13,7 +13,7 @@ import {
   getAgentEditSetupSchema,
   getAgentIdentity,
   getAgentInfo,
-  restartChannel,
+  restartRuntime,
   updateAgentConfig,
   updateAgentIdentity,
 } from "../lib/api";
@@ -234,6 +234,8 @@ export function AgentPage() {
       const updated = await updateAgentIdentity(value);
       setIdentity(updated);
       setEditorValue(updated.identity);
+      setSetupNotice("Identity saved. Restart the Agent to apply it.");
+      setRestartSetupChannel("api");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -255,8 +257,9 @@ export function AgentPage() {
       setConfigData(updated);
       setConfigEditorValue(updated.config);
       setConfigNotice(
-        "Config saved. Provider, model, search, image generation, and observability changes require an API restart.",
+        "Settings saved. Restart the Agent to apply them.",
       );
+      setRestartSetupChannel("api");
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -279,7 +282,7 @@ export function AgentPage() {
     setRestartSetupChannel(result.restart_required ? (result.restart_channel === "voice" ? "voice" : "api") : null);
     setSetupNotice(
       result.restart_required
-        ? `Setup saved. Restart the ${result.restart_channel === "voice" ? "Voice" : "API"} channel for the changes to take effect.`
+        ? "Settings saved. Restart the Agent to apply them."
         : "Setup saved.",
     );
     await load();
@@ -287,12 +290,11 @@ export function AgentPage() {
   };
 
   const restartApiChannel = async () => {
-    const channel = restartSetupChannel || "api";
     setRestartingApi(true);
     setError("");
     try {
-      await restartChannel(channel);
-      setSetupNotice(`${channel === "voice" ? "Voice" : "API"} channel restarted.`);
+      await restartRuntime();
+      setSetupNotice("Agent restarted.");
       setRestartSetupChannel(null);
       await load();
     } catch (err) {
@@ -349,7 +351,7 @@ export function AgentPage() {
     <PageShell className="agent-page">
       <PageToolbar
         title="Agent"
-        subtitle="Runtime snapshot, setup, identity, and local maintenance"
+        subtitle="Identity, preferences and local data."
       />
       {error ? <div className="error-strip">{error}</div> : null}
       {setupNotice ? (
@@ -358,7 +360,7 @@ export function AgentPage() {
           {restartSetupChannel ? (
             <Button type="button" variant="secondary" disabled={restartingApi} onClick={() => void restartApiChannel()}>
               <RefreshCw size={14} />
-              {restartingApi ? "Restarting..." : `Restart ${restartSetupChannel === "voice" ? "Voice" : "API"}`}
+              {restartingApi ? "Restarting..." : "Restart Agent"}
             </Button>
           ) : null}
         </div>
@@ -366,7 +368,7 @@ export function AgentPage() {
 
       <div className="agent-grid">
         <Panel className="info-panel">
-          <PanelHeader title="Runtime" />
+          <PanelHeader title="Model & capabilities" />
           <dl>
             <dt>Provider</dt>
             <dd className="chip-list">
@@ -466,7 +468,7 @@ export function AgentPage() {
         </Panel>
 
         <Panel className="setup-panel">
-          <PanelHeader title="Setup" meta="Channels manage voice / Feishu / Weixin" />
+          <PanelHeader title="Preferences" meta="Manage connections in Channels." />
           <div className="setup-tile-grid">
             {(setupSchema?.features || []).map((feature) => (
               <SetupFeatureTile key={feature.id} feature={feature} onEdit={openSetupFeature} />

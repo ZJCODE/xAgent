@@ -7,14 +7,13 @@ import {
   Play,
   Plus,
   RefreshCw,
-  Search,
   Trash2,
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { TaskEditorModal, type TaskEditorSave } from "../components/TaskEditorModal";
 import { Button, EmptyState, IconButton, PageShell, PageToolbar, SearchField, StatusBadge } from "../components/ui";
-import { createTask, deleteTask, duplicateTask, getTasks, pauseTask, resumeTask, updateTask } from "../lib/api";
+import { createTask, deleteTask, duplicateTask, getTasks, pauseTask, resumeTask, retryTask, updateTask } from "../lib/api";
 import type { ScheduledTaskItem, TaskScope, TasksResponse } from "../types";
 
 const PAGE_SIZE = 50;
@@ -53,13 +52,14 @@ function taskTypeBadge(task: ScheduledTaskItem) {
 
 function taskDisplayStatus(task: ScheduledTaskItem): string {
   if (task.state === "running") return "running";
+  if (task.status === "needs_review") return "Needs checking";
   return task.status;
 }
 
 function taskStatusTone(status: string): "good" | "muted" | "danger" | "info" {
   if (status === "running") return "info";
   if (status === "paused" || status === "completed") return "muted";
-  if (status === "failed") return "danger";
+  if (status === "failed" || status === "Needs checking") return "danger";
   return "good";
 }
 
@@ -236,10 +236,15 @@ export function TasksPage() {
         </div>
       );
     }
-    if (task.status === "failed") {
+    if (task.status === "failed" || task.status === "needs_review") {
       return (
         <div className="task-row-actions">
           <Button className="task-action-button" onClick={() => setSelectedTask(task)}><Eye size={15} />View</Button>
+          <Button className="task-action-button" onClick={async () => {
+            if (!window.confirm("Retry this task with a new attempt? Check whether the earlier execution or delivery already completed before retrying.")) return;
+            try { await retryTask(task.task_id); await load(false); }
+            catch (err) { setError(err instanceof Error ? err.message : String(err)); }
+          }}><Play size={15} />Retry</Button>
           <IconButton variant="danger" onClick={() => void removeTask(task)} title="Delete permanently"><Trash2 size={15} /></IconButton>
         </div>
       );
@@ -257,16 +262,15 @@ export function TasksPage() {
   };
 
   return (
-    <PageShell>
+    <PageShell className="tasks-page">
       <PageToolbar
         title="Tasks"
-        subtitle={data?.root || "tasks"}
+        subtitle="Scheduled work and results that need attention."
         actions={
           <>
-            <Button type="button" onClick={() => openEditor("create")}><Plus size={15} />Create</Button>
+            <Button type="button" variant="primary" onClick={() => openEditor("create")}><Plus size={15} />Create task</Button>
             <SearchField placeholder={`Search ${scope}`} value={query} onChange={(event) => setQuery(event.target.value)} onSubmit={() => setAppliedQuery(query.trim())} />
-            <Button type="button" onClick={() => setAppliedQuery(query.trim())}><Search size={15} />Search</Button>
-            <IconButton type="button" onClick={() => { setQuery(""); setAppliedQuery(""); }} title="Clear search"><X size={16} /></IconButton>
+            {query ? <IconButton type="button" onClick={() => { setQuery(""); setAppliedQuery(""); }} title="Clear search"><X size={16} /></IconButton> : null}
             <IconButton type="button" onClick={() => void load(false)} title="Refresh"><RefreshCw size={16} /></IconButton>
           </>
         }
@@ -279,7 +283,7 @@ export function TasksPage() {
             ["attention", "Needs attention", data?.counts.attention],
             ["archive", "Archive", data?.counts.archive],
           ] as Array<[PageScope, string, number | undefined]>).map(([value, label, count]) => (
-            <button key={value} type="button" className={`task-tab ${scope === value ? "active" : ""}`} onClick={() => setScope(value)}>
+            <button key={value} type="button" role="tab" aria-selected={scope === value} className={`task-tab ${scope === value ? "active" : ""}`} onClick={() => setScope(value)}>
               {label}<span>{count ?? 0}</span>
             </button>
           ))}

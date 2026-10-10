@@ -2,9 +2,11 @@
 
 import asyncio
 import tempfile
+import threading
 import unittest
 from datetime import date, timedelta
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 from xagent.components.memory import MarkdownMemory
 from xagent.core.config import AgentConfig
@@ -468,6 +470,9 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(first_wrote)
         self.assertEqual(handler._last_processed_message_id, 0)
+        self.assertFalse(self.memory.daily_path(date.today()).exists())
+        self.assertFalse(handler._journal_commits.path.exists())
+        self.assertIn("entry 0", failing_llm.diary_calls[1]["existing_today"])
 
         retry_llm = _FakeLLMService()
         retry_handler = MemoryHandler(
@@ -483,7 +488,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(second_wrote)
         self.assertEqual(len(retry_llm.diary_calls), 2)
         today_text = await self.memory.read_file(self.memory.daily_path(date.today()))
-        self.assertEqual(today_text.count("entry 0"), 2)
+        self.assertEqual(today_text.count("entry 0"), 1)
         self.assertEqual(today_text.count("entry 1"), 1)
 
     async def test_run_maintenance_reads_plain_int_cursor(self):
@@ -825,6 +830,208 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(handler._last_processed_message_id, 1)
         today_text = await self.memory.read_file(self.memory.daily_path(date.today()))
         self.assertEqual(today_text.strip(), "")
+
+    def _handler_with_one_message(self, content="recovery experience"):
+        self.storage.append(Message(role=RoleType.USER, sender_id="alice", content=content))
+        return MemoryHandler(
+            memory=self.memory, llm_service=self.llm, message_storage=self.storage,
+            diary_write_batch=_TEST_DIARY_WRITE_BATCH,
+        )
+
+    async def test_cursor_write_failure_recovers_without_replaying_diary_or_model(self):
+        handler = self._handler_with_one_message()
+        with patch.object(handler, "_write_state_sync", side_effect=OSError("disk full")):
+            self.assertFalse(await handler.run_maintenance(force=True))
+        before = self.memory.daily_path(date.today()).read_bytes()
+        self.assertEqual(before.count(b"recovery experience"), 1)
+        self.assertEqual(handler._journal_commits.load()["status"], "prepared")
+
+        retry_llm = _FakeLLMService()
+        retry = MemoryHandler(
+            memory=self.memory, llm_service=retry_llm, message_storage=self.storage,
+            diary_write_batch=_TEST_DIARY_WRITE_BATCH,
+        )
+        self.assertTrue(await retry.run_maintenance(force=True))
+        self.assertEqual(retry_llm.diary_calls, [])
+        self.assertEqual(self.memory.daily_path(date.today()).read_bytes(), before)
+        self.assertEqual(retry._last_processed_message_id, 1)
+        self.assertEqual(retry._journal_commits.load()["status"], "completed")
+
+    async def test_prepared_receipt_recovers_failed_daily_replacement_without_model(self):
+        handler = self._handler_with_one_message()
+        with patch.object(handler._journal_commits, "apply", side_effect=OSError("replace failed")):
+            self.assertFalse(await handler.run_maintenance(force=True))
+        self.assertFalse(self.memory.daily_path(date.today()).exists())
+        self.assertEqual(handler._journal_commits.load()["status"], "prepared")
+        self.assertTrue(await handler.recover_pending_commit())
+        self.assertEqual(len(self.llm.diary_calls), 1)
+        self.assertEqual(self.memory.daily_path(date.today()).read_text().count("recovery experience"), 1)
+        self.assertEqual(handler._last_processed_message_id, 1)
+
+    async def test_cursor_persisted_receipt_cleanup_preserves_later_user_edit(self):
+        handler = self._handler_with_one_message()
+        with patch.object(handler._journal_commits, "complete", side_effect=OSError("receipt failure")):
+            self.assertFalse(await handler.run_maintenance(force=True))
+        self.assertEqual(handler._read_state_sync(), 1)
+        await self.memory.append_daily("my later manual note")
+        before = self.memory.daily_path(date.today()).read_bytes()
+        self.assertTrue(await handler.recover_pending_commit())
+        self.assertEqual(self.memory.daily_path(date.today()).read_bytes(), before)
+        self.assertEqual(handler._journal_commits.load()["status"], "completed")
+
+    async def test_manual_edit_after_preparation_blocks_recovery_without_overwrite(self):
+        handler = self._handler_with_one_message()
+        with patch.object(handler._journal_commits, "apply", side_effect=OSError("interrupted")):
+            self.assertFalse(await handler.run_maintenance(force=True))
+        await self.memory.append_daily("manual edit before recovery")
+        before = self.memory.daily_path(date.today()).read_bytes()
+
+        self.assertFalse(await handler.recover_pending_commit())
+        self.assertFalse(await handler.run_maintenance(force=True))
+        self.assertEqual(self.memory.daily_path(date.today()).read_bytes(), before)
+        self.assertEqual(handler._last_processed_message_id, 0)
+        self.assertEqual(len(self.llm.diary_calls), 1)
+        status = await handler.get_maintenance_status()
+        self.assertEqual(status["backlog"], 1)
+        self.assertEqual(len(status["needs_review"]), 1)
+        self.assertEqual(status["last_maintenance"]["status"], "needs_review")
+
+    async def test_empty_window_recovers_cursor_failure_without_creating_daily(self):
+        handler = self._handler_with_one_message()
+        self.llm.empty_diary = True
+        with patch.object(handler, "_write_state_sync", side_effect=OSError("cursor failure")):
+            self.assertFalse(await handler.run_maintenance(force=True))
+        self.assertFalse(self.memory.daily_path(date.today()).exists())
+        self.assertTrue(await handler.recover_pending_commit())
+        self.assertEqual(handler._last_processed_message_id, 1)
+        self.assertFalse(self.memory.daily_path(date.today()).exists())
+        self.assertEqual(len(self.llm.diary_calls), 1)
+
+    async def test_corrupt_receipt_blocks_new_window_and_reports_review(self):
+        handler = self._handler_with_one_message()
+        handler._journal_commits.path.parent.mkdir(parents=True)
+        handler._journal_commits.path.write_text("{invalid receipt", encoding="utf-8")
+        self.assertFalse(await handler.run_maintenance(force=True))
+        self.assertEqual(self.llm.diary_calls, [])
+        self.assertFalse(self.memory.daily_path(date.today()).exists())
+        self.assertEqual(len((await handler.get_maintenance_status())["needs_review"]), 1)
+
+    async def test_projection_failure_does_not_replay_committed_diary(self):
+        handler = self._handler_with_one_message()
+        with patch.object(handler, "_update_relationship_cards", AsyncMock(side_effect=RuntimeError("projection failed"))):
+            self.assertFalse(await handler.run_maintenance(force=True))
+        self.assertEqual(handler._last_processed_message_id, 1)
+        before = self.memory.daily_path(date.today()).read_bytes()
+        self.assertFalse(await handler.run_maintenance(force=True))
+        self.assertEqual(self.memory.daily_path(date.today()).read_bytes(), before)
+        self.assertEqual(len(self.llm.diary_calls), 1)
+
+    async def test_cancelling_wait_for_process_lock_does_not_leak_acquisition(self):
+        first = self._handler_with_one_message()
+        self.llm.diary_gate = asyncio.Event()
+        second_llm = _FakeLLMService()
+        second = MemoryHandler(
+            memory=self.memory, llm_service=second_llm, message_storage=self.storage,
+            diary_write_batch=_TEST_DIARY_WRITE_BATCH,
+        )
+        first_task = asyncio.create_task(first.run_maintenance(force=True))
+        await asyncio.wait_for(self.llm.diary_started.wait(), 1)
+        waiting = asyncio.create_task(second.run_maintenance(force=True))
+        await asyncio.sleep(0.05)
+        waiting.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await asyncio.wait_for(waiting, 1)
+        self.llm.diary_gate.set()
+        self.assertTrue(await first_task)
+        self.assertFalse(await asyncio.wait_for(second.run_maintenance(force=True), 1))
+        self.assertEqual(second_llm.diary_calls, [])
+
+    async def test_cancellation_drains_disk_commit_before_releasing_process_lock(self):
+        first = self._handler_with_one_message()
+        started, release = threading.Event(), threading.Event()
+        original_apply = first._journal_commits.apply
+
+        def slow_apply(receipt):
+            started.set()
+            if not release.wait(2):
+                raise TimeoutError("test did not release commit")
+            return original_apply(receipt)
+
+        second_llm = _FakeLLMService()
+        second = MemoryHandler(
+            memory=self.memory, llm_service=second_llm, message_storage=self.storage,
+            diary_write_batch=_TEST_DIARY_WRITE_BATCH,
+        )
+        with patch.object(first._journal_commits, "apply", side_effect=slow_apply):
+            first_task = asyncio.create_task(first.run_maintenance(force=True))
+            self.assertTrue(await asyncio.to_thread(started.wait, 1))
+            first_task.cancel()
+            waiting = asyncio.create_task(second.run_maintenance(force=True))
+            await asyncio.sleep(0.05)
+            first_task.cancel()
+            await asyncio.sleep(0)
+            self.assertFalse(first_task.done())
+            self.assertFalse(waiting.done())
+            release.set()
+            with self.assertRaises(asyncio.CancelledError):
+                await first_task
+            self.assertFalse(await asyncio.wait_for(waiting, 1))
+        self.assertEqual(second_llm.diary_calls, [])
+        self.assertEqual(second._last_processed_message_id, 1)
+        self.assertEqual(first._journal_commits.load()["status"], "completed")
+        self.assertEqual(self.memory.daily_path(date.today()).read_text().count("recovery experience"), 1)
+
+    async def test_cancelled_acquisition_that_already_got_lock_releases_its_handle(self):
+        handler = self._handler_with_one_message()
+        acquired, release = threading.Event(), threading.Event()
+        original_acquire = handler._acquire_process_lock_sync
+        handles = []
+
+        def delayed_return(cancelled):
+            handle = original_acquire(cancelled)
+            handles.append(handle)
+            acquired.set()
+            if not release.wait(2):
+                raise TimeoutError("test did not release acquisition")
+            return handle
+
+        with patch.object(handler, "_acquire_process_lock_sync", side_effect=delayed_return):
+            pending = asyncio.create_task(handler.run_maintenance(force=True))
+            self.assertTrue(await asyncio.to_thread(acquired.wait, 1))
+            pending.cancel()
+            await asyncio.sleep(0)
+            self.assertFalse(pending.done())
+            release.set()
+            with self.assertRaises(asyncio.CancelledError):
+                await pending
+        self.assertTrue(handles[0].closed)
+        self.assertEqual(self.llm.diary_calls, [])
+        self.assertTrue(await asyncio.wait_for(handler.run_maintenance(force=True), 1))
+
+    async def test_cancelled_model_slice_keeps_daily_and_cursor_untouched(self):
+        handler = self._handler_with_one_message()
+        self.llm.diary_gate = asyncio.Event()
+        pending = asyncio.create_task(handler.run_maintenance(force=True))
+        await asyncio.wait_for(self.llm.diary_started.wait(), 1)
+        pending.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await pending
+        self.assertEqual(handler._last_processed_message_id, 0)
+        self.assertFalse(self.memory.daily_path(date.today()).exists())
+        self.assertFalse(handler._journal_commits.path.exists())
+        self.llm.diary_gate.set()
+        self.assertTrue(await asyncio.wait_for(handler.run_maintenance(force=True), 1))
+
+    async def test_status_reports_completed_window_and_empty_backlog(self):
+        handler = self._handler_with_one_message()
+        self.assertTrue(await handler.run_maintenance(force=True))
+        status = await handler.get_maintenance_status()
+        self.assertEqual(status["cursor"], 1)
+        self.assertEqual(status["latest_cursor"], 1)
+        self.assertEqual(status["backlog"], 0)
+        self.assertEqual(status["needs_review"], [])
+        self.assertFalse(status["pending_commit"])
+        self.assertEqual(status["last_maintenance"]["status"], "completed")
 
     async def test_generate_previous_weekly_summary_if_missing_writes_summary(self):
         today = date(2026, 5, 18)  # Monday

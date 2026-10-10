@@ -44,9 +44,11 @@ from urllib.parse import parse_qs, unquote, urlparse
 from ...core.agent import Agent
 from ...core.attention import make_room_key, message_storage_cursor
 from ...core.config import AgentConfig
+from ...core.runtime.task_receipts import DeliveryUncertainError, is_strict_task_delivery
 from ...core.runtime import (
     AsyncTaskScheduler,
     ScheduledDeliveryContext,
+    current_delivery_context,
     SubconsciousDelivery,
     resolve_contacts_path,
     scheduled_delivery_context,
@@ -277,20 +279,29 @@ class FeishuAdapter:
         """
         loop = asyncio.get_running_loop()
         self._owner_loop = loop
-        task_scheduler = AsyncTaskScheduler(
-            self._tasks_dir,
-            can_handle=self._can_handle_scheduled_task,
-            dispatch=self._dispatch_scheduled_task,
-            logger_=self.logger,
-        )
-        self._task_scheduler = task_scheduler
-        await task_scheduler.start()
         attention = self._attention_loop()
-        if attention is not None:
-            await attention.reset_to_present(getattr(self.agent, "message_storage", None))
 
-        run_task = loop.run_in_executor(None, self.run_blocking)
+        run_task = loop.create_future()
+
+        def finish(error=None):
+            if not run_task.done():
+                if error is not None:
+                    run_task.set_exception(error)
+                else:
+                    run_task.set_result(None)
+
+        def transport():
+            error = None
+            try:
+                self.run_blocking()
+            except BaseException as exc:
+                error = exc
+            if not loop.is_closed():
+                loop.call_soon_threadsafe(finish, error)
+
+        threading.Thread(target=transport, name="xagent-feishu-transport", daemon=True).start()
         stop_task = asyncio.create_task(self._stop_event.wait())
+        ready_task = asyncio.create_task(self._report_initial_connection())
         try:
             done, pending = await asyncio.wait(
                 {run_task, stop_task},
@@ -305,10 +316,25 @@ class FeishuAdapter:
                 if exc is not None:
                     raise exc
         finally:
-            await task_scheduler.stop()
-            self._task_scheduler = None
+            ready_task.cancel()
+            await asyncio.gather(ready_task, return_exceptions=True)
             self._safe_stop()
             self._owner_loop = None
+
+    async def _report_initial_connection(self) -> None:
+        """Report the first handshake; reconnects use the SDK's event bus."""
+        while not self._stop_event.is_set():
+            channel = self._channel
+            # The SDK's foreground start blocks for the transport lifetime.
+            # Its public background-ready helper checks the same WS handle.
+            ready = channel is not None and (getattr(channel, "is_ready", False) is True
+                or getattr(getattr(channel, "_ws_client", None), "_conn", None) is not None)
+            if ready:
+                callback = getattr(self, "runtime_status", None)
+                if callback:
+                    callback("connected")
+                return
+            await asyncio.sleep(0.1)
 
     def run_blocking(self) -> None:
         """Connect to Feishu and serve events until stopped.
@@ -345,7 +371,6 @@ class FeishuAdapter:
         """Request a graceful shutdown of the connect loop."""
         self._stop_event.set()
         self._safe_stop()
-        await self._flush_agent_memory()
 
     def _safe_stop(self) -> None:
         self._cancel_processing_tasks()
@@ -388,6 +413,9 @@ class FeishuAdapter:
     # ------------------------------------------------------------------
 
     async def _on_message(self, msg: Any) -> None:
+        callback = getattr(self, "runtime_status", None)
+        if callback:
+            callback("connected")
         owner_loop = self._owner_loop
         if owner_loop is not None and owner_loop.is_running():
             try:
@@ -417,6 +445,9 @@ class FeishuAdapter:
 
     async def _on_error(self, err: Any) -> None:
         self.logger.error("FeishuChannel error: %s", err)
+        callback = getattr(self, "runtime_status", None)
+        if callback:
+            callback("reconnecting")
 
     def _on_reject(self, event: Any) -> None:
         self.logger.info(
@@ -429,9 +460,15 @@ class FeishuAdapter:
 
     def _on_reconnecting(self, *_: Any) -> None:
         self.logger.warning("FeishuChannel reconnecting…")
+        callback = getattr(self, "runtime_status", None)
+        if callback:
+            callback("reconnecting")
 
     def _on_reconnected(self, *_: Any) -> None:
         self.logger.info("FeishuChannel reconnected.")
+        callback = getattr(self, "runtime_status", None)
+        if callback:
+            callback("connected")
 
     # ------------------------------------------------------------------
     # Core routing
@@ -2337,12 +2374,30 @@ class FeishuAdapter:
         )
 
     async def _dispatch_scheduled_task(self, task) -> None:
+        from ...core.runtime.task_receipts import occurrence_run_id
+        result = await self.execute_scheduled_task(task)
+        await self.deliver_scheduled_task(task, result, occurrence_run_id(task.task_id, task.run_at))
+
+    async def execute_scheduled_task(self, task) -> dict[str, Any]:
+        result = await self._scheduled_task_result(task)
+        if not result.content and not result.attachments:
+            raise ValueError("scheduled Feishu task produced no content")
+        return {"content": result.content, "attachments": [
+            {"kind": attachment.kind, "path": str(attachment.path), "caption": attachment.caption,
+             "blob_url": attachment.blob_url} for attachment in result.attachments
+        ]}
+
+    async def deliver_scheduled_task(self, task, prepared: dict[str, Any], run_id: str) -> dict[str, Any]:
         assert self._channel is not None
         target = task.target
         chat_id = str(target.get("chat_id") or "").strip()
         if not chat_id:
             raise ValueError("scheduled Feishu task is missing chat_id")
-        result = await self._scheduled_task_result(task)
+        result = _FeishuScheduledTaskResult(str(prepared.get("content") or ""), [
+            _FeishuOutboundAttachment(kind=item["kind"], path=Path(item["path"]),
+                                      caption=str(item.get("caption") or ""), blob_url=str(item.get("blob_url") or ""))
+            for item in prepared.get("attachments", [])
+        ])
         if not result.content and not result.attachments:
             raise ValueError("scheduled Feishu task produced no content")
         message_id = str(target.get("message_id") or "").strip() or None
@@ -2374,18 +2429,23 @@ class FeishuAdapter:
             )
         message_handler = getattr(self.agent, "message_handler", None)
         store_model_reply = getattr(message_handler, "store_model_reply", None)
-        if callable(store_model_reply):
+        storage = getattr(self.agent, "message_storage", None)
+        find_existing = getattr(storage, "get_message_by_metadata", None)
+        existing_result = await find_existing("scheduled_run_id", run_id, role="assistant") if callable(find_existing) else None
+        if callable(store_model_reply) and existing_result is None:
             try:
                 await store_model_reply(
                     result.content,
                     getattr(self.agent, "_assistant_sender_id", "agent"),
                     metadata={
+                        "scheduled_run_id": run_id,
                         "scheduled_task": {
                             "id": task.task_id,
                             "name": task.name,
                             "type": task.task_type,
                             "run_at": task.run_at.isoformat(sep=" "),
                             "delivery": task.delivery,
+                            "run_id": run_id,
                         }
                     },
                     attachments=[
@@ -2401,6 +2461,7 @@ class FeishuAdapter:
                 )
             except Exception:
                 self.logger.debug("Failed to persist Feishu scheduled task result", exc_info=True)
+        return {"accepted": True, "transport": "feishu", "request_id": uuid_message_id}
 
     async def deliver_subconscious_message(self, delivery: SubconsciousDelivery) -> None:
         if delivery.recipient.channel != "feishu":
@@ -2458,6 +2519,7 @@ class FeishuAdapter:
             user_id=user_id,
             target=task.delivery.get("target") if isinstance(task.delivery.get("target"), dict) else {},
             metadata={
+                **(current_delivery_context().metadata if current_delivery_context() else {}),
                 "source": "scheduled_task",
                 "task_id": task.task_id,
                 "task_name": task.name,
@@ -2489,6 +2551,8 @@ class FeishuAdapter:
             inbox_kind="scheduled_turn",
         ):
             event_type = event.get("type")
+            if event_type in {"error", "aborted"} and event.get("needs_review"):
+                raise DeliveryUncertainError(str(event.get("error") or "scheduled tool outcome is unknown"))
             if event_type == "message_done" and str(event.get("phase") or "final") == "final":
                 final_content = str(event.get("content") or "").strip()
                 final_attachments = self._outbound_attachments_from_event(event)
@@ -2496,7 +2560,9 @@ class FeishuAdapter:
                 last_error = str(event.get("error") or "").strip()
         if final_content or final_attachments:
             return _FeishuScheduledTaskResult(final_content, final_attachments)
-        return _FeishuScheduledTaskResult(last_error)
+        if last_error:
+            raise RuntimeError(last_error)
+        raise ValueError("scheduled Feishu task produced no final result")
 
     @staticmethod
     def _stringify_scheduled_agent_response(response: Any) -> str:
@@ -3047,6 +3113,8 @@ class FeishuAdapter:
         )
         if self._send_result_success(file_result):
             return
+        if is_strict_task_delivery():
+            raise DeliveryUncertainError("Feishu attachment delivery was not confirmed")
         await self._send_attachment_failure_notice(
             chat_id=chat_id,
             message_id=message_id,
@@ -3106,7 +3174,7 @@ class FeishuAdapter:
         is_group: bool,
     ) -> None:
         try:
-            await send_message(
+            result = await send_message(
                 self._channel,
                 chat_id=chat_id,
                 payload={"markdown": caption},
@@ -3115,7 +3183,11 @@ class FeishuAdapter:
                 logger=self.logger,
                 message_id=message_id,
             )
+            if is_strict_task_delivery() and not self._send_result_success(result):
+                raise DeliveryUncertainError("Feishu attachment caption delivery was not confirmed")
         except Exception:
+            if is_strict_task_delivery():
+                raise
             self.logger.exception("Failed to send Feishu attachment caption to %s", chat_id)
 
     async def _send_payload_with_retries(
@@ -3129,6 +3201,8 @@ class FeishuAdapter:
         attempts: int,
     ) -> Any:
         result: Any = None
+        if is_strict_task_delivery():
+            attempts = 1
         for attempt in range(1, max(1, attempts) + 1):
             try:
                 result = await send_message(
@@ -3143,6 +3217,8 @@ class FeishuAdapter:
                 if self._send_result_success(result):
                     return result
             except Exception as exc:
+                if is_strict_task_delivery():
+                    raise DeliveryUncertainError(f"Feishu delivery was not confirmed: {exc}") from exc
                 result = exc
                 self.logger.warning(
                     "Feishu attachment send attempt failed: chat_id=%s message_id=%s attempt=%s error=%s",

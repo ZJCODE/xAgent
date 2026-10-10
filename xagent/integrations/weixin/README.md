@@ -20,8 +20,8 @@ import third-party Weixin bot packages.
 ```bash
 xagent init
 xagent channel weixin setup
-xagent channel weixin start
-xagent channel weixin logs -f
+xagent start --agent <name>
+xagent logs --agent <name> --follow
 ```
 
 Setup scans a WeChat QR code, stores iLink credentials under the runtime's

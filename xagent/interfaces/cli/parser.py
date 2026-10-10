@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from . import agents, processes_status, runtime, setup, update
+from . import agent_runtime, agents, processes_status, runtime, setup, update
 from .channels import CHANNEL_API, CHANNEL_FEISHU, CHANNEL_VOICE, CHANNEL_WEIXIN
 
 
@@ -32,19 +32,22 @@ class XAgentArgumentParser(argparse.ArgumentParser):
             "Setup:",
             "  setup       Configure the active agent",
             "  agents      Create, select, inspect, or remove agents",
+            "  feishu      Configure the Feishu channel",
+            "  weixin      Configure the Weixin channel",
             "  update      Update xAgent using its current installation method",
             "",
             "Use Now:",
             "  chat        Chat in the terminal",
             "  web         Manage the browser web UI",
-            "  voice       Use microphone / speaker mode for this session",
+            "  voice       Configure audio or list devices",
             "",
             "Keep Running:",
-            "  api         API channel: start, stop, restart, status, logs",
-            "  voice       Voice channel: start, stop, restart, status, logs",
-            "  feishu      Feishu bot: setup, start, stop, restart, status, logs",
-            "  weixin      Weixin DM: setup, start, stop, restart, status, logs",
-            "  status      Show all configured channel processes",
+            "  run         Run this Agent in the foreground",
+            "  start       Start this Agent and its enabled channels",
+            "  stop        Stop this Agent gracefully",
+            "  restart     Apply configuration and restart this Agent",
+            "  logs        Read this Agent runtime logs",
+            "  status      Show this Agent and channel health",
             "  processes   List or restart all managed background processes",
             "",
             "Inspect:",
@@ -63,17 +66,17 @@ class XAgentArgumentParser(argparse.ArgumentParser):
             "  xagent agents create work",
             "  xagent agents select work",
             '  xagent chat "Help me plan today"',
-            "  xagent api start",
+            "  xagent start",
             "  xagent web start",
             "  xagent web open",
             "  xagent status",
-            "  xagent api logs -f",
+            "  xagent logs -f",
             "  xagent voice setup",
-            "  xagent voice logs -f",
+            "  xagent logs -f",
             "  xagent feishu setup",
-            "  xagent feishu start",
+            "  xagent start",
             "  xagent weixin setup",
-            "  xagent weixin start",
+            "  xagent start",
             "  xagent config show",
             "  xagent memory list --days 7",
             "  xagent doctor",
@@ -398,65 +401,40 @@ def build_parser() -> argparse.ArgumentParser:
     )
     chat_parser.set_defaults(handler=runtime.handle_chat)
 
-    voice_parser = subparsers.add_parser("voice", help="Talk with your agent by microphone")
+    voice_parser = subparsers.add_parser("voice", help="Configure local microphone/speaker input")
     _add_agent_argument(voice_parser)
-    _add_voice_runtime_arguments(voice_parser, include_list_devices=True)
+    voice_parser.add_argument("--list-devices", action="store_true")
     voice_parser.set_defaults(handler=runtime.handle_voice)
     voice_sub = voice_parser.add_subparsers(dest="voice_action", metavar="<action>")
-
-    voice_setup = voice_sub.add_parser("setup", help="Enable or reconfigure the voice channel")
+    voice_setup = voice_sub.add_parser("setup", help="Configure the voice channel")
     _add_voice_setup_arguments(voice_setup)
     voice_setup.set_defaults(handler=setup.handle_init_voice)
-
-    voice_start = voice_sub.add_parser("start", help="Start the voice channel in the background")
-    _add_agent_argument(voice_start)
-    _add_voice_runtime_arguments(voice_start)
-    voice_start.set_defaults(handler=runtime.handle_start, channels=[CHANNEL_VOICE])
-
-    voice_stop = voice_sub.add_parser("stop", help="Stop the background voice channel")
-    _add_agent_argument(voice_stop)
-    voice_stop.set_defaults(handler=runtime.handle_stop, channels=[CHANNEL_VOICE])
-
-    voice_restart = voice_sub.add_parser("restart", help="Restart the background voice channel")
-    _add_agent_argument(voice_restart)
-    _add_voice_runtime_arguments(voice_restart)
-    voice_restart.set_defaults(handler=runtime.handle_restart, channels=[CHANNEL_VOICE])
-
-    voice_status = voice_sub.add_parser("status", help="Show voice channel status")
-    _add_agent_argument(voice_status)
-    voice_status.add_argument("--json", action="store_true", dest="json_output", help="Print machine-readable JSON")
-    voice_status.set_defaults(handler=runtime.handle_status, channels=[CHANNEL_VOICE])
-
-    voice_logs = voice_sub.add_parser("logs", help="Show voice channel logs")
-    _add_agent_argument(voice_logs)
-    voice_logs.add_argument("--lines", type=int, default=80, help="Number of trailing log lines to print")
-    voice_logs.add_argument("--follow", "-f", action="store_true", help="Follow log output")
-    voice_logs.set_defaults(handler=runtime.handle_logs, channels=[CHANNEL_VOICE])
-
-    # ------------------------------------------------------------------
-    # Channels
-    # ------------------------------------------------------------------
-
-    api_parser = subparsers.add_parser("api", help="Manage the HTTP/WebSocket API channel")
-    _add_channel_lifecycle_subparsers(api_parser, CHANNEL_API, dest="api_action")
-    _show_help_on_missing_action(api_parser)
 
     web_parser = subparsers.add_parser("web", help="Manage the browser web client")
     _add_web_lifecycle_subparsers(web_parser)
     _show_help_on_missing_action(web_parser)
 
-    feishu_parser = subparsers.add_parser("feishu", help="Manage the Feishu bot")
-    _add_channel_lifecycle_subparsers(feishu_parser, CHANNEL_FEISHU, dest="feishu_action", has_setup=True)
-    _show_help_on_missing_action(feishu_parser)
+    for channel, setup_handler, add_arguments in (
+        ("feishu", setup.handle_init_feishu, _add_feishu_setup_arguments),
+        ("weixin", setup.handle_init_weixin, _add_weixin_setup_arguments),
+    ):
+        channel_parser = subparsers.add_parser(channel, help=f"Configure the {channel} channel")
+        channel_sub = channel_parser.add_subparsers(dest=f"{channel}_action", metavar="<action>", required=True)
+        channel_setup = channel_sub.add_parser("setup", help=f"Configure {channel}")
+        add_arguments(channel_setup)
+        channel_setup.set_defaults(handler=setup_handler)
 
-    weixin_parser = subparsers.add_parser("weixin", help="Manage the Weixin DM channel")
-    _add_channel_lifecycle_subparsers(weixin_parser, CHANNEL_WEIXIN, dest="weixin_action", has_setup=True)
-    _show_help_on_missing_action(weixin_parser)
-
-    status_parser = subparsers.add_parser("status", help="Show running status of all channels")
-    _add_agent_argument(status_parser)
-    status_parser.add_argument("--json", action="store_true", dest="json_output", help="Print machine-readable JSON")
-    status_parser.set_defaults(handler=runtime.handle_status_all)
+    for action in ("run", "start", "stop", "restart", "status", "logs"):
+        command_parser = subparsers.add_parser(action, help=f"{action.capitalize()} the Agent runtime")
+        _add_agent_argument(command_parser)
+        if action in {"run", "start", "restart"}:
+            command_parser.add_argument("--channels", action="append", default=None, help="Override enabled channels for this run")
+        if action == "status":
+            command_parser.add_argument("--json", action="store_true", dest="json_output")
+        if action == "logs":
+            command_parser.add_argument("--lines", type=int, default=80)
+            command_parser.add_argument("--follow", "-f", action="store_true")
+        command_parser.set_defaults(handler=getattr(agent_runtime, f"handle_{action}"))
 
     # ------------------------------------------------------------------
     # Inspect
@@ -610,14 +588,12 @@ def build_parser() -> argparse.ArgumentParser:
     # Internal
     # ------------------------------------------------------------------
 
-    internal_run = subparsers.add_parser("_run-channel", help=argparse.SUPPRESS)
-    internal_run.add_argument("channel", choices=(CHANNEL_API, CHANNEL_FEISHU, CHANNEL_WEIXIN, CHANNEL_VOICE))
+    internal_run = subparsers.add_parser("_run-agent", help=argparse.SUPPRESS)
     _add_agent_argument(internal_run)
-    internal_run.add_argument("--config-dir", dest="config_dir", default=None, help=argparse.SUPPRESS)
-    _add_api_runtime_arguments(internal_run)
-    _add_voice_runtime_arguments(internal_run)
-    internal_run.set_defaults(handler=runtime.handle_run_channel_internal)
-    _hide_subparser_choice(subparsers, "_run-channel")
+    internal_run.add_argument("--config-dir", dest="config_dir", default=None)
+    internal_run.add_argument("--channels", action="append", default=None)
+    internal_run.set_defaults(handler=agent_runtime.handle_run)
+    _hide_subparser_choice(subparsers, "_run-agent")
 
     internal_web = subparsers.add_parser("_run-web", help=argparse.SUPPRESS)
     _add_agent_argument(internal_web)

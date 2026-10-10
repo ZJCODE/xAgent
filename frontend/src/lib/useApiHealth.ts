@@ -2,10 +2,10 @@ import { useEffect, useState } from "react";
 import { useAgentSession } from "../context/AgentSessionContext";
 import { getHealth } from "./api";
 
-export type ApiHealth = "checking" | "online" | "offline";
+export type ApiHealth = "checking" | "online" | "degraded" | "offline";
 
 export function useApiHealth(): ApiHealth {
-  const { agents, selectedAgent, loading: agentsLoading } = useAgentSession();
+  const { selectedAgent, loading: agentsLoading } = useAgentSession();
   const [health, setHealth] = useState<ApiHealth>("checking");
 
   useEffect(() => {
@@ -13,25 +13,22 @@ export function useApiHealth(): ApiHealth {
       setHealth("checking");
       return;
     }
-
-    const selected = agents.find((agent) => agent.name === selectedAgent);
-    if (selected?.channel_running) {
-      setHealth("online");
-      return;
-    }
-
     let cancelled = false;
-    getHealth()
-      .then(() => {
-        if (!cancelled) setHealth("online");
-      })
-      .catch(() => {
+    const check = async () => {
+      try {
+        const result = await getHealth();
+        if (!cancelled) setHealth(["running", "healthy"].includes(result.status) ? "online" : result.status === "degraded" ? "degraded" : "offline");
+      } catch {
         if (!cancelled) setHealth("offline");
-      });
+      }
+    };
+    void check();
+    const interval = window.setInterval(() => void check(), 5000);
     return () => {
       cancelled = true;
+      window.clearInterval(interval);
     };
-  }, [agents, selectedAgent, agentsLoading]);
+  }, [selectedAgent, agentsLoading]);
 
   return health;
 }

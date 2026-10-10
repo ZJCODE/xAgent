@@ -67,6 +67,78 @@ class _AttachmentTaskAgent(_TaskAgent):
 
 
 class TaskApiTests(unittest.TestCase):
+    def test_scheduled_delivery_cannot_acknowledge_missing_durable_history(self):
+        async def run_test():
+            from types import SimpleNamespace
+            from unittest.mock import AsyncMock
+            from xagent.integrations.api.task_dispatch import TaskDispatchService
+            with tempfile.TemporaryDirectory() as tmpdir:
+                task = enqueue_scheduled_task(task_type="message", content="reminder",
+                                              run_at="2026-06-01 10:00:00", tasks_dir=tmpdir,
+                                              channel="api", target={"user_id": "alice"})
+                delivery = SimpleNamespace(broadcast_scheduled_message=AsyncMock())
+                service = TaskDispatchService(SimpleNamespace(), chat=SimpleNamespace(), delivery=delivery)
+                with self.assertRaisesRegex(ValueError, "durable message storage"):
+                    await service.deliver(task, {"content": "reminder"}, "run-1")
+                delivery.broadcast_scheduled_message.assert_not_awaited()
+        import asyncio
+        asyncio.run(run_test())
+
+    def test_scheduled_message_is_durable_offline_and_deduplicated(self):
+        async def run_test():
+            with tempfile.TemporaryDirectory() as tmpdir:
+                agent = _TaskAgent(Path(tmpdir))
+                server = AgentHTTPServer(agent=agent)
+                task = enqueue_scheduled_task(task_type="message", content="offline reminder",
+                                              run_at="2026-06-01 10:00:00", tasks_dir=server.tasks_dir,
+                                              channel="api", target={"user_id": "alice"})
+                result = await server.api.tasks.execute(task)
+                run_id = f"{task.task_id}-20260601-100000"
+                first = await server.api.tasks.deliver(task, result, run_id)
+                second = await server.api.tasks.deliver(task, result, run_id)
+                history = await agent.message_storage.get_messages()
+                self.assertTrue(first["accepted"])
+                self.assertEqual(first["message_cursor"], second["message_cursor"])
+                self.assertEqual(len(history), 1)
+                self.assertEqual(history[0].content, "offline reminder")
+        import asyncio
+        asyncio.run(run_test())
+
+    def test_error_only_scheduled_agent_result_is_failure(self):
+        async def run_test():
+            with tempfile.TemporaryDirectory() as tmpdir:
+                agent = _TaskAgent(Path(tmpdir))
+                async def errors(**kwargs):
+                    yield {"type": "error", "error": "model unavailable"}
+                    yield {"type": "done"}
+                agent.chat_events = errors
+                server = AgentHTTPServer(agent=agent)
+                task = enqueue_scheduled_task(task_type="agent", content="check",
+                                              run_at="2026-06-01 10:00:00", tasks_dir=server.tasks_dir,
+                                              channel="api", target={"user_id": "alice"})
+                with self.assertRaisesRegex(RuntimeError, "model unavailable"):
+                    await server.api.tasks.execute(task)
+                self.assertEqual(await agent.message_storage.get_messages(), [])
+        import asyncio
+        asyncio.run(run_test())
+
+    def test_uncertain_tool_result_requires_review(self):
+        async def run_test():
+            from xagent.core.runtime.task_receipts import DeliveryUncertainError
+            with tempfile.TemporaryDirectory() as tmpdir:
+                agent = _TaskAgent(Path(tmpdir))
+                async def errors(**kwargs):
+                    yield {"type": "error", "error": "tool timed out", "needs_review": True}
+                agent.chat_events = errors
+                server = AgentHTTPServer(agent=agent)
+                task = enqueue_scheduled_task(task_type="agent", content="check",
+                                              run_at="2026-06-01 10:00:00", tasks_dir=server.tasks_dir,
+                                              channel="api", target={"user_id": "alice"})
+                with self.assertRaises(DeliveryUncertainError):
+                    await server.api.tasks.execute(task)
+        import asyncio
+        asyncio.run(run_test())
+
     def test_deliver_subconscious_message_broadcasts_to_subscriber(self):
         async def run_test():
             class _Subscriber:
@@ -408,7 +480,10 @@ class TaskApiTests(unittest.TestCase):
                 server.api.delivery.broadcast_scheduled_message = capture_broadcast
                 await server._dispatch_scheduled_task(record)
 
-            self.assertEqual(delivered, [("agent", "agent scheduled result", None, [])])
+            self.assertEqual(len(delivered), 1)
+            self.assertEqual(delivered[0][:2], ("agent", "agent scheduled result"))
+            self.assertIsNotNone(delivered[0][2])
+            self.assertEqual(delivered[0][3], [])
             self.assertEqual(agent.chat_calls[0]["user_id"], "web_user")
             self.assertEqual(agent.chat_calls[0]["channel"], "api")
             self.assertEqual(agent.chat_calls[0]["user_message"], "Check system temperature")
@@ -441,7 +516,10 @@ class TaskApiTests(unittest.TestCase):
                 server.api.delivery.broadcast_scheduled_message = capture_broadcast
                 await server._dispatch_scheduled_task(record)
 
-            self.assertEqual(delivered, [("agent", "", None, [agent.attachment])])
+            self.assertEqual(len(delivered), 1)
+            self.assertEqual(delivered[0][:2], ("agent", ""))
+            self.assertIsNotNone(delivered[0][2])
+            self.assertEqual(delivered[0][3], [agent.attachment])
             self.assertEqual(agent.chat_event_calls[0]["user_id"], "web_user")
             self.assertEqual(agent.chat_event_calls[0]["channel"], "api")
             self.assertFalse(agent.chat_event_calls[0]["stream"])

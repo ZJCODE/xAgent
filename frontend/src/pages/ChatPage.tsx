@@ -7,7 +7,7 @@ import { DEFAULT_WEB_USER_ID, useChat } from "../context/ChatContext";
 import { useApiChannel } from "../lib/useApiChannel";
 import { useApiHealth } from "../lib/useApiHealth";
 import { classNames, formatBytes } from "../lib/format";
-import type { AttachmentAsset, ChannelStatus, ChatPanelState } from "../types";
+import type { AgentRuntimeStatus, AttachmentAsset, ChatPanelState } from "../types";
 
 function attachmentUrl(attachment: AttachmentAsset): string {
   return attachment.blob_url || (attachment.path ? `/api/workspace/blob?path=${encodeURIComponent(attachment.path)}` : "");
@@ -130,16 +130,8 @@ function PendingAttachmentPreview({ attachment, onRemove }: { attachment: Attach
   );
 }
 
-function ChatChannelBlocked({
-  channel,
-  starting,
-  loading,
-  error,
-  onStart,
-  onRetry,
-  variant,
-}: {
-  channel: ChannelStatus | null;
+function ChatChannelBlocked({ runtime, starting, loading, error, onStart, onRetry, variant }: {
+  runtime: AgentRuntimeStatus | null;
   starting: boolean;
   loading: boolean;
   error: string;
@@ -147,115 +139,20 @@ function ChatChannelBlocked({
   onRetry: () => void;
   variant: "empty" | "banner";
 }) {
-  if (!channel && loading) {
-    const connecting = (
-      <EmptyState icon={<RadioTower size={24} />} title="Connecting to API channel">
-        Loading channel status...
-      </EmptyState>
-    );
-    if (variant === "banner") {
-      return <div className="chat-channel-banner" role="status">{connecting}</div>;
-    }
-    return connecting;
-  }
-
-  if (!channel && error) {
-    const unreachable = (
-      <div className="empty-state chat-channel-empty">
-        <div className="empty-state-icon" aria-hidden="true">
-          <RadioTower size={24} />
-        </div>
-        <p>Cannot reach channel service</p>
-        <span>{error}</span>
-        <div className="chat-channel-actions">
-          <Button type="button" variant="primary" onClick={onRetry}>
-            Retry
-          </Button>
-          <Button type="button" variant="secondary" disabled={starting} onClick={onStart}>
-            <Play size={14} />
-            {starting ? "Starting..." : "Start API channel"}
-          </Button>
-        </div>
-      </div>
-    );
-    if (variant === "banner") {
-      return <div className="chat-channel-banner" role="status">{unreachable}</div>;
-    }
-    return unreachable;
-  }
-
-  const needsSetup = Boolean(channel && !channel.ready);
-  const isError = channel?.status === "error";
-  const title = needsSetup
-    ? "API channel needs setup"
-    : isError
-      ? "API channel needs attention"
-      : "API channel is stopped";
-  const description = needsSetup
-    ? "Open the Channels page to finish setup, then start the API channel here."
-    : isError
-      ? channel?.detail || "Try starting the channel again."
-      : "Start the API channel to send messages in Chat.";
-  const canStart = starting ? false : channel == null || channel.can_start;
-
-  const actions = (
-    <div className="chat-channel-actions">
-      {needsSetup ? (
-        <a className="chat-channel-link" href="/channels">
-          Open Channels
-        </a>
-      ) : (
-        <Button
-          type="button"
-          variant="primary"
-          disabled={!canStart}
-          onClick={onStart}
-        >
-          <Play size={14} />
-          {starting ? "Starting..." : "Start API channel"}
-        </Button>
-      )}
-    </div>
-  );
-
-  if (variant === "banner") {
-    return (
-      <div className="chat-channel-banner" role="status">
-        <div className="chat-channel-banner-copy">
-          <p>{title}</p>
-          <span>{description}</span>
-          {error ? <span className="chat-channel-error">{error}</span> : null}
-        </div>
-        <div className="chat-channel-banner-actions">
-          {needsSetup ? (
-            <a className="chat-channel-link" href="/channels">
-              Open Channels
-            </a>
-          ) : (
-            <Button
-              type="button"
-              variant="primary"
-              disabled={!canStart}
-              onClick={onStart}
-            >
-              <Play size={13} />
-              {starting ? "Starting..." : "Start"}
-            </Button>
-          )}
-        </div>
-      </div>
-    );
-  }
-
+  const preparing = starting || runtime?.status === "starting";
+  const title = loading ? "Checking Agent status" : error && !runtime ? "Cannot reach the Agent" : preparing ? "Agent is starting" : runtime?.runtime_running ? "Agent is not ready" : "Agent is stopped";
+  const description = error || runtime?.error || (preparing ? "Preparing your Agent. Chat will be available shortly." : "Start the Agent to chat. All enabled channels start together.");
   return (
-    <div className="empty-state chat-channel-empty">
-      <div className="empty-state-icon" aria-hidden="true">
-        <RadioTower size={24} />
+    <div className={variant === "banner" ? "chat-channel-banner" : "empty-state chat-channel-empty"} role="status">
+      <div className={variant === "banner" ? "chat-channel-banner-copy" : undefined}>
+        {variant === "empty" ? <div className="empty-state-icon" aria-hidden="true"><RadioTower size={24} /></div> : null}
+        <p>{title}</p><span>{description}</span>
       </div>
-      <p>{title}</p>
-      <span>{description}</span>
-      {error ? <span className="chat-channel-error">{error}</span> : null}
-      {actions}
+      <div className="chat-channel-actions">
+        {runtime && !runtime.runtime_running ? <Button type="button" variant="primary" disabled={starting || loading} onClick={onStart}><Play size={14} />{starting ? "Starting…" : "Start Agent"}</Button> : null}
+        {!preparing ? <Button type="button" onClick={onRetry}>Refresh status</Button> : null}
+        {runtime?.runtime_running && !preparing ? <a className="chat-channel-link" href="/channels">View Agent status</a> : null}
+      </div>
     </div>
   );
 }
@@ -271,7 +168,7 @@ function ChatPanel({
   statusReady: boolean;
   channelBlock?: ReactNode;
 }) {
-  const { updateSettings, addAttachments, removeAttachment, sendMessage, stopTurn, sendObservation, status: chatStatus } = useChat();
+  const { updateSettings, addAttachments, removeAttachment, sendMessage, stopTurn, currentTurnId, sendObservation, status: chatStatus } = useChat();
   const health = useApiHealth();
   const [messageText, setMessageText] = useState("");
   const [observeText, setObserveText] = useState("");
@@ -320,13 +217,13 @@ function ChatPanel({
             </StatusBadge>
           ) : null}
           <StatusBadge
-            tone={health === "online" ? "good" : health === "offline" ? "danger" : "muted"}
+            tone={health === "online" ? "good" : health === "degraded" ? "info" : health === "offline" ? "danger" : "muted"}
             className="chat-status-badge"
-            title="Reflects the selected agent's api channel (chat). Other tabs work independently."
+            title="Reflects whether the selected Agent is ready. Other tabs remain available."
           >
-            {health === "online" ? <Wifi size={14} /> : <WifiOff size={14} />}
+            {health === "online" || health === "degraded" ? <Wifi size={14} /> : <WifiOff size={14} />}
             <span className="status-badge-label">
-              {health === "checking" ? "Checking" : health === "online" ? "API Online" : "API Offline"}
+              {health === "checking" ? "Checking" : health === "online" ? "Agent Online" : health === "degraded" ? "Agent needs attention" : "Agent Offline"}
             </span>
           </StatusBadge>
           <StatusBadge
@@ -503,7 +400,7 @@ function ChatPanel({
               type="button"
               variant="danger"
               className="send-button"
-              disabled={!statusReady || !chatEnabled}
+              disabled={!currentTurnId}
               onClick={() => void stopTurn()}
             >
               <Square size={16} />
@@ -531,14 +428,14 @@ function ChatPanel({
 export function ChatPage() {
   const { loading: agentsLoading } = useAgentSession();
   const { panel } = useChat();
-  const { apiChannel, loading: channelLoading, starting, error, start, refresh } = useApiChannel();
+  const { runtime, loading: channelLoading, starting, error, start, refresh } = useApiChannel();
 
   const statusReady = !agentsLoading && !channelLoading;
-  const chatEnabled = apiChannel?.status === "running";
+  const chatEnabled = Boolean(runtime?.runtime_ready);
 
   const channelBlock = statusReady && !chatEnabled ? (
     <ChatChannelBlocked
-      channel={apiChannel}
+      runtime={runtime}
       starting={starting}
       loading={channelLoading}
       error={error}
@@ -550,7 +447,7 @@ export function ChatPage() {
 
   const channelBanner = statusReady && !chatEnabled ? (
     <ChatChannelBlocked
-      channel={apiChannel}
+      runtime={runtime}
       starting={starting}
       loading={channelLoading}
       error={error}

@@ -110,12 +110,20 @@ def write_secret_file(path: Path, text: str, *, mode: int = CONFIG_FILE_MODE) ->
     """Atomically write a secret-bearing file and force restrictive permissions."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    tmp_path.write_text(text, encoding="utf-8")
+    with tmp_path.open("w", encoding="utf-8") as handle:
+        handle.write(text)
+        handle.flush()
+        os.fsync(handle.fileno())
     try:
         tmp_path.chmod(mode)
     except OSError:
         pass
     tmp_path.replace(path)
+    directory = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
     try:
         path.chmod(mode)
     except OSError:
@@ -124,8 +132,20 @@ def write_secret_file(path: Path, text: str, *, mode: int = CONFIG_FILE_MODE) ->
 
 def write_config(config_dir: Path, data: dict[str, Any]) -> None:
     validate_config(data)
-    path = config_path(config_dir)
-    write_secret_file(path, yaml.safe_dump(data, sort_keys=False, allow_unicode=False))
+    from ...core.runtime.ownership import RuntimeOwnership, runtime_is_active, runtime_owned_here, runtime_paths
+    root = config_dir.expanduser().resolve()
+    text = yaml.safe_dump(data, sort_keys=False, allow_unicode=False)
+    if runtime_owned_here(root):
+        write_secret_file(config_path(root), text)
+    elif runtime_is_active(root):
+        import httpx
+        transport = httpx.HTTPTransport(uds=str(runtime_paths(root).socket_path))
+        with httpx.Client(transport=transport, base_url="http://runtime", timeout=15, trust_env=False) as client:
+            response = client.put("/api/agent/config", json={"config": text})
+            response.raise_for_status()
+    else:
+        with RuntimeOwnership(root):
+            write_secret_file(config_path(root), text)
 
 
 def _clone_config(config: dict[str, Any]) -> dict[str, Any]:

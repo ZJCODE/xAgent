@@ -1646,6 +1646,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             [event["type"] for event in events],
             [
+                "accepted",
                 "message_start",
                 "message_delta",
                 "message_done",
@@ -1657,11 +1658,11 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
                 "done",
             ],
         )
-        self.assertEqual(events[2]["phase"], "preface")
-        self.assertEqual(events[2]["content"], "I will check.")
-        self.assertEqual(events[3]["name"], "lookup")
-        self.assertEqual(events[7]["phase"], "final")
-        self.assertEqual(events[7]["content"], "We are in /tmp.")
+        self.assertEqual(events[3]["phase"], "preface")
+        self.assertEqual(events[3]["content"], "I will check.")
+        self.assertEqual(events[4]["name"], "lookup")
+        self.assertEqual(events[8]["phase"], "final")
+        self.assertEqual(events[8]["content"], "We are in /tmp.")
         self.assertEqual([message.role for message in storage.messages], [
             RoleType.USER,
             RoleType.ASSISTANT,
@@ -1690,6 +1691,9 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
 
         ).__aiter__()
 
+        accepted = await asyncio.wait_for(events.__anext__(), timeout=0.2)
+        self.assertEqual(accepted["type"], "accepted")
+        self.assertTrue(accepted["turn_id"])
         first_event = await asyncio.wait_for(events.__anext__(), timeout=0.2)
         second_event = await asyncio.wait_for(events.__anext__(), timeout=0.2)
 
@@ -1706,7 +1710,8 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(remaining_events[1]["type"], "message_done")
         self.assertEqual(remaining_events[1]["phase"], "final")
         self.assertEqual(remaining_events[1]["content"], "Hello")
-        self.assertEqual(remaining_events[2], {"type": "done"})
+        self.assertEqual(remaining_events[2]["type"], "done")
+        self.assertEqual(remaining_events[2]["turn_id"], accepted["turn_id"])
         self.assertEqual(model_client.stream_calls, [True])
 
     async def test_chat_stream_true_returns_live_text_generator(self):

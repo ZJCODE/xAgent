@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import sqlite3
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from ...core.providers import provider_model_api
 from ...core.runtime import list_task_records
+from ...core.runtime.ownership import runtime_is_active, runtime_paths
 from ...tools.image_generation_tool import normalize_image_generation_provider
 from ...tools.search_tool import is_placeholder_api_key, normalize_search_provider
 from ..base import BaseAgentConfig, BaseAgentRunner
@@ -23,7 +25,7 @@ from .channels import (
     voice_config,
     weixin_config,
 )
-from .processes import managed_paths, running_pid
+from .processes import running_pid
 from .web_client import DEFAULT_WEB_CLIENT_PORT, web_client_config, web_client_paths
 
 STATUS_OK = "ok"
@@ -86,6 +88,7 @@ def build_runtime_overview(config_dir: Path) -> RuntimeOverview:
 
     config: dict[str, Any] = {}
     config_error = ""
+    runtime = runtime_snapshot(config_dir)
     if not config_path.is_file():
         items.append(OverviewItem("Config", "missing", STATUS_ERROR, f"Expected {config_path}"))
     else:
@@ -108,11 +111,13 @@ def build_runtime_overview(config_dir: Path) -> RuntimeOverview:
                 _model_item(config),
                 _search_item(config),
                 _image_item(config),
-                _voice_item(config_dir, config),
-                _service_item(config_dir, CHANNEL_API, api_config(config)),
+                _runtime_item(runtime),
+                _voice_item(config_dir, config, runtime=runtime),
+                _service_item(config_dir, CHANNEL_API, api_config(config), runtime=runtime),
                 _web_client_item(config_dir, config),
-                _service_item(config_dir, CHANNEL_FEISHU, feishu_config(config)),
-                _service_item(config_dir, CHANNEL_WEIXIN, weixin_config(config)),
+                _service_item(config_dir, CHANNEL_FEISHU, feishu_config(config), runtime=runtime),
+                _service_item(config_dir, CHANNEL_WEIXIN, weixin_config(config), runtime=runtime),
+                _task_item(config_dir),
             )
         )
 
@@ -125,6 +130,58 @@ def build_runtime_overview(config_dir: Path) -> RuntimeOverview:
     else:
         headline = "Ready"
     return RuntimeOverview(config_dir=config_dir, initialized=initialized, headline=headline, items=tuple(items))
+
+
+def runtime_snapshot(config_dir: Path) -> dict[str, Any]:
+    """Use the runtime's published state only while its authoritative lock is held."""
+    if not runtime_is_active(config_dir):
+        return {"state": "stopped", "runtime_ready": False, "channels": {}}
+    try:
+        raw = json.loads(runtime_paths(config_dir).state_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        raw = {}
+    if not isinstance(raw, dict) or raw.get("state") in {None, "stopped"}:
+        return {"state": "starting", "runtime_ready": False, "channels": {}}
+    if not isinstance(raw.get("channels"), dict):
+        raw["channels"] = {}
+    return raw
+
+
+def _runtime_item(runtime: dict[str, Any]) -> OverviewItem:
+    state = str(runtime.get("state") or "stopped")
+    ready = bool(runtime.get("runtime_ready"))
+    if state == "degraded":
+        return OverviewItem("Runtime", "degraded", STATUS_WARNING, "Some channels need attention")
+    if state == "running" and ready:
+        return OverviewItem("Runtime", "ready", STATUS_OK, f"pid {runtime.get('pid', '')}".strip())
+    return OverviewItem("Runtime", state, STATUS_IDLE)
+
+
+def _channel_state(runtime: dict[str, Any], channel: str) -> tuple[str, str, str]:
+    if runtime.get("state") == "stopped":
+        return "stopped", STATUS_IDLE, ""
+    channel_row = runtime.get("channels", {}).get(channel)
+    if not isinstance(channel_row, dict):
+        return "inactive", STATUS_IDLE, "Restart the Agent to include this channel"
+    state = str(channel_row.get("state") or channel_row.get("status") or "starting")
+    return state, STATUS_WARNING if state == "failed" else STATUS_OK if state == "running" else STATUS_IDLE, str(channel_row.get("error") or "")
+
+
+def _task_item(config_dir: Path) -> OverviewItem:
+    root = config_dir / BaseAgentConfig.TASKS_DIRNAME
+    try:
+        records = list_task_records(root, include_running=True) if root.exists() else []
+    except (OSError, ValueError):
+        return OverviewItem("Tasks", "unavailable", STATUS_WARNING, "Check task storage")
+    review = sum(record.status == "needs_review" for record in records)
+    failed = sum(record.status == "failed" for record in records)
+    if review:
+        return OverviewItem("Tasks", f"{review} need review", STATUS_WARNING,
+                            "Check uncertain outcomes before retrying")
+    if failed:
+        return OverviewItem("Tasks", f"{failed} failed", STATUS_WARNING)
+    active = sum(record.status == "active" for record in records)
+    return OverviewItem("Tasks", f"{active} active", STATUS_OK)
 
 
 def _identity_valid(path: Path) -> bool:
@@ -191,7 +248,12 @@ def _image_item(config: dict[str, Any]) -> OverviewItem:
     return OverviewItem("Image", provider, STATUS_OK, detail)
 
 
-def _voice_item(config_dir: Path, config: dict[str, Any]) -> OverviewItem:
+def _voice_item(config_dir: Path, config: dict[str, Any], *, runtime: dict[str, Any] | None = None) -> OverviewItem:
+    runtime = runtime or runtime_snapshot(config_dir)
+    active = runtime.get("channels", {}).get(CHANNEL_VOICE)
+    if isinstance(active, dict):
+        state, status, error = _channel_state(runtime, CHANNEL_VOICE)
+        return OverviewItem("Voice", state, status, error or "soniox voice")
     raw_voice = voice_config(config)
     if not raw_voice:
         return OverviewItem("Voice", "not set", STATUS_DISABLED)
@@ -204,10 +266,8 @@ def _voice_item(config_dir: Path, config: dict[str, Any]) -> OverviewItem:
     except ValueError as exc:
         return OverviewItem("Voice", "soniox", STATUS_ERROR, _friendly_overview_error(str(exc), fallback="Setup"))
 
-    pid = running_pid(managed_paths(config_dir, CHANNEL_VOICE).pid_path)
-    if pid is None:
-        return OverviewItem("Voice", "stopped", STATUS_IDLE, "soniox half-duplex")
-    return OverviewItem("Voice", "running", STATUS_OK, f"soniox half-duplex pid {pid}")
+    state, status, error = _channel_state(runtime or runtime_snapshot(config_dir), CHANNEL_VOICE)
+    return OverviewItem("Voice", state, status, error or "soniox voice")
 
 
 def _api_service_url(config: dict[str, Any]) -> str:
@@ -221,24 +281,21 @@ def _api_service_url(config: dict[str, Any]) -> str:
     return f"http://{browse_host}:{port}"
 
 
-def _service_item(config_dir: Path, channel: str, config: dict[str, Any]) -> OverviewItem:
+def _service_item(config_dir: Path, channel: str, config: dict[str, Any], *, runtime: dict[str, Any] | None = None) -> OverviewItem:
+    runtime = runtime or runtime_snapshot(config_dir)
+    title = {CHANNEL_API: "API", CHANNEL_FEISHU: "Feishu", CHANNEL_WEIXIN: "Weixin"}.get(channel, channel)
+    active = runtime.get("channels", {}).get(channel)
+    if isinstance(active, dict):
+        state, status, error = _channel_state(runtime, channel)
+        return OverviewItem(title, state, status, error or (_api_service_target(config) if channel == CHANNEL_API else ""))
     if channel == CHANNEL_FEISHU and not (config.get("app_id") and config.get("app_secret")):
         return OverviewItem("Feishu", "not set", STATUS_DISABLED, "Setup")
     if channel == CHANNEL_WEIXIN and not config.get("account_id"):
         return OverviewItem("Weixin", "not set", STATUS_DISABLED, "Setup")
     if channel == CHANNEL_API and config.get("enabled", True) is False:
         return OverviewItem("API", "off", STATUS_DISABLED, "Resetup")
-    paths = managed_paths(config_dir, channel)
-    pid = running_pid(paths.pid_path)
-    title = {CHANNEL_API: "API", CHANNEL_FEISHU: "Feishu", CHANNEL_WEIXIN: "Weixin"}.get(channel, channel)
-    if pid is None:
-        detail = ""
-        if channel == CHANNEL_API:
-            detail = _api_service_target(config)
-        return OverviewItem(title, "stopped", STATUS_IDLE, detail)
-    if channel == CHANNEL_API:
-        return OverviewItem(title, "running", STATUS_OK, f"{_api_service_target(config)} pid {pid}")
-    return OverviewItem(title, "running", STATUS_OK, f"pid {pid}")
+    state, status, error = _channel_state(runtime or runtime_snapshot(config_dir), channel)
+    return OverviewItem(title, state, status, error or (_api_service_target(config) if channel == CHANNEL_API else ""))
 
 
 def _web_client_item(config_dir: Path, config: dict[str, Any]) -> OverviewItem:

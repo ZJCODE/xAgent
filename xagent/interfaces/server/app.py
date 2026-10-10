@@ -30,12 +30,16 @@ class AgentHTTPServer(AdminService):
         max_concurrent_chats: int = AgentConfig.DEFAULT_HTTP_MAX_CONCURRENT_CHATS,
         chat_queue_timeout: float = AgentConfig.DEFAULT_HTTP_QUEUE_TIMEOUT,
         chat_timeout: float = AgentConfig.DEFAULT_HTTP_CHAT_TIMEOUT,
+        runtime_managed: bool = False,
+        api_adapter: Optional[ApiChannelAdapter] = None,
     ):
         super().__init__(config_dir=config_dir, agent=agent)
+        self.runtime_managed = runtime_managed
+        self.is_runtime_owner = runtime_managed
 
         self.logger = logging.getLogger(f"{self.__class__.__name__}")
         contacts_file = resolve_contacts_path(self.workspace)
-        self.api = ApiChannelAdapter(
+        self.api = api_adapter or ApiChannelAdapter(
             self.agent,
             contacts_file=contacts_file,
             tasks_dir=self.tasks_dir,
@@ -102,33 +106,16 @@ class AgentHTTPServer(AdminService):
 
     @asynccontextmanager
     async def _lifespan(self, app: FastAPI):
-        heartbeat = create_runtime_heartbeat(
-            self.agent,
-            self.config.get("runtime") if isinstance(self.config, dict) else None,
-            logger_=self.logger,
-            subconscious_delivery_sink=self.api.deliver_subconscious_message,
-            subconscious_deliverable_channels={"api"},
-        )
-        try:
-            if heartbeat is not None:
-                await heartbeat.start()
-                self.logger.info(
-                    "Runtime heartbeat started (interval=%ss)",
-                    heartbeat.interval_seconds,
-                )
-            await self.api.start()
-            yield
-        finally:
-            await self.api.stop()
-            if heartbeat is not None:
-                await heartbeat.stop()
-                self.logger.info("Runtime heartbeat stopped")
+        """HTTP transport never owns agent background work or maintenance."""
+        yield
 
     def _add_routes(self, app: FastAPI) -> None:
         self.api.register_routes(app)
         register_admin_routes(app, lambda: self)
 
     def run(self, host: str = None, port: int = None) -> None:
+        if not self.runtime_managed:
+            raise RuntimeError("Use xagent run/start; RuntimeHost owns the API lifecycle.")
         host = host if host is not None else BaseAgentConfig.DEFAULT_HOST
         port = port if port is not None else BaseAgentConfig.DEFAULT_PORT
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import webbrowser  # noqa: F401 - retained as the launcher browser patch point
 from pathlib import Path
+from copy import deepcopy
 from typing import Any, Callable, Optional, Sequence
 
 from rich.text import Text  # type: ignore[import-not-found]
@@ -46,6 +47,7 @@ from .channels import (
 )
 from .config_editor import (
     ConfigUpdate,
+    ConfigChange,
     image_generation_provider_needs_feature_key,
     load_config,
     prepare_image_generation_provider_update,
@@ -56,8 +58,8 @@ from .config_editor import (
     provider_needs_feature_key,
     write_config,
 )
-from .overview import STATUS_DISABLED, RuntimeOverview, build_runtime_overview
-from .processes import managed_paths, running_pid
+from .overview import STATUS_DISABLED, RuntimeOverview, build_runtime_overview, runtime_snapshot
+from .processes import running_pid
 from .runtime import (
     _launcher_args,
     _xagent_version_text,
@@ -117,9 +119,15 @@ def _launcher_options(*, initialized: bool, has_agents: bool = True) -> list[Men
             description="Create, switch, or inspect managed agents.",
         ),
         MenuOption(
+            key="runtime",
+            title="Runtime",
+            description="Start, stop, or inspect the Agent and all its channels.",
+            disabled=not initialized,
+        ),
+        MenuOption(
             key="channel",
             title="Channel",
-            description="Open chat, API, Feishu, Weixin, and voice entry points.",
+            description="Open chat or configure API, Feishu, Weixin, and voice.",
             disabled=not initialized,
         ),
         MenuOption(
@@ -146,7 +154,7 @@ def _launcher_options(*, initialized: bool, has_agents: bool = True) -> list[Men
     ]
     if has_agents:
         options.insert(
-            4,
+            5,
             MenuOption(
                 key="setup",
                 title=setup_title,
@@ -157,8 +165,10 @@ def _launcher_options(*, initialized: bool, has_agents: bool = True) -> list[Men
 
 
 def _launcher_channel_options(config_dir: Path) -> list[MenuOption]:
+    state = runtime_snapshot(config_dir)
     def _running(channel: str) -> bool:
-        return running_pid(managed_paths(config_dir, channel).pid_path) is not None
+        row = state.get("channels", {}).get(channel, {})
+        return isinstance(row, dict) and row.get("state") == "running"
 
     voice_running = _running(CHANNEL_VOICE)
     api_running = _running(CHANNEL_API)
@@ -174,22 +184,22 @@ def _launcher_channel_options(config_dir: Path) -> list[MenuOption]:
         MenuOption(
             key="voice",
             title="Voice (running)" if voice_running else "Voice",
-            description="Manage the microphone/speaker channel.",
+            description="Configure the microphone and speaker.",
         ),
         MenuOption(
             key=CHANNEL_API,
             title="API (running)" if api_running else "API",
-            description="Manage the HTTP/WebSocket api channel.",
+            description="Configure the API and inspect its address.",
         ),
         MenuOption(
             key=CHANNEL_FEISHU,
             title="Feishu (running)" if feishu_running else "Feishu",
-            description="Configure or manage the Feishu bot channel.",
+            description="Configure the Feishu bot channel.",
         ),
         MenuOption(
             key=CHANNEL_WEIXIN,
             title="Weixin (running)" if weixin_running else "Weixin",
-            description="Configure or manage the Weixin DM channel.",
+            description="Configure the Weixin DM channel.",
         ),
         MenuOption(key="back", title="Back", description="Return to the main launcher."),
     ]
@@ -291,7 +301,7 @@ def _api_channel_is_enabled(config_dir: Path) -> bool:
 
 
 def _api_channel_is_running(config_dir: Path) -> bool:
-    return running_pid(managed_paths(config_dir, CHANNEL_API).pid_path) is not None
+    return runtime_snapshot(config_dir).get("channels", {}).get(CHANNEL_API, {}).get("state") == "running"
 
 
 def _api_channel_url(config_dir: Path) -> str:
@@ -312,11 +322,6 @@ def _voice_is_configured(config: dict[str, Any]) -> bool:
 
 def _voice_channel_options(config: dict[str, Any]) -> list[MenuOption]:
     voice_configured = _voice_is_configured(config)
-    start_description = (
-        "Start the voice channel."
-        if voice_configured
-        else "Set up voice first."
-    )
     return [
         MenuOption(
             "configure",
@@ -325,15 +330,6 @@ def _voice_channel_options(config: dict[str, Any]) -> list[MenuOption]:
             if voice_configured
             else "Add a Soniox API key to configure voice.",
         ),
-        MenuOption("start", "Start", start_description, disabled=not voice_configured),
-        MenuOption("stop", "Stop", "Stop the voice channel."),
-        MenuOption(
-            "restart",
-            "Restart",
-            "Restart the voice channel." if voice_configured else "Set up voice first.",
-            disabled=not voice_configured,
-        ),
-        MenuOption("logs", "Logs", "View and follow the latest log output in real time."),
         MenuOption("devices", "List Devices", "Print available local audio input/output devices."),
         MenuOption("back", "Back", "Return to Channel."),
     ]
@@ -390,7 +386,7 @@ def _partial_update_options(config_dir: Path) -> list[MenuOption]:
             disabled=not observability_available,
         ),
         MenuOption("voice", "Voice", "Configure Soniox voice, interruptions, and audio devices."),
-        MenuOption("back", "Back", "Return to Setup. Channel lifecycle actions live under Channel."),
+        MenuOption("back", "Back", "Return to Setup. Agent controls live under Runtime."),
     ]
 
 
@@ -407,12 +403,11 @@ def _web_client_is_running(config_dir: Path) -> bool:
 def _managed_channel_actions(config_dir: Path, channel: str) -> list[MenuOption]:
     actions: list[MenuOption] = []
     channel_ready = True
-    unavailable_description = "Complete setup before starting this channel."
     if channel == CHANNEL_API:
-        channel_ready = _api_channel_is_enabled(config_dir)
+        actions.append(MenuOption("configure", "Configure", "Set the API address and whether it is enabled."))
+        actions.append(MenuOption("address", "Address", "Show the HTTP/WebSocket API address."))
     if channel == CHANNEL_FEISHU:
         channel_ready = _feishu_channel_is_configured(config_dir)
-        unavailable_description = "Configure channels.feishu before starting this channel."
         actions.append(
             MenuOption(
                 "setup",
@@ -424,7 +419,6 @@ def _managed_channel_actions(config_dir: Path, channel: str) -> list[MenuOption]
         )
     if channel == CHANNEL_WEIXIN:
         channel_ready = _weixin_channel_is_configured(config_dir)
-        unavailable_description = "Configure channels.weixin before starting this channel."
         actions.append(
             MenuOption(
                 "setup",
@@ -434,23 +428,7 @@ def _managed_channel_actions(config_dir: Path, channel: str) -> list[MenuOption]
                 else "Configure channels.weixin before starting this channel.",
             )
         )
-    actions.extend([
-        MenuOption(
-            "start",
-            "Start",
-            "Start this channel." if channel_ready else unavailable_description,
-            disabled=not channel_ready,
-        ),
-        MenuOption("stop", "Stop", "Stop this channel."),
-        MenuOption(
-            "restart",
-            "Restart",
-            "Restart this channel." if channel_ready else unavailable_description,
-            disabled=not channel_ready,
-        ),
-        MenuOption("logs", "Logs", "View and follow the latest log output in real time."),
-        MenuOption("back", "Back", "Return to Channel."),
-    ])
+    actions.append(MenuOption("back", "Back", "Return to Channel. Start the Agent from Runtime."))
     return actions
 
 
@@ -476,8 +454,8 @@ def _launcher_help_content(*, config_dir: Path, initialized: bool) -> Text:
     content.append(_format_init_command('xagent chat "Hey"', config_dir=config_dir), style="cyan")
     content.append(" for one message.\n")
     content.append("  ")
-    content.append(_format_init_command("xagent api start", config_dir=config_dir), style="cyan")
-    content.append("\n    Start the api channel.\n")
+    content.append(_format_init_command("xagent start", config_dir=config_dir), style="cyan")
+    content.append("\n    Start the Agent and its configured channels.\n")
     content.append("  ")
     content.append(_format_init_command("xagent web start", config_dir=config_dir), style="cyan")
     content.append("\n    Start the browser web client.\n")
@@ -485,31 +463,25 @@ def _launcher_help_content(*, config_dir: Path, initialized: bool) -> Text:
     content.append(_format_init_command("xagent web open", config_dir=config_dir), style="cyan")
     content.append("\n    Open the running web client in your browser.\n")
     content.append("  ")
-    content.append(_format_init_command("xagent voice start", config_dir=config_dir), style="cyan")
-    content.append("\n    Start the voice channel.\n")
-    content.append("  ")
     content.append(_format_init_command("xagent voice setup", config_dir=config_dir), style="cyan")
     content.append("\n    Configure the voice channel.\n")
     content.append("  ")
     content.append(_format_init_command("xagent status", config_dir=config_dir), style="cyan")
-    content.append("\n    Show all configured channel processes.\n")
+    content.append("\n    Show Agent readiness, channel states, memory, and tasks.\n")
     content.append("  ")
-    content.append(_format_init_command("xagent api logs -f", config_dir=config_dir), style="cyan")
-    content.append("\n    Follow api channel logs.\n")
-    content.append("  ")
-    content.append(_format_init_command("xagent voice logs -f", config_dir=config_dir), style="cyan")
-    content.append("\n    Follow voice logs.\n")
+    content.append(_format_init_command("xagent logs -f", config_dir=config_dir), style="cyan")
+    content.append("\n    Follow the Agent runtime log.\n")
 
     content.append("\nIntegrations:\n")
     content.append("  ")
     content.append(_format_init_command("xagent feishu setup", config_dir=config_dir), style="cyan")
     content.append("\n    Configure Feishu, then start it with ")
-    content.append(_format_init_command("xagent feishu start", config_dir=config_dir), style="cyan")
+    content.append(_format_init_command("xagent start", config_dir=config_dir), style="cyan")
     content.append(".\n")
     content.append("  ")
     content.append(_format_init_command("xagent weixin setup", config_dir=config_dir), style="cyan")
     content.append("\n    Configure Weixin, then start it with ")
-    content.append(_format_init_command("xagent weixin start", config_dir=config_dir), style="cyan")
+    content.append(_format_init_command("xagent start", config_dir=config_dir), style="cyan")
     content.append(".\n")
 
     content.append("\nInspect:\n")
@@ -549,6 +521,8 @@ def _launcher_overview_subtitle(overview: RuntimeOverview) -> str:
         line = f"{item.name:<10} {item.value}"
         if item.name in {"API", "Web", "Voice", "Feishu", "Weixin"} and item.value == "running" and item.detail:
             line += f"  {item.detail}"
+        elif item.name in {"Runtime", "Tasks"} and item.detail:
+            line += f"  {item.detail}"
         lines.append(line)
     if disabled_names:
         lines.append("")
@@ -557,7 +531,6 @@ def _launcher_overview_subtitle(overview: RuntimeOverview) -> str:
 
 
 def _run_managed_channel_action(config_dir: Path, channel: str, action: str) -> int:
-    channels = [channel]
     if action == "setup":
         if channel == CHANNEL_WEIXIN:
             already_configured = _weixin_channel_is_configured(config_dir)
@@ -590,57 +563,74 @@ def _run_managed_channel_action(config_dir: Path, channel: str, action: str) -> 
                 show_next_steps=False,
             )
         )
-    if action == "start":
-        return handle_start(
-            _launcher_args(
-                config_dir=str(config_dir),
-                channels=channels,
-                host=None,
-                port=None,
-                open_browser=False,
-                max_concurrent_chats=None,
-                queue_timeout=None,
-                chat_timeout=None,
-            )
-        )
-    if action == "stop":
-        return handle_stop(_launcher_args(config_dir=str(config_dir), channels=channels))
-    if action == "restart":
-        return handle_restart(
-            _launcher_args(
-                config_dir=str(config_dir),
-                channels=channels,
-                host=None,
-                port=None,
-                open_browser=False,
-                max_concurrent_chats=None,
-                queue_timeout=None,
-                chat_timeout=None,
-            )
-        )
-    if action == "status":
-        return handle_status(
-            _launcher_args(
-                config_dir=str(config_dir),
-                channels=channels,
-                json_output=False,
-            )
-        )
-    from .runtime import handle_logs
-
-    print(f"\nFollowing {channel} logs (Ctrl+C to stop)...\n")
-    try:
-        return handle_logs(
-            _launcher_args(
-                config_dir=str(config_dir),
-                channels=channels,
-                lines=80,
-                follow=True,
-            )
-        )
-    except KeyboardInterrupt:
-        print("\nStopped following logs.")
+    if channel == CHANNEL_API and action == "address":
+        print(_api_channel_url(config_dir))
         return 0
+    print("Manage the Agent under Runtime; channels have configuration only.")
+    return 1
+
+
+def _run_runtime_action(config_dir: Path, action: str) -> int:
+    args = _launcher_args(config_dir=str(config_dir), channels=None, json_output=False,
+                          lines=80, follow=action == "logs")
+    handlers = {"start": handle_start, "stop": handle_stop, "restart": handle_restart,
+                "status": handle_status}
+    if action == "logs":
+        from .runtime import handle_logs
+        try:
+            return handle_logs(args)
+        except KeyboardInterrupt:
+            return 0
+    return handlers[action](args)
+
+
+def _run_runtime_launcher(config_dir: Path) -> int:
+    ui = TerminalUI()
+    try:
+        while True:
+            state = runtime_snapshot(config_dir)
+            option = ui.select_menu(title="xAgent Runtime",
+                subtitle=f"Agent: {state.get('state', 'stopped')} · {config_dir}",
+                options=[MenuOption("start", "Start", "Start the Agent and its configured channels."),
+                         MenuOption("stop", "Stop", "Stop the Agent and all its channels."),
+                         MenuOption("restart", "Restart", "Restart the Agent to apply configuration changes."),
+                         MenuOption("status", "Status", "Show readiness, channels, memory, and tasks."),
+                         MenuOption("logs", "Logs", "Follow the Agent runtime log."),
+                         MenuOption("back", "Back", "Return to the main launcher.")],
+                footer="↑/↓ Move • Enter Select  •  q Back")
+            if option is None or option.key == "back":
+                ui.clear()
+                return 0
+            ui.clear()
+            exit_code = _run_runtime_action(config_dir, str(option.key))
+            if exit_code:
+                ui.print_panel(f"Runtime action exited with status {exit_code}.", title="Runtime")
+            ui.pause("Press Enter to return to Runtime")
+    except ReturnToLauncherHome:
+        ui.clear()
+        return 0
+
+
+def _run_api_config_launcher(ui: TerminalUI, config_dir: Path) -> None:
+    config = load_config(config_dir)
+    current = api_config(config)
+    enabled = ui.confirm("Enable the API channel?", default=bool(current.get("enabled", True)))
+    if enabled is None:
+        return
+    host = ui.ask_text("API host", default=str(current.get("host") or BaseAgentConfig.DEFAULT_HOST)).strip()
+    port_text = ui.ask_text("API port", default=str(current.get("port") or BaseAgentConfig.DEFAULT_PORT)).strip()
+    try:
+        port = int(port_text)
+        if not host or not 1 <= port <= 65535:
+            raise ValueError("Use a host and a port between 1 and 65535.")
+        updated = deepcopy(config)
+        updated.setdefault("channels", {})["api"] = {**current, "enabled": enabled, "host": host, "port": port}
+        changes = tuple(ConfigChange(f"channels.api.{key}", str(current.get(key, "")), str(value))
+                        for key, value in (("enabled", enabled), ("host", host), ("port", port))
+                        if current.get(key) != value)
+        _apply_config_update(ui, config_dir, ConfigUpdate(updated, changes), return_home_on_success=True)
+    except (ValueError, OSError) as exc:
+        ui.print_panel(f"Cannot configure API: {exc}", title="Channel")
 
 
 def _current_search_provider(config: dict[str, Any]) -> str:
@@ -829,6 +819,9 @@ def _run_managed_channel_launcher(
             continue
         if option.key == "setup" and channel == CHANNEL_WEIXIN:
             _run_weixin_config_launcher(ui, config_dir)
+            continue
+        if option.key == "configure" and channel == CHANNEL_API:
+            _run_api_config_launcher(ui, config_dir)
             continue
         exit_code = _run_managed_channel_action(config_dir, channel, str(option.key))
         if exit_code == SETUP_EXIT_CANCELLED:
@@ -2069,10 +2062,7 @@ def _run_voice_channel_launcher(ui: TerminalUI, config_dir: Path) -> None:
         if option.key == "configure":
             _run_voice_config_launcher(ui, config_dir)
             continue
-        if option.key in {"start", "stop", "restart", "status", "logs"}:
-            exit_code = _run_managed_channel_action(config_dir, CHANNEL_VOICE, str(option.key))
-        else:
-            exit_code = handle_voice(
+        exit_code = handle_voice(
                 _launcher_args(
                     config_dir=str(config_dir),
                     user_id="local_voice",
@@ -2095,7 +2085,7 @@ def _run_channel_launcher(config_dir: Path) -> int:
         while True:
             channel_option = ui.select_menu(
                 title="xAgent Channel",
-                subtitle="Choose how you want to enter or manage the runtime.",
+            subtitle="Choose a channel to configure. Manage the Agent under Runtime.",
                 options=_launcher_channel_options(config_dir),
                 footer="↑/↓ Move • Enter Select  •  q Back",
             )
@@ -2199,6 +2189,9 @@ def _run_interactive_launcher() -> int:
         ui.clear()
         if option.key == "agent":
             _run_agent_launcher()
+            continue
+        if option.key == "runtime":
+            _run_runtime_launcher(config_dir)
             continue
         if option.key == "setup":
             if initialized:

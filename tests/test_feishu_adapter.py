@@ -337,13 +337,13 @@ class FeishuAdapterTests(unittest.TestCase):
 
         self.assertEqual(channel.kwargs["policy"], "marker")
 
-    def test_stop_flushes_agent_memory(self):
+    def test_stop_leaves_shared_memory_flush_to_runtime_host(self):
         agent = _FakeAgent()
         adapter = FeishuAdapter(agent=agent, config=FeishuAdapterConfig(app_id="cli_test", app_secret="secret"))
 
         asyncio.run(adapter.stop())
 
-        self.assertEqual(agent.flush_count, 1)
+        self.assertEqual(agent.flush_count, 0)
 
     def test_scheduled_task_dispatch_sends_to_feishu_chat(self):
         async def run_test():

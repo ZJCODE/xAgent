@@ -342,7 +342,7 @@ class AgentInboxTests(unittest.IsolatedAsyncioTestCase):
         release.set()
         events = await task
         types = [event.get("type") for event in events]
-        self.assertEqual(types, ["aborted", "done"])
+        self.assertEqual(types, ["accepted", "aborted", "done"])
         self.assertEqual(tool_executor.seen_input_messages, [])
         self.assertEqual(len(model_client.calls), 1)
 

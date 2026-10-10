@@ -13,7 +13,8 @@ from .processes import (
     process_status_row,
     stop_managed_process,
 )
-from .runtime import _start_background_channel, _start_background_web
+from .runtime import _start_background_web
+from .agent_runtime import start_runtime
 from .web_client import web_client_paths
 
 
@@ -112,11 +113,11 @@ def handle_processes_restart(args: argparse.Namespace) -> int:
                 continue
 
             restart_args = _channel_restart_namespace(ref)
-            entry_ok = _start_background_channel(
-                restart_args,
-                channel=str(ref.channel),
-                config_dir=ref.config_dir,
-            )
+            try:
+                start_runtime(ref.config_dir)
+                entry_ok = True
+            except Exception:
+                entry_ok = False
             message = "restarted" if entry_ok else "failed to restart"
 
         ok = ok and entry_ok

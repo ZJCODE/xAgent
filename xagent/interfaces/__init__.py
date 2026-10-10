@@ -1,9 +1,10 @@
-from .server import AgentHTTPServer
-
 __all__ = ["AgentHTTPServer", "AgentCLI"]
 
 
 def __getattr__(name: str):
+	if name == "AgentHTTPServer":
+		from .server import AgentHTTPServer
+		return AgentHTTPServer
 	if name == "AgentCLI":
 		from .cli import AgentCLI
 

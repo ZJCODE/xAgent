@@ -682,6 +682,36 @@ class SonioxSDKAdapterTests(unittest.TestCase):
 
 
 class VoiceRuntimeTests(unittest.TestCase):
+    def test_voice_cancellation_uses_its_turn_and_keeps_other_voice_work(self):
+        from xagent.core.inbox import AgentInbox
+        agent = FakeAgent()
+        agent.inbox = AgentInbox()
+        agent.abort = Mock(side_effect=lambda turn_id, **kwargs: agent.inbox.request_abort(turn_id, **kwargs))
+        runtime = self.make_runtime(agent=agent)
+        api = agent.inbox.reserve_turn(channel="api")
+        own = agent.inbox.reserve_turn(channel="voice")
+        another = agent.inbox.reserve_turn(channel="voice")
+        runtime._active_voice_turn_id = own.turn_id
+        runtime._abort_voice_turn()
+        agent.abort.assert_called_once_with(own.turn_id, channel="voice")
+        self.assertTrue(own.cancelled.is_set())
+        self.assertFalse(api.cancelled.is_set())
+        self.assertFalse(another.cancelled.is_set())
+
+    def test_voice_supplement_targets_its_accepted_turn(self):
+        async def run():
+            agent = FakeAgent()
+            agent.steer = AsyncMock(return_value=True)
+            runtime = self.make_runtime(agent=agent)
+            runtime._active_voice_turn_id = "own-voice-turn"
+            runtime._utterance_queue = asyncio.Queue()
+            runtime._steer_result = asyncio.get_running_loop().create_future()
+            await runtime._utterance_queue.put(VoiceUtterance(text="also check tomorrow"))
+            await runtime._steer_during_think("check today", asyncio.Event())
+            agent.steer.assert_awaited_once_with("own-voice-turn", "also check tomorrow", channel="voice")
+            self.assertFalse(runtime._steer_result.done(), "a successfully steered turn must not start another reply")
+        asyncio.run(run())
+
     def setUp(self):
         cooldown = patch("xagent.interfaces.voice.runtime._PLAYBACK_MICROPHONE_COOLDOWN_SECONDS", 0.0)
         cooldown.start()
@@ -916,7 +946,12 @@ class VoiceRuntimeTests(unittest.TestCase):
                 )
                 runtime = self.make_runtime(tasks_dir=tmpdir, allow_proactive_output=True)
                 runtime._speak = AsyncMock()
-                await runtime.task_scheduler.tick()
+                from xagent.core.runtime import AsyncTaskScheduler
+                self.assertIsNone(runtime.task_scheduler)
+                scheduler = AsyncTaskScheduler(tmpdir,
+                    can_handle=runtime._can_handle_scheduled_task,
+                    dispatch=runtime._dispatch_scheduled_task)
+                await scheduler.tick()
                 self.assertEqual(runtime._speak.await_count, 1)
                 self.assertEqual(list_active_task_records(tmpdir), [])
 

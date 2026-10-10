@@ -7,10 +7,15 @@ from typing import TYPE_CHECKING
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
+from pydantic import BaseModel
 
 from .models import AgentInput, ChatInput, ObserveInput
 from .serializers import response_payload
 from ...integrations.api.constants import CLIENT_HTTP, CLIENT_WS
+
+
+class StopInput(BaseModel):
+    turn_id: str
 
 if TYPE_CHECKING:
     from ...integrations.api.adapter import ApiChannelAdapter
@@ -29,8 +34,7 @@ def register_runtime_routes(app: FastAPI, adapter: "ApiChannelAdapter") -> None:
     async def chat(input_data: ChatInput):
         adapter.logger.info("Chat request from %s", input_data.user_id)
         try:
-            response = await adapter.chat.run_chat(input_data, client=CLIENT_HTTP)
-            return {"reply": response_payload(response)}
+            return await adapter.chat.run_chat_response(input_data, client=CLIENT_HTTP)
         except HTTPException:
             raise
         except Exception as exc:
@@ -38,8 +42,10 @@ def register_runtime_routes(app: FastAPI, adapter: "ApiChannelAdapter") -> None:
             raise HTTPException(status_code=500, detail=f"Agent processing error: {str(exc)}")
 
     @app.post("/chat/stop")
-    async def stop_chat():
-        result = adapter.chat.abort_turn()
+    async def stop_chat(input_data: StopInput):
+        if not input_data.turn_id:
+            raise HTTPException(422, "turn_id is required")
+        result = adapter.chat.abort_turn(input_data.turn_id)
         adapter.logger.info("Chat stop requested: stopped=%s", result.get("stopped"))
         return result
 

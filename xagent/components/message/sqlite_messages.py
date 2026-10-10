@@ -6,7 +6,8 @@ import asyncio
 import logging
 import re
 import sqlite3
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Union
@@ -51,13 +52,18 @@ class MessageStorage:
         self.logger = logging.getLogger(self.__class__.__name__)
         self._initialize_database()
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
         connection = sqlite3.connect(
             str(self.path),
             timeout=MessageStorageConfig.CONNECT_TIMEOUT,
         )
         connection.row_factory = sqlite3.Row
-        return connection
+        try:
+            with connection:
+                yield connection
+        finally:
+            connection.close()
 
     def _initialize_database(self) -> None:
         with self._connect() as connection:
@@ -116,7 +122,30 @@ class MessageStorage:
     def _add_messages_sync(self, messages: List[Message]) -> List[Message]:
         stored: List[Message] = []
         with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
             for message in messages:
+                metadata = message.metadata or {}
+                if metadata.get("event_id") and metadata.get("event_scope") and message.role in {RoleType.USER, RoleType.ENVIRONMENT}:
+                    existing = connection.execute(
+                        "SELECT id, message_json FROM messages "
+                        "WHERE json_extract(message_json, '$.metadata.event_id')=? "
+                        "AND json_extract(message_json, '$.metadata.event_scope')=? LIMIT 1",
+                        (metadata["event_id"], metadata["event_scope"]),
+                    ).fetchone()
+                    if existing is not None:
+                        stored.append(_message_with_storage_cursor(
+                            Message.model_validate_json(existing["message_json"]), int(existing["id"]),
+                        ))
+                        continue
+                if metadata.get("delivery_key"):
+                    existing = connection.execute(
+                        "SELECT id, message_json FROM messages WHERE "
+                        "json_extract(message_json, '$.metadata.delivery_key')=? LIMIT 1",
+                        (metadata["delivery_key"],),
+                    ).fetchone()
+                    if existing is not None:
+                        stored.append(_message_with_storage_cursor(Message.model_validate_json(existing["message_json"]), int(existing["id"])))
+                        continue
                 cursor = connection.execute(
                     f"""
                     INSERT INTO {MessageStorageConfig.TABLE_NAME} (timestamp, message_json)
@@ -127,6 +156,30 @@ class MessageStorage:
                 stored.append(_message_with_storage_cursor(message, int(cursor)))
             connection.commit()
         return stored
+
+    async def add_message_once(self, message: Message, *, idempotency_key: str) -> Message:
+        metadata = {**(message.metadata or {}), "delivery_key": idempotency_key}
+        stored = await self.add_messages(message.model_copy(update={"metadata": metadata}))
+        return stored[0]
+
+    async def get_message_by_metadata(self, key: str, value, *, role=None) -> Optional[Message]:
+        """Find a persisted receipt reference without depending on prompt windows."""
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
+            raise ValueError("Invalid metadata key")
+        return await asyncio.to_thread(self._get_message_by_metadata_sync, key, value, role)
+
+    def _get_message_by_metadata_sync(self, key, value, role):
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT id, message_json FROM messages WHERE "
+                f"json_extract(message_json, '$.metadata.{key}')=? ORDER BY id DESC",
+                (value,),
+            )
+            for row in rows:
+                message = Message.model_validate_json(row["message_json"])
+                if role is None or message.role == role or message.role.value == role:
+                    return _message_with_storage_cursor(message, int(row["id"]))
+        return None
 
     async def get_messages(
         self,

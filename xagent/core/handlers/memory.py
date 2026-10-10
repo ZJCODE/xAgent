@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import re
+import threading
 from contextlib import asynccontextmanager
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import IO, TYPE_CHECKING, List, Optional
 
@@ -23,6 +23,7 @@ except ImportError:  # pragma: no cover - POSIX platforms
 
 from ..config import AgentConfig
 from ..inbox import is_scheduled_work
+from ..journal_commits import JournalCommitStore, atomic_write_bytes, read_bytes
 from ...schemas import Message, MessageType, RoleType
 
 if TYPE_CHECKING:
@@ -81,6 +82,9 @@ class MemoryHandler:
         )
         self._maintenance_lock = asyncio.Lock()
         self._maintenance_task: Optional[asyncio.Task[bool]] = None
+        self._journal_commits = JournalCommitStore(self.memory.root)
+        self._last_maintenance: dict = {}
+        self._receipt_error: Optional[str] = None
         self._last_processed_message_id = self._non_negative_int(
             self._read_state_sync(),
             0,
@@ -288,18 +292,39 @@ class MemoryHandler:
                 return bool(existing_result)
 
         async with self._maintenance_guard(refresh_state=True):
-            return await self._run_maintenance_locked(
-                force=force, trigger=trigger, idle_seconds=idle_seconds
-            )
+            self._last_maintenance = {
+                "status": "running", "trigger": trigger,
+                "started_at": datetime.now().astimezone().isoformat(),
+            }
+            try:
+                result = await self._run_maintenance_locked(
+                    force=force, trigger=trigger, idle_seconds=idle_seconds
+                )
+            except asyncio.CancelledError:
+                self._last_maintenance["status"] = "interrupted"
+                raise
+            except Exception as exc:
+                self._last_maintenance.update(status="failed", error=str(exc))
+                logger.error("Journal maintenance failed: %s", exc, exc_info=True)
+                return False
+            else:
+                if self._last_maintenance["status"] == "running":
+                    self._last_maintenance["status"] = "completed" if result else "idle"
+                return result
+            finally:
+                self._last_maintenance["finished_at"] = datetime.now().astimezone().isoformat()
 
     async def _run_maintenance_locked(
         self, force: bool = False, trigger: str = "count", idle_seconds: float = 0
     ) -> bool:
+        healthy, recovered = await self._recover_pending_commit_locked()
+        if not healthy:
+            return False
         latest_message_id = await self.message_storage.get_latest_message_cursor()
         if latest_message_id <= 0:
-            return False
+            return recovered
         if latest_message_id <= self._last_processed_message_id:
-            return False
+            return recovered
 
         # Gate on unprocessed message count: only run when enough new
         # messages have accumulated since the last checkpoint.  Based on
@@ -324,12 +349,16 @@ class MemoryHandler:
             start_exclusive=start_exclusive,
             end_inclusive=end_inclusive,
         )
+        today = date.today()
+        old_content = await asyncio.to_thread(read_bytes, self.memory.daily_path(today))
         if not recent_messages:
             # Jump checkpoint forward.  If messages were deleted (id gap),
             # leap to just before latest so the next cycle catches real data
             # instead of inching forward one window at a time.
             jump_to = max(end_inclusive, latest_message_id - self.diary_write_batch)
-            await self._commit_processed_message_id(jump_to)
+            await self._prepare_and_commit_window(
+                today, old_content, "", start_exclusive, jump_to,
+            )
             return False
 
         checkpoint = self._last_processed_message_id
@@ -343,30 +372,41 @@ class MemoryHandler:
                 record["already_journaled"] = True
             new_records.append(record)
         if not new_records:
-            await self._commit_processed_message_id(end_inclusive)
+            await self._prepare_and_commit_window(
+                today, old_content, "", start_exclusive, end_inclusive,
+            )
             return False
 
         batches = self._split_records_for_source_budget(new_records)
         if not batches:
             return False
 
+        # All model slices belong to one cursor window. Stage them in memory
+        # so a failure in a later slice never leaves an uncheckpointed append.
+        staged_content = ""
         for batch in batches:
-            if not await self._write_journal_entry(
-                batch,
-                trigger=trigger,
-                start_cursor=start_exclusive,
-                end_cursor=end_inclusive,
-                idle_seconds=idle_seconds,
-            ):
-                return False
-
-        await self._update_relationship_cards(recent_messages, new_records)
-
-        if not await self._commit_processed_message_id(end_inclusive):
-            logger.warning(
-                "Diary write completed but checkpoint was not advanced; retry will replay pending messages."
+            body = await self._prepare_journal_entry(
+                batch, today, old_content.decode("utf-8", errors="replace") + staged_content,
             )
+            if body is None:
+                self._last_maintenance["status"] = "failed"
+                return False
+            if body:
+                staged_content += self.memory.daily_entry_block(body, today)
+
+        if not await self._prepare_and_commit_window(
+            today, old_content, staged_content, start_exclusive, end_inclusive,
+        ):
             return False
+
+        # Derived projections follow the durable diary/cursor commit, so
+        # failures or shutdown while projecting cannot replay diary prose.
+        await self._update_relationship_cards(recent_messages, new_records)
+        logger.info(
+            "Diary commit [trigger=%s] cursor %d→%d, %d msgs, %d slices → %d chars, idle=%.0fs",
+            trigger, start_exclusive, end_inclusive, len(new_records), len(batches),
+            len(staged_content), idle_seconds,
+        )
 
         return True
 
@@ -778,62 +818,38 @@ class MemoryHandler:
         routine_types = {"heartbeat", "ping", "sensor_tick", "presence_tick"}
         return event_type not in routine_types and bool(message.content.strip())
 
-    async def _write_journal_entry(
+    async def _prepare_journal_entry(
         self,
         messages: List[dict],
-        trigger: str = "count",
-        start_cursor: int = 0,
-        end_cursor: int = 0,
-        idle_seconds: float = 0,
-    ) -> bool:
-        """LLM-format messages and append today's next diary slice.
+        target_date: date,
+        existing_content: str,
+    ) -> Optional[str]:
+        """Generate a slice without writing any part of its cursor window.
 
         Empty model output means the slice is already covered: do not append,
-        but still succeed so the checkpoint can advance. LLM errors return
-        False so the checkpoint stays put.
+        but still commit its cursor. Model failure returns None, leaving both
+        diary and cursor untouched.
         """
-        today = date.today()
-        today_str = today.isoformat()
-        existing_today = await self._read_existing_today(today)
-
         try:
             content = await self.llm_service.format_diary_entry(
                 messages=messages,
-                journal_date=today_str,
-                existing_today=existing_today,
+                journal_date=target_date.isoformat(),
+                existing_today=self._existing_diary_context(existing_content),
             )
-            body = content.strip()
-            if body:
-                await self.memory.append_daily(body)
-
-            if trigger == "idle":
-                logger.info(
-                    "Diary write [trigger=idle] idle=%.0fs, cursor %d→%d, %d msgs → %d chars%s",
-                    idle_seconds,
-                    start_cursor,
-                    end_cursor,
-                    len(messages),
-                    len(body),
-                    "" if body else " (empty slice)",
-                )
-            else:
-                logger.info(
-                    "Diary write [trigger=count] cursor %d→%d, %d msgs → %d chars%s",
-                    start_cursor,
-                    end_cursor,
-                    len(messages),
-                    len(body),
-                    "" if body else " (empty slice)",
-                )
-            return True
+            return content.strip()
         except Exception as exc:
-            logger.error("Background diary write failed: %s", exc)
-        return False
+            self._last_maintenance["error"] = str(exc)
+            logger.error("Diary slice generation failed: %s", exc)
+        return None
 
     async def _read_existing_today(self, target_date: date) -> str:
         """Return today's daily prose, newest-first trimmed for the diary writer."""
         path = self.memory.daily_path(target_date)
         text = await self.memory.read_file(path)
+        return self._existing_diary_context(text)
+
+    def _existing_diary_context(self, text: str) -> str:
+        """Trim original and staged slices with the same prompt budget."""
         if not text.strip():
             return ""
         entries = self._split_diary_entries(text)
@@ -1035,6 +1051,144 @@ class MemoryHandler:
         self._maintenance_task = maintenance_task
         maintenance_task.add_done_callback(self._on_maintenance_done)
 
+    async def recover_pending_commit(self) -> bool:
+        """Recover operational diary state after the host acquires ownership.
+
+        Return False when a window needs review or disk recovery failed. No
+        model calls are made, and ordinary maintenance runs this same recovery
+        before deciding whether a new source window is eligible.
+        """
+        async with self._maintenance_guard(refresh_state=True):
+            healthy, _ = await self._recover_pending_commit_locked()
+            return healthy
+
+    async def get_maintenance_status(self) -> dict:
+        """Report operational backlog and review state without blocking a write."""
+        latest_cursor = await self.message_storage.get_latest_message_cursor()
+        receipt = None
+        error = self._receipt_error
+        try:
+            receipt = await asyncio.to_thread(self._journal_commits.load)
+            error = None
+        except (ValueError, OSError, KeyError, TypeError) as exc:
+            error = str(exc)
+        needs_review = []
+        if error:
+            needs_review.append({"reason": error, "receipt_path": str(self._journal_commits.path)})
+        elif receipt and receipt["status"] == "needs_review":
+            needs_review.append({
+                "commit_id": receipt["commit_id"],
+                "target_date": receipt["target_date"],
+                "start_exclusive": receipt["start_exclusive"],
+                "end_inclusive": receipt["end_inclusive"],
+                "reason": receipt.get("reason", "Diary commit needs review"),
+            })
+        last = dict(self._last_maintenance)
+        if not last and receipt:
+            last = {
+                "status": receipt["status"], "commit_id": receipt["commit_id"],
+                "finished_at": receipt.get("completed_at"),
+            }
+        return {
+            "cursor": self._last_processed_message_id,
+            "latest_cursor": latest_cursor,
+            "backlog": max(0, latest_cursor - self._last_processed_message_id),
+            "pending_commit": bool(receipt and receipt["status"] == "prepared"),
+            "needs_review": needs_review,
+            "last_maintenance": last,
+        }
+
+    async def _recover_pending_commit_locked(self) -> tuple[bool, bool]:
+        try:
+            receipt = await asyncio.to_thread(self._journal_commits.load)
+            self._receipt_error = None
+            if not receipt or receipt["status"] == "completed":
+                return True, False
+            if receipt["status"] == "needs_review":
+                self._last_maintenance["status"] = "needs_review"
+                return False, False
+            recovered = await self._finish_despite_cancellation(self._apply_prepared_receipt(receipt))
+            return recovered, recovered
+        except Exception as exc:
+            self._receipt_error = str(exc)
+            self._last_maintenance.update(status="failed", error=str(exc))
+            logger.error("Diary commit recovery failed: %s", exc, exc_info=True)
+            return False, False
+
+    async def _prepare_and_commit_window(
+        self, target_date: date, old_content: bytes, prepared_content: str,
+        start_exclusive: int, end_inclusive: int,
+    ) -> bool:
+        async def commit() -> bool:
+            receipt = await asyncio.to_thread(
+                self._journal_commits.prepare,
+                target_date=target_date, old_content=old_content,
+                prepared_content=prepared_content,
+                cursor_before=self._last_processed_message_id,
+                start_exclusive=start_exclusive, end_inclusive=end_inclusive,
+            )
+            return await self._apply_prepared_receipt(receipt)
+
+        try:
+            return await self._finish_despite_cancellation(commit())
+        except Exception as exc:
+            self._last_maintenance.update(status="failed", error=str(exc))
+            logger.error("Failed to commit diary window: %s", exc, exc_info=True)
+            return False
+
+    async def _apply_prepared_receipt(self, receipt: dict) -> bool:
+        # This entire routine is shielded, including cursor and final receipt.
+        # Keep the store's lock until all its worker-thread writes finish.
+        async with self.memory._write_lock:
+            if self._last_processed_message_id == receipt["end_inclusive"]:
+                # A crash after cursor persistence only needs receipt closure.
+                await asyncio.to_thread(self._journal_commits.complete, receipt)
+                self._last_maintenance.pop("error", None)
+                self._last_maintenance.update(status="completed", commit_id=receipt["commit_id"])
+                return True
+            if self._last_processed_message_id != receipt["cursor_before"]:
+                receipt.update(status="needs_review", reason="Journal cursor changed outside this commit")
+                await asyncio.to_thread(self._journal_commits.save, receipt)
+                self._last_maintenance["status"] = "needs_review"
+                return False
+            if not await asyncio.to_thread(self._journal_commits.apply, receipt):
+                self._last_maintenance["status"] = "needs_review"
+                logger.error("Diary commit %s needs review: %s", receipt["commit_id"], receipt.get("reason"))
+                return False
+            if not await self._commit_processed_message_id(receipt["end_inclusive"]):
+                self._last_maintenance["status"] = "failed"
+                return False
+            await asyncio.to_thread(self._journal_commits.complete, receipt)
+            self._last_maintenance.pop("error", None)
+            self._last_maintenance.update(status="completed", commit_id=receipt["commit_id"])
+            logger.info(
+                "Journal commit %s persisted cursor %d→%d",
+                receipt["commit_id"], receipt["cursor_before"], receipt["end_inclusive"],
+            )
+            return True
+
+    @staticmethod
+    async def _await_completion(task: asyncio.Task):
+        """Drain a shielded task even when shutdown repeats cancellation."""
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                continue
+        return task.result()
+
+    @classmethod
+    async def _finish_despite_cancellation(cls, operation):
+        task = asyncio.create_task(operation)
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            try:
+                await cls._await_completion(task)
+            except Exception:
+                logger.exception("Diary disk operation failed during shutdown")
+            raise
+
     @asynccontextmanager
     async def _maintenance_guard(self, refresh_state: bool = False):
         async with self._maintenance_lock:
@@ -1045,11 +1199,24 @@ class MemoryHandler:
 
     @asynccontextmanager
     async def _maintenance_process_lock(self):
-        lock_handle = await asyncio.to_thread(self._acquire_process_lock_sync)
+        cancelled = threading.Event()
+        acquisition = asyncio.create_task(asyncio.to_thread(self._acquire_process_lock_sync, cancelled))
+        try:
+            lock_handle = await asyncio.shield(acquisition)
+        except asyncio.CancelledError:
+            cancelled.set()
+            lock_handle = await self._await_completion(acquisition)
+            if lock_handle is not None:
+                await self._finish_despite_cancellation(
+                    asyncio.to_thread(self._release_process_lock_sync, lock_handle)
+                )
+            raise
         try:
             yield
         finally:
-            await asyncio.to_thread(self._release_process_lock_sync, lock_handle)
+            await self._finish_despite_cancellation(
+                asyncio.to_thread(self._release_process_lock_sync, lock_handle)
+            )
 
     async def _refresh_state_from_disk(self) -> None:
         cursor = await asyncio.to_thread(self._read_state_sync)
@@ -1079,30 +1246,32 @@ class MemoryHandler:
             return 0
 
     def _write_state_sync(self, cursor: int) -> None:
-        path = self._state_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = path.with_name(f".{path.name}.tmp")
-        with tmp_path.open("w", encoding="utf-8") as handle:
-            handle.write(str(int(cursor)))
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(tmp_path, path)
+        atomic_write_bytes(self._state_path(), str(int(cursor)).encode("utf-8"))
 
-    def _acquire_process_lock_sync(self) -> IO[str]:
+    def _acquire_process_lock_sync(self, cancelled: Optional[threading.Event] = None) -> Optional[IO[str]]:
         path = self._lock_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         lock_file = path.open("a+", encoding="utf-8")
         try:
-            self._lock_file(lock_file)
+            while cancelled is None or not cancelled.is_set():
+                try:
+                    self._lock_file(lock_file, nonblocking=cancelled is not None)
+                    return lock_file
+                except BlockingIOError:
+                    if cancelled is None:
+                        raise
+                    cancelled.wait(0.05)
+            lock_file.close()
+            return None
         except Exception:
             lock_file.close()
             raise
-        return lock_file
 
     @staticmethod
-    def _lock_file(lock_file: IO[str]) -> None:
+    def _lock_file(lock_file: IO[str], nonblocking: bool = False) -> None:
         if fcntl is not None:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            flags = fcntl.LOCK_EX | (fcntl.LOCK_NB if nonblocking else 0)
+            fcntl.flock(lock_file.fileno(), flags)
             return
         if msvcrt is not None:
             lock_file.seek(0)
@@ -1110,7 +1279,8 @@ class MemoryHandler:
                 lock_file.write("\0")
                 lock_file.flush()
             lock_file.seek(0)
-            msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
+            mode = msvcrt.LK_NBLCK if nonblocking else msvcrt.LK_LOCK
+            msvcrt.locking(lock_file.fileno(), mode, 1)
             return
         raise RuntimeError("No supported file locking implementation is available")
 

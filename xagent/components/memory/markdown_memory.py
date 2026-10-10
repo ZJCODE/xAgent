@@ -77,14 +77,19 @@ class MarkdownMemory:
         # Ensure parent directory exists
         await self._mkdir(path.parent)
 
-        now = datetime.now()
-        timestamp_heading = f"## {entry_date.isoformat()} {now.hour:02d}:{now.minute:02d}"
-        block = f"\n{timestamp_heading}\n\n{content.rstrip()}\n"
+        block = self.daily_entry_block(content, entry_date)
 
         async with self._write_lock:
             await self._append_file(path, block)
         logger.debug("Appended daily entry: %s (%d chars)", path, len(content))
         return path
+
+    @staticmethod
+    def daily_entry_block(content: str, target_date: date) -> str:
+        """Prepare the existing diary format without touching its daily file."""
+        now = datetime.now()
+        heading = f"## {target_date.isoformat()} {now.hour:02d}:{now.minute:02d}"
+        return f"\n{heading}\n\n{content.rstrip()}\n"
 
     # ------------------------------------------------------------------
     # Core read helpers
@@ -305,12 +310,30 @@ class MarkdownMemory:
     @staticmethod
     async def _append_file(path: Path, content: str) -> None:
         """Append *content* to *path*."""
-        await asyncio.to_thread(MarkdownMemory._append_file_sync, path, content)
+        await MarkdownMemory._finish_file_write(MarkdownMemory._append_file_sync, path, content)
 
     @staticmethod
     async def _write_file(path: Path, content: str) -> None:
         """Overwrite *path*."""
-        await asyncio.to_thread(MarkdownMemory._write_file_sync, path, content)
+        await MarkdownMemory._finish_file_write(MarkdownMemory._write_file_sync, path, content)
+
+    @staticmethod
+    async def _finish_file_write(operation, path: Path, content: str) -> None:
+        """Keep the store write lock held until its worker has really exited."""
+        task = asyncio.create_task(asyncio.to_thread(operation, path, content))
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            while not task.done():
+                try:
+                    await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    continue
+            try:
+                task.result()
+            except Exception:
+                logger.exception("Memory file write failed during shutdown")
+            raise
 
     @staticmethod
     def _read_text_sync(path: Path) -> str:

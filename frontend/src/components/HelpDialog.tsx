@@ -39,7 +39,8 @@ export function HelpDialog({ open, currentAgent, directApiUrl, onClose }: HelpDi
   -H 'Content-Type: application/json' \\
   -d '{
     "user_id": "api_demo",
-    "user_message": "Hello, xAgent!"
+    "user_message": "Hello, xAgent!",
+    "event_id": "unique-source-message-id"
   }'`, [exampleApiUrl]);
 
   const websocketExample = useMemo(() => `const socket = new WebSocket("${directWebsocketUrl}");
@@ -49,11 +50,14 @@ socket.addEventListener("open", () => {
     user_id: "api_demo",
     user_message: "Hello, xAgent!",
     stream: true,
+    event_id: crypto.randomUUID(),
   }));
 });
 
 socket.addEventListener("message", ({ data }) => {
   const event = JSON.parse(data);
+
+  if (event.type === "accepted") console.log("turn:", event.turn_id);
 
   if (event.type === "message_delta") console.log("delta:", event.delta);
   if (event.type === "message_done") console.log("message:", event.content);
@@ -175,7 +179,8 @@ socket.addEventListener("message", ({ data }) => {
             </div>
             <p>
               Send a JSON body with a stable <code>user_id</code> and the text in <code>user_message</code>. The
-              successful JSON response contains the Agent result in <code>reply</code>.
+              successful JSON response contains <code>reply</code>, <code>turn_id</code>, <code>event_id</code> and <code>request_id</code>.
+              Reuse the same <code>event_id</code> when retrying delivery of the same input.
             </p>
             <div className="help-code-block">
               <div className="help-code-toolbar">
@@ -187,6 +192,8 @@ socket.addEventListener("message", ({ data }) => {
               <pre><code>{httpExample}</code></pre>
             </div>
           </section>
+
+          <p className="help-intro">To cancel a reply, send <code>POST /chat/stop</code> with <code>{'{"turn_id":"the accepted turn ID"}'}</code>. Local Web chat works through the Agent core even when the public API is disabled.</p>
 
           <section className="help-api-section" aria-labelledby="websocket-example-title">
             <div className="help-section-heading">

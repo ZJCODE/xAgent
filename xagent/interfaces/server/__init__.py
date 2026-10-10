@@ -5,7 +5,6 @@ by its routes.
 """
 from __future__ import annotations
 
-from .app import AgentHTTPServer
 from .models import (
     AgentInput,
     ChatAttachmentInput,
@@ -36,3 +35,10 @@ __all__ = [
     "SkillWriteInput",
     "WorkspaceWriteInput",
 ]
+
+
+def __getattr__(name: str):
+    if name == "AgentHTTPServer":
+        from .app import AgentHTTPServer
+        return AgentHTTPServer
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

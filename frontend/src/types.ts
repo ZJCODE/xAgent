@@ -72,6 +72,9 @@ export interface ChatEvent {
   error_id?: string;
   status_code?: number;
   task?: ScheduledTaskItem;
+  turn_id?: string;
+  event_id?: string;
+  request_id?: string;
 }
 
 export interface ScheduledTaskRecurrenceRule {
@@ -93,7 +96,7 @@ export interface ScheduledTaskItem {
   content: string;
   next_run_at: string | null;
   recurrence?: ScheduledTaskRecurrenceRule[] | null;
-  status: "active" | "paused" | "completed" | "failed" | string;
+  status: "active" | "paused" | "completed" | "failed" | "needs_review" | string;
   reason?: string;
   channel?: string;
   user_id?: string;
@@ -159,7 +162,27 @@ export interface TasksResponse {
 
 export type ChannelId = "api" | "voice" | "feishu" | "weixin";
 
-export type ChannelRuntimeStatus = "running" | "stopped" | "disabled" | "error";
+export type ChannelRuntimeStatus = "running" | "connected" | "starting" | "connecting" | "reconnecting" | "stopped" | "disabled" | "error" | "failed";
+
+export interface AgentRuntimeStatus {
+  status: string;
+  state?: string;
+  runtime_running: boolean;
+  runtime_ready?: boolean;
+  needs_restart?: boolean;
+  error?: string;
+  channels: Record<string, { status?: string; state?: string; error?: string }>;
+  queue?: { pending: number; active_turn_id?: string | null };
+  memory?: JournalRuntimeStatus;
+  journal?: JournalRuntimeStatus;
+  tasks?: { needs_review?: number | Array<{ task_id?: string; reason?: string }>; failed?: number };
+}
+
+export interface JournalRuntimeStatus {
+  backlog: number;
+  needs_review?: Array<{ reason?: string }>;
+  last_maintenance?: { status?: string; finished_at?: string | null; error?: string };
+}
 
 export interface ChannelStatus {
   id: ChannelId;
@@ -180,6 +203,7 @@ export interface ChannelStatus {
 export interface ChannelsResponse {
   config_dir: string;
   channels: ChannelStatus[];
+  runtime: AgentRuntimeStatus;
 }
 
 export interface ChannelActionResponse {
@@ -303,6 +327,7 @@ export interface AgentSummary {
   selected: boolean;
   initialized: boolean;
   channel_running: boolean;
+  runtime_running?: boolean;
 }
 
 export interface AgentsResponse {
@@ -465,6 +490,7 @@ export interface AgentIdentity {
   path: string;
   filename: string;
   modified: number;
+  needs_restart?: boolean;
 }
 
 export interface AgentConfig {

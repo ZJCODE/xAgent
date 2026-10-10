@@ -49,12 +49,19 @@ def register_agent_session_routes(app: FastAPI, session: WebAgentSession) -> Non
     async def web_client_health():
         api_reachable = False
         try:
+            root = session.get_current_runtime_root()
+            if root is not None:
+                from ..cli.agent_runtime import runtime_status
+                status = await runtime_status(root)
+                ready = bool(status.get("runtime_ready"))
+                return {"status": "ok", "web": True, "api_reachable": ready,
+                        "runtime_reachable": ready, "runtime": status}
             async with httpx.AsyncClient(timeout=httpx.Timeout(2.0), trust_env=False) as client:
                 response = await client.get(f"{session.get_current_api_url().rstrip('/')}/health")
                 api_reachable = response.status_code == 200
         except Exception:
             api_reachable = False
-        return {"status": "ok", "web": True, "api_reachable": api_reachable}
+        return {"status": "ok", "web": True, "api_reachable": api_reachable, "runtime_reachable": api_reachable}
 
     @app.get("/api/agents", tags=["Agents"])
     async def list_agents():

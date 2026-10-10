@@ -69,7 +69,8 @@ class WebClientServer:
             self.session.get_current_admin,
             on_config_written=self.session.invalidate_admin_cache,
         )
-        register_api_proxy(app, resolve_api_url=self.session.get_current_api_url, logger=self.logger)
+        register_api_proxy(app, resolve_api_url=self.session.get_current_api_url,
+                           resolve_runtime_root=self.session.get_current_runtime_root, logger=self.logger)
         register_spa_routes(app, static_dir=self.static_dir, logger=self.logger)
         return app
 
