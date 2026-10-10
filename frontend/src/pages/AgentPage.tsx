@@ -379,8 +379,15 @@ export function AgentPage() {
               <RuntimeValue value={info?.model} />
             </dd>
             <dt>Tools</dt>
-            <dd className="chip-list">
-              {info?.tools?.length ? info.tools.map((tool) => <span key={tool} className="data-chip">{tool}</span>) : "None"}
+            <dd>
+              <div className="chip-list">
+                {info?.tools?.length
+                  ? info.tools.map((tool) => <span key={tool} className="data-chip">{tool}</span>)
+                  : info ? "No tools loaded" : "Loading…"}
+              </div>
+              {info?.tools_source === "configured" ? (
+                <p className="agent-tools-note">Shown from configuration</p>
+              ) : null}
             </dd>
           </dl>
         </Panel>

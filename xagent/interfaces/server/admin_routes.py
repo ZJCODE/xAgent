@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
 import yaml as pyyaml
+import httpx
 from fastapi import Body, FastAPI, File, Form, HTTPException, Query, UploadFile
 
 from ...interfaces.cli.config_editor import (
@@ -179,6 +180,22 @@ def register_admin_routes(
     @app.get("/api/agent/info", tags=["Monitoring"])
     async def agent_info():
         server = resolve_admin()
+        if getattr(server, "offline", False):
+            from ...core.runtime.client import RuntimeClient, RuntimeUnavailable
+            from ...core.runtime.ownership import runtime_is_active
+
+            if runtime_is_active(server.config_dir):
+                try:
+                    # The private socket remains available when the public API
+                    # is disabled. Prefer the actual tools loaded by the owner.
+                    response = await RuntimeClient(server.config_dir).request(
+                        "GET", "/api/agent/info", timeout=1.5,
+                    )
+                    return response.json()
+                except (RuntimeUnavailable, httpx.HTTPError):
+                    # Startup/shutdown can temporarily leave no control socket.
+                    # Keep offline browsing useful without starting a model.
+                    pass
         memory_dir = str(server._get_memory_root())
         storage_info = server.message_storage.get_stream_info() if hasattr(server.message_storage, "get_stream_info") else {}
         identity = server._get_agent_identity()
@@ -191,7 +208,7 @@ def register_admin_routes(
             identity_editable = False
         provider_cfg = server.config.get("provider") if isinstance(server.config, dict) else {}
         provider_name = provider_cfg.get("name") if isinstance(provider_cfg, dict) else None
-        tool_names = list(server.agent.tools.keys())
+        tool_names = server._get_agent_tool_names()
         supports_vision = bool(getattr(server.agent, "supports_vision", True))
         skills_root = server._get_skills_root()
         return {
@@ -203,6 +220,7 @@ def register_admin_routes(
             "memory_dir": memory_dir,
             "message_storage": storage_info,
             "tools": tool_names,
+            "tools_source": "configured" if server.offline else "runtime",
             "capabilities": {
                 "vision": supports_vision,
                 "vision_input": supports_vision,

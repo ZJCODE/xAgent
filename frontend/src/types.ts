@@ -310,6 +310,7 @@ export interface AgentInfo {
   memory_dir: string;
   message_storage: Record<string, unknown>;
   tools: string[];
+  tools_source?: "configured" | "runtime";
   capabilities?: Partial<AgentCapabilities>;
   identity?: string;
   identity_file?: string;

@@ -40,6 +40,7 @@ class AdminService(BaseAgentRunner):
         config_dir: Optional[str] = None,
         agent: Optional[Agent] = None,
     ):
+        self.offline = agent is None
         if agent is not None:
             self.agent = agent
             workspace_dir = getattr(agent, "workspace_dir", None)
@@ -113,11 +114,37 @@ class AdminService(BaseAgentRunner):
             self.agent = SimpleNamespace(
                 identity=self.identity, system_prompt=self.identity,
                 model=provider.get("model", BaseAgentConfig.DEFAULT_MODEL), tools={},
-                supports_vision=True, markdown_memory=MarkdownMemory(str(self.workspace / BaseAgentConfig.MEMORY_DIRNAME)),
+                supports_vision=self._provider_supports_vision(self.config),
+                markdown_memory=MarkdownMemory(str(self.workspace / BaseAgentConfig.MEMORY_DIRNAME)),
                 message_storage=self.message_storage, skills_storage=self.skills_storage,
                 workspace=self.workspace, workspace_dir=self.workspace_dir,
             )
             self._temporary_runtime = None
+
+    def _get_agent_tool_names(self) -> List[str]:
+        if not self.offline:
+            return list(self.agent.tools)
+
+        # Describe the standard runtime without constructing an Agent, tool
+        # clients, or background work in this read-only data view.
+        from ...core.config import AgentConfig
+        from ...tools.search_tool import SEARCH_PROVIDER_NONE, normalize_search_provider
+        from ...tools.image_generation_tool import IMAGE_GENERATION_PROVIDER_NONE, normalize_image_generation_provider
+
+        names = ["run_command", "manage_scheduled_tasks", "attach_artifact", "web_fetch"]
+        search = self.config.get("search") or {}
+        images = self.config.get("image_generation") or {}
+        if normalize_search_provider(search.get("provider")) != SEARCH_PROVIDER_NONE:
+            names.append("web_search")
+        if normalize_image_generation_provider(images.get("provider")) != IMAGE_GENERATION_PROVIDER_NONE:
+            names.append("generate_image")
+        names.extend(["read_skill", "search_memory"])
+        agent_config = self.config.get("agent") or {}
+        if agent_config.get("notes_enabled", AgentConfig.NOTES_ENABLED):
+            names.extend(["write_note", "update_note", "search_note", "read_note"])
+        if self._provider_supports_vision(self.config):
+            names.append("see_image")
+        return names
 
     def _get_memory_root(self) -> Path:
         memory = self.agent.markdown_memory
