@@ -44,7 +44,25 @@ import type {
   TasksResponse,
   ScheduledTaskItem,
   WorkspaceUploadResult,
+  DeviceStatus,
+  DevicePairing,
 } from "../types";
+
+export function getDevices(): Promise<DeviceStatus> {
+  return requestJson("/api/devices");
+}
+
+export function createDevicePairing(): Promise<DevicePairing> {
+  return requestJson("/api/devices/pairing", { method: "POST" });
+}
+
+export function cancelDevicePairing(): Promise<{ status: string }> {
+  return requestJson("/api/devices/pairing", { method: "DELETE" });
+}
+
+export function removeDevice(deviceId: string): Promise<{ status: string }> {
+  return requestJson(`/api/devices/${encodeURIComponent(deviceId)}`, { method: "DELETE" });
+}
 
 export class ApiError extends Error {
   status: number;

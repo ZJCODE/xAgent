@@ -11,6 +11,8 @@ from fastapi import FastAPI
 from ...core.agent import Agent
 from ...core.runtime import AsyncTaskScheduler, SubconsciousDelivery
 from ...interfaces.server.runtime_routes import register_runtime_routes
+from ...interfaces.server.device_routes import register_device_routes
+from ...integrations.devices.service import DeviceService
 from .chat_service import ChatService
 from .config import ChatLimits
 from .constants import CHANNEL_API
@@ -32,8 +34,10 @@ class ApiChannelAdapter:
         tasks_dir: Path,
         limits: ChatLimits | None = None,
         logger: Optional[logging.Logger] = None,
+        device_service: DeviceService | None = None,
     ) -> None:
         self.agent = agent
+        self.device_service = device_service
         self.contacts_file = contacts_file
         self.tasks_dir = tasks_dir
         self.limits = limits or ChatLimits()
@@ -64,3 +68,5 @@ class ApiChannelAdapter:
 
     def register_routes(self, app: FastAPI) -> None:
         register_runtime_routes(app, self)
+        if self.device_service is not None:
+            register_device_routes(app, self.device_service)

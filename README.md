@@ -13,6 +13,7 @@ Interact with your agents through the terminal, Web UI, voice, Feishu, or Weixin
 - **Independent agents** — Each agent has its own identity, memory, diary, workspace, skills, tasks, logs, and channel state.
 - **Multiple interfaces** — Use xAgent from the terminal, Web UI, voice, Feishu, or Weixin.
 - **Unified management** — Create, configure, and manage agents from one interactive launcher.
+- **External execution** — Connect hardware or software devices to the Agent API and call their declared capabilities through one generic tool.
 
 ## Requirements
 
@@ -70,6 +71,14 @@ ordinary Stop still attempts final diary maintenance. Configuration and identity
 edits take effect after restart. Interrupted tasks
 with uncertain execution or delivery wait for review instead of replaying.
 See [runtime operation and recovery](docs/runtime-core.md) for details and validation.
+
+For external devices, pair them in Agent → Devices without editing configuration
+or restarting the Agent. All chat users can discover and use paired devices. Devices
+connect to `/ws/devices/{device_id}` on its existing API port and declare
+their own capabilities; Agent calls use one generic `device` tool. Chat remains
+on `/ws/chat`, with its existing protocol. There is no additional service to start.
+See [device execution and protocol](docs/device-execution.md) for pairing,
+protocol details, and a runnable software device example.
 
 ## Updating
 

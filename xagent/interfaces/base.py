@@ -25,8 +25,11 @@ from ..core.providers import (
 from ..components import MessageStorage
 from ..components.skills import SkillsStorageBase, SkillsStorageLocal
 from ..integrations.langfuse import ObservabilityRuntime, create_observability_runtime
+from ..integrations.devices.config import DeviceConfig
+from ..integrations.devices.service import DeviceService
 from ..tools import (
     create_attach_artifact_tool,
+    create_device_tool,
     create_image_generation_tool,
     create_read_skill_tool,
     create_schedule_task_tool,
@@ -121,6 +124,9 @@ class BaseAgentRunner:
         # Initialize components in dependency order
         self.message_storage = self._initialize_message_storage()
         self.skills_storage = self._initialize_skills_storage()
+        self.device_service = DeviceService(
+            DeviceConfig.model_validate(self.config.get("devices", {})), self.config_dir / ".devices.json",
+        )
         self.agent = self._initialize_agent()
         
     def _resolve_config_dir(self, config_dir: Optional[str]) -> Path:
@@ -173,6 +179,7 @@ class BaseAgentRunner:
             "runtime",
             "observability",
             "web",
+            "devices",
         }
         unsupported_keys = sorted(set(config) - allowed_config_keys)
         if unsupported_keys:
@@ -269,6 +276,8 @@ class BaseAgentRunner:
                         f"agent.{key} must be a boolean, got {agent_cfg[key]!r}"
                     )
         self._validate_observability_config(config.get("observability"))
+        if "devices" in config:
+            DeviceConfig.model_validate(config["devices"])
 
         provider_cfg = config.get("provider")
         if not isinstance(provider_cfg, dict) or not provider_cfg:
@@ -607,7 +616,7 @@ class BaseAgentRunner:
             if isinstance(voice_channel_cfg, dict)
             else AgentConfig.DEFAULT_VOICE
         )
-        return Agent(
+        agent = Agent(
             system_prompt=self.identity,
             model=self._get_agent_model(agent_cfg),
             provider_name=self._get_provider_name(agent_cfg),
@@ -630,6 +639,7 @@ class BaseAgentRunner:
             subconscious_activity=agent_section.get("subconscious_activity", AgentConfig.SUBCONSCIOUS_ACTIVITY),
             voice=voice_name,
         )
+        return agent
 
     def _initialize_observability(self, agent_cfg: Dict[str, Any]) -> ObservabilityRuntime:
         """Build the optional observability runtime."""
@@ -810,6 +820,7 @@ class BaseAgentRunner:
             tools.append(image_generation_tool)
         if getattr(self, "skills_storage", None) is not None:
             tools.append(create_read_skill_tool(self.skills_storage))
+        tools.append(create_device_tool(self.device_service))
         return tools
 
     def _initialize_image_generation_client(

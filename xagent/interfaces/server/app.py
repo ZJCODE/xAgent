@@ -33,7 +33,8 @@ class AgentHTTPServer(AdminService):
         runtime_managed: bool = False,
         api_adapter: Optional[ApiChannelAdapter] = None,
     ):
-        super().__init__(config_dir=config_dir, agent=agent)
+        super().__init__(config_dir=config_dir, agent=agent,
+                         device_service=getattr(api_adapter, "device_service", None))
         self.runtime_managed = runtime_managed
         self.is_runtime_owner = runtime_managed
 

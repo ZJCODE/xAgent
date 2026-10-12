@@ -39,7 +39,9 @@ class AdminService(BaseAgentRunner):
         self,
         config_dir: Optional[str] = None,
         agent: Optional[Agent] = None,
+        device_service=None,
     ):
+        self.device_service = device_service
         self.offline = agent is None
         if agent is not None:
             self.agent = agent
@@ -138,7 +140,8 @@ class AdminService(BaseAgentRunner):
             names.append("web_search")
         if normalize_image_generation_provider(images.get("provider")) != IMAGE_GENERATION_PROVIDER_NONE:
             names.append("generate_image")
-        names.extend(["read_skill", "search_memory"])
+        names.extend(["read_skill", "device"])
+        names.append("search_memory")
         agent_config = self.config.get("agent") or {}
         if agent_config.get("notes_enabled", AgentConfig.NOTES_ENABLED):
             names.extend(["write_note", "update_note", "search_note", "read_note"])

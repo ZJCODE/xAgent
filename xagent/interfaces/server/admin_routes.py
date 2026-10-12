@@ -149,6 +149,8 @@ def register_admin_routes(
 ) -> None:
     from .admin_access import register_admin_access
     register_admin_access(app, resolve_admin)
+    from .device_admin import register_device_admin_routes
+    register_device_admin_routes(app, resolve_admin)
     def _notify_config_written() -> None:
         if on_config_written is not None:
             on_config_written()

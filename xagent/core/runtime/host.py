@@ -74,6 +74,7 @@ class RuntimeHost:
         self.admin = None
         self.heartbeat = None
         self.scheduler = None
+        self.device_service = None
         self.shutdown_timeout = 30.0
         self._shutdown_pending: set[asyncio.Task] = set()
         self._ownership_finalized = False
@@ -162,7 +163,9 @@ class RuntimeHost:
             self.runner = BaseAgentRunner(config_dir=str(self.config_dir))
             self._startup_fingerprint = self._configuration_fingerprint()
             self.agent = self.runner.agent
-            self.admin = AdminService(config_dir=str(self.config_dir), agent=self.agent)
+            self.device_service = getattr(self.runner, "device_service", None)
+            self.admin = AdminService(config_dir=str(self.config_dir), agent=self.agent,
+                device_service=self.device_service)
             self.admin.is_runtime_owner = True
             recovery = getattr(self.agent.memory_handler, "recover_pending_commit", None)
             if callable(recovery):
@@ -170,7 +173,8 @@ class RuntimeHost:
             self.recovered_turns = await self.agent.turn_store.recover()
             await self.agent.attention.reset_to_present(self.agent.message_storage)
             self.api = ApiChannelAdapter(self.agent,
-                contacts_file=resolve_contacts_path(self.config_dir), tasks_dir=self.runner.tasks_dir)
+                contacts_file=resolve_contacts_path(self.config_dir), tasks_dir=self.runner.tasks_dir,
+                device_service=self.device_service)
             self.adapters["api"] = self.api
             channels = self.requested_channels if self.requested_channels is not None else default_runtime_channels(self.runner.config)
             self.channel_status = {name: {"state": "disconnected"} for name in self._channel_locks}
@@ -351,7 +355,24 @@ class RuntimeHost:
         tasks = set(activity.tasks) if activity else set()
         if channel != "api" and self.scheduler is not None:
             tasks.update(self.scheduler.channel_tasks(channel))
+        if channel == "api":
+            device_stop = self._tasks.get("api-devices-stop")
+            if device_stop is not None:
+                tasks.add(device_stop)
         return {task for task in tasks if not task.done()}
+
+    def _stop_devices(self, drain_timeout: float = 0) -> asyncio.Task | None:
+        if self.device_service is None:
+            return None
+        self.device_service.quiesce()
+        existing = self._tasks.get("api-devices-stop")
+        if existing is not None and not existing.done():
+            return existing
+        if self.device_service.resources_closed:
+            return None
+        task = asyncio.create_task(self.device_service.stop(drain_timeout), name="xagent-devices-stop")
+        self._tasks["api-devices-stop"] = task
+        return task
 
     async def _disconnect_locked(self, channel: str, *, failed: bool = False) -> None:
         async with self._channel_locks[channel]:
@@ -369,6 +390,7 @@ class RuntimeHost:
             # Closing the public listening sockets blocks new requests without
             # touching local API turns or the private control server.
             if channel == "api":
+                self._stop_devices(0.0 if failed else self.channel_drain_timeout)
                 server = self._servers.get(channel)
                 if server is not None:
                     for listener in getattr(server, "servers", []):
@@ -385,7 +407,8 @@ class RuntimeHost:
             if channel != "api":
                 self.agent.inbox.cancel_pending(channel=channel)
             for task in self._channel_work(channel):
-                task.cancel()
+                if task is not self._tasks.get("api-devices-stop"):
+                    task.cancel()
             if not await self._cleanup_channel(channel):
                 self._update_channel_state(channel, "failed", error="Connection cleanup did not finish; retry Disconnect")
                 if failed:
@@ -398,6 +421,8 @@ class RuntimeHost:
 
     async def _cleanup_channel(self, channel: str) -> bool:
         deadline = time.monotonic() + self.channel_cleanup_timeout
+        if channel == "api":
+            self._stop_devices()
         adapter = self.adapters.get(channel) if channel != "api" else None
         server = self._servers.get(channel)
         if server is not None:
@@ -433,6 +458,8 @@ class RuntimeHost:
         while not pending and adapter is not None and not adapter.resources_closed and time.monotonic() < deadline:
             await asyncio.sleep(min(0.02, max(0.0, deadline - time.monotonic())))
         clean = not pending and (adapter is None or adapter.resources_closed)
+        if channel == "api" and self.device_service is not None:
+            clean = clean and self.device_service.resources_closed
         if not clean:
             return False
         for task in (transport, readiness, stop_task):
@@ -445,6 +472,10 @@ class RuntimeHost:
             self.adapters.pop(channel, None)
         for key in (channel, f"{channel}-readiness", f"{channel}-stop"):
             self._tasks.pop(key, None)
+        if channel == "api":
+            device_stop = self._tasks.pop("api-devices-stop", None)
+            if device_stop is not None and not device_stop.cancelled():
+                device_stop.exception()
         self._servers.pop(channel, None)
         self._channel_activity.pop(channel, None)
         self._channel_generation[channel] += 1
@@ -475,6 +506,10 @@ class RuntimeHost:
                             await JSONResponse({"detail": "API is disconnecting"}, status_code=503)(scope, receive, send)
                             return
                         if scope["type"] == "websocket":
+                            if scope.get("path", "").startswith("/ws/devices/"):
+                                # Accept then close with 1013, so a temporary
+                                # drain isn't mistaken for HTTP 403 bad auth.
+                                await send({"type": "websocket.accept"})
                             await send({"type": "websocket.close", "code": 1013})
                             return
                     await self.app(scope, receive, send)
@@ -523,6 +558,8 @@ class RuntimeHost:
                         return
                     await asyncio.sleep(0.01)
                 self._channel_connection(channel, "connected", generation)
+                if self.channel_status[channel]["state"] == "connected" and self.device_service is not None:
+                    self.device_service.start()
             self._tasks["api-readiness"] = asyncio.create_task(ready())
 
     def _task_adapter(self, task):
@@ -716,6 +753,7 @@ class RuntimeHost:
                 if error is not None:
                     logger.warning("Runtime drain failed: %s", error, exc_info=error)
         finally:
+            device_stop = self._stop_devices()
             if self.agent is not None:
                 self.agent.inbox.stop_accepting()
                 self.agent.inbox.cancel_pending()
@@ -724,7 +762,7 @@ class RuntimeHost:
             for channel in self._channel_activity:
                 cleanup.update(self._channel_work(channel))
             for task in cleanup:
-                if not task.done():
+                if not task.done() and task is not device_stop:
                     task.cancel()
             if cleanup:
                 done, pending = await asyncio.wait(cleanup,
@@ -788,6 +826,7 @@ class RuntimeHost:
                 self.agent.inbox.cancel_pending()
         if self.agent is not None:
             await self.agent.attention.stop()
+        self._stop_devices()
         for name, adapter in list(self.adapters.items()):
             stop = getattr(adapter, "stop", None)
             if callable(stop):

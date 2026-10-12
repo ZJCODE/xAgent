@@ -11,6 +11,7 @@ from ...core.runtime.ownership import RuntimeOwnership, runtime_is_active
 ADMIN_PREFIXES = (
     "/api/agent/", "/api/tasks", "/api/memory/", "/api/messages",
     "/api/workspace/", "/api/skills/",
+    "/api/devices",
 )
 
 

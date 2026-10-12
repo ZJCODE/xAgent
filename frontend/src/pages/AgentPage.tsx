@@ -2,6 +2,7 @@ import { RefreshCw, Save, RotateCcw, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { FeatureSetupModal } from "../components/FeatureSetupModal";
+import { DevicePanel } from "../components/DevicePanel";
 import { Button, EmptyState, IconButton, PageShell, PageToolbar, Panel, PanelHeader } from "../components/ui";
 import { useAgentSession } from "../context/AgentSessionContext";
 import { useUnsavedChanges } from "../context/UnsavedChangesContext";
@@ -483,6 +484,8 @@ export function AgentPage() {
           </div>
           {!setupSchema ? <p className="wizard-hint">Loading setup options...</p> : null}
         </Panel>
+
+        <DevicePanel />
 
         <Panel className="danger-panel">
           <PanelHeader title="Maintenance" />
