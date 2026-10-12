@@ -424,11 +424,17 @@ def build_parser() -> argparse.ArgumentParser:
         add_arguments(channel_setup)
         channel_setup.set_defaults(handler=setup_handler)
 
+    channel_parser = subparsers.add_parser("channel", help="Connect or disconnect one channel")
+    channel_parser.add_argument("channel", choices=("api", "feishu", "weixin", "voice"))
+    channel_parser.add_argument("channel_action", choices=("connect", "disconnect"))
+    _add_agent_argument(channel_parser)
+    channel_parser.set_defaults(handler=agent_runtime.handle_channel_connection)
+
     for action in ("run", "start", "stop", "restart", "status", "logs"):
         command_parser = subparsers.add_parser(action, help=f"{action.capitalize()} the Agent runtime")
         _add_agent_argument(command_parser)
         if action in {"run", "start", "restart"}:
-            command_parser.add_argument("--channels", action="append", default=None, help="Override enabled channels for this run")
+            command_parser.add_argument("--channels", action="append", default=None, help="Override API-only startup for this run")
         if action == "status":
             command_parser.add_argument("--json", action="store_true", dest="json_output")
         if action == "logs":

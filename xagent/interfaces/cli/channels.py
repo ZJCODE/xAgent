@@ -48,6 +48,40 @@ def load_config_file(config_dir: Path) -> dict[str, Any]:
     return data
 
 
+def default_runtime_channels(config: Mapping[str, Any]) -> list[str]:
+    """External channels are opt-in for each runtime session."""
+    return [] if api_config(config).get("enabled", True) is False else [CHANNEL_API]
+
+
+def channel_readiness(config: Mapping[str, Any], channel: str, root: Path) -> tuple[bool, str]:
+    """Validate the running configuration without opening devices or networks."""
+    try:
+        if channel == CHANNEL_API:
+            data = api_config(config)
+            if not str(data.get("host", "127.0.0.1")).strip():
+                raise ValueError("Configure an API host")
+            if not 0 < int(data.get("port", 8010)) < 65536:
+                raise ValueError("Configure a valid API port")
+        elif channel == CHANNEL_FEISHU:
+            from ...integrations.feishu.config import FeishuAdapterConfig
+            FeishuAdapterConfig.from_dict(feishu_config(config))
+        elif channel == CHANNEL_WEIXIN:
+            from ...integrations.weixin.config import WeixinAdapterConfig
+            from ...integrations.weixin.state import WeixinStateStore
+            cfg = WeixinAdapterConfig.from_dict(weixin_config(config))
+            if WeixinStateStore(root, create=False).load_credentials(cfg.account_id) is None:
+                raise ValueError("Weixin credentials are missing; run setup")
+        elif channel == CHANNEL_VOICE:
+            from ..voice.config import VoiceChannelConfig
+            VoiceChannelConfig.from_dict(voice_config(config)).resolved_api_key()
+        else:
+            return False, "Unknown channel"
+    except (ValueError, TypeError, OSError, ImportError):
+        # Configuration can contain secrets; never echo validation input.
+        return False, f"Configure {channel} before connecting"
+    return True, ""
+
+
 def enabled_channels_from_config(config: Optional[Mapping[str, Any]]) -> list[str]:
     """Return public managed channels enabled by config."""
     channels = config.get("channels") if isinstance(config, Mapping) else None

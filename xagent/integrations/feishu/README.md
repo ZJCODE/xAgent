@@ -118,12 +118,15 @@ Configure the channel, then start the Agent's shared core:
 ```bash
 xagent feishu setup --agent work
 xagent start --agent work
+xagent channel feishu connect --agent work
 xagent status --agent work
 xagent logs --agent work --follow
 xagent stop --agent work
 ```
 
-Feishu runs alongside the Agent's other enabled channels. Use
+Feishu connects on demand and shares the Agent runtime with other connected channels.
+Use `xagent channel feishu disconnect --agent work` to disconnect it independently.
+Ordinary restart returns to API-only startup. Use
 `xagent run --agent work --channels feishu` for a foreground launch with only
 Feishu selected. There is one owner, scheduler and runtime log per Agent;
 channel connection or reconnect does not recover tasks or reset attention.

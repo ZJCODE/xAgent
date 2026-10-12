@@ -172,9 +172,10 @@ class AgentInbox:
     def stop_accepting(self) -> None:
         self.accepting = False
 
-    def cancel_pending(self) -> None:
+    def cancel_pending(self, *, channel: str | None = None) -> None:
         for ticket in self._pending.values():
-            ticket.cancelled.set()
+            if channel is None or ticket.channel == channel:
+                ticket.cancelled.set()
 
     def request_steer(self, turn_id: str, content: str, *, channel: str | None = None) -> bool:
         current = self._current

@@ -69,7 +69,17 @@ def create_local_voice_runtime(
     def _on_stt_reconnecting() -> None:
         runtime = runtime_holder[0]
         if runtime is not None:
+            callback = getattr(runtime, "runtime_status", None)
+            if callback:
+                callback("reconnecting")
             runtime._schedule_notice("ears_offline")
+
+    def _on_stt_connected() -> None:
+        runtime = runtime_holder[0]
+        if runtime is not None:
+            callback = getattr(runtime, "runtime_status", None)
+            if callback:
+                callback("connected")
 
     def _on_stt_recovered() -> None:
         runtime = runtime_holder[0]
@@ -120,6 +130,7 @@ def create_local_voice_runtime(
         stt_callbacks=SonioxSTTCallbacks(
             on_reconnecting=_on_stt_reconnecting,
             on_recovered=_on_stt_recovered,
+            on_connected=_on_stt_connected,
         ),
         lifecycle=lifecycle,
     )

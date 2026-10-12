@@ -10,7 +10,7 @@ import sys
 import time
 from pathlib import Path
 
-from ...core.runtime.client import RuntimeClient
+from ...core.runtime.client import RuntimeClient, RuntimeUnavailable
 from ...core.runtime.ownership import runtime_is_active, runtime_paths
 from .channels import normalize_channel_values
 from .paths import runtime_dir
@@ -37,12 +37,18 @@ async def runtime_status(root: Path) -> dict:
         return {**result, "status": result.get("status") or result.get("state", "starting"),
                 "channels": channels, "memory": result.get("journal", {}), "runtime_running": True}
     except Exception as exc:
+        # Ownership can disappear while the status request is in flight.
+        if not runtime_is_active(root):
+            return {"status": "stopped", "runtime_running": False, "channels": {}}
         try:
             cached = json.loads(runtime_paths(root).state_path.read_text())
         except (OSError, ValueError):
             cached = {}
-        return {**cached, "status": cached.get("state", "starting"), "runtime_running": True,
-                "runtime_ready": False, "error": str(exc), "channels": {
+        stopping = isinstance(exc, RuntimeUnavailable) and cached.get("state") in {"stopping", "stopped"}
+        if stopping:
+            cached.pop("error", None)
+        return {**cached, "status": "stopping" if stopping else cached.get("state", "starting"), "runtime_running": True,
+                "runtime_ready": False, **({} if stopping else {"error": str(exc)}), "channels": {
                     name: {**row, "status": row.get("state", "unknown")}
                     for name, row in cached.get("channels", {}).items()}}
 
@@ -94,7 +100,15 @@ async def ensure_runtime(root: Path) -> RuntimeClient:
 async def stop_runtime(root: Path) -> dict:
     if not runtime_is_active(root):
         return {"status": "stopped", "runtime_running": False}
-    await RuntimeClient(root).stop()
+    try:
+        await RuntimeClient(root).stop()
+    except RuntimeUnavailable:
+        # Shutdown may close the socket before the stop acknowledgement arrives.
+        status = await runtime_status(root)
+        if not status.get("runtime_running"):
+            return {"status": "stopped", "runtime_running": False}
+        if status.get("status") != "stopping":
+            raise
     deadline = time.monotonic() + STOP_TIMEOUT
     while time.monotonic() < deadline:
         if not runtime_is_active(root):
@@ -138,6 +152,29 @@ def handle_stop(args: argparse.Namespace) -> int:
 
 def handle_restart(args: argparse.Namespace) -> int:
     return handle_start(args) if handle_stop(args) == 0 else 1
+
+
+def handle_channel_connection(args: argparse.Namespace) -> int:
+    async def control():
+        client = RuntimeClient(runtime_dir(args))
+        action = args.channel_action
+        method = client.connect_channel if action == "connect" else client.disconnect_channel
+        return await method(args.channel)
+    try:
+        result = asyncio.run(control())
+        print(f"{args.channel}: {result['channel']['state']}")
+        return 0
+    except Exception as exc:
+        import httpx
+        if isinstance(exc, httpx.HTTPStatusError):
+            try:
+                detail = exc.response.json().get("detail", "Channel operation failed")
+            except ValueError:
+                detail = "Channel operation failed"
+        else:
+            detail = str(exc)
+        print(f"Cannot {args.channel_action} {args.channel}: {detail}")
+        return 1
 
 
 def handle_status(args: argparse.Namespace) -> int:

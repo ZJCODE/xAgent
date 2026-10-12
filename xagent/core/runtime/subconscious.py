@@ -243,6 +243,9 @@ class SubconsciousLoop:
     def contacts_file(self) -> Path:
         return self._contacts_file
 
+    def set_deliverable_channels(self, channels: Iterable[str]) -> None:
+        self._deliverable_channels = self._normalize_deliverable_channels(channels)
+
     def record_interaction(
         self,
         channel: str,

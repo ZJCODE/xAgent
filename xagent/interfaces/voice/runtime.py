@@ -160,6 +160,16 @@ class VoiceRuntime:
         self.logger = logging.getLogger(self.__class__.__name__)
         self.pause_event = threading.Event()
         self.stop_event = threading.Event()
+        self._capture_stop = threading.Event()
+        self._stop_requested = asyncio.Event()
+        self._accepting = True
+        self._closed = False
+        self._capture_sources: tuple = ()
+        self._sources_closed = True
+        self._capture_threads: set[threading.Thread] = set()
+        self._capture_threads_lock = threading.Lock()
+        self.runtime_activity = None
+        self._resource_workers: set[asyncio.Task] = set()
         self._playback_lock = asyncio.Lock()
         self._language_tracker = ConversationLanguageTracker(
             fallback=self.config.fallback_language,
@@ -181,7 +191,7 @@ class VoiceRuntime:
         )
         self._event_loop: asyncio.AbstractEventLoop | None = None
         self._floor = ConversationFloor()
-        self._utterance_queue: asyncio.Queue[VoiceUtterance | None] | None = None
+        self._utterance_queue: asyncio.Queue[VoiceUtterance | Exception | None] | None = None
         self._steer_result: asyncio.Future[str] | None = None
         self._active_voice_turn_id: str | None = None
         self._preemptive_turn_id: str | None = None
@@ -223,6 +233,8 @@ class VoiceRuntime:
             max_agent_loops=performance.max_agent_loops,
         )
         self._last_preemptive_partial = ""
+        self._preemptive.task_factory = lambda work: (self.runtime_activity.create_task(work)
+            if self.runtime_activity is not None else asyncio.create_task(work))
 
     async def _refresh_stt_context_terms(self) -> None:
         """Feed the recognizer the names the agent knows, before it connects."""
@@ -242,77 +254,159 @@ class VoiceRuntime:
         self._event_loop = asyncio.get_running_loop()
         await self._refresh_stt_context_terms()
         self.output("xAgent voice ready. Speak to the microphone; press Ctrl+C to stop.")
-        callback = getattr(self, "runtime_status", None)
-        if callback:
-            callback("connected")
         audio_chunks = self.microphone.iter_chunks(
             pause_event=self.pause_event,
-            stop_event=self.stop_event,
+            stop_event=self._capture_stop,
         )
         raw_utterances = self.recognizer.iter_utterances(
             audio_chunks,
             pause_event=self.pause_event,
-            stop_event=self.stop_event,
+            stop_event=self._capture_stop,
         )
         if self.config.aggregate_utterances:
             utterances = iter_aggregated_utterances(
                 raw_utterances,
-                stop_event=self.stop_event,
+                stop_event=self._capture_stop,
                 grace_scale=self.config.aggregation_grace_scale,
+                on_worker=self._register_capture_thread,
             )
         else:
             utterances = raw_utterances
+        self._capture_sources = (utterances, raw_utterances, audio_chunks)
+        self._sources_closed = False
         self._utterance_queue = asyncio.Queue()
         utterance_worker = asyncio.create_task(self._utterance_worker(utterances))
         preemptive_worker = asyncio.create_task(self._preemptive_partial_loop())
         try:
             while not self.stop_event.is_set():
                 utterance = await self._utterance_queue.get()
+                if not self._accepting:
+                    await self._stop_requested.wait()
+                    break
                 if utterance is None:
                     break
-                transcript = utterance.text.strip()
-                if not transcript:
-                    await self._speak_notice("not_understood")
-                    continue
-                attribution = self._resolve_speaker(utterance)
-                if not await self._should_reply_to_utterance(transcript, utterance, attribution):
-                    continue
-                endpoint_at = time.monotonic()
-                self.output(f"User: {transcript}")
-                try:
-                    await self._reply_to_utterance(
-                        utterance,
-                        endpoint_at=endpoint_at,
-                        user_id=attribution.user_id,
-                        voice_metadata=self._voice_turn_metadata(utterance, attribution),
-                    )
-                    self._attention.mark_dispatched()
-                except Exception as exc:
-                    self.logger.exception("Voice turn failed")
-                    self.output(f"Voice turn failed: {exc}")
-                    await self._speak_notice("error")
+                if isinstance(utterance, Exception):
+                    raise utterance
+                if self.runtime_activity is not None:
+                    work = self.runtime_activity.create_task(self._handle_utterance(utterance))
+                    try:
+                        await work
+                    except asyncio.CancelledError:
+                        if asyncio.current_task().cancelling():
+                            raise
+                else:
+                    await self._handle_utterance(utterance)
         finally:
             self.stop_event.set()
+            self._capture_stop.set()
             self.pause_event.clear()
             self.synthesizer.cancel()
             close = getattr(self.synthesizer, "close", None)
             if callable(close):
-                close()
+                await self._resource_call(close)
             close_player = getattr(self.player, "close", None)
             if callable(close_player):
-                close_player()
+                await self._resource_call(close_player)
             await self._preemptive.cancel()
             preemptive_worker.cancel()
             utterance_worker.cancel()
             await asyncio.gather(preemptive_worker, utterance_worker, return_exceptions=True)
+            close_recognizer = getattr(self.recognizer, "close", None)
+            if callable(close_recognizer):
+                await self._resource_call(close_recognizer)
+            if self._resource_workers:
+                await asyncio.shield(asyncio.gather(*self._resource_workers, return_exceptions=True))
+            with self._capture_threads_lock:
+                capture_threads = list(self._capture_threads)
+            for thread in capture_threads:
+                await self._resource_call(thread.join)
+            await self._close_capture_sources()
+            self._closed = True
 
     async def _utterance_worker(self, utterances: Iterable[VoiceUtterance]) -> None:
         assert self._utterance_queue is not None
-        while not self.stop_event.is_set():
-            utterance = await asyncio.to_thread(_next_or_none, utterances)
-            await self._utterance_queue.put(utterance)
-            if utterance is None:
-                return
+        try:
+            while not self._capture_stop.is_set():
+                utterance = await self._resource_call(_next_or_none, utterances)
+                await self._utterance_queue.put(utterance)
+                if utterance is None:
+                    return
+        except Exception as exc:
+            await self._utterance_queue.put(exc)
+
+    async def _handle_utterance(self, utterance: VoiceUtterance) -> None:
+        transcript = utterance.text.strip()
+        if not transcript:
+            await self._speak_notice("not_understood")
+            return
+        attribution = self._resolve_speaker(utterance)
+        if not await self._should_reply_to_utterance(transcript, utterance, attribution):
+            return
+        endpoint_at = time.monotonic()
+        self.output(f"User: {transcript}")
+        try:
+            await self._reply_to_utterance(utterance, endpoint_at=endpoint_at,
+                user_id=attribution.user_id,
+                voice_metadata=self._voice_turn_metadata(utterance, attribution))
+            self._attention.mark_dispatched()
+        except Exception as exc:
+            self.logger.exception("Voice turn failed")
+            self.output(f"Voice turn failed: {exc}")
+            await self._speak_notice("error")
+
+    def quiesce(self) -> None:
+        self._accepting = False
+        self._capture_stop.set()
+        if self._utterance_queue is not None:
+            self._utterance_queue.put_nowait(None)
+
+    @property
+    def resources_closed(self) -> bool:
+        return self._closed and self._sources_closed and not self._resource_workers and not self._capture_active() and getattr(self.recognizer, "resources_closed", True)
+
+    def _register_capture_thread(self, thread: threading.Thread) -> None:
+        with self._capture_threads_lock:
+            self._capture_threads.add(thread)
+
+    def _capture_active(self) -> bool:
+        with self._capture_threads_lock:
+            return any(thread.is_alive() for thread in self._capture_threads)
+
+    async def stop(self) -> None:
+        self.quiesce()
+        self.stop_event.set()
+        self._stop_requested.set()
+        self._abort_voice_turn()
+        self._abort_preemptive_turn()
+        self.synthesizer.cancel()
+        close = getattr(self.recognizer, "close", None)
+        if callable(close):
+            await self._resource_call(close)
+        await self._close_capture_sources()
+
+    async def _close_capture_sources(self) -> None:
+        if self._resource_workers or self._capture_active() or not getattr(self.recognizer, "resources_closed", True):
+            return
+        for source in self._capture_sources:
+            close = getattr(source, "close", None)
+            if callable(close):
+                try:
+                    await self._resource_call(close)
+                except Exception:
+                    self.logger.warning("Voice capture has not finished closing", exc_info=True)
+                    return
+        self._sources_closed = True
+
+    async def _resource_call(self, function, *args):
+        # Shield the worker so cancellation cannot hide an active device thread.
+        worker = asyncio.create_task(asyncio.to_thread(function, *args))
+        self._resource_workers.add(worker)
+        def finished(task):
+            self._resource_workers.discard(task)
+            if not task.cancelled():
+                task.exception()
+        worker.add_done_callback(finished)
+        return await asyncio.shield(worker)
 
     @property
     def _duplex_capture_enabled(self) -> bool:
@@ -536,6 +630,9 @@ class VoiceRuntime:
             return
         try:
             while not self.stop_event.is_set():
+                if not self._accepting:
+                    await asyncio.sleep(0.02)
+                    continue
                 if self._floor.state != FloorState.IDLE:
                     self._last_preemptive_partial = ""
                     await self._preemptive.cancel()
@@ -620,7 +717,7 @@ class VoiceRuntime:
                             )
                         )
                     playback_task = asyncio.create_task(
-                        asyncio.to_thread(
+                        self._resource_call(
                             self._play_text_queue,
                             text_queue,
                             speak_language,
@@ -662,10 +759,10 @@ class VoiceRuntime:
                             close_synthesizer = getattr(self.synthesizer, "close", None)
                             if callable(close_synthesizer):
                                 try:
-                                    await asyncio.to_thread(close_synthesizer)
+                                    await self._resource_call(close_synthesizer)
                                 except Exception:
                                     self.logger.debug("Failed to reset the TTS connection", exc_info=True)
-                            await asyncio.to_thread(
+                            await self._resource_call(
                                 self._play_text_queue,
                                 [spoken_reply],
                                 speak_language,
@@ -1138,7 +1235,7 @@ class VoiceRuntime:
             self.pause_event.set()
             playback_stop = threading.Event()
             try:
-                await asyncio.to_thread(
+                await self._resource_call(
                     self._notice_speaker.speak,
                     category,
                 )

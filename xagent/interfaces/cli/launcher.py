@@ -121,7 +121,7 @@ def _launcher_options(*, initialized: bool, has_agents: bool = True) -> list[Men
         MenuOption(
             key="runtime",
             title="Runtime",
-            description="Start, stop, or inspect the Agent and all its channels.",
+            description="Start, stop, or inspect the Agent; other channels connect on demand.",
             disabled=not initialized,
         ),
         MenuOption(
@@ -168,7 +168,7 @@ def _launcher_channel_options(config_dir: Path) -> list[MenuOption]:
     state = runtime_snapshot(config_dir)
     def _running(channel: str) -> bool:
         row = state.get("channels", {}).get(channel, {})
-        return isinstance(row, dict) and row.get("state") == "running"
+        return isinstance(row, dict) and row.get("state") in {"running", "connected"}
 
     voice_running = _running(CHANNEL_VOICE)
     api_running = _running(CHANNEL_API)
@@ -301,7 +301,7 @@ def _api_channel_is_enabled(config_dir: Path) -> bool:
 
 
 def _api_channel_is_running(config_dir: Path) -> bool:
-    return runtime_snapshot(config_dir).get("channels", {}).get(CHANNEL_API, {}).get("state") == "running"
+    return runtime_snapshot(config_dir).get("channels", {}).get(CHANNEL_API, {}).get("state") in {"running", "connected"}
 
 
 def _api_channel_url(config_dir: Path) -> str:
@@ -455,7 +455,7 @@ def _launcher_help_content(*, config_dir: Path, initialized: bool) -> Text:
     content.append(" for one message.\n")
     content.append("  ")
     content.append(_format_init_command("xagent start", config_dir=config_dir), style="cyan")
-    content.append("\n    Start the Agent and its configured channels.\n")
+    content.append("\n    Start the Agent with API; connect other channels on demand.\n")
     content.append("  ")
     content.append(_format_init_command("xagent web start", config_dir=config_dir), style="cyan")
     content.append("\n    Start the browser web client.\n")
@@ -566,7 +566,7 @@ def _run_managed_channel_action(config_dir: Path, channel: str, action: str) -> 
     if channel == CHANNEL_API and action == "address":
         print(_api_channel_url(config_dir))
         return 0
-    print("Manage the Agent under Runtime; channels have configuration only.")
+    print("Manage the Agent under Runtime; connect channels in Web or with xagent channel <name> connect.")
     return 1
 
 
@@ -591,7 +591,7 @@ def _run_runtime_launcher(config_dir: Path) -> int:
             state = runtime_snapshot(config_dir)
             option = ui.select_menu(title="xAgent Runtime",
                 subtitle=f"Agent: {state.get('state', 'stopped')} · {config_dir}",
-                options=[MenuOption("start", "Start", "Start the Agent and its configured channels."),
+                options=[MenuOption("start", "Start", "Start the Agent with API; connect other channels on demand."),
                          MenuOption("stop", "Stop", "Stop the Agent and all its channels."),
                          MenuOption("restart", "Restart", "Restart the Agent to apply configuration changes."),
                          MenuOption("status", "Status", "Show readiness, channels, memory, and tasks."),

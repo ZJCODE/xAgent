@@ -152,6 +152,10 @@ class WeixinAdapter:
         self._task_scheduler: Optional[AsyncTaskScheduler] = None
         self._contacts_file = resolve_contacts_path(self.runtime_dir)
         self._attention_bound = False
+        self._accepting = True
+        self._client_closed = False
+        self._poll_task: asyncio.Task | None = None
+        self.runtime_activity = None
 
     async def run(self) -> None:
         credentials = self.state_store.load_credentials(self.config.account_id)
@@ -172,13 +176,35 @@ class WeixinAdapter:
         attention = self._attention_loop()
 
         try:
-            await self._poll_loop()
+            self._poll_task = asyncio.create_task(self._poll_loop())
+            if not self._accepting:
+                self._poll_task.cancel()
+            try:
+                await asyncio.shield(self._poll_task)
+            except asyncio.CancelledError:
+                if asyncio.current_task().cancelling():
+                    raise
+                await self._stop_event.wait()
         finally:
+            if self._poll_task is not None:
+                self._poll_task.cancel()
+                await asyncio.gather(self._poll_task, return_exceptions=True)
             await self._cancel_processing_tasks()
             if self._owns_client and self.client is not None:
                 await self.client.aclose()
+            self._client_closed = True
+
+    def quiesce(self) -> None:
+        self._accepting = False
+        if self._poll_task is not None:
+            self._poll_task.cancel()
+
+    @property
+    def resources_closed(self) -> bool:
+        return not any(not task.done() for task in self._processing_tasks) and (self.client is None or self._client_closed)
 
     async def stop(self) -> None:
+        self.quiesce()
         self._stop_event.set()
 
     async def _poll_loop(self) -> None:
@@ -260,7 +286,10 @@ class WeixinAdapter:
             pass
 
     async def _create_processing_task(self, message: dict[str, Any]) -> None:
-        task = asyncio.create_task(self._process_message_safe(message))
+        if not self._accepting:
+            return
+        task = (self.runtime_activity.create_task(self._process_message_safe(message)) if self.runtime_activity is not None
+                else asyncio.create_task(self._process_message_safe(message)))
         async with self._processing_tasks_lock:
             self._processing_tasks.add(task)
         task.add_done_callback(self._on_processing_task_done)

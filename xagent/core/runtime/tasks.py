@@ -775,6 +775,13 @@ class AsyncTaskScheduler:
     def is_running(self) -> bool:
         return self._task is not None and not self._task.done()
 
+    def wake(self) -> None:
+        self._wake_event.set()
+
+    def channel_tasks(self, channel: str) -> set[asyncio.Task]:
+        return {task for task, (_, record) in self._inflight_records.items()
+                if record.delivery_channel == channel and not task.done()}
+
     def status_snapshot(self) -> dict[str, Any]:
         records = list_task_records(self.tasks_dir, include_running=True)
         return {"running": self.is_running, "inflight": len(self._inflight),

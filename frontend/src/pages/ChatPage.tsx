@@ -141,7 +141,7 @@ function ChatChannelBlocked({ runtime, starting, loading, error, onStart, onRetr
 }) {
   const preparing = starting || runtime?.status === "starting";
   const title = loading ? "Checking Agent status" : error && !runtime ? "Cannot reach the Agent" : preparing ? "Agent is starting" : runtime?.runtime_running ? "Agent is not ready" : "Agent is stopped";
-  const description = error || runtime?.error || (preparing ? "Preparing your Agent. Chat will be available shortly." : "Start the Agent to chat. All enabled channels start together.");
+  const description = error || runtime?.error || (preparing ? "Preparing your Agent. Chat will be available shortly." : "Start the Agent to chat. API starts by default; other channels connect on demand.");
   return (
     <div className={variant === "banner" ? "chat-channel-banner" : "empty-state chat-channel-empty"} role="status">
       <div className={variant === "banner" ? "chat-channel-banner-copy" : undefined}>

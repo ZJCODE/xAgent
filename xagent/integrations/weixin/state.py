@@ -32,11 +32,12 @@ class WeixinCredentials:
 class WeixinStateStore:
     """State files rooted inside an xAgent runtime directory."""
 
-    def __init__(self, runtime_dir: str | Path) -> None:
+    def __init__(self, runtime_dir: str | Path, *, create: bool = True) -> None:
         self.runtime_dir = Path(runtime_dir).expanduser().resolve()
         self.root = self.runtime_dir / "weixin"
         self.accounts_dir = self.root / "accounts"
-        self.accounts_dir.mkdir(parents=True, exist_ok=True)
+        if create:
+            self.accounts_dir.mkdir(parents=True, exist_ok=True)
 
     def credential_path(self, account_id: str) -> Path:
         return self.accounts_dir / f"{_safe_account_id(account_id)}.json"

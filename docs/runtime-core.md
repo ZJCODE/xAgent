@@ -11,9 +11,19 @@ xagent stop --agent atlas
 xagent restart --agent atlas
 xagent status --agent atlas
 xagent logs --agent atlas --follow
+xagent channel feishu connect --agent atlas
+xagent channel feishu disconnect --agent atlas
 ```
 
-`run` is foreground; `start` is background. The default channels come from configuration. `run/start --channels api,feishu` overrides that selection for one launch. Channel setup and voice device queries remain available, but channels do not have separate start/stop commands. Stop legacy channel processes before launching the new core. Different Agents can run independently.
+`run` is foreground; `start` is background. Ordinary startup/restart opens only the public API, unless `channels.api.enabled: false`. Feishu, Weixin and Voice stay disconnected even when their configuration has `enabled: true`; startup does not construct those adapters or inspect audio devices. `run/start/restart --channels api,feishu` explicitly overrides the default for one launch. Different Agents can run independently. Stop legacy channel processes before launching the core.
+
+The Web Channels page lists every channel as configured/available, connecting, connected, reconnecting, disconnecting or failed. Configuration readiness is not proof of a successful remote handshake. Use Connect / Disconnect or `xagent channel <api|feishu|weixin|voice> connect|disconnect --agent atlas`. Start the Agent before using these controls. Connections are session-only: disconnecting preserves configuration, credentials and history, and restart does not restore manual connections. Handshake/transport failures appear in runtime logs.
+
+Connection operations run inside the owner. Each channel has an operation lock and connection generation; stale callbacks cannot replace current status. Disconnect stops new input/background dispatch, allows up to 10 seconds for accepted work, then allows 5 seconds for cancellation and cleanup. The shared Agent inbox, attention consumer, diary maintenance and other channels remain available. Public API disconnect closes only the public listener and its requests/subscriptions; the internal API delivery sink and local clients remain available. Cleanup failure retains resources and blocks another instance until Disconnect succeeds.
+
+Disconnected external channels do not receive new scheduled or subconscious dispatches. Reconnection wakes the scheduler and follows existing overdue/recurrence rules. Interrupted conversations and attention triggers are not replayed. Unconfirmed execution or delivery retains task receipts for review rather than automatically re-running tools. Configuration and identity edits still take effect after a full Agent restart.
+
+The local control API provides `POST /runtime/channels/{channel}/connect` and `/disconnect`; Web uses `/api/channels/{channel}/connect` and `/disconnect`. Responses contain channel status/capabilities and a runtime snapshot. Unknown channels return 404, invalid configuration 422, unavailable lifecycle states 409, and cleanup failures 503. Connect returns the initial state and clients poll for readiness; Disconnect has a 20-second client request timeout.
 
 CLI chat and observation connect to the local core and start it when necessary. Local Web chat uses the same core, including when the public HTTP API is disabled. Browsing history, memory, configuration and tasks offline does not construct an Agent or a model client. Passive Web notifications do not start it.
 
@@ -70,3 +80,7 @@ cd frontend && npm run build
 The simulation advances the scheduler through 24 virtual hours, dispatches an hourly recurring task, submits four-channel traffic and duplicates, forces diary maintenance, simulates reconnects, and restarts the core twice. It checks persisted message counts, unique diary inputs, prepared task acknowledgements, single-turn execution and bounded file-handle use. The default has a 115-second total budget. It contacts no external model or bot. Separate fault regressions cover execution/delivery/archive interruption, diary conflicts and cursor failures, queue cancellation and cross-process ownership.
 
 This is accelerated scenario validation; it does not measure actual 24-hour uptime or real device/network behaviour.
+
+## Goal check: on-demand channels
+
+One Agent identity and unified first-person diary remain shared across connections. User identity and private/group attribution follow the existing message paths. Connection state is operational state, not a new memory carrier; diary-backed memory stays authoritative. Sharing remains governed by the Agent, with unavailable recipients excluded from new deliveries. Source messages, tool effects and interruption receipts preserve attribution and continuity across disconnect/reconnect.

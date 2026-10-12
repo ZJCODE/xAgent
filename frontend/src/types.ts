@@ -162,7 +162,7 @@ export interface TasksResponse {
 
 export type ChannelId = "api" | "voice" | "feishu" | "weixin";
 
-export type ChannelRuntimeStatus = "running" | "connected" | "starting" | "connecting" | "reconnecting" | "stopped" | "disabled" | "error" | "failed";
+export type ChannelRuntimeStatus = "running" | "connected" | "starting" | "connecting" | "reconnecting" | "disconnecting" | "disconnected" | "stopped" | "disabled" | "error" | "failed";
 
 export interface AgentRuntimeStatus {
   status: string;
@@ -197,6 +197,8 @@ export interface ChannelStatus {
   can_start: boolean;
   can_stop: boolean;
   can_restart: boolean;
+  can_connect: boolean;
+  can_disconnect: boolean;
   setup_hint: string;
 }
 
@@ -207,9 +209,8 @@ export interface ChannelsResponse {
 }
 
 export interface ChannelActionResponse {
-  status: string;
-  message: string;
   channel: ChannelStatus;
+  runtime: AgentRuntimeStatus;
 }
 
 export interface ChannelLogsResponse {

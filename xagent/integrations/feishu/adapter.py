@@ -220,6 +220,10 @@ class FeishuAdapter:
         self._task_scheduler: Optional[AsyncTaskScheduler] = None
         self._contacts_file = resolve_contacts_path(runtime_root)
         self._attention_bound = False
+        self._accepting = True
+        self._transport_thread: threading.Thread | None = None
+        self._sdk_threads: set[threading.Thread] = set()
+        self.runtime_activity = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -299,7 +303,8 @@ class FeishuAdapter:
             if not loop.is_closed():
                 loop.call_soon_threadsafe(finish, error)
 
-        threading.Thread(target=transport, name="xagent-feishu-transport", daemon=True).start()
+        self._transport_thread = threading.Thread(target=transport, name="xagent-feishu-transport", daemon=True)
+        self._transport_thread.start()
         stop_task = asyncio.create_task(self._stop_event.wait())
         ready_task = asyncio.create_task(self._report_initial_connection())
         try:
@@ -308,18 +313,30 @@ class FeishuAdapter:
                 return_when=asyncio.FIRST_COMPLETED,
             )
             if stop_task in done:
-                self._safe_stop()
-            for task in pending:
-                task.cancel()
-            if run_task in done:
-                exc = run_task.exception()
-                if exc is not None:
-                    raise exc
+                # stop() closes the SDK; wait for the real transport acknowledgement.
+                await asyncio.shield(run_task)
+            elif run_task in done:
+                run_task.result()
         finally:
             ready_task.cancel()
-            await asyncio.gather(ready_task, return_exceptions=True)
-            self._safe_stop()
+            stop_task.cancel()
+            await asyncio.gather(ready_task, stop_task, return_exceptions=True)
+            await asyncio.to_thread(self._safe_stop)
+            with self._processing_tasks_lock:
+                processing = list(self._processing_tasks)
+            if processing:
+                await asyncio.gather(*processing, return_exceptions=True)
             self._owner_loop = None
+
+    def quiesce(self) -> None:
+        self._accepting = False
+
+    @property
+    def resources_closed(self) -> bool:
+        with self._processing_tasks_lock:
+            active = any(not task.done() for task in self._processing_tasks)
+            sdk_active = any(thread.is_alive() for thread in self._sdk_threads)
+        return not active and not sdk_active and (self._transport_thread is None or not self._transport_thread.is_alive())
 
     async def _report_initial_connection(self) -> None:
         """Report the first handshake; reconnects use the SDK's event bus."""
@@ -347,6 +364,9 @@ class FeishuAdapter:
         self._setup_channel()
         assert self._channel is not None
 
+        if self._stop_event.is_set():
+            return
+
         self.logger.info("Connecting Feishu WebSocket (app_id=%s)…", self.config.app_id)
         try:
             self._channel.start()
@@ -369,14 +389,24 @@ class FeishuAdapter:
 
     async def stop(self) -> None:
         """Request a graceful shutdown of the connect loop."""
+        self.quiesce()
         self._stop_event.set()
-        self._safe_stop()
+        await asyncio.to_thread(self._safe_stop)
+        while self._transport_thread is not None and self._transport_thread.is_alive():
+            await asyncio.sleep(0.05)
+            # A stop racing the SDK's synchronous startup must also close a
+            # transport that became available after the first stop request.
+            await asyncio.to_thread(self._safe_stop)
 
     def _safe_stop(self) -> None:
         self._cancel_processing_tasks()
         channel = self._channel
         if channel is None:
             return
+        sdk_thread = getattr(channel, "_bg_thread", None)
+        if isinstance(sdk_thread, threading.Thread):
+            with self._processing_tasks_lock:
+                self._sdk_threads.add(sdk_thread)
         try:
             channel.stop()
         except Exception:  # pragma: no cover - best-effort cleanup
@@ -413,6 +443,8 @@ class FeishuAdapter:
     # ------------------------------------------------------------------
 
     async def _on_message(self, msg: Any) -> None:
+        if not self._accepting:
+            return
         callback = getattr(self, "runtime_status", None)
         if callback:
             callback("connected")
@@ -428,7 +460,10 @@ class FeishuAdapter:
         self._create_dispatch_task(msg)
 
     def _create_dispatch_task(self, msg: Any) -> None:
-        task = asyncio.create_task(self._dispatch(msg))
+        if not self._accepting:
+            return
+        task = (self.runtime_activity.create_task(self._dispatch(msg)) if self.runtime_activity is not None
+                else asyncio.create_task(self._dispatch(msg)))
         with self._processing_tasks_lock:
             self._processing_tasks.add(task)
         task.add_done_callback(self._on_dispatch_task_done)

@@ -5,7 +5,7 @@ import queue
 import threading
 import time
 from collections import Counter
-from typing import Iterable, Iterator
+from typing import Callable, Iterable, Iterator
 
 from .types import VoiceUtterance
 
@@ -36,9 +36,12 @@ def iter_aggregated_utterances(
     stop_event: threading.Event,
     max_segments: int = _MAX_SEGMENTS,
     grace_scale: float = 1.0,
+    on_worker: Callable[[threading.Thread], None] | None = None,
 ) -> Iterator[VoiceUtterance]:
     """Yield merged utterances after a short grace window following each endpoint."""
     feeder = _UtteranceFeeder(utterances)
+    if on_worker is not None:
+        on_worker(feeder._thread)
     try:
         while not stop_event.is_set():
             first = feeder.get(timeout=_POLL_INTERVAL_SECONDS)
@@ -125,6 +128,8 @@ class _UtteranceFeeder:
             return None
         if item is _STOP:
             return None
+        if isinstance(item, Exception):
+            raise item
         return item
 
     def _run(self, utterances: Iterable[VoiceUtterance]) -> None:
@@ -133,6 +138,8 @@ class _UtteranceFeeder:
                 if self._stop.is_set():
                     break
                 self._queue.put(utterance)
+        except Exception as exc:
+            self._queue.put(exc)
         finally:
             self._queue.put(_STOP)
             self._done.set()

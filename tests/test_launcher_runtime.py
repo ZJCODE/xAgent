@@ -20,7 +20,7 @@ class LauncherRuntimeTests(unittest.TestCase):
         }), encoding="utf-8")
         (root / "identity.md").write_text("I am an agent.", encoding="utf-8")
 
-    def test_runtime_control_menu_starts_all_configured_channels(self):
+    def test_runtime_control_menu_uses_default_api_startup(self):
         class UI:
             choices = iter((SimpleNamespace(key="start"), SimpleNamespace(key="back")))
             def select_menu(self, **kwargs):

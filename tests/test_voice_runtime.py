@@ -898,7 +898,7 @@ class VoiceRuntimeTests(unittest.TestCase):
             synthesizer=synth,
         )
 
-        def _no_aggregate(utterances, *, stop_event, grace_scale=1.0):
+        def _no_aggregate(utterances, *, stop_event, grace_scale=1.0, on_worker=None):
             del stop_event, grace_scale
             yield from utterances
 
@@ -919,7 +919,7 @@ class VoiceRuntimeTests(unittest.TestCase):
             synthesizer=synth,
         )
 
-        def _no_aggregate(utterances, *, stop_event, grace_scale=1.0):
+        def _no_aggregate(utterances, *, stop_event, grace_scale=1.0, on_worker=None):
             del stop_event, grace_scale
             yield from utterances
 

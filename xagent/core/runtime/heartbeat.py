@@ -60,6 +60,10 @@ class RuntimeHeartbeat:
         self._subconscious_loop = subconscious_loop
 
     @property
+    def subconscious_loop(self):
+        return self._subconscious_loop
+
+    @property
     def is_running(self) -> bool:
         return self._task is not None and not self._task.done()
 

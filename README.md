@@ -42,18 +42,25 @@ xagent
 
 The interactive launcher will guide you through creating and managing your agents.
 
-Each Agent runs one persistent core shared by its enabled channels:
+Each Agent runs one persistent core. The public API starts by default; Feishu,
+Weixin and Voice connect only when requested:
 
 ```bash
 xagent run --agent atlas       # foreground
 xagent start --agent atlas     # background
+xagent channel feishu connect --agent atlas
+xagent channel feishu disconnect --agent atlas
 xagent status --agent atlas
 xagent logs --agent atlas --follow
 xagent restart --agent atlas
 xagent stop --agent atlas
 ```
 
-CLI and local Web chat connect to that core, even with the public API disabled.
+Use **Channels → Connect / Disconnect** in the Web client, or the channel commands
+above. Restarting returns to API-only startup; `channels.api.enabled: false`
+keeps the public API offline too. An explicit `--channels api,feishu` overrides
+this default for one launch. CLI and local Web chat use the same core, even
+with the public API disconnected.
 Configuration and identity edits take effect after restart. Interrupted tasks
 with uncertain execution or delivery wait for review instead of replaying.
 See [runtime operation and recovery](docs/runtime-core.md) for details and validation.

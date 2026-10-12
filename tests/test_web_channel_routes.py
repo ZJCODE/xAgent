@@ -72,7 +72,7 @@ class WebChannelRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         rows = {row["id"]: row for row in payload["channels"]}
-        self.assertEqual(rows["api"]["status"], "stopped")
+        self.assertEqual(rows["api"]["status"], "disconnected")
         self.assertTrue(rows["api"]["ready"])
         self.assertEqual(rows["voice"]["status"], "disabled")
         self.assertEqual(rows["feishu"]["setup_hint"], "")
@@ -149,6 +149,80 @@ class WebChannelRouteTests(unittest.IsolatedAsyncioTestCase):
                         self.assertEqual(response.status_code, 404)
         start.assert_not_called()
         stop.assert_not_awaited()
+
+    async def test_connection_actions_target_selected_agent(self):
+        self.server.session.select("agent_b")
+        runtime = {"runtime_ready": True, "runtime_running": True, "status": "running", "channels": {}}
+        with patch("xagent.interfaces.cli.agent_runtime.runtime_status", new_callable=AsyncMock, return_value=runtime), patch(
+            "xagent.core.runtime.client.RuntimeClient.connect_channel", new_callable=AsyncMock
+        ) as connect, patch("xagent.core.runtime.client.RuntimeClient.disconnect_channel", new_callable=AsyncMock) as disconnect, patch(
+            "xagent.core.runtime.client.RuntimeClient.__init__", return_value=None
+        ) as client_init:
+            async with await self._client() as client:
+                first = await client.post("/api/channels/feishu/connect")
+                second = await client.post("/api/channels/feishu/disconnect")
+            self.assertEqual(first.status_code, 200)
+            self.assertEqual(second.status_code, 200)
+            self.assertEqual(first.json()["channel"]["id"], "feishu")
+            connect.assert_awaited_once_with("feishu")
+            disconnect.assert_awaited_once_with("feishu")
+            self.assertTrue(all(call.args == (self.agent_b_path.resolve(),) for call in client_init.call_args_list))
+
+    async def test_connection_requires_ready_runtime_and_valid_channel(self):
+        with patch("xagent.interfaces.cli.agent_runtime.runtime_status", new_callable=AsyncMock,
+                   return_value={"runtime_ready": False}), patch(
+            "xagent.core.runtime.client.RuntimeClient.connect_channel", new_callable=AsyncMock
+        ) as connect:
+            async with await self._client() as client:
+                self.assertEqual((await client.post("/api/channels/feishu/connect")).status_code, 409)
+                self.assertEqual((await client.post("/api/channels/invalid/connect")).status_code, 404)
+            connect.assert_not_awaited()
+
+    async def test_connection_response_keeps_original_agent_when_selection_changes(self):
+        self.server.session.select("agent_b")
+        async def connect(channel):
+            self.server.session.select("agent_a")
+        with patch("xagent.interfaces.cli.agent_runtime.runtime_status", new_callable=AsyncMock,
+                   return_value={"runtime_ready": True, "channels": {}}), patch(
+            "xagent.core.runtime.client.RuntimeClient.connect_channel", side_effect=connect
+        ):
+            async with await self._client() as client:
+                result = await client.post("/api/channels/feishu/connect")
+        self.assertEqual(result.status_code, 200)
+        self.assertTrue(result.json()["channel"]["configured"])
+        self.assertEqual(result.json()["channel"]["log_path"], str(self.agent_b_path.resolve() / "logs" / "runtime.log"))
+
+    async def test_connection_error_preserves_runtime_validation_status(self):
+        error = httpx.HTTPStatusError("invalid", request=httpx.Request("POST", "http://local"),
+            response=httpx.Response(422, json={"detail": "Configure feishu before connecting"}))
+        with patch("xagent.interfaces.cli.agent_runtime.runtime_status", new_callable=AsyncMock,
+                   return_value={"runtime_ready": True}), patch(
+            "xagent.core.runtime.client.RuntimeClient.connect_channel", new_callable=AsyncMock, side_effect=error
+        ):
+            async with await self._client() as client:
+                result = await client.post("/api/channels/feishu/connect")
+            self.assertEqual(result.status_code, 422)
+            self.assertEqual(result.json()["detail"], "Configure feishu before connecting")
+
+    async def test_connections_follow_snapshot_not_shared_pid_or_saved_config(self):
+        self.server.session.select("agent_b")
+        runtime = {"runtime_ready": True, "runtime_running": True, "status": "running",
+                   "channels": {"feishu": {"state": "disconnected", "ready": True,
+                                             "can_connect": True, "can_disconnect": False},
+                                "voice": {"state": "disconnected", "ready": False,
+                                          "config_error": "Restart to apply configuration",
+                                          "can_connect": False, "can_disconnect": False}}}
+        with patch("xagent.interfaces.cli.agent_runtime.runtime_status", new_callable=AsyncMock, return_value=runtime), patch(
+            "xagent.interfaces.web.channel_routes.running_pid", return_value=123
+        ):
+            async with await self._client() as client:
+                result = await client.get("/api/channels")
+        rows = {row["id"]: row for row in result.json()["channels"]}
+        self.assertEqual(rows["feishu"]["status"], "disconnected")
+        self.assertTrue(rows["feishu"]["can_connect"])
+        self.assertFalse(rows["voice"]["ready"])
+        self.assertFalse(rows["voice"]["can_connect"])
+        self.assertEqual(rows["weixin"]["status"], "disconnected")
 
     async def test_channels_and_runtime_report_degraded_state_and_task_review_count(self):
         runtime = {"status": "degraded", "runtime_running": True, "runtime_ready": True,

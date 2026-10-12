@@ -197,6 +197,31 @@ class AttentionLoop:
         self._stopped = False
         self._seq = 0
         self._lock = asyncio.Lock()
+        self._paused_channels: set[str] = set()
+        self._channel_activity: Dict[str, Any] = {}
+
+    def attach_channel(self, channel: str, activity: Any) -> None:
+        self._channel_activity[channel] = activity
+        self._paused_channels.discard(channel)
+        self._wake.set()
+
+    def pause_channel(self, channel: str) -> None:
+        self._paused_channels.add(channel)
+        self._wake.set()
+
+    async def detach_channel(self, channel: str) -> None:
+        """Discard reply triggers, retaining persisted source messages/cursors."""
+        self.pause_channel(channel)
+        async with self._lock:
+            for key, state in self._rooms.items():
+                if room_key_channel(key) == channel:
+                    through = max((event.cursor for event in state.events), default=state.attended_through)
+                    self._advance(key, through)
+                    state.extras.clear()
+            self._speakers.pop(channel, None)
+            self._formatters.pop(channel, None)
+            self._channel_activity.pop(channel, None)
+            self._persist()
 
     def register_speaker(self, channel: str, speaker: SpeakFn) -> None:
         self._speakers[str(channel or "").strip()] = speaker
@@ -338,7 +363,8 @@ class AttentionLoop:
         return state
 
     def _armed_rooms(self) -> List[str]:
-        return [key for key, state in self._rooms.items() if state.events]
+        return [key for key, state in self._rooms.items()
+                if state.events and room_key_channel(key) not in self._paused_channels]
 
     def _ensure_loop(self) -> None:
         if self._stopped:
@@ -369,7 +395,19 @@ class AttentionLoop:
                     except asyncio.TimeoutError:
                         pass
                     continue
-                await self._evaluate(due_key)
+                activity = self._channel_activity.get(room_key_channel(due_key))
+                if activity is None:
+                    await self._evaluate(due_key)
+                else:
+                    if not activity.accepting:
+                        continue
+                    evaluation = activity.create_task(self._evaluate(due_key))
+                    try:
+                        await evaluation
+                    except asyncio.CancelledError:
+                        # A channel drain cancels its child, not this consumer.
+                        if self._stopped or asyncio.current_task().cancelling():
+                            raise
         except asyncio.CancelledError:
             raise
 
@@ -380,6 +418,8 @@ class AttentionLoop:
         best_addressed = False
         best_age = 0.0
         for key, state in self._rooms.items():
+            if room_key_channel(key) in self._paused_channels:
+                continue
             if not state.events or state.due_at <= 0:
                 continue
             age = now - state.earliest_unattended_at

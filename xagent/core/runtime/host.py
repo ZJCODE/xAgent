@@ -19,6 +19,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict
 from ...interfaces.server.models import ChatInput, ObserveInput
 
+from .channel_activity import ChannelActivity
 from .ownership import RuntimeOwnership, canonical_root, prepare_socket_directory, write_runtime_status
 
 logger = logging.getLogger(__name__)
@@ -82,6 +83,13 @@ class RuntimeHost:
         self.recovered_turns = 0
         self.control_app = None
         self._startup_fingerprint = None
+        self.channel_drain_timeout = 10.0
+        self.channel_cleanup_timeout = 5.0
+        self._channel_locks = {name: asyncio.Lock() for name in ("api", "feishu", "weixin", "voice")}
+        self._channel_generation = {name: 0 for name in self._channel_locks}
+        self._channel_activity: dict[str, ChannelActivity] = {}
+        self._channel_operations: dict[str, asyncio.Task] = {}
+        self._api_app = None
 
     def _configuration_fingerprint(self):
         digest = hashlib.sha256()
@@ -97,7 +105,7 @@ class RuntimeHost:
         return {
             "pid": os.getpid(), "root": str(self.config_dir),
             "state": self.state, "runtime_ready": self.runtime_ready,
-            "started_at": self.started_at, "channels": self.channel_status,
+            "started_at": self.started_at, "channels": {name: self._channel_view(name) for name in self.channel_status},
             "socket_path": str(self.paths.socket_path),
             "model": getattr(self.agent, "model", None),
             "tools": list(getattr(self.agent, "tools", {})),
@@ -132,7 +140,7 @@ class RuntimeHost:
         try:
             self._publish_status()
             from ...interfaces.base import BaseAgentRunner
-            from ...interfaces.cli.channels import enabled_channels_from_config
+            from ...interfaces.cli.channels import default_runtime_channels
             from ...interfaces.cli.processes import managed_paths, running_pid
             from ...interfaces.server.admin_service import AdminService
             from ...integrations.api import ApiChannelAdapter
@@ -155,7 +163,8 @@ class RuntimeHost:
             self.api = ApiChannelAdapter(self.agent,
                 contacts_file=resolve_contacts_path(self.config_dir), tasks_dir=self.runner.tasks_dir)
             self.adapters["api"] = self.api
-            channels = self.requested_channels if self.requested_channels is not None else enabled_channels_from_config(self.runner.config)
+            channels = self.requested_channels if self.requested_channels is not None else default_runtime_channels(self.runner.config)
+            self.channel_status = {name: {"state": "disconnected"} for name in self._channel_locks}
             for channel in channels:
                 if channel not in {"api", "feishu", "weixin", "voice"}:
                     raise ValueError(f"Unknown channel: {channel}")
@@ -177,12 +186,12 @@ class RuntimeHost:
             self.heartbeat = create_runtime_heartbeat(
                 self.agent, self.runner.config.get("runtime"),
                 subconscious_delivery_sink=self._deliver_subconscious,
-                subconscious_deliverable_channels=set(self.adapters),
+                subconscious_deliverable_channels=self._deliverable_channels(),
             )
             if self.heartbeat is not None:
                 await self.heartbeat.start()
             self.runtime_ready = True
-            self.state = "degraded" if any(row["state"] == "failed" for row in self.channel_status.values()) else "running"
+            self.state = "degraded" if any(row["state"] in {"failed", "reconnecting"} for row in self.channel_status.values()) else "running"
             self.paths.pid_path.parent.mkdir(parents=True, exist_ok=True)
             self.paths.pid_path.write_text(f"{os.getpid()}\n", encoding="utf-8")
             self._publish_status()
@@ -223,33 +232,221 @@ class RuntimeHost:
     async def stop(self) -> None:
         self._stop_event.set()
 
-    def _channel_failed(self, channel, exc) -> None:
-        logger.error("%s channel failed: %s", channel, exc, exc_info=exc)
-        self.channel_status[channel] = {"state": "failed", "error": f"{type(exc).__name__}: check the runtime log"}
-        if self.runtime_ready:
-            self.state = "degraded"
-            self._publish_status()
+    def _channel_readiness(self, channel: str) -> tuple[bool, str]:
+        if self.runner is None:
+            return False, "Agent runtime is not ready"
+        from ...interfaces.cli.channels import channel_readiness
+        return channel_readiness(self.runner.config, channel, self.config_dir)
 
-    def _channel_connection(self, channel: str, state: str) -> None:
-        self.channel_status[channel] = {"state": state}
-        if self.runtime_ready:
+    def _channel_view(self, channel: str) -> dict:
+        row = dict(self.channel_status.get(channel, {"state": "disconnected"}))
+        ready, detail = self._channel_readiness(channel)
+        resources = channel in self._tasks or channel in self._servers or (channel != "api" and channel in self.adapters)
+        operation = self._channel_operations.get(channel)
+        busy = operation is not None and not operation.done()
+        available = self.runtime_ready and not self._stop_event.is_set()
+        row.update(ready=ready, config_error=detail, can_connect=available and ready and not resources and not busy,
+                   can_disconnect=available and resources and not busy and row["state"] != "disconnecting")
+        return row
+
+    def _update_channel_state(self, channel: str, state: str, **extra) -> None:
+        self.channel_status[channel] = {"state": state, **extra}
+        if self.runtime_ready and not self._stop_event.is_set():
             self.state = "degraded" if any(row["state"] in {"failed", "reconnecting"}
                 for row in self.channel_status.values()) else "running"
             self._publish_status()
+        self._sync_delivery_channels()
 
-    async def _watch_channel(self, channel, awaitable) -> None:
-        self.channel_status[channel] = {"state": "connecting"}
+    def _deliverable_channels(self) -> set[str]:
+        # The internal API delivery sink remains available without a public listener.
+        return {"api"} | {name for name, row in self.channel_status.items() if row["state"] == "connected"}
+
+    def _sync_delivery_channels(self) -> None:
+        loop = getattr(self.heartbeat, "subconscious_loop", None)
+        if loop is not None:
+            loop.set_deliverable_channels(self._deliverable_channels())
+        if self.scheduler is not None:
+            self.scheduler.wake()
+
+    def _channel_failed(self, channel, exc) -> None:
+        logger.error("%s channel failed: %s", channel, exc, exc_info=exc)
+        self._update_channel_state(channel, "failed", error=f"{type(exc).__name__}: check the runtime log")
+
+    def _channel_connection(self, channel: str, state: str, generation: int | None = None) -> None:
+        if generation is not None and generation != self._channel_generation[channel]:
+            return
+        if self._stop_event.is_set() or self.channel_status.get(channel, {}).get("state") in {"disconnecting", "disconnected", "failed"}:
+            return
+        self._update_channel_state(channel, state)
+
+    async def _watch_channel(self, channel, awaitable, generation: int | None = None) -> None:
         try:
             await awaitable
-            if not self._stop_event.is_set():
-                self._channel_failed(channel, RuntimeError("Channel stopped unexpectedly"))
+            if not self._stop_event.is_set() and self.channel_status[channel]["state"] != "disconnecting":
+                raise RuntimeError("Channel stopped unexpectedly")
         except asyncio.CancelledError:
             raise
         except (Exception, SystemExit) as exc:
-            self._channel_failed(channel, exc)
+            if generation is None or generation == self._channel_generation[channel]:
+                self._channel_failed(channel, exc)
+                operation = self._channel_operations.get(channel)
+                if operation is None or operation.done():
+                    self._channel_operations[channel] = asyncio.create_task(self._disconnect_locked(channel, failed=True))
+
+    def _require_channel_control(self, channel: str) -> None:
+        if channel not in self._channel_locks:
+            raise HTTPException(404, "Unknown channel")
+        if not self.runtime_ready or self._stop_event.is_set():
+            raise HTTPException(409, "Start the Agent before managing connections")
+
+    async def connect_channel(self, channel: str) -> dict:
+        self._require_channel_control(channel)
+        async with self._channel_locks[channel]:
+            self._require_channel_control(channel)
+            operation = self._channel_operations.get(channel)
+            if operation is not None and not operation.done():
+                raise HTTPException(409, "Channel cleanup is still in progress")
+            state = self.channel_status[channel]["state"]
+            if state in {"connecting", "connected", "reconnecting"}:
+                return self._channel_response(channel)
+            if not self._channel_view(channel)["can_connect"]:
+                ready, detail = self._channel_readiness(channel)
+                if not ready:
+                    raise HTTPException(422, detail)
+                raise HTTPException(409, "Disconnect the previous connection before reconnecting")
+            try:
+                await self._start_channel(channel)
+            except Exception as exc:
+                self._channel_failed(channel, exc)
+                await self._cleanup_channel(channel)
+                raise HTTPException(503, "Channel could not start; check the runtime log") from exc
+            return self._channel_response(channel)
+
+    async def disconnect_channel(self, channel: str) -> dict:
+        self._require_channel_control(channel)
+        operation = self._channel_operations.get(channel)
+        if operation is None or operation.done():
+            operation = asyncio.create_task(self._disconnect_locked(channel))
+            self._channel_operations[channel] = operation
+            # A disconnected HTTP caller must not leave half-cleaned resources.
+            operation.add_done_callback(lambda task: task.exception() if not task.cancelled() else None)
+        await asyncio.shield(operation)
+        return self._channel_response(channel)
+
+    def _channel_response(self, channel: str) -> dict:
+        return {"channel": {"id": channel, **self._channel_view(channel)}, "runtime": self.status()}
+
+    def _channel_work(self, channel: str) -> set[asyncio.Task]:
+        activity = self._channel_activity.get(channel)
+        tasks = set(activity.tasks) if activity else set()
+        if channel != "api" and self.scheduler is not None:
+            tasks.update(self.scheduler.channel_tasks(channel))
+        return {task for task in tasks if not task.done()}
+
+    async def _disconnect_locked(self, channel: str, *, failed: bool = False) -> None:
+        async with self._channel_locks[channel]:
+            previous_error = self.channel_status[channel].get("error")
+            self._update_channel_state(channel, "disconnecting")
+            activity = self._channel_activity.get(channel)
+            if activity is not None:
+                activity.quiesce()
+            attention = getattr(self.agent, "attention", None)
+            if channel != "api" and attention is not None:
+                attention.pause_channel(channel)
+            adapter = self.adapters.get(channel) if channel != "api" else None
+            if adapter is not None:
+                adapter.quiesce()
+            # Closing the public listening sockets blocks new requests without
+            # touching local API turns or the private control server.
+            if channel == "api":
+                server = self._servers.get(channel)
+                if server is not None:
+                    for listener in getattr(server, "servers", []):
+                        listener.close()
+            deadline = time.monotonic() + (0.0 if failed else self.channel_drain_timeout)
+            while time.monotonic() < deadline:
+                work = self._channel_work(channel)
+                if channel == "api":
+                    server = self._servers.get(channel)
+                    work |= set(server.server_state.tasks) if server else set()
+                if not work:
+                    break
+                await asyncio.sleep(min(0.02, max(0.0, deadline - time.monotonic())))
+            if channel != "api":
+                self.agent.inbox.cancel_pending(channel=channel)
+            for task in self._channel_work(channel):
+                task.cancel()
+            if not await self._cleanup_channel(channel):
+                self._update_channel_state(channel, "failed", error="Connection cleanup did not finish; retry Disconnect")
+                if failed:
+                    return
+                raise HTTPException(503, "Connection cleanup did not finish; retry Disconnect")
+            if failed:
+                self._update_channel_state(channel, "failed", error=previous_error or "Channel failed; check the runtime log")
+            else:
+                self._update_channel_state(channel, "disconnected")
+
+    async def _cleanup_channel(self, channel: str) -> bool:
+        deadline = time.monotonic() + self.channel_cleanup_timeout
+        adapter = self.adapters.get(channel) if channel != "api" else None
+        server = self._servers.get(channel)
+        if server is not None:
+            server.should_exit = True
+            # Cancel only requests owned by the public uvicorn server.
+            for task in list(server.server_state.tasks):
+                task.cancel()
+        readiness = self._tasks.get(f"{channel}-readiness")
+        if readiness is not None:
+            readiness.cancel()
+        stop_task = None
+        if adapter is not None:
+            stop_task = self._tasks.get(f"{channel}-stop")
+            if stop_task is None or stop_task.done():
+                stop_task = asyncio.create_task(adapter.stop())
+                self._tasks[f"{channel}-stop"] = stop_task
+        transport = self._tasks.get(channel)
+        work = self._channel_work(channel)
+        pending = work | {task for task in (transport, readiness, stop_task) if task is not None and not task.done()}
+        if server is not None:
+            pending |= {task for task in server.server_state.tasks if not task.done()}
+        if pending:
+            _, pending = await asyncio.wait(pending, timeout=max(0.0, deadline - time.monotonic()))
+        if not pending and server is not None and any(listener.is_serving() for listener in getattr(server, "servers", [])):
+            # Uvicorn can return immediately after startup when should_exit was
+            # set before bind completed. That path skips its normal shutdown.
+            stop_task = self._tasks.get(f"{channel}-stop")
+            if stop_task is None or stop_task.done():
+                stop_task = asyncio.create_task(server.shutdown())
+                self._tasks[f"{channel}-stop"] = stop_task
+            _, pending = await asyncio.wait({stop_task}, timeout=max(0.0, deadline - time.monotonic()))
+        # Voice / SDK threads can outlive cancelled asyncio wrappers.
+        while not pending and adapter is not None and not adapter.resources_closed and time.monotonic() < deadline:
+            await asyncio.sleep(min(0.02, max(0.0, deadline - time.monotonic())))
+        clean = not pending and (adapter is None or adapter.resources_closed)
+        if not clean:
+            return False
+        for task in (transport, readiness, stop_task):
+            if task is not None and not task.cancelled():
+                task.exception()
+        if channel != "api":
+            attention = getattr(self.agent, "attention", None)
+            if attention is not None:
+                await attention.detach_channel(channel)
+            self.adapters.pop(channel, None)
+        for key in (channel, f"{channel}-readiness", f"{channel}-stop"):
+            self._tasks.pop(key, None)
+        self._servers.pop(channel, None)
+        self._channel_activity.pop(channel, None)
+        self._channel_generation[channel] += 1
+        return True
 
     async def _start_channel(self, channel) -> None:
         config = self.runner.config
+        self._channel_generation[channel] += 1
+        generation = self._channel_generation[channel]
+        activity = ChannelActivity()
+        self._channel_activity[channel] = activity
+        self._update_channel_state(channel, "connecting")
         if channel == "api":
             from ...interfaces.server import AgentHTTPServer
             from ...interfaces.cli.channels import api_config
@@ -257,7 +454,21 @@ class RuntimeHost:
             cfg = api_config(config)
             service = AgentHTTPServer(config_dir=str(self.config_dir), agent=self.agent,
                 runtime_managed=True, api_adapter=self.api)
-            server = _HostedServer(uvicorn.Config(service.app,
+            self._api_app = service.app
+            class PublicAdmission:
+                def __init__(self, app):
+                    self.app = app
+                async def __call__(self, scope, receive, send):
+                    if not activity.accepting:
+                        if scope["type"] == "http":
+                            from starlette.responses import JSONResponse
+                            await JSONResponse({"detail": "API is disconnecting"}, status_code=503)(scope, receive, send)
+                            return
+                        if scope["type"] == "websocket":
+                            await send({"type": "websocket.close", "code": 1013})
+                            return
+                    await self.app(scope, receive, send)
+            server = _HostedServer(uvicorn.Config(PublicAdmission(service.app),
                 host=cfg.get("host", "127.0.0.1"), port=int(cfg.get("port", 8010)),
                 lifespan="off", access_log=False, timeout_graceful_shutdown=10))
             self._servers["api"] = server
@@ -288,18 +499,20 @@ class RuntimeHost:
             self.adapters[channel] = adapter
             run = adapter.run_forever()
         if channel != "api":
+            adapter.runtime_activity = activity
+            self.agent.attention.attach_channel(channel, activity)
             loop = asyncio.get_running_loop()
-            adapter.runtime_status = lambda state: loop.call_soon_threadsafe(self._channel_connection, channel, state)
-        self._tasks[channel] = asyncio.create_task(self._watch_channel(channel, run), name=f"xagent-channel-{channel}")
+            adapter.runtime_status = lambda state: loop.call_soon_threadsafe(self._channel_connection, channel, state, generation)
+        self._tasks[channel] = asyncio.create_task(self._watch_channel(channel, run, generation), name=f"xagent-channel-{channel}")
         await asyncio.sleep(0)
         if channel == "api":
             server = self._servers["api"]
             async def ready():
                 while not server.started:
-                    if self._tasks[channel].done():
+                    if generation != self._channel_generation[channel] or self._tasks[channel].done():
                         return
                     await asyncio.sleep(0.01)
-                self._channel_connection(channel, "connected")
+                self._channel_connection(channel, "connected", generation)
             self._tasks["api-readiness"] = asyncio.create_task(ready())
 
     def _task_adapter(self, task):
@@ -309,6 +522,8 @@ class RuntimeHost:
         return self.adapters.get(channel)
 
     def _can_handle_task(self, task) -> bool:
+        if task.delivery_channel not in {"", "local", "cli", "api"} and self.channel_status.get(task.delivery_channel, {}).get("state") != "connected":
+            return False
         adapter = self._task_adapter(task)
         if adapter is None:
             return False
@@ -337,7 +552,19 @@ class RuntimeHost:
         adapter = self.adapters.get(delivery.recipient.channel)
         if adapter is None:
             raise RuntimeError("Subconscious delivery channel is unavailable")
-        await adapter.deliver_subconscious_message(delivery)
+        channel = delivery.recipient.channel
+        if channel == "api":
+            await adapter.deliver_subconscious_message(delivery)
+            return
+        if self.channel_status.get(channel, {}).get("state") != "connected":
+            raise RuntimeError("Subconscious delivery channel is disconnected")
+        task = self._channel_activity[channel].create_task(adapter.deliver_subconscious_message(delivery))
+        try:
+            await task
+        except asyncio.CancelledError:
+            if asyncio.current_task().cancelling():
+                raise
+            raise RuntimeError("Channel disconnected during delivery") from None
 
     async def _start_control_server(self):
         prepare_socket_directory(self.paths)
@@ -368,6 +595,14 @@ class RuntimeHost:
         @app.get("/runtime/status")
         async def status():
             return await self.detailed_status()
+
+        @app.post("/runtime/channels/{channel}/connect")
+        async def connect(channel: str):
+            return await self.connect_channel(channel)
+
+        @app.post("/runtime/channels/{channel}/disconnect")
+        async def disconnect(channel: str):
+            return await self.disconnect_channel(channel)
 
         @app.post("/runtime/stop")
         async def stop():
@@ -455,7 +690,9 @@ class RuntimeHost:
                 self.agent.inbox.stop_accepting()
                 self.agent.inbox.cancel_pending()
                 self.agent.abort()
-            cleanup = set(self._tasks.values()) | {drain}
+            cleanup = set(self._tasks.values()) | set(self._channel_operations.values()) | {drain}
+            for channel in self._channel_activity:
+                cleanup.update(self._channel_work(channel))
             for task in cleanup:
                 if not task.done():
                     task.cancel()
@@ -487,8 +724,20 @@ class RuntimeHost:
         self._stop_event.set()
         self.runtime_ready = False
         self.state = "stopping"
+        self._publish_status()
         if self.agent is not None:
             self.agent.inbox.stop_accepting()
+        for activity in self._channel_activity.values():
+            activity.quiesce()
+        for name, adapter in list(self.adapters.items()):
+            if name != "api":
+                adapter.quiesce()
+        operations = {task for task in self._channel_operations.values() if not task.done()}
+        if operations:
+            await asyncio.wait(operations, timeout=1.0)
+            for task in operations:
+                if not task.done():
+                    task.cancel()
         if self.heartbeat is not None:
             await self.heartbeat.stop()
         if self.scheduler is not None:
@@ -502,7 +751,7 @@ class RuntimeHost:
                 self.agent.inbox.cancel_pending()
         if self.agent is not None:
             await self.agent.attention.stop()
-        for adapter in self.adapters.values():
+        for adapter in list(self.adapters.values()):
             stop = getattr(adapter, "stop", None)
             if callable(stop):
                 try:

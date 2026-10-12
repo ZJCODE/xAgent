@@ -41,6 +41,12 @@ class RuntimeClient:
     async def stop(self) -> dict:
         return (await self.request("POST", "/runtime/stop")).json()
 
+    async def connect_channel(self, channel: str) -> dict:
+        return (await self.request("POST", f"/runtime/channels/{channel}/connect", timeout=20.0)).json()
+
+    async def disconnect_channel(self, channel: str) -> dict:
+        return (await self.request("POST", f"/runtime/channels/{channel}/disconnect", timeout=20.0)).json()
+
     async def abort(self, *, turn_id: str, channel: str | None = None) -> dict:
         return (await self.request("POST", "/runtime/turns/stop", json={
             "turn_id": turn_id, "channel": channel,

@@ -50,6 +50,7 @@ class PreemptiveGenerationController:
         self._session: _PreemptiveSession | None = None
         self._chat_factory: ChatEventsFactory | None = None
         self._chat_kwargs: dict[str, Any] = {}
+        self.task_factory = asyncio.create_task
 
     def configure(self, chat_factory: ChatEventsFactory, **chat_kwargs: Any) -> None:
         self._chat_factory = chat_factory
@@ -70,7 +71,7 @@ class PreemptiveGenerationController:
                 return
             await self._cancel_locked()
             session = _PreemptiveSession(transcript=text)
-            session.task = asyncio.create_task(self._run_session(session, text))
+            session.task = self.task_factory(self._run_session(session, text))
             self._session = session
 
     async def adopt_events(self, final_transcript: str) -> AsyncIterator[dict[str, Any]] | None:

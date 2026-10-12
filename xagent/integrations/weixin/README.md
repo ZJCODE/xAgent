@@ -19,8 +19,9 @@ import third-party Weixin bot packages.
 
 ```bash
 xagent init
-xagent channel weixin setup
+xagent weixin setup
 xagent start --agent <name>
+xagent channel weixin connect --agent <name>
 xagent logs --agent <name> --follow
 ```
 

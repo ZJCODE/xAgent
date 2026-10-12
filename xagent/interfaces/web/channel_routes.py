@@ -63,9 +63,7 @@ def register_channel_routes(
         session = None
         resolve_config_dir = session_or_resolver
 
-    @app.get("/api/channels", tags=["Channels"])
-    async def list_channels():
-        config_dir = resolve_config_dir().expanduser().resolve()
+    async def channels_for(config_dir: Path):
         config = _safe_load_config(config_dir)
         from ..cli.agent_runtime import runtime_status
         runtime = await runtime_status(config_dir)
@@ -74,11 +72,55 @@ def register_channel_routes(
         for row in rows:
             state = states.get(row["id"], {})
             if isinstance(state, dict) and state:
-                raw_status = state.get("status", "stopped")
+                raw_status = state.get("status") or state.get("state", "disconnected")
                 row["status"] = {"connected": "running", "failed": "error"}.get(raw_status, raw_status)
-                row["detail"] = state.get("error") or row["detail"]
-            row.update(can_start=False, can_stop=False, can_restart=False)
+                row["ready"] = state.get("ready", row["ready"])
+                row["detail"] = state.get("error") or state.get("config_error") or row["detail"]
+            else:
+                row["status"] = "disconnected" if row["ready"] else "disabled" if not row["configured"] else "error"
+            available = bool(runtime.get("runtime_ready"))
+            row.update(can_start=False, can_stop=False, can_restart=False,
+                can_connect=available and bool(state.get("can_connect", False)),
+                can_disconnect=available and bool(state.get("can_disconnect", False)))
         return {"config_dir": str(config_dir), "channels": rows, "runtime": runtime}
+
+    @app.get("/api/channels", tags=["Channels"])
+    async def list_channels():
+        return await channels_for(resolve_config_dir().expanduser().resolve())
+
+    async def channel_action(channel: str, action: str):
+        normalized = _normalize_channel(channel)
+        config_dir = resolve_config_dir().expanduser().resolve()
+        from ...core.runtime.client import RuntimeClient, RuntimeUnavailable
+        import httpx
+        from ..cli.agent_runtime import runtime_status
+        runtime = await runtime_status(config_dir)
+        if not runtime.get("runtime_ready"):
+            raise HTTPException(409, "Start the Agent before managing connections")
+        try:
+            client = RuntimeClient(config_dir)
+            if action == "connect":
+                await client.connect_channel(normalized)
+            else:
+                await client.disconnect_channel(normalized)
+        except httpx.HTTPStatusError as exc:
+            try:
+                detail = exc.response.json().get("detail", "Channel operation failed")
+            except ValueError:
+                detail = "Channel operation failed"
+            raise HTTPException(exc.response.status_code, detail) from exc
+        except RuntimeUnavailable as exc:
+            raise HTTPException(503, "Agent runtime is unavailable") from exc
+        result = await channels_for(config_dir)
+        return {"channel": next(row for row in result["channels"] if row["id"] == normalized), "runtime": result["runtime"]}
+
+    @app.post("/api/channels/{channel}/connect", tags=["Channels"])
+    async def connect_channel(channel: str):
+        return await channel_action(channel, "connect")
+
+    @app.post("/api/channels/{channel}/disconnect", tags=["Channels"])
+    async def disconnect_channel(channel: str):
+        return await channel_action(channel, "disconnect")
 
     if session is not None:
         @app.get("/api/channels/{channel}/setup-schema", tags=["Channels"])
@@ -234,9 +276,8 @@ def _channel_status(config_dir: Path, config: dict[str, Any], channel: str) -> d
 def _readiness(config: dict[str, Any], channel: str) -> tuple[bool, bool, str, str]:
     if channel == CHANNEL_API:
         data = api_config(config)
-        enabled = data.get("enabled", True) is not False
         detail = _api_target(data)
-        return enabled, enabled, detail, "" if enabled else "channels.api.enabled is false"
+        return True, True, detail, ""
 
     if channel == CHANNEL_VOICE:
         data = voice_config(config)

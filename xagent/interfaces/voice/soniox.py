@@ -65,6 +65,7 @@ class SonioxSTTCallbacks:
 
     on_reconnecting: _STT_RECONNECTING | None = None
     on_recovered: _STT_RECOVERED | None = None
+    on_connected: Callable[[], None] | None = None
 
 
 class SonioxVoiceError(RuntimeError):
@@ -119,6 +120,26 @@ class SonioxRealtimeSTT:
         self.partial_relay = PartialTranscriptRelay()
         self.lifecycle = lifecycle
         self._extra_context_terms: list[str] = []
+        self._session_lock = threading.Lock()
+        self._active_session = None
+        self._senders: set[threading.Thread] = set()
+        self._closed = threading.Event()
+
+    @property
+    def resources_closed(self) -> bool:
+        with self._session_lock:
+            return self._active_session is None and not any(sender.is_alive() for sender in self._senders)
+
+    def close(self) -> None:
+        self._closed.set()
+        with self._session_lock:
+            session = self._active_session
+            senders = list(self._senders)
+        if session is not None:
+            session.close()
+        for sender in senders:
+            if sender is not threading.current_thread():
+                sender.join(timeout=1.0)
 
     def set_extra_context_terms(self, terms: list[str]) -> None:
         self._extra_context_terms = [term.strip() for term in terms if term and term.strip()]
@@ -238,68 +259,86 @@ class SonioxRealtimeSTT:
     ) -> Iterator[VoiceUtterance]:
         send_errors: queue.Queue[BaseException] = queue.Queue()
         session = self._client.realtime.stt.connect(config=self._stt_config())
-        with session:
-            sender = threading.Thread(
-                target=self._send_audio_loop,
-                args=(
-                    session,
-                    audio_chunks,
-                    pause_event,
-                    stop_event,
-                    session_stop,
-                    send_errors,
-                    self.lifecycle,
-                ),
-                daemon=True,
-                name="xagent-soniox-stt-send",
-            )
-            sender.start()
-            final_tokens: list[_FinalToken] = []
-            draft_tokens: list[str] = []
-            try:
-                for event in session.receive_events():
-                    if stop_event.is_set() or session_stop.is_set():
-                        break
-                    _raise_event_error(event, kind="STT")
-                    for token in event.tokens:
-                        if not token.is_final:
-                            text = str(token.text or "")
-                            if text and text not in {"<end>", "<fin>"}:
-                                draft_tokens.append(text)
-                                self.partial_relay.update("".join(draft_tokens))
-                            continue
-                        text = str(token.text or "")
-                        if text == "<end>":
-                            utterance = _utterance_from(final_tokens)
-                            final_tokens = []
-                            draft_tokens = []
-                            self.partial_relay.clear()
-                            if utterance.text:
-                                if self.lifecycle is not None:
-                                    self.lifecycle.note_endpoint()
-                                yield utterance
-                            continue
-                        if text in {"<fin>"}:
-                            continue
-                        final_tokens.append(
-                            _FinalToken(
-                                text=text,
-                                language=str(token.language or ""),
-                                speaker=str(getattr(token, "speaker", "") or ""),
-                                confidence=float(getattr(token, "confidence", 0.0) or 0.0),
-                            )
-                        )
-                    if event.finished:
-                        break
-                if not send_errors.empty():
-                    raise send_errors.get()
-            finally:
-                session_stop.set()
+        with self._session_lock:
+            self._active_session = session
+        if self._closed.is_set():
+            session.close()
+            with self._session_lock:
+                self._active_session = None
+            return
+        try:
+            with session:
+                if self._callbacks.on_connected is not None:
+                    self._callbacks.on_connected()
+                sender = threading.Thread(
+                    target=self._send_audio_loop,
+                    args=(
+                        session,
+                        audio_chunks,
+                        pause_event,
+                        stop_event,
+                        session_stop,
+                        send_errors,
+                        self.lifecycle,
+                    ),
+                    daemon=True,
+                    name="xagent-soniox-stt-send",
+                )
+                sender.start()
+                with self._session_lock:
+                    self._senders = {worker for worker in self._senders if worker.is_alive()}
+                    self._senders.add(sender)
+                final_tokens: list[_FinalToken] = []
+                draft_tokens: list[str] = []
                 try:
-                    session.close()
-                except Exception:
-                    pass
-                sender.join(timeout=1.0)
+                    for event in session.receive_events():
+                        if stop_event.is_set() or session_stop.is_set():
+                            break
+                        _raise_event_error(event, kind="STT")
+                        for token in event.tokens:
+                            if not token.is_final:
+                                text = str(token.text or "")
+                                if text and text not in {"<end>", "<fin>"}:
+                                    draft_tokens.append(text)
+                                    self.partial_relay.update("".join(draft_tokens))
+                                continue
+                            text = str(token.text or "")
+                            if text == "<end>":
+                                utterance = _utterance_from(final_tokens)
+                                final_tokens = []
+                                draft_tokens = []
+                                self.partial_relay.clear()
+                                if utterance.text:
+                                    if self.lifecycle is not None:
+                                        self.lifecycle.note_endpoint()
+                                    yield utterance
+                                continue
+                            if text in {"<fin>"}:
+                                continue
+                            final_tokens.append(
+                                _FinalToken(
+                                    text=text,
+                                    language=str(token.language or ""),
+                                    speaker=str(getattr(token, "speaker", "") or ""),
+                                    confidence=float(getattr(token, "confidence", 0.0) or 0.0),
+                                )
+                            )
+                        if event.finished:
+                            break
+                    if not send_errors.empty():
+                        raise send_errors.get()
+                finally:
+                    session_stop.set()
+                    try:
+                        session.close()
+                    except Exception:
+                        pass
+                    sender.join(timeout=1.0)
+                    with self._session_lock:
+                        self._active_session = None
+        finally:
+            with self._session_lock:
+                self._active_session = None
 
     def _stt_config(self) -> RealtimeSTTConfig:
         return RealtimeSTTConfig(

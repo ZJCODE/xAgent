@@ -2,12 +2,14 @@
 import asyncio
 import json
 import os
+import socket
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 import yaml
+import httpx
 
 from xagent.components import MessageStorage
 from xagent.core.agent import Agent
@@ -137,6 +139,147 @@ class AgentAdmissionTests(unittest.IsolatedAsyncioTestCase):
 
 
 class RuntimeTransportTests(unittest.IsolatedAsyncioTestCase):
+    async def _start_host(self, root, model, *, channels=None):
+        def bootstrap(config_dir):
+            runner = BaseAgentRunner(config_dir=config_dir)
+            runner.agent.model_client = model
+            runner.agent.memory_handler = FakeMemoryHandler()
+            return runner
+        host = RuntimeHost(root, channels=channels)
+        with patch("xagent.interfaces.base.BaseAgentRunner", side_effect=bootstrap):
+            task = asyncio.create_task(host.run())
+            for _ in range(300):
+                if host.runtime_ready or task.done():
+                    break
+                await asyncio.sleep(0.01)
+            if task.done():
+                await task
+        self.assertTrue(host.runtime_ready)
+        return host, task
+
+    async def test_default_start_and_restart_leave_external_channels_disconnected(self):
+        from tests.test_channel_lifecycle import FakeAdapter
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_config(root)
+            config = yaml.safe_load((root / "config.yaml").read_text())
+            with socket.socket() as available:
+                available.bind(("127.0.0.1", 0))
+                port = available.getsockname()[1]
+            config["channels"]["api"] = {"enabled": True, "host": "127.0.0.1", "port": port}
+            config["channels"].update({
+                "voice": {"enabled": True, "api_key": "test-key"},
+                "feishu": {"enabled": True, "app_id": "test", "app_secret": "test"},
+                "weixin": {"enabled": True, "account_id": "test"},
+            })
+            (root / "config.yaml").write_text(yaml.safe_dump(config))
+            with patch("xagent.integrations.feishu.FeishuAdapter", FakeAdapter), patch(
+                "xagent.interfaces.voice.factory.create_local_voice_runtime", side_effect=AssertionError("device accessed")
+            ) as voice:
+                first, task = await self._start_host(root, CapturingModelClient([]))
+                try:
+                    self.assertTrue(all(row["state"] == "disconnected" for name, row in first.channel_status.items() if name != "api"))
+                    self.assertIn("api", first._servers)
+                    await first.connect_channel("feishu")
+                    self.assertIn("feishu", first.adapters)
+                finally:
+                    await first.stop()
+                    await asyncio.wait_for(task, timeout=5)
+                second, task = await self._start_host(root, CapturingModelClient([]))
+                try:
+                    self.assertTrue(all(row["state"] == "disconnected" for name, row in second.channel_status.items() if name != "api"))
+                    self.assertIn("api", second._servers)
+                    self.assertNotIn("feishu", second.adapters)
+                    voice.assert_not_called()
+                finally:
+                    await second.stop()
+                    await asyncio.wait_for(task, timeout=5)
+
+    async def test_explicit_start_override_connects_requested_channel(self):
+        from tests.test_channel_lifecycle import FakeAdapter
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_config(root)
+            config = yaml.safe_load((root / "config.yaml").read_text())
+            config["channels"]["feishu"] = {"enabled": False, "app_id": "test", "app_secret": "test"}
+            (root / "config.yaml").write_text(yaml.safe_dump(config))
+            with patch("xagent.integrations.feishu.FeishuAdapter", FakeAdapter):
+                host, task = await self._start_host(root, CapturingModelClient([]), channels=["feishu"])
+                try:
+                    await asyncio.sleep(0)
+                    self.assertEqual(host.channel_status["feishu"]["state"], "connected")
+                    self.assertEqual(host.channel_status["api"]["state"], "disconnected")
+                finally:
+                    await host.stop()
+                    await asyncio.wait_for(task, timeout=5)
+
+    async def test_public_api_disconnect_preserves_active_local_turn_and_notifications(self):
+        started = asyncio.Event()
+        release = asyncio.Event()
+        class BlockingModel(CapturingModelClient):
+            async def model_turn_events(self, **kwargs):
+                started.set()
+                await release.wait()
+                yield type("E", (), {"type": "text", "delta": "local reply", "tool_calls": None, "error": None})()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_config(root)
+            with socket.socket() as available:
+                available.bind(("127.0.0.1", 0))
+                port = available.getsockname()[1]
+            config = yaml.safe_load((root / "config.yaml").read_text())
+            config["channels"]["api"]["port"] = port
+            (root / "config.yaml").write_text(yaml.safe_dump(config))
+            host, host_task = await self._start_host(root, BlockingModel([]))
+            client = RuntimeClient(root)
+            local_turn = None
+            try:
+                async def chat():
+                    return [event async for event in client.chat_events(user_id="alice", user_message="hello", channel="api")]
+                local_turn = asyncio.create_task(chat())
+                await started.wait()
+                await client.connect_channel("api")
+                for _ in range(200):
+                    if host.channel_status["api"]["state"] == "connected":
+                        break
+                    await asyncio.sleep(0.01)
+                async with httpx.AsyncClient(trust_env=False) as public:
+                    self.assertEqual((await public.get(f"http://127.0.0.1:{port}/health")).status_code, 200)
+                await client.disconnect_channel("api")
+                self.assertFalse(local_turn.done())
+                self.assertIs(host.adapters["api"], host.api)
+                self.assertTrue((await client.status())["runtime_ready"])
+                release.set()
+                events = await local_turn
+                self.assertTrue(any(event.get("content") == "local reply" for event in events))
+                notifications = []
+                class Subscriber:
+                    async def send_json(self, event):
+                        notifications.append(event)
+                subscriber = Subscriber()
+                await host.api.delivery.register_subscriber("alice", subscriber)
+                from xagent.core.runtime import enqueue_scheduled_task
+                record = enqueue_scheduled_task(task_type="message", content="local notification",
+                    run_at="2099-01-01 00:00:00", tasks_dir=host.runner.tasks_dir,
+                    channel="api", target={"user_id": "alice"})
+                await host.api.tasks.dispatch(record)
+                self.assertTrue(notifications)
+                await host.api.delivery.unregister_subscriber("alice", subscriber)
+                await client.connect_channel("api")
+                await client.disconnect_channel("api")
+                for _ in range(3):
+                    # Direct calls expose startup/bind races without HTTP latency.
+                    await host.connect_channel("api")
+                    await host.disconnect_channel("api")
+                    with socket.socket() as available:
+                        available.bind(("127.0.0.1", port))
+            finally:
+                release.set()
+                if local_turn is not None:
+                    await asyncio.gather(local_turn, return_exceptions=True)
+                await host.stop()
+                await asyncio.wait_for(host_task, timeout=5)
+
     async def test_private_client_works_without_public_api_and_owner_precedes_bootstrap(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -162,7 +305,8 @@ class RuntimeTransportTests(unittest.IsolatedAsyncioTestCase):
                 try:
                     status = await client.status()
                     self.assertEqual(status["state"], "running")
-                    self.assertEqual(status["channels"], {})
+                    self.assertEqual(set(status["channels"]), {"api", "feishu", "weixin", "voice"})
+                    self.assertTrue(all(row["state"] == "disconnected" for row in status["channels"].values()))
                     self.assertEqual(os.stat(host.paths.socket_path).st_mode & 0o777, 0o600)
                     events = [event async for event in client.chat_events(user_id="alice", user_message="hello", event_id="one")]
                     self.assertEqual(events[0]["type"], "accepted")

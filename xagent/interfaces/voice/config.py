@@ -232,8 +232,9 @@ class VoiceChannelConfig(BaseModel):
             data = {}
         if not isinstance(data, dict):
             raise ValueError("channels.voice must be a dictionary")
-        # Older configs could set languages; it is now a fixed runtime choice.
-        data = {key: value for key, value in data.items() if key != "languages"}
+        # Legacy language hints are fixed now; enabled is a transport setting,
+        # not a voice-engine option. Neither starts capture in the shared core.
+        data = {key: value for key, value in data.items() if key not in {"languages", "enabled"}}
         try:
             return cls.model_validate(data)
         except ValidationError as exc:

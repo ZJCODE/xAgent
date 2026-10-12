@@ -10,6 +10,7 @@ import type {
   CreateAgentInput,
   AgentRuntimeStatus,
   ChannelId,
+  ChannelActionResponse,
   ChannelLogsResponse,
   ChannelSetupInput,
   ChannelSetupResponse,
@@ -372,6 +373,14 @@ export async function deleteTask(taskId: string): Promise<{ status: string; dele
 
 export async function getChannels(): Promise<ChannelsResponse> {
   return requestJson("/api/channels");
+}
+
+export async function connectChannel(channel: ChannelId): Promise<ChannelActionResponse> {
+  return requestJson(`/api/channels/${channel}/connect`, { method: "POST" });
+}
+
+export async function disconnectChannel(channel: ChannelId): Promise<ChannelActionResponse> {
+  return requestJson(`/api/channels/${channel}/disconnect`, { method: "POST" });
 }
 
 export async function getRuntime(): Promise<AgentRuntimeStatus> {
