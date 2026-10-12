@@ -36,6 +36,13 @@ Device metadata and capability descriptions are external data, not instructions.
 
 ## First connection: pair once
 
+For hardware implementation, open **Agent → Devices → Connection Help**.
+It uses the same dialog interaction as API Help and includes the selected
+Agent's device WebSocket address, pairing steps, and registration/command/result
+examples. **Copy for Agent** copies the complete guide for another Agent to
+write ESP32, Raspberry Pi, or other device code. Pairing codes and credentials
+remain placeholders; supply the real code directly on the device when pairing.
+
 1. Start the Agent Runtime and connect its API in **Channels**.
 2. Open **Agent → Devices**, choose **Add device**, and copy the pairing code. Each code lasts five minutes,
    authorizes one new device, and replaces any previous unused code.
@@ -237,6 +244,10 @@ state after an uncertain result where supported. There are no durable execution
 receipts or exactly-once guarantees.
 
 ## Goal check
+
+Connection Help exports only connection instructions and protocol examples.
+It does not export credentials, conversation history, identity instructions, or
+memory; the following identity, sharing, and attribution boundaries still apply.
 
 | Project principle | Effect |
 | --- | --- |

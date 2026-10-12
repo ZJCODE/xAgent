@@ -1,6 +1,7 @@
 import { Check, Copy, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Button, IconButton } from "./ui";
+import { copyText } from "../lib/clipboard";
 
 interface HelpDialogProps {
   open: boolean;
@@ -83,26 +84,7 @@ socket.addEventListener("message", ({ data }) => {
   }, [open]);
 
   const copyExample = async (target: CopyTarget, value: string) => {
-    let copied = false;
-    try {
-      if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(value);
-        copied = true;
-      }
-    } catch {
-      copied = false;
-    }
-    if (!copied) {
-      const textArea = document.createElement("textarea");
-      textArea.value = value;
-      textArea.setAttribute("readonly", "");
-      textArea.style.position = "fixed";
-      textArea.style.opacity = "0";
-      document.body.appendChild(textArea);
-      textArea.select();
-      copied = document.execCommand("copy");
-      textArea.remove();
-    }
+    const copied = await copyText(value);
     setCopyState({ target, failed: !copied });
     if (copyResetTimer.current !== null) window.clearTimeout(copyResetTimer.current);
     copyResetTimer.current = window.setTimeout(() => setCopyState(null), 1800);

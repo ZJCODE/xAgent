@@ -1,0 +1,122 @@
+import { Check, Copy, X } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { copyText } from "../lib/clipboard";
+import { Markdown } from "./Markdown";
+import { Button, IconButton } from "./ui";
+
+interface DeviceConnectionHelpProps {
+  open: boolean;
+  currentAgent: string;
+  apiUrl: string;
+  onClose: () => void;
+}
+
+function websocketBase(value: string): string {
+  try {
+    const url = new URL(value);
+    if (!["ws:", "wss:", "http:", "https:"].includes(url.protocol)) return "AGENT_WS_URL";
+    url.protocol = ["https:", "wss:"].includes(url.protocol) ? "wss:" : "ws:";
+    url.username = url.password = url.search = url.hash = "";
+    return url.toString().replace(/\/+$/, "");
+  } catch {
+    return "AGENT_WS_URL";
+  }
+}
+
+function connectionGuide(agent: string, base: string): string {
+  const registration = JSON.stringify({
+    type: "register", device_id: "my-device", name: "My device", location: "office",
+    capabilities: [{
+      name: "example.echo", description: "Return the supplied text",
+      parameters: { type: "object", properties: { text: { type: "string" } }, required: ["text"], additionalProperties: false },
+    }],
+  }, null, 2);
+  return `## Build a device endpoint for xAgent
+
+Write runnable device-side code for my hardware (ESP32, Raspberry Pi, or any WebSocket-capable platform), with dependencies and build/run instructions. Keep hardware pins and handlers configurable; ask for my target hardware and desired capabilities if unspecified.
+
+### 1. Connect to the Agent
+
+- Selected Agent: ${JSON.stringify(agent || "Selected Agent")}
+- Agent API base: \`${base}\`
+- Device WebSocket: \`${base}/ws/devices/{device_id}\`
+- The device initiates one outbound connection to the Agent's API, on the same port as chat. This socket is for execution; it does not use \`/ws/chat\`.
+- Use an address reachable from the device. \`127.0.0.1\`/\`localhost\` only work on the Agent's own machine; use its reachable LAN IP or domain for external hardware. Public connections use WSS with certificate verification. Network access to the Agent API must be available.
+
+### 2. Pair once, register on every connection
+
+Choose a stable unique \`device_id\` (1–128 ASCII letters/digits or \`_ . : -\`, starting with a letter/digit). Start the Agent and connect its API in Channels, then open Agent → Devices → Add device for a pairing code (valid for 5 minutes, one use).
+
+Set the WebSocket request header to \`Authorization: Bearer <PAIRING_CODE>\` on the first connection. Within 5 seconds of connecting, send this JSON registration, using the same ID as the URL:
+
+\`\`\`json
+${registration}
+\`\`\`
+
+Declare the actual device capabilities with descriptions and object-parameter JSON Schema; replace \`example.echo\` with matching handlers as needed. Capability names are arbitrary and need no framework changes.
+
+On first pairing, receive:
+\`\`\`json
+{"type":"paired","device_id":"my-device","credential":"<DEVICE_CREDENTIAL>"}
+\`\`\`
+Save the credential durably before handling commands (ESP32: NVS; Raspberry Pi: a private file). Subsequent connections use \`Authorization: Bearer <DEVICE_CREDENTIAL>\` and send registration again. They receive no new \`paired\` message. Keep credentials out of logs and metadata. Lost/revoked credentials require removing the device in the page and pairing again.
+
+### 3. Execute and return the result
+
+Agent → device:
+\`\`\`json
+{"type":"command","command_id":"cmd_123","capability":"example.echo","params":{"text":"hello"}}
+\`\`\`
+Device → Agent: return one result per command, success or failure (\`ok\` must be a JSON boolean):
+\`\`\`json
+{"type":"result","command_id":"cmd_123","ok":true,"data":{"text":"hello"}}
+{"type":"result","command_id":"cmd_123","ok":false,"error":"Invalid parameters or execution failed"}
+\`\`\`
+
+Validate parameters on the device; serialize its command handlers and preserve the exact \`command_id\`. Use UTF-8 JSON text messages of at most 64 KiB and WebSocket ping/pong. Reconnect with backoff after disconnection (including normal closure or temporary-unavailability code 1013), then register again. An authentication rejection needs a fresh valid credential/pairing code.
+
+Never replay or automatically retry actions or old results after reconnecting. The Agent's default command timeout is 10 seconds; timeout does not stop an operation already running on the device.
+
+All users talking to this Agent can discover and call its online paired devices through the generic \`device\` tool. Implement only the device endpoint; pairing and routing are already provided by xAgent.`;
+}
+
+export function DeviceConnectionHelp({ open, currentAgent, apiUrl, onClose }: DeviceConnectionHelpProps) {
+  const guide = useMemo(() => connectionGuide(currentAgent, websocketBase(apiUrl)), [currentAgent, apiUrl]);
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [open, onClose]);
+  useEffect(() => { setCopyState("idle"); }, [open, guide]);
+  useEffect(() => {
+    if (copyState !== "copied") return;
+    const timer = window.setTimeout(() => setCopyState("idle"), 1800);
+    return () => window.clearTimeout(timer);
+  }, [copyState]);
+  if (!open) return null;
+
+  return <div className="modal-overlay help-dialog-overlay" role="presentation" onClick={onClose}>
+    <div className="modal-card help-dialog device-connection-help" role="dialog" aria-modal="true"
+      aria-labelledby="device-help-title" aria-describedby="device-help-description" onClick={(event) => event.stopPropagation()}>
+      <div className="modal-header help-dialog-header">
+        <div>
+          <h3 id="device-help-title">Device Connection Help</h3>
+          <p id="device-help-description">One protocol for ESP32, Raspberry Pi, and other hardware. Copy the guide to ask another Agent for device code.</p>
+        </div>
+        <IconButton type="button" onClick={onClose} title="Close Device Connection Help" aria-label="Close Device Connection Help" autoFocus><X size={16} /></IconButton>
+      </div>
+      <div className="modal-body help-dialog-body">
+        <Markdown content={guide} renderImages={false} />
+      </div>
+      <div className="modal-footer">
+        <span className="wizard-hint" role="status">{copyState === "failed" ? "Copy failed. Select the guide and copy it manually." : "Paste the full guide into another Agent."}</span>
+        <Button type="button" variant="primary" aria-live="polite" onClick={() => void copyText(guide).then((copied) => setCopyState(copied ? "copied" : "failed"))}>
+          {copyState === "copied" ? <Check size={14} /> : <Copy size={14} />}
+          {copyState === "copied" ? "Copied" : "Copy for Agent"}
+        </Button>
+      </div>
+    </div>
+  </div>;
+}

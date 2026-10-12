@@ -3371,6 +3371,10 @@ body { -webkit-font-smoothing: antialiased; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
 .device-panel { grid-column: 1 / -1; }
 .device-panel-body { display: grid; gap: 14px; }
+.device-connection-help .markdown-content { font-size: 13px; line-height: 1.55; }
+.device-connection-help .markdown-content > div > :first-child { margin-top: 0; }
+.device-connection-help .markdown-content pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.device-connection-help .modal-footer .ui-button { flex-shrink: 0; }
 .device-add-row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
 .device-pairing { display: grid; gap: 12px; padding: 16px; border: 1px solid var(--border); border-radius: 10px; }
 .device-list { display: grid; gap: 12px; }

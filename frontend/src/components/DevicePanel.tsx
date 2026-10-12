@@ -1,12 +1,15 @@
-import { Copy, Plus, RefreshCw } from "lucide-react";
+import { BookOpen, Copy, Plus, RefreshCw } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useAgentSession } from "../context/AgentSessionContext";
 import { cancelDevicePairing, createDevicePairing, getDevices, removeDevice } from "../lib/api";
 import type { DevicePairing, DeviceStatus } from "../types";
 import { Button, IconButton, Panel, PanelHeader, StatusBadge } from "./ui";
+import { DeviceConnectionHelp } from "./DeviceConnectionHelp";
+import { copyText } from "../lib/clipboard";
 
 export function DevicePanel() {
-  const { selectedAgent } = useAgentSession();
+  const { agents, selectedAgent } = useAgentSession();
+  const [helpOpen, setHelpOpen] = useState(false);
   const [status, setStatus] = useState<DeviceStatus | null>(null);
   const [pairing, setPairing] = useState<DevicePairing | null>(null);
   const [busy, setBusy] = useState(false);
@@ -24,6 +27,7 @@ export function DevicePanel() {
     setPairing(null);
     setError("");
     setNotice("");
+    setHelpOpen(false);
     void load().catch((err) => setError(String(err.message || err)));
   }, [selectedAgent]);
 
@@ -57,7 +61,10 @@ export function DevicePanel() {
 
   return <Panel className="device-panel">
     <PanelHeader title="Devices" meta="Pair once. Reconnect automatically."
-      actions={<IconButton title="Refresh devices" disabled={busy} onClick={() => void act(async () => { await load(); })}><RefreshCw size={16} /></IconButton>} />
+      actions={<div className="toolbar-actions">
+        <Button type="button" variant="ghost" onClick={() => setHelpOpen(true)}><BookOpen size={15} /> Connection Help</Button>
+        <IconButton title="Refresh devices" disabled={busy} onClick={() => void act(async () => { await load(); })}><RefreshCw size={16} /></IconButton>
+      </div>} />
     <div className="device-panel-body">
       {error && <div className="error-strip">{error}</div>}
       {notice && <div className="success-strip">{notice}</div>}
@@ -76,7 +83,10 @@ export function DevicePanel() {
           <label className="wizard-field"><span>Agent address</span><input readOnly value={status.api_url} /></label>
           <label className="wizard-field"><span>Pairing code</span><input readOnly value={pairing.pairing_code} /></label>
           <div className="toolbar-actions">
-            <Button onClick={() => void act(async () => { await navigator.clipboard.writeText(pairing.pairing_code); setNotice("Pairing code copied."); })}><Copy size={14} /> Copy code</Button>
+            <Button onClick={() => void act(async () => {
+              if (!(await copyText(pairing.pairing_code))) throw new Error("Copy failed. Select the pairing code and copy it manually.");
+              setNotice("Pairing code copied.");
+            })}><Copy size={14} /> Copy code</Button>
             <Button disabled={busy} onClick={() => void act(async () => { await cancelDevicePairing(); setPairing(null); })}>Cancel pairing</Button>
           </div>
           <p className="wizard-hint">For a device on another machine, use the Agent’s reachable address. Public connections use WSS.</p>
@@ -94,5 +104,8 @@ export function DevicePanel() {
         </div>
       </>}
     </div>
+    <DeviceConnectionHelp open={helpOpen} currentAgent={selectedAgent}
+      apiUrl={status?.api_url || agents.find((agent) => agent.name === selectedAgent)?.api_url || ""}
+      onClose={() => setHelpOpen(false)} />
   </Panel>;
 }
