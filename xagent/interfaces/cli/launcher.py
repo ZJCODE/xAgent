@@ -243,11 +243,21 @@ def _launcher_channel_options(config_dir: Path) -> list[MenuOption]:
             description="Talk with the configured agent in the terminal.",
         ),
     ]
-    for channel, title in ((CHANNEL_VOICE, "Voice"), (CHANNEL_API, "API"),
-                           (CHANNEL_FEISHU, "Feishu"), (CHANNEL_WEIXIN, "Weixin")):
+    badge_styles = {
+        "Connected": ("●", "bold green"),
+        "Connecting": ("◌", "yellow"),
+        "Reconnecting": ("◌", "yellow"),
+        "Disconnecting": ("◌", "yellow"),
+        "Failed": ("!", "bold red"),
+        "Needs configuration": ("○", "yellow"),
+    }
+    for channel, title in ((CHANNEL_API, "API"), (CHANNEL_FEISHU, "Feishu"),
+                           (CHANNEL_WEIXIN, "Weixin"), (CHANNEL_VOICE, "Voice")):
         row = _channel_control_view(config_dir, channel, runtime)
         control = _channel_connection_actions(runtime, row)[0]
-        options.append(MenuOption(channel, title, f"{row['label']} • {control.description}"))
+        symbol, style = badge_styles.get(row["label"], ("○", "grey50"))
+        options.append(MenuOption(channel, title, control.description,
+                                  badge=f"{symbol} {row['label']}", badge_style=style))
     options.append(MenuOption(key="back", title="Back", description="Return to the main launcher."))
     return options
 

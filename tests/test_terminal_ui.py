@@ -33,21 +33,24 @@ class TerminalUITests(unittest.TestCase):
     def test_render_menu_text_is_borderless(self):
         ui = TerminalUI(stdout=io.StringIO())
 
-        rendered = str(
-            ui._render_menu_text(
-                title="xAgent",
-                subtitle="Runtime ready",
-                options=[
-                    MenuOption("chat", "Chat", "Talk with the configured agent."),
-                    MenuOption("web", "Web", "Manage the browser client."),
-                ],
-                footer="↑/↓ move  •  enter select  •  esc quit",
-                selected=0,
-            )
+        text = ui._render_menu_text(
+            title="xAgent",
+            subtitle="Runtime ready",
+            options=[
+                MenuOption("api", "API", "Disconnect this channel.",
+                           badge="● Connected", badge_style="bold green"),
+                MenuOption("web", "Web", "Manage the browser client."),
+            ],
+            footer="↑/↓ move  •  enter select  •  esc quit",
+            selected=0,
         )
+        rendered = str(text)
 
         self.assertIn("xAgent", rendered)
-        self.assertIn("› Chat", rendered)
+        self.assertIn("› API  ● Connected", rendered)
+        badge_style = text.get_style_at_offset(ui.console, rendered.index("●"))
+        self.assertEqual(badge_style.color.name, "green")
+        self.assertTrue(badge_style.bold)
         self.assertIn("Web", rendered)
         self.assertNotIn("╭", rendered)
         self.assertNotIn("│", rendered)

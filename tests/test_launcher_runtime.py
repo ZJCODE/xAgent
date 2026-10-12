@@ -166,10 +166,13 @@ class ChannelMenuTests(unittest.TestCase):
         }}
         with patch("xagent.interfaces.cli.launcher._channel_runtime_snapshot", return_value=runtime):
             options = {row.key: row for row in _launcher_channel_options(Path("/tmp/menu-agent"))}
-        self.assertIn("Connected", options["api"].description)
-        self.assertIn("Disconnected", options["feishu"].description)
-        self.assertIn("Needs configuration", options["weixin"].description)
-        self.assertIn("Failed", options["voice"].description)
+        self.assertEqual(list(options), ["chat", "api", "feishu", "weixin", "voice", "back"])
+        self.assertEqual(options["api"].badge, "● Connected")
+        self.assertEqual(options["api"].badge_style, "bold green")
+        self.assertIn("Disconnected", options["feishu"].badge)
+        self.assertIn("Needs configuration", options["weixin"].badge)
+        self.assertIn("Failed", options["voice"].badge)
+        self.assertEqual(options["voice"].badge_style, "bold red")
         self.assertIn("Retry cleanup", options["voice"].description)
 
     def test_degraded_agent_can_still_connect_healthy_channel(self):

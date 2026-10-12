@@ -916,7 +916,10 @@ class CLICommandTests(unittest.TestCase):
         self.assertIn("Web        running", subtitle)
         self.assertIn("99999", subtitle)
         self.assertIn("Feishu     running", subtitle)
-        self.assertIn("Not configured: Image, Weixin", subtitle)
+        self.assertIn("Not configured: Weixin, Image", subtitle)
+        displayed_names = [line.split()[0] for line in subtitle.splitlines()
+                           if line and line.split()[0] in {"Runtime", "Web", "API", "Feishu", "Voice", "Model", "Search", "Tasks"}]
+        self.assertEqual(displayed_names, ["Runtime", "Web", "API", "Feishu", "Voice", "Model", "Search", "Tasks"])
         self.assertNotIn("\nImage ", subtitle)
 
     def test_launcher_channel_options_are_entry_points(self):
@@ -925,7 +928,7 @@ class CLICommandTests(unittest.TestCase):
             options = _launcher_channel_options(Path(tmpdir))
         titles = [option.title for option in options]
 
-        self.assertEqual(titles, ["Chat", "Voice", "API", "Feishu", "Weixin", "Back"])
+        self.assertEqual(titles, ["Chat", "API", "Feishu", "Weixin", "Voice", "Back"])
         self.assertNotIn("All", titles)
         self.assertNotIn("Web", titles)
 

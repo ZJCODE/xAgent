@@ -108,15 +108,15 @@ def build_runtime_overview(config_dir: Path) -> RuntimeOverview:
     if config:
         items.extend(
             (
+                _runtime_item(runtime),
+                _web_client_item(config_dir, config),
+                _service_item(config_dir, CHANNEL_API, api_config(config), runtime=runtime),
+                _service_item(config_dir, CHANNEL_FEISHU, feishu_config(config), runtime=runtime),
+                _service_item(config_dir, CHANNEL_WEIXIN, weixin_config(config), runtime=runtime),
+                _voice_item(config_dir, config, runtime=runtime),
                 _model_item(config),
                 _search_item(config),
                 _image_item(config),
-                _runtime_item(runtime),
-                _voice_item(config_dir, config, runtime=runtime),
-                _service_item(config_dir, CHANNEL_API, api_config(config), runtime=runtime),
-                _web_client_item(config_dir, config),
-                _service_item(config_dir, CHANNEL_FEISHU, feishu_config(config), runtime=runtime),
-                _service_item(config_dir, CHANNEL_WEIXIN, weixin_config(config), runtime=runtime),
                 _task_item(config_dir),
             )
         )

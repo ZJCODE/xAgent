@@ -20,6 +20,8 @@ class MenuOption:
     title: str
     description: str
     disabled: bool = False
+    badge: str = ""
+    badge_style: str = "grey50"
 
 
 class ReturnToLauncherHome(Exception):
@@ -126,7 +128,11 @@ class TerminalUI:
                 title_style = "default"
                 desc_style = "grey50"
 
-            text.append(prefix + option.title + "\n", style=title_style)
+            text.append(prefix + option.title, style=title_style)
+            if option.badge:
+                text.append("  " + option.badge,
+                            style="bright_black" if option.disabled else option.badge_style)
+            text.append("\n")
             if option.description:
                 text.append("    " + option.description + "\n", style=desc_style)
 
