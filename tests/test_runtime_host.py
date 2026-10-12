@@ -213,6 +213,36 @@ class RuntimeTransportTests(unittest.IsolatedAsyncioTestCase):
                     await host.stop()
                     await asyncio.wait_for(task, timeout=5)
 
+    async def test_terminal_channel_controls_can_reconnect_using_live_capabilities(self):
+        from tests.test_channel_lifecycle import FakeAdapter
+        from xagent.interfaces.cli.launcher import _managed_channel_actions, _run_managed_channel_action
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_config(root)
+            config = yaml.safe_load((root / "config.yaml").read_text())
+            config["channels"]["feishu"] = {"app_id": "test", "app_secret": "test"}
+            (root / "config.yaml").write_text(yaml.safe_dump(config))
+            with patch("xagent.integrations.feishu.FeishuAdapter", FakeAdapter):
+                host, task = await self._start_host(root, CapturingModelClient([]))
+                try:
+                    for _ in range(2):
+                        actions = await asyncio.to_thread(_managed_channel_actions, root, "feishu")
+                        self.assertFalse(next(row for row in actions if row.key == "connect").disabled)
+                        self.assertEqual(await asyncio.to_thread(
+                            _run_managed_channel_action, root, "feishu", "connect"), 0)
+                        actions = await asyncio.to_thread(_managed_channel_actions, root, "feishu")
+                        self.assertFalse(next(row for row in actions if row.key == "disconnect").disabled)
+                        self.assertEqual(await asyncio.to_thread(
+                            _run_managed_channel_action, root, "feishu", "disconnect"), 0)
+                        self.assertTrue(host.runtime_ready)
+                        self.assertNotIn("feishu", host.adapters)
+                    actions = await asyncio.to_thread(_managed_channel_actions, root, "feishu")
+                    self.assertFalse(next(row for row in actions if row.key == "connect").disabled)
+                finally:
+                    await host.stop()
+                    await asyncio.wait_for(task, timeout=5)
+
     async def test_public_api_disconnect_preserves_active_local_turn_and_notifications(self):
         started = asyncio.Event()
         release = asyncio.Event()

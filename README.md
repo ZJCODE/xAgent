@@ -56,8 +56,12 @@ xagent restart --agent atlas
 xagent stop --agent atlas
 ```
 
-Use **Channels → Connect / Disconnect** in the Web client, or the channel commands
-above. Restarting returns to API-only startup; `channels.api.enabled: false`
+In the terminal launcher, use **Runtime → Start**, then **Channel → API / Feishu /
+Weixin / Voice → Connect / Disconnect**. Each channel shows its actual state;
+**Refresh** updates the available actions, and configuration remains accessible
+when the Agent is stopped. You can also use **Channels → Connect / Disconnect**
+in the Web client or the channel commands above.
+Restarting returns to API-only startup; `channels.api.enabled: false`
 keeps the public API offline too. An explicit `--channels api,feishu` overrides
 this default for one launch. CLI and local Web chat use the same core, even
 with the public API disconnected.

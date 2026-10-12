@@ -940,12 +940,13 @@ class CLICommandTests(unittest.TestCase):
 
         self.assertEqual(titles, ["Open", "Start", "Stop", "Restart", "Logs", "Back"])
 
-    def test_channel_launcher_has_configuration_without_lifecycle(self):
+    def test_channel_launcher_has_connection_and_configuration_controls(self):
         from xagent.interfaces.cli.launcher import _managed_channel_actions
         with tempfile.TemporaryDirectory() as tmpdir:
             _write_runtime(tmpdir)
             actions = _managed_channel_actions(Path(tmpdir), "api")
-        self.assertEqual([row.key for row in actions], ["configure", "address", "back"])
+        self.assertEqual([row.key for row in actions], ["connect", "configure", "address", "refresh", "back"])
+        self.assertTrue(actions[0].disabled)
 
     def test_web_launcher_start_runs_directly(self):
         class FakeUI:
@@ -1029,7 +1030,7 @@ class CLICommandTests(unittest.TestCase):
                     exit_code = _run_channel_launcher(Path(tmpdir))
 
         self.assertEqual(exit_code, 0)
-        self.assertEqual(fake_ui.action_option_titles[0], "Set up")
+        self.assertIn("Set up", fake_ui.action_option_titles)
         init_feishu.assert_called_once()
         args = init_feishu.call_args.args[0]
         self.assertEqual(args.config_dir, tmpdir)
@@ -1042,7 +1043,7 @@ class CLICommandTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             _write_runtime(tmpdir, feishu=True)
             actions = _managed_channel_actions(Path(tmpdir), "feishu")
-        self.assertEqual([row.title for row in actions], ["Configure", "Back"])
+        self.assertEqual([row.title for row in actions], ["Connect", "Configure", "Refresh", "Back"])
         self.assertFalse(any(row.key in {"start", "stop", "restart"} for row in actions))
 
     def test_runtime_overview_flags_search_missing_key(self):
@@ -1953,7 +1954,8 @@ class CLICommandTests(unittest.TestCase):
 
             actions = {option.key: option for option in _managed_channel_actions(Path(tmpdir), "api")}
 
-        self.assertEqual(set(actions), {"configure", "address", "back"})
+        self.assertEqual(set(actions), {"connect", "configure", "address", "refresh", "back"})
+        self.assertTrue(actions["connect"].disabled)
         self.assertFalse(actions["configure"].disabled)
 
     def test_web_client_actions_disable_open_until_web_client_is_running(self):
@@ -2164,6 +2166,9 @@ class CLICommandTests(unittest.TestCase):
 
         self.assertIn("xagent setup", setup_help)
         self.assertIn("xagent setup --force", resetup_help)
+        self.assertIn("xagent channel <api|feishu|weixin|voice> connect|disconnect", setup_help)
+        self.assertIn("xagent channel feishu connect", setup_help)
+        self.assertIn("restart the Agent to apply changes", setup_help)
         self.assertNotIn("--dir", setup_help)
         self.assertNotIn("--dir", resetup_help)
 
@@ -2178,6 +2183,10 @@ class CLICommandTests(unittest.TestCase):
         self.assertIn("Common Flows:", help_text)
         self.assertIn("  web", help_text)
         self.assertIn("  voice", help_text)
+        self.assertIn("  channel", help_text)
+        self.assertIn("xagent channel feishu disconnect", help_text)
+        self.assertIn("connect other channels on demand", help_text)
+        self.assertNotIn("its enabled channels", help_text)
         self.assertIn("  agents", help_text)
         self.assertIn("  run", help_text)
         self.assertIn("  feishu", help_text)
