@@ -167,14 +167,29 @@ async def _local_websocket(websocket: WebSocket, path: str, root: Path, logger) 
                 return
             client = RuntimeClient(root)
             user_id = websocket.query_params.get("user_id") or "web_user"
-            async with client._client(timeout=None) as transport:
-                async with transport.stream("GET", "/runtime/events", params={"user_id": user_id}) as response:
-                    response.raise_for_status()
-                    async for line in response.aiter_lines():
-                        if line.strip():
-                            event = json.loads(line)
-                            if event.get("type") != "keepalive":
-                                await websocket.send_json(event)
+            async def notifications():
+                async with client._client(timeout=None) as transport:
+                    async with transport.stream("GET", "/runtime/events", params={"user_id": user_id}) as response:
+                        response.raise_for_status()
+                        async for line in response.aiter_lines():
+                            if line.strip():
+                                event = json.loads(line)
+                                if event.get("type") != "keepalive":
+                                    await websocket.send_json(event)
+            async def disconnected():
+                while True:
+                    if (await websocket.receive())["type"] == "websocket.disconnect":
+                        return
+            reader = asyncio.create_task(notifications())
+            observer = asyncio.create_task(disconnected())
+            try:
+                done, _ = await asyncio.wait({reader, observer}, return_when=asyncio.FIRST_COMPLETED)
+                for task in done:
+                    await task
+            finally:
+                reader.cancel()
+                observer.cancel()
+                await asyncio.gather(reader, observer, return_exceptions=True)
             return
         if path not in {"chat", "observe"}:
             await websocket.close(code=1008, reason="Unknown runtime stream")

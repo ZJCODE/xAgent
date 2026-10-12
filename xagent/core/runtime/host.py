@@ -49,6 +49,11 @@ class TurnControl(BaseModel):
     content: str = ""
 
 
+class RuntimeStopInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    restart: bool = False
+
+
 class _HostedServer(uvicorn.Server):
     """Servers share the host's signal handler and cannot own shutdown."""
 
@@ -90,6 +95,8 @@ class RuntimeHost:
         self._channel_activity: dict[str, ChannelActivity] = {}
         self._channel_operations: dict[str, asyncio.Task] = {}
         self._api_app = None
+        self._restarting = False
+        self.lifecycle_timings: dict[str, float] = {}
 
     def _configuration_fingerprint(self):
         digest = hashlib.sha256()
@@ -113,6 +120,7 @@ class RuntimeHost:
                 "active_turn_id": getattr(inbox, "current_turn_id", None),
                 "max_pending": 32, "queue_timeout_seconds": 30, "run_timeout_seconds": 600},
             "recovered_turns": self.recovered_turns,
+            "lifecycle_timings": dict(self.lifecycle_timings),
             "needs_restart": self._startup_fingerprint is not None and self._startup_fingerprint != self._configuration_fingerprint(),
         }
 
@@ -134,6 +142,7 @@ class RuntimeHost:
     async def run(self) -> None:
         """Acquire ownership before any Agent, storage recovery, or channel starts."""
         self.ownership.acquire()
+        startup_started = time.monotonic()
         self.state = "starting"
         self.started_at = time.time()
         handlers = []
@@ -191,6 +200,7 @@ class RuntimeHost:
             if self.heartbeat is not None:
                 await self.heartbeat.start()
             self.runtime_ready = True
+            self.lifecycle_timings["startup_seconds"] = round(time.monotonic() - startup_started, 3)
             self.state = "degraded" if any(row["state"] in {"failed", "reconnecting"} for row in self.channel_status.values()) else "running"
             self.paths.pid_path.parent.mkdir(parents=True, exist_ok=True)
             self.paths.pid_path.write_text(f"{os.getpid()}\n", encoding="utf-8")
@@ -596,6 +606,11 @@ class RuntimeHost:
         async def status():
             return await self.detailed_status()
 
+        @app.get("/runtime/ready")
+        async def ready():
+            return {"pid": os.getpid(), "state": self.state,
+                    "runtime_ready": self.runtime_ready and not self._stop_event.is_set()}
+
         @app.post("/runtime/channels/{channel}/connect")
         async def connect(channel: str):
             return await self.connect_channel(channel)
@@ -605,7 +620,8 @@ class RuntimeHost:
             return await self.disconnect_channel(channel)
 
         @app.post("/runtime/stop")
-        async def stop():
+        async def stop(payload: RuntimeStopInput | None = None):
+            self._restarting = bool(payload and payload.restart)
             self._stop_event.set()
             return {"stopping": True}
 
@@ -661,19 +677,33 @@ class RuntimeHost:
             subscriber = Subscriber()
             async def events():
                 await self.api.delivery.register_subscriber(user_id, subscriber)
+                stopping = asyncio.create_task(self._stop_event.wait())
+                incoming = None
                 try:
                     while not self._stop_event.is_set() and not await request.is_disconnected():
-                        try:
-                            payload = await asyncio.wait_for(queue.get(), timeout=15.0)
-                        except asyncio.TimeoutError:
+                        incoming = asyncio.create_task(queue.get())
+                        done, _ = await asyncio.wait({incoming, stopping}, timeout=15.0,
+                            return_when=asyncio.FIRST_COMPLETED)
+                        if stopping in done:
+                            break
+                        if incoming in done:
+                            payload = incoming.result()
+                        else:
+                            incoming.cancel()
+                            await asyncio.gather(incoming, return_exceptions=True)
                             payload = {"type": "keepalive"}
                         yield json.dumps(payload, ensure_ascii=False) + "\n"
                 finally:
+                    stopping.cancel()
+                    if incoming is not None:
+                        incoming.cancel()
+                    await asyncio.gather(stopping, *([incoming] if incoming is not None else []), return_exceptions=True)
                     await self.api.delivery.unregister_subscriber(user_id, subscriber)
             return StreamingResponse(events(), media_type="application/x-ndjson")
         return app
 
     async def _shutdown(self):
+        shutdown_started = time.monotonic()
         deadline = time.monotonic() + self.shutdown_timeout
         drain = asyncio.create_task(self._drain(), name="xagent-shutdown-drain")
         try:
@@ -718,6 +748,9 @@ class RuntimeHost:
             # Keep the OS lock until unresponsive writes stop or the process
             # manager terminates us. A replacement core must never overlap.
             self.state = "stopping" if self._shutdown_pending else "stopped"
+            self.lifecycle_timings["shutdown_seconds"] = round(time.monotonic() - shutdown_started, 3)
+            logger.info("Runtime %s completed in %.3fs", "restart shutdown" if self._restarting else "shutdown",
+                        self.lifecycle_timings["shutdown_seconds"])
             self._publish_status()
 
     async def _drain(self):
@@ -727,6 +760,9 @@ class RuntimeHost:
         self._publish_status()
         if self.agent is not None:
             self.agent.inbox.stop_accepting()
+            pause_attention = getattr(self.agent.attention, "pause_all", None)
+            if callable(pause_attention):
+                pause_attention()
         for activity in self._channel_activity.values():
             activity.quiesce()
         for name, adapter in list(self.adapters.items()):
@@ -738,10 +774,11 @@ class RuntimeHost:
             for task in operations:
                 if not task.done():
                     task.cancel()
-        if self.heartbeat is not None:
-            await self.heartbeat.stop()
-        if self.scheduler is not None:
-            await self.scheduler.stop()
+        # These owners are independent. Start their cleanup together with the
+        # accepted-turn drain, instead of adding each timeout to the next one.
+        for name, owner in (("heartbeat", self.heartbeat), ("scheduler", self.scheduler)):
+            if owner is not None:
+                self._tasks[f"{name}-stop"] = asyncio.create_task(owner.stop())
         if self.agent is not None:
             deadline = time.monotonic() + 15.0
             while (self.agent.inbox.busy or self.agent.inbox.pending_count) and time.monotonic() < deadline:
@@ -751,13 +788,12 @@ class RuntimeHost:
                 self.agent.inbox.cancel_pending()
         if self.agent is not None:
             await self.agent.attention.stop()
-        for adapter in list(self.adapters.values()):
+        for name, adapter in list(self.adapters.items()):
             stop = getattr(adapter, "stop", None)
             if callable(stop):
-                try:
-                    await asyncio.wait_for(stop(), timeout=3.0)
-                except (Exception, asyncio.CancelledError):
-                    logger.warning("Channel stop did not complete", exc_info=True)
+                existing = self._tasks.get(f"{name}-stop")
+                if existing is None or existing.done():
+                    self._tasks[f"{name}-stop"] = asyncio.create_task(stop())
             event = getattr(adapter, "stop_event", None)
             if event is not None:
                 event.set()
@@ -770,11 +806,13 @@ class RuntimeHost:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
         if self.agent is not None:
-            try:
-                await asyncio.wait_for(self.agent.memory_handler.run_maintenance(force=True, trigger="shutdown"), timeout=10.0)
-            except Exception:
-                logger.warning("Final memory maintenance did not complete", exc_info=True)
-            await self.agent.turn_store.recover()
+            if not self._restarting:
+                try:
+                    await asyncio.wait_for(self.agent.memory_handler.run_maintenance(force=True, trigger="shutdown"), timeout=10.0)
+                except Exception:
+                    logger.warning("Final memory maintenance did not complete", exc_info=True)
+            # Turn receipts are finalized once by _shutdown; startup recovers
+            # prepared diary writes. Restart never starts a new model turn.
             close = getattr(getattr(self.agent, "client", None), "close", None)
             if callable(close):
                 result = close()

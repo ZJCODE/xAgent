@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 from typing import Any
 
@@ -14,7 +15,8 @@ from .processes import (
     stop_managed_process,
 )
 from .runtime import _start_background_web
-from .agent_runtime import start_runtime
+from .agent_runtime import start_runtime, stop_runtime
+from ...core.runtime.client import RuntimeUnavailable
 from .web_client import web_client_paths
 
 
@@ -97,7 +99,14 @@ def handle_processes_restart(args: argparse.Namespace) -> int:
             entry_ok = started
             message = "restarted" if started else "failed to restart"
         else:
-            stopped, message = stop_managed_process(ref.pid_path)
+            try:
+                asyncio.run(stop_runtime(ref.config_dir, restart=True))
+                stopped, message = True, "stopped"
+            except RuntimeUnavailable:
+                # Retain signal-based recovery for an unreachable older core.
+                stopped, message = stop_managed_process(ref.pid_path)
+            except Exception as exc:
+                stopped, message = False, str(exc)
             if not stopped:
                 ok = False
                 restarted.append({
@@ -112,7 +121,6 @@ def handle_processes_restart(args: argparse.Namespace) -> int:
                     print(f"{label}: {message}")
                 continue
 
-            restart_args = _channel_restart_namespace(ref)
             try:
                 start_runtime(ref.config_dir)
                 entry_ok = True

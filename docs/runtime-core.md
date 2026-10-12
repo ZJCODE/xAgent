@@ -67,6 +67,18 @@ Recovery completes a prepared write once, or advances the cursor if the file alr
 
 The core stops accepting work and drains within a 30-second budget. Unfinished work retains recovery evidence. An unresponsive writer keeps ownership until it stops or the process is terminated; another core cannot overlap it. Configure the macOS/Linux service manager to allow at least 35 seconds before forced termination, and use it for startup and crash restart. Cancellation is cooperative; blocking external tools ultimately require the process boundary. The runtime targets macOS and Linux, including Raspberry Pi and Linux servers.
 
+### Restart latency
+
+Agent restart sends `POST /runtime/stop` with `{"restart": true}`; ordinary Stop keeps the default shutdown behavior. Restart drains accepted work and finalizes turn receipts without requesting a new model-generated diary window. Persisted message sources and prepared diary commits remain intact: startup recovers prepared commits and subsequent memory maintenance follows the existing batch rules. Ordinary Stop still attempts its final forced diary maintenance.
+
+Heartbeat/scheduler shutdown overlaps the accepted-turn drain, and channel transports stop concurrently. New attention decisions are paused before the drain; closed channels cannot keep the shared attention loop spinning. The 30-second core budget and single-owner lock remain in force, including when a writer refuses cancellation.
+
+Idle runtime notification streams wake immediately on the stop event. Web notification proxies observe downstream WebSocket disconnects and close their upstream streams even when no notifications arrive. Web shutdown allows up to five seconds for its remaining requests; it never stops the Agent core. Web startup waits for a PID-matched `/api/ready` response instead of an unconditional two-second survival wait. Agent startup polls `/runtime/ready` without repeatedly reading task and journal details.
+
+Runtime status and logs include `lifecycle_timings.startup_seconds` (core initialization after ownership acquisition, excluding Python imports) and `shutdown_seconds`. These describe the runtime lifecycle, not a guarantee for an entire command with active conversations, external devices or slow disk writes.
+
+Goal check: stable Agent identity, user distinction and private/group attribution are preserved. Journal generation remains first-person, unified and diary-authoritative; raw pending sources and recovery receipts are durable operational evidence, not separate memory silos. Sharing stays Agent-governed. Restart changes scheduling and transport cleanup, not source attribution or cross-channel continuity.
+
 Settings and identity edits apply on restart. Web displays that pending state. Live mutations are routed through the owner; offline mutations acquire the same exclusive lock. Runtime status exposes connections, active turn, queue, task review count, diary backlog and recent maintenance. Logs include request, turn, task, run and attempt identifiers.
 
 ## Accelerated validation

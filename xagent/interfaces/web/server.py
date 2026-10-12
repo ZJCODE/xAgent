@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import webbrowser
 from pathlib import Path
@@ -62,6 +63,10 @@ class WebClientServer:
             description="Browser client for the xAgent api channel",
             version="1.0.0",
         )
+        @app.get("/api/ready", include_in_schema=False)
+        async def readiness():
+            # Startup must not wait for Agent status, storage, or an upstream API.
+            return {"web": True, "pid": os.getpid()}
         register_agent_session_routes(app, self.session)
         register_channel_routes(app, self.session)
         register_admin_routes(
@@ -85,4 +90,4 @@ class WebClientServer:
             url = f"http://{browse_host}:{self.port}"
             threading.Timer(1.0, lambda: webbrowser.open(url)).start()
 
-        uvicorn.run(self.app, host=self.host, port=self.port)
+        uvicorn.run(self.app, host=self.host, port=self.port, timeout_graceful_shutdown=5)

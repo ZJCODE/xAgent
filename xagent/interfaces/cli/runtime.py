@@ -635,10 +635,27 @@ def handle_status_all(args: argparse.Namespace) -> int:
 def _start_background_web(args: argparse.Namespace) -> tuple[bool, bool]:
     """Start the web client. Returns (success, already_running)."""
     paths = web_client_paths()
+    config = load_client_runtime_config(args)
+    host, port, *_ = _web_client_runtime_values(args, config)
+    browse_host = "127.0.0.1" if host == "0.0.0.0" else "::1" if host == "::" else host
+    if ":" in browse_host:
+        browse_host = f"[{browse_host}]"
+    readiness_url = f"http://{browse_host}:{port}/api/ready"
+    from urllib.request import ProxyHandler, build_opener
+    opener = build_opener(ProxyHandler({}))
+    def ready(pid: int) -> bool:
+        try:
+            with opener.open(readiness_url, timeout=0.2) as response:
+                result = json.load(response)
+                return bool(result.get("web")) and result.get("pid") == pid
+        except (OSError, ValueError):
+            return False
     result = start_background(
         _web_command(args),
         pid_path=paths.pid_path,
         log_path=paths.log_path,
+        startup_timeout=10.0,
+        ready_probe=ready,
     )
     if result.ok:
         print(f"Started web client in background (pid={result.pid}).")

@@ -3133,7 +3133,7 @@ class CLICommandTests(unittest.TestCase):
             with patch("xagent.interfaces.cli.agent_runtime.stop_runtime", new_callable=AsyncMock, return_value={"status": "stopped"}) as stopper:
                 with patch("xagent.interfaces.cli.agent_runtime.start_runtime", return_value={"status": "running"}) as starter:
                     self.assertEqual(handle_restart(args), 0)
-            stopper.assert_awaited_once_with(Path(tmpdir).resolve())
+            stopper.assert_awaited_once_with(Path(tmpdir).resolve(), restart=True)
             starter.assert_called_once_with(Path(tmpdir).resolve(), None)
 
     def test_restart_skips_start_when_core_does_not_stop(self):

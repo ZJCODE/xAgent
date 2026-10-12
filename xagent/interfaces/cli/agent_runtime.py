@@ -20,6 +20,19 @@ START_TIMEOUT = 30.0
 STOP_TIMEOUT = 35.0
 
 
+def _runtime_ready(root: Path) -> bool:
+    import httpx
+    try:
+        return bool(asyncio.run(RuntimeClient(root).readiness()).get("runtime_ready"))
+    except RuntimeUnavailable:
+        return False
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 404:
+            # A running older version can still be managed during upgrades.
+            return bool(asyncio.run(runtime_status(root)).get("runtime_ready"))
+        raise
+
+
 def selected_channels(args: argparse.Namespace) -> list[str] | None:
     values = getattr(args, "channels", None)
     if not values:
@@ -59,9 +72,8 @@ def start_runtime(root: Path, channels: list[str] | None = None) -> dict:
     if runtime_is_active(root):
         deadline = time.monotonic() + START_TIMEOUT
         while time.monotonic() < deadline:
-            status = asyncio.run(runtime_status(root))
-            if status.get("runtime_ready"):
-                return status
+            if _runtime_ready(root):
+                return asyncio.run(runtime_status(root))
             time.sleep(0.1)
         raise RuntimeError("Agent owns its runtime but is not ready; inspect xagent logs.")
     paths.log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -76,9 +88,8 @@ def start_runtime(root: Path, channels: list[str] | None = None) -> dict:
         )
     deadline = time.monotonic() + START_TIMEOUT
     while time.monotonic() < deadline:
-        status = asyncio.run(runtime_status(root))
-        if status.get("runtime_running") and status.get("runtime_ready"):
-            return status
+        if runtime_is_active(root) and _runtime_ready(root):
+            return asyncio.run(runtime_status(root))
         if process.poll() is not None:
             # Another concurrent launcher can win ownership of the same agent.
             if runtime_is_active(root):
@@ -97,11 +108,15 @@ async def ensure_runtime(root: Path) -> RuntimeClient:
     return client
 
 
-async def stop_runtime(root: Path) -> dict:
+async def stop_runtime(root: Path, *, restart: bool = False) -> dict:
     if not runtime_is_active(root):
         return {"status": "stopped", "runtime_running": False}
     try:
-        await RuntimeClient(root).stop()
+        client = RuntimeClient(root)
+        if restart:
+            await client.stop(restart=True)
+        else:
+            await client.stop()
     except RuntimeUnavailable:
         # Shutdown may close the socket before the stop acknowledgement arrives.
         status = await runtime_status(root)
@@ -151,7 +166,12 @@ def handle_stop(args: argparse.Namespace) -> int:
 
 
 def handle_restart(args: argparse.Namespace) -> int:
-    return handle_start(args) if handle_stop(args) == 0 else 1
+    try:
+        asyncio.run(stop_runtime(runtime_dir(args), restart=True))
+    except Exception as exc:
+        print(f"Cannot restart Agent: {exc}")
+        return 1
+    return handle_start(args)
 
 
 def handle_channel_connection(args: argparse.Namespace) -> int:

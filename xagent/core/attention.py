@@ -209,6 +209,11 @@ class AttentionLoop:
         self._paused_channels.add(channel)
         self._wake.set()
 
+    def pause_all(self) -> None:
+        self._paused_channels.update(self._speakers)
+        self._paused_channels.update(room_key_channel(key) for key in self._rooms)
+        self._wake.set()
+
     async def detach_channel(self, channel: str) -> None:
         """Discard reply triggers, retaining persisted source messages/cursors."""
         self.pause_channel(channel)
@@ -364,7 +369,12 @@ class AttentionLoop:
 
     def _armed_rooms(self) -> List[str]:
         return [key for key, state in self._rooms.items()
-                if state.events and room_key_channel(key) not in self._paused_channels]
+                if state.events and room_key_channel(key) not in self._paused_channels
+                and self._channel_accepting(room_key_channel(key))]
+
+    def _channel_accepting(self, channel: str) -> bool:
+        activity = self._channel_activity.get(channel)
+        return activity is None or activity.accepting
 
     def _ensure_loop(self) -> None:
         if self._stopped:
@@ -419,6 +429,8 @@ class AttentionLoop:
         best_age = 0.0
         for key, state in self._rooms.items():
             if room_key_channel(key) in self._paused_channels:
+                continue
+            if not self._channel_accepting(room_key_channel(key)):
                 continue
             if not state.events or state.due_at <= 0:
                 continue

@@ -38,8 +38,12 @@ class RuntimeClient:
     async def status(self) -> dict:
         return (await self.request("GET", "/runtime/status")).json()
 
-    async def stop(self) -> dict:
-        return (await self.request("POST", "/runtime/stop")).json()
+    async def readiness(self) -> dict:
+        return (await self.request("GET", "/runtime/ready", timeout=1.0)).json()
+
+    async def stop(self, *, restart: bool = False) -> dict:
+        options = {"json": {"restart": True}} if restart else {}
+        return (await self.request("POST", "/runtime/stop", **options)).json()
 
     async def connect_channel(self, channel: str) -> dict:
         return (await self.request("POST", f"/runtime/channels/{channel}/connect", timeout=20.0)).json()

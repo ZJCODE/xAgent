@@ -112,7 +112,8 @@ class WebChannelRouteTests(unittest.IsolatedAsyncioTestCase):
     async def test_restart_stops_then_starts_selected_runtime(self):
         self.server.session.select("agent_b")
         calls = []
-        async def stop_runtime(root):
+        async def stop_runtime(root, *, restart=False):
+            self.assertTrue(restart)
             calls.append(("stop", root))
             return {"status": "stopped"}
         def start_runtime(root):

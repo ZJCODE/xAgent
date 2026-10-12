@@ -61,7 +61,9 @@ above. Restarting returns to API-only startup; `channels.api.enabled: false`
 keeps the public API offline too. An explicit `--channels api,feishu` overrides
 this default for one launch. CLI and local Web chat use the same core, even
 with the public API disconnected.
-Configuration and identity edits take effect after restart. Interrupted tasks
+Restart drains accepted work without waiting for a new diary-generation model call;
+ordinary Stop still attempts final diary maintenance. Configuration and identity
+edits take effect after restart. Interrupted tasks
 with uncertain execution or delivery wait for review instead of replaying.
 See [runtime operation and recovery](docs/runtime-core.md) for details and validation.
 

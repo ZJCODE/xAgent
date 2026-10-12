@@ -89,6 +89,14 @@ class WebClientMultiAgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(payload["web"])
         self.assertIn("api_reachable", payload)
 
+    async def test_web_readiness_does_not_query_agent_runtime(self):
+        server = self._server()
+        with patch.object(server.session, "get_current_runtime_root", side_effect=AssertionError("Agent status lookup")):
+            result = TestClient(server.app).get("/api/ready")
+        self.assertEqual(result.status_code, 200)
+        self.assertTrue(result.json()["web"])
+        self.assertIsInstance(result.json()["pid"], int)
+
     async def test_list_agents_endpoint_reports_both_agents(self):
         client = TestClient(self._server().app)
 

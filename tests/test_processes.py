@@ -3,7 +3,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from xagent.interfaces.cli.agents import register_agent
 from xagent.interfaces.cli.processes import (
@@ -136,20 +136,21 @@ class ManagedProcessTests(unittest.TestCase):
                                     config_dir=config_dir, pid_path=config_dir / "run" / "runtime.pid",
                                     log_path=config_dir / "logs" / "runtime.log")
             calls = []
-            def stop(path):
+            async def stop(path, *, restart=False):
+                self.assertTrue(restart)
                 calls.append(("stop", path))
-                return True, "stopped"
+                return {"status": "stopped"}
             def start(root):
                 calls.append(("start", root))
                 return {"status": "running"}
             with patch("xagent.interfaces.cli.processes_status.iter_running_process_refs", return_value=[ref]), patch(
-                "xagent.interfaces.cli.processes_status.stop_managed_process", side_effect=stop,
+                "xagent.interfaces.cli.processes_status.stop_runtime", side_effect=stop,
             ), patch("xagent.interfaces.cli.processes_status.start_runtime", side_effect=start), patch(
                 "xagent.interfaces.cli.processes_status._start_background_web",
             ) as web_restart, patch("sys.stdout", new_callable=io.StringIO) as stdout:
                 exit_code = handle_processes_restart(argparse.Namespace(json_output=True))
             self.assertEqual(exit_code, 0)
-            self.assertEqual(calls, [("stop", ref.pid_path), ("start", config_dir)])
+            self.assertEqual(calls, [("stop", config_dir), ("start", config_dir)])
             self.assertEqual(json.loads(stdout.getvalue())["restarted"][0]["label"], "work/runtime")
             web_restart.assert_not_called()
 
@@ -161,7 +162,8 @@ class ManagedProcessTests(unittest.TestCase):
             ref = ManagedProcessRef(scope="agent", agent="work", channel="runtime", config_dir=root,
                                     pid_path=root / "runtime.pid", log_path=root / "runtime.log")
             with patch("xagent.interfaces.cli.processes_status.iter_running_process_refs", return_value=[ref]), patch(
-                "xagent.interfaces.cli.processes_status.stop_managed_process", return_value=(False, "still draining"),
+                "xagent.interfaces.cli.processes_status.stop_runtime", new_callable=AsyncMock,
+                side_effect=RuntimeError("still draining"),
             ), patch("xagent.interfaces.cli.processes_status.start_runtime") as start, patch(
                 "sys.stdout", new_callable=io.StringIO,
             ) as stdout:

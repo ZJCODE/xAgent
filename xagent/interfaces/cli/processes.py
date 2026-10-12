@@ -7,7 +7,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator, Mapping, Optional, Sequence
+from typing import Callable, Iterator, Mapping, Optional, Sequence
 
 
 DEFAULT_STARTUP_TIMEOUT = 2.0
@@ -151,6 +151,7 @@ def start_background(
     log_path: Path,
     startup_timeout: float = DEFAULT_STARTUP_TIMEOUT,
     extra_env: Optional[Mapping[str, str]] = None,
+    ready_probe: Optional[Callable[[int], bool]] = None,
 ) -> StartResult:
     """Start a detached process, write its PID, and verify it survives startup."""
     existing_pid = running_pid(pid_path)
@@ -174,6 +175,22 @@ def start_background(
             return StartResult(ok=False, error=str(exc))
 
     write_pid(pid_path, process.pid)
+
+    if ready_probe is not None:
+        deadline = time.monotonic() + startup_timeout
+        while process.poll() is None:
+            if ready_probe(process.pid):
+                return StartResult(ok=True, pid=process.pid)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                # Keep its PID: it may still finish initialization, and a retry
+                # must not spawn another process over it.
+                return StartResult(ok=False, pid=process.pid, error="startup readiness timed out; inspect the log",
+                                   recent_output=tail_text(log_path))
+            time.sleep(min(0.05, remaining))
+        remove_pid(pid_path, expected_pid=process.pid)
+        return StartResult(ok=False, pid=process.pid, return_code=process.returncode,
+                           error="exited during startup", recent_output=tail_text(log_path))
 
     try:
         process.wait(timeout=startup_timeout)
