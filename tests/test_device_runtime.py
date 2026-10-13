@@ -114,7 +114,7 @@ class DeviceRuntimeTests(unittest.IsolatedAsyncioTestCase):
             }))]),
             (ReplyType.TOOL_CALL, [chat_test.FakeToolCall(name="see_image", call_id="view", arguments=json.dumps({"path": path}))]),
             (ReplyType.TOOL_CALL, [chat_test.FakeToolCall(name="attach_artifact", call_id="deliver", arguments=json.dumps({"path": path, "caption": "Device photo"}))]),
-            (ReplyType.SIMPLE_REPLY, "The photo is ready."),
+            (ReplyType.SIMPLE_REPLY, "The photo shows the desk."),
         ]
         host, _, root, _ = await self.start_host([])
         model = chat_test.SnapshotModelClient(responses)
@@ -168,6 +168,11 @@ class DeviceRuntimeTests(unittest.IsolatedAsyncioTestCase):
                     self.assertNotIn("data:image/", json.dumps(model.calls[0]))
                     self.assertNotIn("data:image/", json.dumps(model.calls[1]))
                     self.assertIn("data:image/", json.dumps(model.calls[2]))
+                    self.assertEqual(len(model.calls), 4)
+                    self.assertIn("data:image/", json.dumps(model.calls[3]))
+                    self.assertEqual(len(displayed), 1)
+                    self.assertTrue(any(event.get("content") == "The photo shows the desk." for event in events))
+                    self.assertEqual(sum(event["type"] == "done" for event in events), 1)
                     observation = await host.agent.message_storage.get_message_by_metadata("device_event_id", "photo-event")
                     self.assertEqual(observation.metadata["attachments"][0]["path"], path)
                     self.assertIn(path, observation.content)

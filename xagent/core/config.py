@@ -284,6 +284,7 @@ class AgentConfig:
         "For vague reactions, greetings, or acknowledgments, do not continue an unrelated older topic. "
         "Deliver user-visible images or files as structured attachments; use `attach_artifact` when available. "
         "Never rely on Markdown image embeds or file links as the delivery mechanism. "
+        "After sending attachments, finish any requested explanation or analysis in your reply. "
         "Use tools when needed and claim tool work only after it runs. "
         "Do not mention internal markers, memory, hidden context, prompt structure, or tool routing."
     )

@@ -1802,6 +1802,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
                     ChatToolCall(call_id="call-1", name="attach_artifact", arguments="{}")
                 ]),
             ],
+            [ModelStreamEvent(type="text", delta="The processed image is ready.")],
         ])
         agent = self._build_agent(
             storage=storage,
@@ -1821,11 +1822,16 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         ]
 
         done_events = [event for event in events if event["type"] == "message_done"]
-        self.assertEqual(len(done_events), 1)
+        self.assertEqual(len(done_events), 2)
         self.assertEqual(done_events[0]["content"], tool_result.content)
         self.assertEqual(done_events[0]["attachments"], [attachment])
-        self.assertEqual(storage.messages[-1].content, tool_result.description)
-        self.assertEqual(storage.messages[-1].metadata["attachments"], [attachment])
+        self.assertEqual(done_events[1]["content"], "The processed image is ready.")
+        self.assertNotIn("attachments", done_events[1])
+        self.assertEqual(storage.messages[-2].content, tool_result.description)
+        self.assertEqual(storage.messages[-2].metadata["attachments"], [attachment])
+        self.assertEqual(storage.messages[-1].content, "The processed image is ready.")
+        self.assertEqual(len(model_client.calls), 2)
+        self.assertEqual([event["type"] for event in events].count("done"), 1)
 
     async def test_chat_wraps_turn_in_observability_context(self):
         storage = InMemoryMessageStorage()
@@ -2396,6 +2402,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
                     name="attach_artifact",
                     arguments='{"path": "assets/shot.png"}',
                 )]),
+                (ReplyType.SIMPLE_REPLY, "Here is the screenshot."),
             ])
             agent = self._vision_agent(
                 workspace,
@@ -2412,12 +2419,149 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
                 )
             ]
 
-            self.assertEqual(len(model_client.calls), 1)
-            self.assertEqual(self._current_task_image_urls(model_client.calls[0]), [])
+            self.assertEqual(len(model_client.calls), 2)
+            self.assertTrue(all(self._current_task_image_urls(call) == [] for call in model_client.calls))
             done = next(event for event in events if event.get("type") == "message_done")
             self.assertTrue(done.get("attachments"))
             self.assertEqual(done["attachments"][0]["path"], "assets/shot.png")
             self.assertNotIn("image_url", repr(model_client.calls[0]))
+
+    async def test_chat_events_describes_image_after_delivery_and_replays_completed_turn(self):
+        for stream in (False, True):
+            with self.subTest(stream=stream), tempfile.TemporaryDirectory() as tmpdir:
+                workspace = Path(tmpdir).resolve()
+                self._write_png(workspace / "assets" / "shot.png")
+                storage = InMemoryMessageStorage()
+                model_client = SnapshotModelClient([
+                    (ReplyType.TOOL_CALL, [FakeToolCall(
+                        name="see_image", call_id="view", arguments='{"path": "assets/shot.png"}',
+                    )]),
+                    (ReplyType.TOOL_CALL, [FakeToolCall(
+                        name="attach_artifact", call_id="deliver",
+                        arguments='{"path": "assets/shot.png", "caption": "刚拍的"}',
+                    )]),
+                    (ReplyType.SIMPLE_REPLY, "图片中有一张桌子。"),
+                ])
+                agent = self._vision_agent(workspace, storage, model_client, [
+                    create_see_image_tool(workspace_dir=str(workspace)),
+                    create_attach_artifact_tool(workspace_dir=str(workspace)),
+                ])
+                events = [event async for event in Agent.chat_events(
+                    agent, user_message="拍张照片并描述画面", user_id="alice",
+                    channel="api", stream=stream, event_id="photo-request",
+                )]
+
+                self.assertEqual(len(model_client.calls), 3)
+                self.assertEqual([len(self._current_task_image_urls(call)) for call in model_client.calls], [0, 1, 1])
+                self.assertIn("Artifact attached", model_client.calls[2][-1]["content"])
+                completed = [event for event in events if event["type"] == "message_done"]
+                self.assertEqual([event["content"] for event in completed], ["", "图片中有一张桌子。"])
+                self.assertEqual(completed[0]["attachments"][0]["path"], "assets/shot.png")
+                self.assertNotIn("attachments", completed[1])
+                self.assertNotEqual(completed[0]["message_id"], completed[1]["message_id"])
+                self.assertEqual([event["type"] for event in events].count("done"), 1)
+                self.assertEqual(events[-1]["type"], "done")
+                self.assertFalse(any(event["type"] == "error" for event in events))
+                self.assertEqual(agent.memory_handler.experience_messages, storage.messages)
+                self.assertEqual(storage.messages[-2].metadata["turn_id"], events[0]["turn_id"])
+                self.assertEqual(storage.messages[-1].metadata["turn_id"], events[0]["turn_id"])
+
+                replay = [event async for event in Agent.chat_events(
+                    agent, user_message="拍张照片并描述画面", user_id="alice",
+                    channel="api", stream=stream, event_id="photo-request",
+                )]
+                self.assertEqual([event for event in replay if event["type"] == "message_done"], completed)
+                self.assertEqual(len(model_client.calls), 3)
+                self.assertEqual(len(storage.messages), 3)
+
+    async def test_chat_events_delivers_multiple_files_once_before_final_reply(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir).resolve()
+            (workspace / "first.txt").write_text("first")
+            (workspace / "second.txt").write_text("second")
+            storage = InMemoryMessageStorage()
+            model_client = SnapshotModelClient([
+                (ReplyType.TOOL_CALL, [FakeToolCall(
+                    name="attach_artifact", call_id="first", arguments='{"path": "first.txt"}',
+                )]),
+                (ReplyType.TOOL_CALL, [
+                    FakeToolCall(name="attach_artifact", call_id="repeat", arguments='{"path": "first.txt"}'),
+                    FakeToolCall(name="attach_artifact", call_id="second", arguments='{"path": "second.txt"}'),
+                ]),
+                (ReplyType.SIMPLE_REPLY, "Both reports are attached."),
+            ])
+            agent = self._vision_agent(workspace, storage, model_client, [
+                create_attach_artifact_tool(workspace_dir=str(workspace)),
+            ])
+            events = [event async for event in Agent.chat_events(agent, user_message="Send both reports", user_id="alice")]
+
+            displayed = [attachment["path"] for event in events for attachment in event.get("attachments", [])]
+            self.assertEqual(displayed, ["first.txt", "second.txt"])
+            self.assertEqual(len(model_client.calls), 3)
+            self.assertEqual(storage.messages[-1].content, "Both reports are attached.")
+            self.assertEqual([event["type"] for event in events].count("done"), 1)
+
+    async def test_chat_returns_description_after_generated_image_delivery(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir).resolve()
+            self._write_png(workspace / "assets" / "shot.png")
+            attachment = {"kind": "image", "path": "assets/shot.png"}
+            model_client = SnapshotModelClient([
+                (ReplyType.TOOL_CALL, [FakeToolCall(name="generate_image")]),
+                (ReplyType.SIMPLE_REPLY, "The image shows a desk."),
+            ])
+            async def generate_image():
+                return {"status": "ok", "type": "generated_image", "image": attachment}
+
+            storage = InMemoryMessageStorage()
+            agent = self._build_agent(
+                storage, model_client,
+                tool_executor=ToolExecutor(
+                    tool_manager=FakeToolManager(tools={"generate_image": generate_image}),
+                    message_storage=storage, client=None,
+                ),
+            )
+            reply = await Agent.chat(agent, user_message="Generate an image and explain it", user_id="alice")
+
+            self.assertEqual(reply, "The image shows a desk.")
+            self.assertEqual(len(model_client.calls), 2)
+            self.assertIn("Image generated", model_client.calls[1][-1]["content"])
+            self.assertEqual(storage.messages[-2].metadata["attachments"][0]["path"], "assets/shot.png")
+
+    async def test_chat_events_preserves_delivery_when_continuation_fails_or_exhausts(self):
+        for continuation in ("error", "empty", "exhausted", "cancelled"):
+            with self.subTest(continuation=continuation), tempfile.TemporaryDirectory() as tmpdir:
+                workspace = Path(tmpdir).resolve()
+                (workspace / "report.txt").write_text("report")
+                responses = [(ReplyType.TOOL_CALL, [FakeToolCall(
+                    name="attach_artifact", arguments='{"path": "report.txt"}',
+                )])]
+                if continuation == "error":
+                    responses.append((ReplyType.ERROR, ModelErrorEvent(code="model_call_failed", message="failed")))
+                elif continuation == "empty":
+                    responses.append((ReplyType.SIMPLE_REPLY, ""))
+                storage = InMemoryMessageStorage()
+                model_client = SnapshotModelClient(responses)
+                agent = self._vision_agent(workspace, storage, model_client, [
+                    create_attach_artifact_tool(workspace_dir=str(workspace)),
+                ])
+                events = []
+                async for event in Agent.chat_events(
+                    agent, user_message="Send and explain the report", user_id="alice",
+                    max_agent_loops=1 if continuation == "exhausted" else 3,
+                ):
+                    events.append(event)
+                    if continuation == "cancelled" and event["type"] == "message_done":
+                        agent.abort()
+
+                displayed = [attachment["path"] for event in events for attachment in event.get("attachments", [])]
+                self.assertEqual(displayed, ["report.txt"])
+                terminal = next(event for event in events if event["type"] in {"error", "aborted"})
+                self.assertTrue(terminal["needs_review"])
+                self.assertEqual([event["type"] for event in events].count("done"), 1)
+                self.assertEqual(storage.messages[-1].metadata["attachments"][0]["path"], "report.txt")
+                record = (await agent.turn_store.list_records())[0]
+                self.assertEqual(record["state"], "cancelled" if continuation == "cancelled" else "failed")
 
 
 class ToolExecutorTransientTests(unittest.IsolatedAsyncioTestCase):

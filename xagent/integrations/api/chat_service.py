@@ -22,6 +22,7 @@ from ...core.errors import (
 from ...core.runtime import ScheduledDeliveryContext, scheduled_delivery_context, upsert_contact
 from ...interfaces.server.models import AgentInput, ChatInput, ObserveInput
 from ...interfaces.server.serializers import response_payload
+from ...schemas.attachment import dedupe_attachments
 from .config import ChatLimits
 from .constants import CHANNEL_API, CLIENT_HTTP, CLIENT_WS
 from .input_normalization import input_attachments, input_image_sources
@@ -86,7 +87,12 @@ class ChatService:
             if event.get("type") == "error":
                 raise PublicHTTPException(event)
             if event.get("type") == "message_done" and event.get("phase") == "final":
-                payload["reply"] = str(event.get("content") or "")
+                payload["reply"] = str(event.get("content") or "") or payload["reply"]
+                attachments = event.get("attachments")
+                if isinstance(attachments, list) and attachments:
+                    payload["attachments"] = dedupe_attachments([
+                        *payload.get("attachments", []), *attachments,
+                    ])
         return payload
 
     def abort_turn(self, turn_id: str | None = None) -> dict[str, bool]:

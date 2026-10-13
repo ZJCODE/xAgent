@@ -84,6 +84,14 @@ Workspace-only. No fetch of arbitrary `https://` URLs as a side effect of this j
 3. The next iteration of the same turn has the pixels on `current_task`.
 4. It answers from what it sees.
 
+If the agent also calls `attach_artifact`, the file is displayed as its own
+completed message and the tool result stays in the same turn's model context.
+Delivery does not end the turn: the model can continue with a description,
+analysis, or further tools before its final text reply. Only the turn's `done`
+event signals completion. Repeated delivery of the same path within one turn
+does not display the attachment twice. Scheduled delivery collects attachments
+across completed messages so a later text reply does not overwrite the files.
+
 No new memory write. No nested vision model. No skill load.
 
 ## 5. Diary, notes, subconscious

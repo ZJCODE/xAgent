@@ -926,8 +926,10 @@ class WeixinAdapter:
                 if event.get("type") in {"error", "aborted"} and event.get("needs_review"):
                     raise DeliveryUncertainError(str(event.get("error") or "scheduled tool outcome is unknown"))
                 if event.get("type") == "message_done" and str(event.get("phase") or "final") == "final":
-                    content = str(event.get("content") or "").strip()
-                    attachments = self._outbound_attachments_from_event(event)
+                    content = str(event.get("content") or "").strip() or content
+                    attachments = self._dedupe_outbound_attachments([
+                        *attachments, *self._outbound_attachments_from_event(event),
+                    ])
                 elif event.get("type") == "error" and not content:
                     last_error = str(event.get("error") or "").strip()
         if not content and not attachments:

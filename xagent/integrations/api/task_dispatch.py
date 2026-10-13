@@ -178,9 +178,12 @@ class TaskDispatchService:
             if event_type in {"error", "aborted"} and event.get("needs_review"):
                 raise DeliveryUncertainError(str(event.get("error") or "scheduled tool outcome is unknown"))
             if event_type == "message_done" and str(event.get("phase") or "final") == "final":
-                final_content = str(event.get("content") or "").strip()
+                final_content = str(event.get("content") or "").strip() or final_content
                 raw_attachments = event.get("attachments")
-                final_attachments = dedupe_attachments(raw_attachments if isinstance(raw_attachments, list) else [])
+                final_attachments = dedupe_attachments([
+                    *final_attachments,
+                    *(raw_attachments if isinstance(raw_attachments, list) else []),
+                ])
             elif event_type == "error":
                 last_error = str(event.get("error") or "").strip()
         if final_content or final_attachments:

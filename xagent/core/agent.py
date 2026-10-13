@@ -26,6 +26,7 @@ from ..schemas import (
     ParticipationDecision,
     RoleType,
 )
+from ..schemas.attachment import dedupe_attachments
 from ..tools import (
     create_read_note_tool,
     create_search_memory_tool,
@@ -902,6 +903,8 @@ class Agent:
                 )
 
             loop_cap = max_agent_loops if max_agent_loops is not None else self.max_agent_loops
+            delivered_paths: set[str] = set()
+            delivered_messages: list[Message] = []
             for iteration_index in range(loop_cap):
                 if self.inbox.abort_requested():
                     yield self._aborted_event()
@@ -921,6 +924,11 @@ class Agent:
                     message_started = True
                     return self._message_start_event(message_id, "assistant")
 
+                logger.info(
+                    "Model iteration turn_id=%s iteration=%s current_task_images=%s",
+                    trace_metadata.get("turn_id"), iteration_index + 1,
+                    MessageHandler.count_current_task_images(input_messages),
+                )
                 async for model_event in self.model_client.model_turn_events(
                     messages=input_messages,
                     tool_specs=tool_specs,
@@ -958,6 +966,11 @@ class Agent:
                         return
 
                 visible_text = "".join(text_parts)
+                logger.info(
+                    "Model iteration result turn_id=%s iteration=%s text_chars=%s tool_calls=%s",
+                    trace_metadata.get("turn_id"), iteration_index + 1,
+                    len(visible_text), len(tool_calls),
+                )
                 if self.inbox.abort_requested() and tool_calls:
                     yield self._aborted_event()
                     yield {"type": "done"}
@@ -1011,30 +1024,37 @@ class Agent:
                         yield self._tool_event("tool_result", tool_call)
 
                     if tool_result is not None:
-                        final_message_id = self._turn_message_id(user_msg, iteration_index, suffix="image")
-                        for event in self._message_events(
-                            message_id=final_message_id,
-                            phase="final",
-                            content=tool_result.content,
-                            stream=False,
-                            attachments=tool_result.attachments,
-                        ):
-                            yield event
-                        assistant_msg = await msg_handler.store_model_reply(
-                            tool_result.description,
-                            self._assistant_sender_id,
-                            metadata={"turn_phase": "final"},
-                            attachments=tool_result.attachments,
-                            room_name=room_name,
-                            channel=channel,
-                            recipient_id=room_name or user_id,
-                        )
-                        self._schedule_experience_write(
-                            messages=[user_msg, assistant_msg],
-                        )
-                        turn_obs.set_output(tool_result.content)
-                        yield {"type": "done"}
-                        return
+                        attachments = []
+                        for attachment in dedupe_attachments(tool_result.attachments):
+                            path = attachment.get("path") or attachment.get("blob_url")
+                            if path not in delivered_paths:
+                                delivered_paths.add(path)
+                                attachments.append(attachment)
+                        if tool_result.content or attachments:
+                            artifact_message_id = self._turn_message_id(user_msg, iteration_index, suffix="image")
+                            for event in self._message_events(
+                                message_id=artifact_message_id,
+                                phase="final",
+                                content=tool_result.content,
+                                stream=False,
+                                attachments=attachments,
+                            ):
+                                yield event
+                            assistant_msg = await msg_handler.store_model_reply(
+                                tool_result.description,
+                                self._assistant_sender_id,
+                                metadata={**trace_metadata, "turn_phase": "final"},
+                                attachments=attachments,
+                                room_name=room_name,
+                                channel=channel,
+                                recipient_id=room_name or user_id,
+                            )
+                            delivered_messages.append(assistant_msg)
+                            self._schedule_experience_write(
+                                messages=[user_msg, *delivered_messages],
+                            )
+                        # Completing a displayed message does not complete the turn.
+                        # Replay the tool result so the model can finish the user's request.
 
                     if self.inbox.abort_requested():
                         yield self._aborted_event()
@@ -1065,7 +1085,7 @@ class Agent:
                         recipient_id=room_name or user_id,
                     )
                     self._schedule_experience_write(
-                        messages=[user_msg, assistant_msg],
+                        messages=[user_msg, *delivered_messages, assistant_msg],
                     )
                     turn_obs.set_output(visible_text)
                     yield {"type": "done"}
