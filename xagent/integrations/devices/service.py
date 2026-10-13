@@ -9,11 +9,11 @@ import secrets
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from pathlib import Path
 from datetime import datetime, timezone
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StringConstraints
 
 from .config import DeviceConfig, DeviceId, Name
 from .credentials import DeviceCredentials
@@ -56,6 +56,15 @@ class DeviceResult(BaseModel):
     ok: StrictBool
     data: Any = None
     error: str = Field(default="", max_length=4096)
+
+
+class DeviceEvent(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    type: Literal["event"]
+    event_id: str = Field(min_length=1, max_length=128)
+    event_type: Name
+    context: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_MESSAGE_BYTES)]
+    data: dict[str, Any] | None = None
 
 
 @dataclass(eq=False)

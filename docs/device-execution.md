@@ -1,8 +1,8 @@
 # External devices as Agent execution endpoints
 
-Hardware and software devices connect directly to the Agent's existing API and
-execute capabilities they declare. Each device uses its own WebSocket; chat
-continues on `/ws/chat` with its existing protocol. One Agent process and one
+Hardware and software devices connect directly to the Agent's existing API,
+execute capabilities they declare, and report environmental events. Each device
+uses its own WebSocket; chat continues on `/ws/chat` with its existing protocol. One Agent process and one
 API port host both routes. There is no separate Gateway or HTTP execution client.
 
 New devices pair at runtime. Pairing makes a device eligible to connect and
@@ -33,6 +33,8 @@ Capability names are arbitrary. Devices describe object parameters with JSON
 Schema and validate them before executing. New capabilities require no new
 Agent tools or framework code. Reconnect to replace a device's complete manifest.
 Device metadata and capability descriptions are external data, not instructions.
+Active device events enter the same Agent's shared environmental context without
+a user, room, subscription, or immediate chat reply.
 
 ## First connection: pair once
 
@@ -164,8 +166,46 @@ The server sends a command and the device returns its correlated result:
 
 Devices report success after execution and reject invalid parameters without
 executing. Messages contain JSON only, with a 64 KiB limit. Transport ping and
-pong handle connection health. Device sockets carry no chat messages; a terminal
+pong handle connection health. Device sockets carry commands, results, and
+environmental events, with no chat messages; a terminal
 that also chats opens a separate `/ws/chat` connection on the same API port.
+
+### Report an environmental event
+
+After registering, a device may send an event on its existing connection,
+including while a command is in progress:
+
+```json
+{
+  "type": "event",
+  "event_id": "evt_a7f4",
+  "event_type": "touch",
+  "context": "The head touch sensor detected a tap.",
+  "data": {"area": "head", "gesture": "tap"}
+}
+```
+
+`event_id` is a nonempty string of at most 128 characters, unique to an occurrence
+on this device. Prefer a UUID rather than a counter that resets on restart.
+`event_type` is a nonempty name of at most 128 characters. `context` is required,
+nonblank readable information; `data` is an optional JSON object. The complete
+UTF-8 frame remains limited to 64 KiB. Device identity comes from the authenticated
+connection; do not include `device_id`, `user_id`, room, or attribution metadata
+in the event. Registration and execution capabilities remain unchanged.
+
+The API records events through `Agent.observe()` as environmental observations
+with `source="device"`, the device ID, event type, original event ID, and optional
+data. They have no human sender, recipient, or room. The model's recent experience
+includes the device ID and event type alongside the observation, without claiming
+who caused a touch. Duplicate IDs on the same device are stored once, including
+after reconnect or Agent restart; different devices have separate event identities.
+
+No chat client needs to be connected. Recording an event does not start a chat
+turn, subscribe users, broadcast notifications, or alter an in-flight model request.
+Subsequent context assembly uses the existing recent-event budget, working summary,
+and memory maintenance. The normal background memory policy still applies.
+This protocol sends no event acknowledgement or automatic reply, and does not
+automatically replay device events after reconnect.
 
 ## Try the software execution endpoint
 
@@ -221,6 +261,9 @@ connections do not add a command-drain delay. API reconnection requires devices
 to register again. Runtime shutdown keeps connections available during its
 existing accepted-work drain and then explicitly cleans them up; no FastAPI
 lifespan hook owns device cleanup.
+New environmental events are ignored once device admission closes; command
+results can still finish accepted work. Replaced or revoked connections cannot
+submit new events.
 
 Pairing codes are memory-only and invalidated by cancellation, replacement,
 API disconnection, or Runtime shutdown. Device credentials

@@ -609,6 +609,12 @@ class MessageHandler:
     @staticmethod
     def _format_context_event_header(message: Message) -> str:
         header = f"[ambient context][timestamp={MessageHandler._format_transcript_timestamp(message)}]"
+        metadata = message.metadata or {}
+        if metadata.get("source") == "device":
+            for key in ("device_id", "event_type"):
+                value = MessageHandler._sanitize_marker_field(str(metadata.get(key) or ""))
+                if value:
+                    header += f"[{key}={value}]"
         if message.sender_id or str((message.metadata or {}).get("sender_name") or "").strip():
             speaker = MessageHandler._sanitize_marker_field(
                 MessageHandler._format_transcript_speaker(message)

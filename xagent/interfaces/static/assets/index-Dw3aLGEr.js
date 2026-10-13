@@ -347,7 +347,7 @@ Write runnable device-side code for my hardware (ESP32, Raspberry Pi, or any Web
 - Selected Agent: ${JSON.stringify(u||"Selected Agent")}
 - Agent API base: \`${l}\`
 - Device WebSocket: \`${l}/ws/devices/{device_id}\`
-- The device initiates one outbound connection to the Agent's API, on the same port as chat. This socket is for execution; it does not use \`/ws/chat\`.
+- The device initiates one outbound connection to the Agent's API, on the same port as chat. This socket carries commands, results, and environmental events; it does not use \`/ws/chat\`.
 - Use an address reachable from the device. \`127.0.0.1\`/\`localhost\` only work on the Agent's own machine; use its reachable LAN IP or domain for external hardware. Public connections use WSS with certificate verification. Network access to the Agent API must be available.
 
 ### 2. Pair once, register on every connection
@@ -379,6 +379,19 @@ Device → Agent: return one result per command, success or failure (\`ok\` must
 {"type":"result","command_id":"cmd_123","ok":true,"data":{"text":"hello"}}
 {"type":"result","command_id":"cmd_123","ok":false,"error":"Invalid parameters or execution failed"}
 \`\`\`
+
+### 4. Report environmental events (optional)
+
+After registration, send an event on this same socket when a sensor detects something:
+\`\`\`json
+{"type":"event","event_id":"evt_a7f4","event_type":"touch","context":"The head touch sensor detected a tap.","data":{"area":"head","gesture":"tap"}}
+\`\`\`
+
+Use a unique nonempty \`event_id\` of at most 128 characters per occurrence (prefer a UUID); reuse that ID only when resending the same event. \`event_type\` is a nonempty name of at most 128 characters, \`context\` is required nonblank readable information, and \`data\` is an optional JSON object. The server takes the device identity from this connection; do not supply a device ID, user ID, room, or attribution metadata in the event.
+
+Events are stored once per device and event ID as observations in this Agent's shared context. They do not start a chat turn or notify users; no chat client or subscription is needed. Future context assembly can use them, while a model request already in progress is unchanged. There is no event acknowledgement or automatic reply. Events can be interleaved with command results; events reported while the API is draining are ignored.
+
+### 5. Transport and reconnect
 
 Validate parameters on the device; serialize its command handlers and preserve the exact \`command_id\`. Use UTF-8 JSON text messages of at most 64 KiB and WebSocket ping/pong. Reconnect with backoff after disconnection (including normal closure or temporary-unavailability code 1013), then register again. An authentication rejection needs a fresh valid credential/pairing code.
 

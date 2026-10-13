@@ -15,10 +15,11 @@ import websockets
 import yaml
 import httpx
 
-from xagent.core.config import ReplyType
+from xagent.core.config import AgentConfig, ReplyType
 from xagent.core.runtime.client import RuntimeClient
 from xagent.integrations.devices.service import CallRequest
 from xagent.integrations.devices.credentials import DeviceCredentials
+from xagent.schemas import MessageType, RoleType
 import tests.test_agent_chat_flow as chat_test
 import tests.test_runtime_host as runtime_test
 import tests.test_device_execution as device_test
@@ -93,6 +94,55 @@ class DeviceRuntimeTests(unittest.IsolatedAsyncioTestCase):
             events = await self.chat_events(chat)
             self.assertTrue(any(event.get("content") == "Device set to 41" for event in events))
             self.assertFalse(host.device_service.pending)
+
+    async def test_environment_event_survives_runtime_restart_and_remains_shared(self):
+        async def recorded(host, event_id):
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline:
+                message = await host.agent.message_storage.get_message_by_metadata("device_event_id", event_id)
+                if message is not None:
+                    return message
+                await asyncio.sleep(0.01)
+            self.fail("Runtime did not persist the device observation")
+
+        event = {
+            "type": "event", "event_id": "touch-1", "event_type": "touch",
+            "context": "The head sensor detected a tap.", "data": {"area": "head"},
+        }
+        first, task, root, url = await self.start_host([])
+        async with self.device_socket(url) as device:
+            await self.register(device, first)
+            await device.send(json.dumps(event))
+            message = await recorded(first, "touch-1")
+            self.assertEqual(message.role, RoleType.ENVIRONMENT)
+            self.assertIsNone(message.sender_id)
+            self.assertIsNone(message.recipient_id)
+            self.assertEqual(first.agent.model_client.calls, [])
+        await first.stop()
+        await asyncio.wait_for(task, timeout=20)
+        self.hosts.pop()
+
+        model = chat_test.CapturingModelClient([(ReplyType.SIMPLE_REPLY, "I noticed the tap.")])
+        second, task = await runtime_test.RuntimeTransportTests._start_host(self, root, model)
+        self.hosts.append((second, task))
+        await self.wait_for(lambda: second.channel_status["api"]["state"] == "connected")
+        async with self.device_socket(url) as device:
+            await self.register(device, second)
+            await device.send(json.dumps({**event, "context": "Duplicate content must not replace the event."}))
+            await device.send(json.dumps({**event, "event_id": "touch-2"}))
+            await recorded(second, "touch-2")
+            observations = [
+                item for item in await second.agent.message_storage.get_messages(100)
+                if item.type == MessageType.CONTEXT_EVENT
+            ]
+            self.assertEqual(len(observations), 2)
+            self.assertEqual(observations[0].content, event["context"])
+            self.assertEqual(model.calls, [])
+            events = [item async for item in RuntimeClient(root).chat_events(user_id="alice", user_message="What happened?")]
+            self.assertTrue(any(item.get("content") == "I noticed the tap." for item in events))
+            transcript = next(item["content"] for item in model.calls[0] if item.get("name") == AgentConfig.RECENT_EXPERIENCE_NAME)
+            self.assertIn(event["context"], transcript)
+            self.assertIn("[device_id=desk][event_type=touch]", transcript)
 
     async def test_api_disconnect_resolves_unknown_and_private_chat_survives_then_device_reregisters(self):
         host, _, root, url = await self.start_host([(ReplyType.SIMPLE_REPLY, "Local chat still works")])

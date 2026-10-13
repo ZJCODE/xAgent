@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Awaitable, Callable
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
-from ...integrations.devices.service import DeviceResult, DeviceService, Registration, load_message
+from ...integrations.devices.service import DeviceEvent, DeviceResult, DeviceService, Registration, load_message
 
 
-def register_device_routes(app: FastAPI, service: DeviceService) -> None:
+def register_device_routes(
+    app: FastAPI,
+    service: DeviceService,
+    *,
+    on_event: Callable[[str, DeviceEvent], Awaitable[None]],
+) -> None:
     @app.websocket("/ws/devices/{device_id}")
     async def device_socket(websocket: WebSocket, device_id: str):
         credential = websocket.headers.get("authorization", "")
@@ -33,8 +39,16 @@ def register_device_routes(app: FastAPI, service: DeviceService) -> None:
                 }), timeout=5)
             connection = await service.register(websocket, registration)
             while service.devices.get(device_id) is connection:
-                result = DeviceResult.model_validate(load_message(await websocket.receive_text()))
-                service.resolve(connection, result)
+                message = load_message(await websocket.receive_text())
+                # A replacement can register while this socket waits for input.
+                if service.devices.get(device_id) is not connection:
+                    break
+                if isinstance(message, dict) and message.get("type") == "event":
+                    event = DeviceEvent.model_validate(message)
+                    if service.accepting:
+                        await on_event(device_id, event)
+                else:
+                    service.resolve(connection, DeviceResult.model_validate(message))
         except WebSocketDisconnect:
             pass
         except asyncio.CancelledError:
@@ -53,7 +67,7 @@ def register_device_routes(app: FastAPI, service: DeviceService) -> None:
             except RuntimeError:
                 pass
         except OSError:
-            await websocket.close(code=1011, reason="Unable to persist device credentials")
+            await websocket.close(code=1011, reason="Unable to persist device data")
         finally:
             if connection is not None:
                 await service.disconnect(connection)

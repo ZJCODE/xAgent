@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import FastAPI
 
@@ -12,7 +13,7 @@ from ...core.agent import Agent
 from ...core.runtime import AsyncTaskScheduler, SubconsciousDelivery
 from ...interfaces.server.runtime_routes import register_runtime_routes
 from ...interfaces.server.device_routes import register_device_routes
-from ...integrations.devices.service import DeviceService
+from ...integrations.devices.service import DeviceEvent, DeviceService
 from .chat_service import ChatService
 from .config import ChatLimits
 from .constants import CHANNEL_API
@@ -66,7 +67,21 @@ class ApiChannelAdapter:
     async def deliver_subconscious_message(self, delivery: SubconsciousDelivery) -> None:
         await self.delivery.deliver_subconscious(delivery, agent=self.agent)
 
+    async def observe_device_event(self, device_id: str, event: DeviceEvent) -> None:
+        """Record device perception in the shared context without a user turn."""
+        metadata: dict[str, Any] = {"device_id": device_id, "device_event_id": event.event_id}
+        if event.data is not None:
+            metadata["data"] = event.data
+        await self.agent.observe(
+            context=event.context,
+            source="device",
+            event_type=event.event_type,
+            metadata=metadata,
+            channel="devices",
+            event_id=json.dumps([device_id, event.event_id], ensure_ascii=False, separators=(",", ":")),
+        )
+
     def register_routes(self, app: FastAPI) -> None:
         register_runtime_routes(app, self)
         if self.device_service is not None:
-            register_device_routes(app, self.device_service)
+            register_device_routes(app, self.device_service, on_event=self.observe_device_event)
