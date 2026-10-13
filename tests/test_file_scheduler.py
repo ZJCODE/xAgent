@@ -312,6 +312,41 @@ class ScheduledTaskTests(unittest.TestCase):
 
         asyncio.run(run_test())
 
+    def test_ten_second_interval_dispatches_on_grid_and_skips_missed_runs(self):
+        async def run_test():
+            with tempfile.TemporaryDirectory() as tmpdir:
+                start = datetime(2026, 6, 1, 10, 0, 0)
+                enqueue_scheduled_task(
+                    task_type="message",
+                    content="short reminder",
+                    run_at=start,
+                    tasks_dir=tmpdir,
+                    channel="api",
+                    target={"user_id": "alice"},
+                    recurrence=[{"kind": "interval", "every_seconds": 10, "end_at": "2026-06-01 10:00:40"}],
+                )
+                delivered = []
+                current = {"now": start}
+
+                async def dispatch(task):
+                    delivered.append(task.run_at)
+
+                scheduler = AsyncTaskScheduler(
+                    tmpdir,
+                    can_handle=lambda task: True,
+                    dispatch=dispatch,
+                    now_provider=lambda: current["now"],
+                )
+                for second in (0, 9, 10, 31, 40):
+                    current["now"] = start + timedelta(seconds=second)
+                    await scheduler.tick()
+
+                self.assertEqual(delivered, [start + timedelta(seconds=s) for s in (0, 10, 40)])
+                self.assertEqual(list_task_records(tmpdir, include_failed=False), [])
+                self.assertEqual(list_archived_task_records(tmpdir)[0].status, "completed")
+
+        asyncio.run(run_test())
+
     def test_async_scheduler_expires_overdue_interval_past_end_at_without_dispatch(self):
         async def run_test():
             with tempfile.TemporaryDirectory() as tmpdir:
@@ -865,7 +900,7 @@ class ScheduledTaskTests(unittest.TestCase):
                         action="create",
                         task_type="message",
                         content="hey",
-                        interval_seconds=600,
+                        interval_seconds=10,
                         duration_seconds=18000,
                         title="Hey reminder",
                     )
@@ -873,7 +908,7 @@ class ScheduledTaskTests(unittest.TestCase):
 
             self.assertTrue(result["ok"])
             self.assertEqual(result["task"]["recurrence"][0]["kind"], "interval")
-            self.assertEqual(result["task"]["recurrence"][0]["every_seconds"], 600)
+            self.assertEqual(result["task"]["recurrence"][0]["every_seconds"], 10)
             self.assertIn("end_at", result["task"]["recurrence"][0])
             self.assertNotIn("duration_seconds", result["task"]["recurrence"][0])
             self.assertEqual(records[0].recurrence, result["task"]["recurrence"])
@@ -1010,7 +1045,7 @@ class ScheduledTaskTests(unittest.TestCase):
                     action="create",
                     task_type="message",
                     content="hey",
-                    interval_seconds=30,
+                    interval_seconds=9,
                     duration_seconds=300,
                 )
                 interval_missing_end = await tool(

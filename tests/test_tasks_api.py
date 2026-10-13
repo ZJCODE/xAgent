@@ -350,7 +350,7 @@ class TaskApiTests(unittest.TestCase):
                     json={
                         "task_type": "message",
                         "content": "喝水",
-                        "interval_seconds": 60,
+                        "interval_seconds": 10,
                         "duration_seconds": 3600,
                         "title": "喝水提醒",
                     },
@@ -359,6 +359,25 @@ class TaskApiTests(unittest.TestCase):
                 task_id = created.json()["task"]["task_id"]
                 self.assertEqual(created.json()["task"]["status"], "active")
                 self.assertEqual(created.json()["task"]["channel"], "api")
+                self.assertEqual(created.json()["task"]["recurrence"][0]["every_seconds"], 10)
+
+                rejected_interval = client.post(
+                    "/api/tasks",
+                    json={"task_type": "message", "content": "too frequent", "interval_seconds": 9, "duration_seconds": 60},
+                )
+                self.assertEqual(rejected_interval.status_code, 400)
+                self.assertIn("at least 10", rejected_interval.text)
+
+                changed_interval = client.patch(f"/api/tasks/{task_id}", json={"interval_seconds": 30})
+                self.assertEqual(changed_interval.status_code, 200)
+                self.assertEqual(changed_interval.json()["task"]["recurrence"][0]["every_seconds"], 30)
+
+                restored_interval = client.patch(f"/api/tasks/{task_id}", json={"interval_seconds": 10})
+                self.assertEqual(restored_interval.status_code, 200)
+                self.assertEqual(restored_interval.json()["task"]["recurrence"][0]["every_seconds"], 10)
+
+                rejected_update = client.patch(f"/api/tasks/{task_id}", json={"interval_seconds": 9})
+                self.assertEqual(rejected_update.status_code, 400)
 
                 paused = client.post(f"/api/tasks/{task_id}/pause")
                 self.assertEqual(paused.status_code, 200)

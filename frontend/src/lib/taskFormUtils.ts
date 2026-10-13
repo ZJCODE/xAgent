@@ -8,6 +8,7 @@ export type MonthlyOnType = "day" | "nth_weekday";
 export type IntervalStartMode = "now" | "at";
 export type IntervalEndMode = "duration" | "end_at";
 export type IntervalFirstRunMode = "default" | "immediate" | "delay";
+export type IntervalUnit = "seconds" | "minutes";
 
 export interface TaskFormState {
   title: string;
@@ -25,7 +26,8 @@ export interface TaskFormState {
   monthlyDay: string;
   monthlyWeekday: WeekdayOption;
   monthlyNth: string;
-  intervalMinutes: string;
+  intervalValue: string;
+  intervalUnit: IntervalUnit;
   intervalStartMode: IntervalStartMode;
   intervalStartAt: string;
   intervalEndMode: IntervalEndMode;
@@ -35,6 +37,7 @@ export interface TaskFormState {
   intervalDelayMinutes: string;
 }
 
+export const MIN_INTERVAL_SECONDS = 10;
 const MAX_INTERVAL_DURATION_MINUTES = 30 * 24 * 60;
 const MONTHLY_NTH_OPTIONS = new Set(["1", "2", "3", "4", "-1"]);
 
@@ -55,7 +58,8 @@ export function createDefaultTaskFormState(): TaskFormState {
     monthlyDay: "1",
     monthlyWeekday: "mon",
     monthlyNth: "2",
-    intervalMinutes: "5",
+    intervalValue: "5",
+    intervalUnit: "minutes",
     intervalStartMode: "now",
     intervalStartAt: "",
     intervalEndMode: "end_at",
@@ -84,7 +88,11 @@ export function taskToFormState(task: ScheduledTaskItem): TaskFormState {
   state.scheduleKind = inferScheduleKind(task);
 
   if (state.scheduleKind === "interval" && rule) {
-    state.intervalMinutes = secondsToMinutesString(rule.every_seconds, "5");
+    const seconds = Number(rule.every_seconds);
+    if (Number.isFinite(seconds) && seconds > 0) {
+      state.intervalUnit = seconds % 60 === 0 ? "minutes" : "seconds";
+      state.intervalValue = String(state.intervalUnit === "minutes" ? seconds / 60 : seconds);
+    }
     state.intervalEndMode = "end_at";
     state.intervalEndAt = fromApiDateTime(rule.end_at || "");
     if (rule.start_at) {
@@ -179,8 +187,12 @@ export function validateTaskForm(state: TaskFormState): string | null {
     return null;
   }
 
-  const everyMinutes = parseNumber(state.intervalMinutes);
-  if (everyMinutes == null || everyMinutes < 1) return "Interval must be at least 1 minute.";
+  const every = parseNumber(state.intervalValue);
+  const unitSeconds = state.intervalUnit === "minutes" ? 60 : 1;
+  if (every == null || every * unitSeconds < MIN_INTERVAL_SECONDS) {
+    return `Interval must be at least ${MIN_INTERVAL_SECONDS} seconds.`;
+  }
+  if (state.intervalUnit === "seconds" && !Number.isInteger(every)) return "Interval must use whole seconds.";
 
   if (state.intervalStartMode === "at") {
     const startError = validateFutureDateTime(state.intervalStartAt, "Start at");
@@ -254,7 +266,7 @@ export function fromApiDateTime(value: string): string {
   const text = String(value || "").trim();
   if (!text) return "";
   const normalized = text.replace(" ", "T");
-  return normalized.slice(0, 16);
+  return normalized.slice(0, 19);
 }
 
 export function toApiTime(value: string): string {
@@ -332,7 +344,7 @@ function monthlyRecurrenceRule(state: TaskFormState): ScheduledTaskRecurrenceRul
 
 function intervalPayload(state: TaskFormState): Partial<TaskCreateInput & TaskUpdateInput> {
   const payload: Partial<TaskCreateInput & TaskUpdateInput> = {
-    interval_seconds: minutesToSeconds(state.intervalMinutes),
+    interval_seconds: intervalToSeconds(state),
   };
   if (state.intervalStartMode === "at") {
     payload.start_at = toApiDateTime(state.intervalStartAt);
@@ -353,7 +365,7 @@ function intervalPayload(state: TaskFormState): Partial<TaskCreateInput & TaskUp
 function intervalRecurrenceRule(state: TaskFormState): ScheduledTaskRecurrenceRule {
   const rule: ScheduledTaskRecurrenceRule = {
     kind: "interval",
-    every_seconds: minutesToSeconds(state.intervalMinutes),
+    every_seconds: intervalToSeconds(state),
     end_at: resolveIntervalEndAt(state),
   };
   if (state.intervalStartMode === "at") {
@@ -399,7 +411,7 @@ function scheduleSignature(state: TaskFormState): string {
   }
   return [
     "interval",
-    minutesToSeconds(state.intervalMinutes),
+    intervalToSeconds(state),
     state.intervalStartMode,
     state.intervalStartMode === "at" ? toApiDateTime(state.intervalStartAt) : "",
     state.intervalEndMode,
@@ -435,10 +447,14 @@ function minutesToSeconds(value: string): number {
   return Math.round((parseNumber(value) || 0) * 60);
 }
 
-function secondsToMinutesString(value: unknown, fallback: string): string {
-  const seconds = Number(value);
-  if (!Number.isFinite(seconds) || seconds <= 0) return fallback;
-  return String(Math.max(1, Math.round(seconds / 60)));
+function intervalToSeconds(state: TaskFormState): number {
+  return Math.round((parseNumber(state.intervalValue) || 0) * (state.intervalUnit === "minutes" ? 60 : 1));
+}
+
+export function convertIntervalUnit(value: string, from: IntervalUnit, to: IntervalUnit): string {
+  const amount = parseNumber(value);
+  if (amount == null || from === to) return value;
+  return String(to === "seconds" ? Math.round(amount * 60) : amount / 60);
 }
 
 function parseNumber(value: string): number | null {
@@ -469,5 +485,5 @@ function endAtFromDuration(durationMinutes: string): string {
 
 function formatDateTimeLocal(date: Date): string {
   const pad = (value: number) => String(value).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 }

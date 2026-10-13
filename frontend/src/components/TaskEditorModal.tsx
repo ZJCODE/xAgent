@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { classNames } from "../lib/format";
 import {
   createDefaultTaskFormState,
+  convertIntervalUnit,
   formStateToDuplicateInput,
   formStateToCreateInput,
   formStateToUpdateInput,
@@ -10,9 +11,11 @@ import {
   taskToDuplicateFormState,
   validateTaskForm,
   WEEKDAY_OPTIONS,
+  MIN_INTERVAL_SECONDS,
   type IntervalEndMode,
   type IntervalFirstRunMode,
   type IntervalStartMode,
+  type IntervalUnit,
   type MonthlyOnType,
   type OneShotMode,
   type TaskFormState,
@@ -228,7 +231,7 @@ function OneShotFields({
         </WizardField>
       ) : (
         <WizardField label="Run at">
-          <input type="datetime-local" value={form.runAt} onChange={(event) => updateForm({ runAt: event.target.value })} />
+          <input type="datetime-local" step="1" value={form.runAt} onChange={(event) => updateForm({ runAt: event.target.value })} />
         </WizardField>
       )}
     </div>
@@ -357,21 +360,39 @@ function IntervalFields({
         <WizardField label="Start at" hint="First reminder fires at this time, then repeats on the grid.">
           <input
             type="datetime-local"
+            step="1"
             value={form.intervalStartAt}
             onChange={(event) => updateForm({ intervalStartAt: event.target.value })}
           />
         </WizardField>
       ) : null}
 
-      <WizardField label="Every (minutes)" hint="Minimum 1 minute.">
-        <input
-          type="number"
-          min="1"
-          step="1"
-          value={form.intervalMinutes}
-          onChange={(event) => updateForm({ intervalMinutes: event.target.value })}
-        />
-      </WizardField>
+      <div className="task-editor-grid">
+        <WizardField label="Every" hint={`Minimum ${MIN_INTERVAL_SECONDS} seconds.`}>
+          <input
+            type="number"
+            min={form.intervalUnit === "seconds" ? MIN_INTERVAL_SECONDS : MIN_INTERVAL_SECONDS / 60}
+            step={form.intervalUnit === "seconds" ? 1 : "any"}
+            value={form.intervalValue}
+            onChange={(event) => updateForm({ intervalValue: event.target.value })}
+          />
+        </WizardField>
+        <WizardField label="Unit">
+          <select
+            value={form.intervalUnit}
+            onChange={(event) => {
+              const intervalUnit = event.target.value as IntervalUnit;
+              updateForm({
+                intervalUnit,
+                intervalValue: convertIntervalUnit(form.intervalValue, form.intervalUnit, intervalUnit),
+              });
+            }}
+          >
+            <option value="seconds">Seconds</option>
+            <option value="minutes">Minutes</option>
+          </select>
+        </WizardField>
+      </div>
 
       <RadioGroup
         name="interval-end-mode"
@@ -394,7 +415,7 @@ function IntervalFields({
         </WizardField>
       ) : (
         <WizardField label="Stop at">
-          <input type="datetime-local" value={form.intervalEndAt} onChange={(event) => updateForm({ intervalEndAt: event.target.value })} />
+          <input type="datetime-local" step="1" value={form.intervalEndAt} onChange={(event) => updateForm({ intervalEndAt: event.target.value })} />
         </WizardField>
       )}
 

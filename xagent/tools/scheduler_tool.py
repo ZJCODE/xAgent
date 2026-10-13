@@ -16,6 +16,7 @@ from xagent.core.runtime import (
     resume_scheduled_task,
     update_scheduled_task,
 )
+from xagent.core.runtime.scheduler import MIN_INTERVAL_EVERY_SECONDS
 from xagent.utils.tool_decorator import function_tool
 
 
@@ -60,7 +61,10 @@ def create_schedule_task_tool(*, tasks_dir: str):
                 "{\"kind\":\"interval\",\"every_seconds\":600,\"end_at\":\"2026-06-01 12:00:00\"}. "
                 "Monthly day and weekday/nth are mutually exclusive; day=-1 is month end; day=31 skips short months."
             ),
-            "interval_seconds": "Repeat every N seconds. Requires user-provided duration_seconds or end_at.",
+            "interval_seconds": (
+                f"Repeat every N seconds (minimum {MIN_INTERVAL_EVERY_SECONDS} seconds). "
+                "Requires user-provided duration_seconds or end_at."
+            ),
             "duration_seconds": "Required for interval unless end_at is set. Must come from the user; do not invent.",
             "start_at": "Optional interval window start. Use for requests like from 10:00 to 12:00 every 10 minutes.",
             "end_at": "Required for interval unless duration_seconds is set. Must come from the user; do not invent.",
