@@ -144,8 +144,8 @@ export function AgentPage() {
   const [setupSchema, setSetupSchema] = useState<AgentEditSetupSchema | null>(null);
   const [setupFeature, setSetupFeature] = useState<AgentEditSetupFeatureId | null>(null);
   const [setupNotice, setSetupNotice] = useState("");
-  const [restartingApi, setRestartingApi] = useState(false);
-  const [restartSetupChannel, setRestartSetupChannel] = useState<"api" | "voice" | null>(null);
+  const [restarting, setRestarting] = useState(false);
+  const [restartRequired, setRestartRequired] = useState(false);
 
   const dirty = useMemo(() => editorValue !== (identity?.identity || ""), [editorValue, identity]);
   const dirtyConfig = useMemo(
@@ -236,7 +236,7 @@ export function AgentPage() {
       setIdentity(updated);
       setEditorValue(updated.identity);
       setSetupNotice("Identity saved. Restart the Agent to apply it.");
-      setRestartSetupChannel("api");
+      setRestartRequired(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -260,7 +260,7 @@ export function AgentPage() {
       setConfigNotice(
         "Settings saved. Restart the Agent to apply them.",
       );
-      setRestartSetupChannel("api");
+      setRestartRequired(true);
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -277,10 +277,10 @@ export function AgentPage() {
     setSetupFeature(null);
     if (!result.changed) {
       setSetupNotice("No config values changed.");
-      setRestartSetupChannel(null);
+      setRestartRequired(false);
       return;
     }
-    setRestartSetupChannel(result.restart_required ? (result.restart_channel === "voice" ? "voice" : "api") : null);
+    setRestartRequired(result.restart_required);
     setSetupNotice(
       result.restart_required
         ? "Settings saved. Restart the Agent to apply them."
@@ -290,18 +290,18 @@ export function AgentPage() {
     if (activeTab === "config") await loadConfig();
   };
 
-  const restartApiChannel = async () => {
-    setRestartingApi(true);
+  const restartAgent = async () => {
+    setRestarting(true);
     setError("");
     try {
       await restartRuntime();
       setSetupNotice("Agent restarted.");
-      setRestartSetupChannel(null);
+      setRestartRequired(false);
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setRestartingApi(false);
+      setRestarting(false);
     }
   };
 
@@ -358,10 +358,10 @@ export function AgentPage() {
       {setupNotice ? (
         <div className="success-strip setup-notice-strip">
           <span>{setupNotice}</span>
-          {restartSetupChannel ? (
-            <Button type="button" variant="secondary" disabled={restartingApi} onClick={() => void restartApiChannel()}>
+          {restartRequired ? (
+            <Button type="button" variant="secondary" disabled={restarting} onClick={() => void restartAgent()}>
               <RefreshCw size={14} />
-              {restartingApi ? "Restarting..." : "Restart Agent"}
+              {restarting ? "Restarting..." : "Restart Agent"}
             </Button>
           ) : null}
         </div>

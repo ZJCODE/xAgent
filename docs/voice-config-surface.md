@@ -198,12 +198,19 @@ who is allowed to receive information.
 
 ## 8. Setup surfaces
 
-Voice is exposed in both `xAgent Setup / Edit Setup` and the web Agent setup
-tiles. The channel setup wizard uses the same fields and validation. Both
-surfaces edit the persisted channel block; they do not write session CLI
-overrides. API keys remain masked and blank means “keep the existing key”.
+The web UI exposes Voice settings only under `Channels → Voice → Set up /
+Configure`. Its single-page form contains the Soniox key, speaking voice,
+interruption policy, and input/output devices, without a step counter or step
+chips. Initial configuration is titled `Voice setup`; subsequent edits are
+titled `Voice settings`. The Agent Preferences tiles contain only Model,
+Search, Image, and Observability.
 
-Entering voice setup enables the channel and asks only for the Soniox key;
+CLI `xAgent Setup / Edit Setup` and the web channel form edit the persisted
+channel block; they do not write session CLI overrides. API keys remain masked
+and blank means “keep the existing key”. Saving in the web UI reminds the user
+to restart the Agent to apply the settings.
+
+Entering CLI voice setup enables the channel and asks only for the Soniox key;
 there is no separate enable checkbox. Edit Setup exposes speaking voice,
 interruption policy, and optional input/output device pins
 when they need to be changed.

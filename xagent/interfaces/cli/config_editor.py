@@ -627,7 +627,6 @@ def build_agent_edit_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
         OPENAI_MODELS,
         QWEN_MODELS,
         build_setup_schema,
-        build_voice_setup_schema,
     )
 
     create_schema = build_setup_schema()
@@ -646,11 +645,6 @@ def build_agent_edit_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
         image_provider = IMAGE_GENERATION_PROVIDER_NONE
     observability_cfg = config.get("observability") if isinstance(config.get("observability"), dict) else {}
     observability_enabled = bool(observability_cfg.get("enabled", False))
-    voice_raw = config.get("channels", {}).get("voice") if isinstance(config.get("channels"), dict) else None
-    voice_data = dict(voice_raw) if isinstance(voice_raw, dict) else {}
-    voice_config = VoiceChannelConfig.from_dict(voice_data)
-    voice_ready = bool(voice_data)
-    voice_setup_schema = build_voice_setup_schema(config)
 
     features = [
         {
@@ -692,15 +686,6 @@ def build_agent_edit_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
             "status": ("enabled" if observability_enabled else "disabled"),
             "disabled": not observability_available,
             "disabled_reason": "" if observability_available else "Requires an OpenAI-compatible model API.",
-        },
-        {
-            "id": "voice",
-            "kind": "agent",
-            "label": "Voice",
-            "description": "Configure Soniox voice, interruption policy, and audio devices.",
-            "status": f"{'enabled' if voice_ready else 'disabled'} / interruptions={str(voice_config.interruptions).lower()}",
-            "disabled": False,
-            "disabled_reason": "",
         },
     ]
 
@@ -776,19 +761,6 @@ def build_agent_edit_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
                 "secret_key": LANGFUSE_SECRET_KEY_PLACEHOLDER,
                 "base_url": LANGFUSE_BASE_URL,
             },
-        },
-        "voice": {
-            "configured": voice_ready,
-            "defaults": {
-                "voice_api_key": "",
-                "voice": voice_config.speaking_voice,
-                "interruptions": voice_config.interruptions,
-                "audio_input": voice_config.audio.input,
-                "audio_output": voice_config.audio.output,
-            },
-            "voice_options": voice_setup_schema["voice_options"],
-            "audio_devices": voice_setup_schema["audio_devices"],
-            "placeholders": {"soniox_api_key": SONIOX_KEY_PLACEHOLDER},
         },
     }
 

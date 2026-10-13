@@ -64,24 +64,19 @@ def _write_agent(root: Path, *, anthropic: bool = False) -> Path:
 
 
 class AgentEditSetupHelperTests(unittest.TestCase):
-    def test_schema_features_include_voice_setup(self):
+    def test_schema_features_exclude_channel_setup(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             agent_dir = _write_agent(Path(tmpdir))
             schema = build_agent_edit_setup_schema(load_config(agent_dir))
 
         self.assertEqual(
             [row["id"] for row in schema["features"]],
-            ["model", "search", "image_generation", "observability", "voice"],
+            ["model", "search", "image_generation", "observability"],
         )
         self.assertFalse(schema["features"][3]["disabled"])
-        self.assertEqual(
-            [item["id"] for item in schema["voice"]["voice_options"]],
-            ["Maya", "Daniel", "Adrian", "Claire", "Oliver", "Isla"],
-        )
-        self.assertEqual(schema["voice"]["audio_devices"]["input"][0]["id"], "auto")
-        self.assertEqual(schema["voice"]["audio_devices"]["output"][0]["id"], "auto")
+        self.assertNotIn("voice", schema)
 
-    def test_voice_schema_and_apply_preserve_other_channel_settings(self):
+    def test_legacy_voice_apply_preserves_other_channel_settings(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             agent_dir = _write_agent(Path(tmpdir))
             config = load_config(agent_dir)
@@ -90,14 +85,12 @@ class AgentEditSetupHelperTests(unittest.TestCase):
                 "interruptions": False,
             }
             (agent_dir / "config.yaml").write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
-            schema = build_agent_edit_setup_schema(load_config(agent_dir))
             result = apply_agent_edit_setup(
                 agent_dir,
                 "voice",
                 {"voice": "Maya", "interruptions": True},
             )
             updated = load_config(agent_dir)["channels"]["voice"]
-        self.assertIs(schema["voice"]["defaults"]["interruptions"], False)
         self.assertTrue(result["changed"])
         self.assertEqual(updated["voice"], "Maya")
         self.assertIs(updated["interruptions"], True)
@@ -195,7 +188,7 @@ class AgentEditSetupRouteTests(unittest.TestCase):
 
             self.assertEqual(schema_response.status_code, 200)
             feature_ids = [row["id"] for row in schema_response.json()["features"]]
-            self.assertEqual(feature_ids, ["model", "search", "image_generation", "observability", "voice"])
+            self.assertEqual(feature_ids, ["model", "search", "image_generation", "observability"])
             self.assertEqual(apply_response.status_code, 200)
             self.assertEqual(apply_response.json()["feature"], "search")
             self.assertTrue(apply_response.json()["restart_required"])

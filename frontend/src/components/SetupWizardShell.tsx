@@ -47,6 +47,7 @@ export function SetupWizardShell({
   const [discardConfirmationOpen, setDiscardConfirmationOpen] = useState(false);
   const currentStep = steps[stepIndex] ?? steps[0];
   const isLastStep = stepIndex >= steps.length - 1;
+  const isMultiStep = steps.length > 1;
 
   const requestClose = () => {
     if (submitting) return;
@@ -82,9 +83,9 @@ export function SetupWizardShell({
           <div className="wizard-header-heading">
             <div>
               <h3 id="setup-wizard-title">{title}</h3>
-              <p className="wizard-subtitle">
+              {isMultiStep ? <p className="wizard-subtitle">
                 Step {stepIndex + 1} of {steps.length}: {currentStep?.label}
-              </p>
+              </p> : subtitle ? <p className="wizard-subtitle">{subtitle}</p> : null}
             </div>
             <IconButton
               type="button"
@@ -96,7 +97,7 @@ export function SetupWizardShell({
               <X size={16} />
             </IconButton>
           </div>
-          <div className="wizard-steps" aria-hidden="true">
+          {isMultiStep ? <div className="wizard-steps" aria-hidden="true">
             {steps.map((step, index) => (
               <span
                 key={step.id}
@@ -109,7 +110,7 @@ export function SetupWizardShell({
                 {step.label}
               </span>
             ))}
-          </div>
+          </div> : null}
         </div>
 
         <div className="modal-body wizard-body">

@@ -600,26 +600,18 @@ def _voice_channel_config(
     *,
     existing: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Merge wizard choices into ``channels.voice``, preserving advanced keys."""
+    """Merge resolved wizard choices, including explicit resets to defaults."""
     from ..voice.config import VoiceChannelConfig
 
-    if existing:
-        merged = dict(existing)
-        existing_key = str(existing.get("api_key") or "").strip()
-        merged["api_key"] = selection.voice_api_key.strip() or existing_key or SONIOX_KEY_PLACEHOLDER
-        if selection.voice != "Daniel":
-            merged["voice"] = selection.voice
-        merged["interruptions"] = selection.interruptions
-        if selection.audio_input != "auto" or selection.audio_output != "auto":
-            merged["audio"] = {"input": selection.audio_input, "output": selection.audio_output}
-        return VoiceChannelConfig.from_dict(merged).to_public_dict()
-    payload = {
-        "api_key": selection.voice_api_key.strip() or SONIOX_KEY_PLACEHOLDER,
+    merged = dict(existing or {})
+    existing_key = str(merged.get("api_key") or "").strip()
+    merged.update({
+        "api_key": selection.voice_api_key.strip() or existing_key or SONIOX_KEY_PLACEHOLDER,
         "voice": selection.voice,
         "interruptions": selection.interruptions,
         "audio": {"input": selection.audio_input, "output": selection.audio_output},
-    }
-    return VoiceChannelConfig.from_dict(payload).to_public_dict()
+    })
+    return VoiceChannelConfig.from_dict(merged).to_public_dict()
 
 
 def _config_yaml(selection: InitSelection, port: int) -> str:
@@ -1418,13 +1410,12 @@ def collect_voice_init_selection_terminal_ui(
 ) -> VoiceInitSelection:
     wizard_ui = ui or TerminalUI()
     ask_secret = wizard_ui.ask_secret if wizard_ui.interactive else secret_input_func
-    _ = config
     voice_api_key = _arg_text(args, "api_key")
     existing_voice = config.get("channels", {}).get("voice") if isinstance(config.get("channels"), dict) else None
     existing_key = str(existing_voice.get("api_key") or "").strip() if isinstance(existing_voice, dict) else ""
     if not voice_api_key and not existing_key:
         voice_api_key = _prompt_voice_api_key(secret_input_func=ask_secret)
-    return VoiceInitSelection(voice_api_key=voice_api_key)
+    return voice_init_selection_from_mapping({"voice_api_key": voice_api_key}, config=config)
 
 
 def _print_voice_post_setup(

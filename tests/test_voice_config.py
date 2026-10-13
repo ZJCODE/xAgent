@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import yaml
 
 from xagent.interfaces.cli.config_editor import prepare_voice_preset_update
-from xagent.interfaces.cli.setup import VoiceInitSelection, _voice_channel_config
+from xagent.interfaces.cli.setup import _voice_channel_config, voice_init_selection_from_mapping
 from xagent.interfaces.voice.config import (
     VoiceChannelConfig,
     VoiceRuntimeProfile,
@@ -98,13 +98,17 @@ class VoiceConfigSurfaceTests(unittest.TestCase):
     def test_voice_setup_preserves_tier1_when_rotating_key(self):
         existing = {
             "api_key": "old",
-            "interruptions": False,
+            "voice": "Maya",
+            "interruptions": True,
             "audio": {"input": "Mic", "output": "Speaker"},
         }
-        selection = VoiceInitSelection(voice_api_key="new-key")
+        selection = voice_init_selection_from_mapping(
+            {"voice_api_key": "new-key"}, config={"channels": {"voice": existing}},
+        )
         merged = _voice_channel_config(selection, existing=existing)
         self.assertEqual(merged["api_key"], "new-key")
-        self.assertIs(merged["interruptions"], False)
+        self.assertEqual(merged["voice"], "Maya")
+        self.assertIs(merged["interruptions"], True)
         self.assertEqual(merged["audio"]["input"], "Mic")
 
     def test_prepare_voice_preset_update_preserves_block(self):

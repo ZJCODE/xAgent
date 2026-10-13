@@ -32,8 +32,8 @@ function defaultVoiceSelection(schema: VoiceSetupSchema): VoiceSelectionInput {
     voice_api_key: defaults.voice_api_key,
     voice: defaults.voice,
     interruptions: defaults.interruptions,
-    audio_input: defaults.audio_input,
-    audio_output: defaults.audio_output,
+    audio_input: String(defaults.audio_input ?? "auto"),
+    audio_output: String(defaults.audio_output ?? "auto"),
   };
 }
 
@@ -164,6 +164,7 @@ export function ChannelSetupWizard({ channel, open, onClose, onComplete }: Chann
   }, [stepIndex, steps.length]);
 
   const validateStep = (): string => {
+    if (!schema || loadingSchema) return "Load the setup options before saving.";
     if (channel === "voice" && voiceSelection) {
       if (
         !voiceSelection.voice_api_key.trim() &&
@@ -209,7 +210,7 @@ export function ChannelSetupWizard({ channel, open, onClose, onComplete }: Chann
 
   const buildSelection = (): Record<string, unknown> => {
     if (channel === "voice" && voiceSelection) {
-      return { ...voiceSelection };
+      return { ...voiceSelection, voice_api_key: voiceSelection.voice_api_key.trim() };
     }
     if (channel === "feishu") {
       const defaults = (schema as FeishuSetupSchema | null)?.defaults;
@@ -286,7 +287,7 @@ export function ChannelSetupWizard({ channel, open, onClose, onComplete }: Chann
   return (
     <SetupWizardShell
       open={open}
-      title={CHANNEL_TITLES[channel]}
+      title={channel === "voice" && schema?.configured ? "Voice settings" : CHANNEL_TITLES[channel]}
       subtitle=""
       steps={steps}
       stepIndex={stepIndex}
@@ -294,7 +295,7 @@ export function ChannelSetupWizard({ channel, open, onClose, onComplete }: Chann
       submitting={submitting}
       isDirty={isDirty}
       error={error}
-      submitLabel="Save setup"
+      submitLabel={channel === "voice" && schema?.configured ? "Save changes" : "Save setup"}
       onClose={onClose}
       onBack={goBack}
       onNext={goNext}

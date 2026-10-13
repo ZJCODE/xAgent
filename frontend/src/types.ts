@@ -406,7 +406,7 @@ export interface CreateAgentInput {
   selection: InitSelectionInput;
 }
 
-export type AgentEditSetupFeatureId = "model" | "search" | "image_generation" | "observability" | "voice";
+export type AgentEditSetupFeatureId = "model" | "search" | "image_generation" | "observability";
 
 export interface AgentEditSetupFeature {
   id: AgentEditSetupFeatureId;
@@ -460,23 +460,6 @@ export interface AgentEditSetupSchema {
       base_url: string;
     };
     placeholders: Record<string, string>;
-  };
-  voice: {
-    configured: boolean;
-    defaults: {
-      voice_api_key: string;
-      voice: string;
-      interruptions: boolean;
-      audio_input: string | number | null;
-      audio_output: string | number | null;
-    };
-    voice_options: SetupOption[];
-    audio_devices: {
-      input: SetupOption[];
-      output: SetupOption[];
-      error?: string;
-    };
-    placeholders: { soniox_api_key: string };
   };
 }
 

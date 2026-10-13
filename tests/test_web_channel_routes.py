@@ -332,6 +332,39 @@ class WebChannelRouteTests(unittest.IsolatedAsyncioTestCase):
         saved = yaml.safe_load(config_path.read_text(encoding="utf-8"))
         self.assertEqual(saved["channels"]["voice"]["api_key"], "new-key")
 
+    async def test_voice_settings_round_trip_and_reset_defaults(self):
+        self.server.session.select("agent_b")
+        config_path = self.agent_b_path / "config.yaml"
+        original = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        async with await self._client() as client:
+            for selection in (
+                {"voice": "Maya", "interruptions": True, "audio_input": "Test microphone", "audio_output": "Test speaker"},
+                {"voice": "Daniel", "interruptions": False, "audio_input": "auto", "audio_output": "auto"},
+            ):
+                with self.subTest(selection=selection):
+                    response = await client.post(
+                        "/api/channels/voice/setup",
+                        json={"force": True, "selection": {"voice_api_key": "", **selection}},
+                    )
+                    self.assertEqual(response.status_code, 200)
+                    self.assertTrue(response.json()["channel"]["ready"])
+                    schema_response = await client.get("/api/channels/voice/setup-schema")
+                    self.assertEqual(schema_response.status_code, 200)
+                    schema = schema_response.json()
+                    self.assertTrue(schema["configured"])
+                    self.assertEqual(schema["defaults"], {"voice_api_key": "", **selection})
+                    self.assertEqual(
+                        [option["id"] for option in schema["voice_options"]],
+                        ["Maya", "Daniel", "Adrian", "Claire", "Oliver", "Isla"],
+                    )
+                    saved = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+                    self.assertEqual(saved["channels"]["voice"]["api_key"], "soniox-key")
+                    for channel in ("api", "feishu", "weixin"):
+                        self.assertEqual(saved["channels"][channel], original["channels"][channel])
+                    self.assertEqual(saved["provider"], original["provider"])
+                    other_agent = yaml.safe_load((self.agent_a_path / "config.yaml").read_text(encoding="utf-8"))
+                    self.assertNotIn("voice", other_agent["channels"])
+
     async def test_feishu_manual_setup_writes_credentials(self):
         async with await self._client() as client:
             response = await client.post(
