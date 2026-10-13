@@ -126,6 +126,7 @@ class BaseAgentRunner:
         self.skills_storage = self._initialize_skills_storage()
         self.device_service = DeviceService(
             DeviceConfig.model_validate(self.config.get("devices", {})), self.config_dir / ".devices.json",
+            workspace=self.workspace_dir,
         )
         self.agent = self._initialize_agent()
         

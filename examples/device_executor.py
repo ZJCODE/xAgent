@@ -12,11 +12,15 @@ import inspect
 import hashlib
 import json
 import os
+import mimetypes
 import tempfile
+import time
+import uuid
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 
 import websockets
+import httpx
 from websockets.exceptions import ConnectionClosed, InvalidStatus
 
 
@@ -36,6 +40,56 @@ def save_credential(path: Path, api_url: str, device_id: str, credential: str):
         os.fsync(directory)
     finally:
         os.close(directory)
+
+
+async def upload_file(api_url: str, device_id: str, credential: str, path: Path) -> dict:
+    """Upload an existing capture; retries reuse its ID and never recapture."""
+    path = path.expanduser().resolve()
+    def describe():
+        digest = hashlib.sha256()
+        with path.open("rb") as file:
+            while block := file.read(64 * 1024):
+                digest.update(block)
+        return path.stat().st_size, digest.hexdigest()
+    try:
+        size, digest = await asyncio.to_thread(describe)
+    except OSError as exc:
+        raise ValueError("Configured media file cannot be read") from exc
+    attachment_id = str(uuid.uuid4())
+    base = api_url.replace("wss://", "https://", 1).replace("ws://", "http://", 1).rstrip("/")
+    url = base + "/api/device-media/" + quote(device_id, safe="") + "/" + attachment_id
+    mime_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    deadline = time.monotonic() + 60
+
+    async def body():
+        with path.open("rb") as file:
+            while block := await asyncio.to_thread(file.read, 64 * 1024):
+                yield block
+
+    async with httpx.AsyncClient(trust_env=False) as client:
+        for attempt in range(3):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            try:
+                response = await asyncio.wait_for(client.put(
+                    url, params={"filename": path.name}, content=body(),
+                    headers={"Authorization": "Bearer " + credential, "Content-Type": mime_type,
+                             "Content-Length": str(size), "X-Content-SHA256": digest},
+                    timeout=remaining,
+                ), timeout=remaining)
+            except (httpx.TransportError, asyncio.TimeoutError):
+                response = None
+            if response is not None and response.status_code in {200, 201}:
+                metadata = response.json()
+                if metadata.get("attachment_id") != attachment_id or metadata.get("sha256") != digest:
+                    raise ValueError("Upload response failed identity/checksum validation")
+                return {"attachment_id": attachment_id}
+            if response is not None and response.status_code not in {408, 429, 500, 502, 503, 504}:
+                raise ValueError(f"Media upload rejected (HTTP {response.status_code})")
+            if attempt < 2:
+                await asyncio.sleep(min(2 ** attempt, max(0, deadline - time.monotonic())))
+    raise ValueError("Media upload was not confirmed; do not retry the capture command")
 
 
 async def run(args):
@@ -72,6 +126,16 @@ async def run(args):
             }},
         ],
     }
+    if args.capture_file:
+        registration["capabilities"].append({
+            "name": "camera.capture", "description": "Demo capture: upload a configured existing photo. Replace the handler with real camera capture on hardware.",
+            "parameters": {"type": "object", "additionalProperties": False},
+        })
+    if args.media_file:
+        registration["capabilities"].append({
+            "name": "media.read", "description": "Upload a configured local recording or file to the Agent workspace.",
+            "parameters": {"type": "object", "additionalProperties": False},
+        })
     while True:
         try:
             async with websockets.connect(
@@ -100,6 +164,14 @@ async def run(args):
                             if set(params) != {"value"} or type(params["value"]) is not int:
                                 raise ValueError("counter.set requires exactly one integer value")
                             state["value"] = params["value"]
+                        elif command["capability"] in {"camera.capture", "media.read"}:
+                            if params:
+                                raise ValueError("Media capabilities take no parameters")
+                            source = args.capture_file if command["capability"] == "camera.capture" else args.media_file
+                            if not source or not token:
+                                raise ValueError("A configured file and saved device credential are required")
+                            reference = await upload_file(args.api_url, args.device_id, token, Path(source))
+                            result["attachments"] = [reference]
                         else:
                             raise ValueError("Unsupported capability")
                         result.update(ok=True, data=dict(state))
@@ -127,6 +199,8 @@ if __name__ == "__main__":
     parser.add_argument("--location", default="office")
     parser.add_argument("--pairing-code", default=os.environ.get("XAGENT_PAIRING_CODE"), help="One-time code for initial pairing")
     parser.add_argument("--credentials-file", help="Local credential file; defaults to a file per Agent address and device ID")
+    parser.add_argument("--capture-file", help="Existing PNG/JPEG/WebP photo to simulate camera.capture; replace with real capture on hardware")
+    parser.add_argument("--media-file", help="Existing recording or file for the media.read capability")
     arguments = parser.parse_args()
     try:
         asyncio.run(run(arguments))

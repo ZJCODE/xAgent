@@ -41,6 +41,8 @@ class WorkspaceAttachment(BaseModel):
     source_message_id: Optional[str] = None
     source_resource_id: Optional[str] = None
     source_resource_type: Optional[str] = None
+    source_device_id: Optional[str] = None
+    sha256: Optional[str] = None
 
 
 def safe_attachment_filename(file_name: str, *, fallback: str = "attachment.bin", max_length: int = 180) -> str:
@@ -105,6 +107,8 @@ def normalize_attachment(value: Any) -> Optional[dict[str, Any]]:
         "source_message_id": _optional_str(raw.get("source_message_id")),
         "source_resource_id": _optional_str(raw.get("source_resource_id")),
         "source_resource_type": _optional_str(raw.get("source_resource_type")),
+        "source_device_id": _optional_str(raw.get("source_device_id")),
+        "sha256": _optional_str(raw.get("sha256")),
     }
     return {key: item for key, item in normalized.items() if item not in (None, "")}
 

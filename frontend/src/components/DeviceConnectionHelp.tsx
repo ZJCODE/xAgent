@@ -24,6 +24,7 @@ function websocketBase(value: string): string {
 }
 
 function connectionGuide(agent: string, base: string): string {
+  const httpBase = base.replace(/^wss:/, "https:").replace(/^ws:/, "http:");
   const registration = JSON.stringify({
     type: "register", device_id: "my-device", name: "My device", location: "office",
     capabilities: [{
@@ -84,7 +85,25 @@ Use a unique nonempty \`event_id\` of at most 128 characters per occurrence (pre
 
 Events are stored once per device and event ID as observations in this Agent's shared context. They do not start a chat turn or notify users; no chat client or subscription is needed. Future context assembly can use them, while a model request already in progress is unchanged. There is no event acknowledgement or automatic reply. Events can be interleaved with command results; events reported while the API is draining are ignored.
 
-### 5. Transport and reconnect
+### 5. Upload photos, recordings, or files (optional)
+
+After pairing, upload the raw file bytes directly to:
+\`PUT ${httpBase}/api/device-media/{device_id}/{attachment_id}?filename=photo.jpg\`
+
+Generate a UUID \`attachment_id\` per file. Use \`Authorization: Bearer <DEVICE_CREDENTIAL>\`, the matching \`Content-Type\`, and the exact \`Content-Length\`; optionally send the SHA-256 hex digest in \`X-Content-SHA256\`. Pairing codes cannot upload files. Do not put file bytes or Base64 into WebSocket JSON. Public uploads use HTTPS with certificate verification.
+
+Wait for HTTP 201 (created) or 200 (identical retry). The response contains \`attachment_id\`, \`file_name\`, \`mime_type\`, \`size_bytes\`, and \`sha256\`. A lost response may be retried using the same UUID, content, and metadata; changed content or metadata returns 409. Retrying an upload must never repeat the physical capture. Use a bounded retry budget for transport errors, 408, 429, or transient server failures.
+
+Then include the completed reference in a result or event:
+\`\`\`json
+{"type":"result","command_id":"cmd_123","ok":true,"data":{"captured":true},"attachments":[{"attachment_id":"550e8400-e29b-41d4-a716-446655440000"}]}
+\`\`\`
+
+Defaults: PNG/JPEG/WebP images up to 10 MiB, other files up to 50 MiB; at most 8 attachments and 200 MiB per result/event; one upload per device, four per Agent. Uploads have a 60-second total deadline and 15-second idle deadline. Limits can be configured in \`devices.media\`. References must belong to this device's current pairing. Devices cannot choose a workspace path or arbitrary attachment URL.
+
+The Agent receives stored attachment metadata and can choose to inspect images with \`see_image\` or deliver files with \`attach_artifact\`. Uploading and reporting an environmental event do not start a chat turn or automatically send anything to users. Ask the Agent to use \`timeout_seconds=90\` when calling a capture capability so its deadline covers capture, upload, and the final result.
+
+### 6. Transport and reconnect
 
 Validate parameters on the device; serialize its command handlers and preserve the exact \`command_id\`. Use UTF-8 JSON text messages of at most 64 KiB and WebSocket ping/pong. Reconnect with backoff after disconnection (including normal closure or temporary-unavailability code 1013), then register again. An authentication rejection needs a fresh valid credential/pairing code.
 

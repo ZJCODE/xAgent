@@ -446,8 +446,10 @@ class DeviceToolTests(unittest.IsolatedAsyncioTestCase):
 
 
 class DeviceConfigurationTests(unittest.TestCase):
-    def test_configuration_is_optional_and_only_controls_command_timeout(self):
-        self.assertEqual(DeviceConfig().model_dump(), {"timeout_seconds": 10})
+    def test_configuration_is_optional_with_default_media_limits(self):
+        self.assertEqual(DeviceConfig().timeout_seconds, 10)
+        self.assertEqual(DeviceConfig().media.max_image_bytes, 10 * 1024 * 1024)
+        self.assertEqual(DeviceConfig().media.max_file_bytes, 50 * 1024 * 1024)
         for overrides in (
             {"timeout_seconds": float("inf")},
             {"timeout_seconds": True}, {"unexpected": True},

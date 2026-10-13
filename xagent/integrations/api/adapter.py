@@ -14,6 +14,7 @@ from ...core.runtime import AsyncTaskScheduler, SubconsciousDelivery
 from ...interfaces.server.runtime_routes import register_runtime_routes
 from ...interfaces.server.device_routes import register_device_routes
 from ...integrations.devices.service import DeviceEvent, DeviceService
+from ...schemas.attachment import attachment_manifest_markdown
 from .chat_service import ChatService
 from .config import ChatLimits
 from .constants import CHANNEL_API
@@ -67,13 +68,20 @@ class ApiChannelAdapter:
     async def deliver_subconscious_message(self, delivery: SubconsciousDelivery) -> None:
         await self.delivery.deliver_subconscious(delivery, agent=self.agent)
 
-    async def observe_device_event(self, device_id: str, event: DeviceEvent) -> None:
+    async def observe_device_event(self, device_id: str, event: DeviceEvent, *, attachments: list[dict] | None = None) -> None:
         """Record device perception in the shared context without a user turn."""
         metadata: dict[str, Any] = {"device_id": device_id, "device_event_id": event.event_id}
         if event.data is not None:
             metadata["data"] = event.data
+        if attachments:
+            metadata["attachments"] = attachments
+        context = event.context
+        if attachments:
+            # Observation context is text-only. Expose the trusted stored paths
+            # so a later turn can choose see_image without injecting vision now.
+            context += "\n\n" + attachment_manifest_markdown(attachments, title="Device attachments")
         await self.agent.observe(
-            context=event.context,
+            context=context,
             source="device",
             event_type=event.event_type,
             metadata=metadata,

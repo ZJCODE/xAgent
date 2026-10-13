@@ -2,18 +2,27 @@
 
 import asyncio
 import inspect
+import ipaddress
 import json
 import os
 import socket
+import ssl
 import sys
 import tempfile
 import time
 import unittest
+import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import websockets
 import yaml
 import httpx
+import uvicorn
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.x509.oid import NameOID
 
 from xagent.core.config import AgentConfig, ReplyType
 from xagent.core.runtime.client import RuntimeClient
@@ -23,6 +32,7 @@ from xagent.schemas import MessageType, RoleType
 import tests.test_agent_chat_flow as chat_test
 import tests.test_runtime_host as runtime_test
 import tests.test_device_execution as device_test
+import tests.test_device_media as media_test
 
 
 class DeviceRuntimeTests(unittest.IsolatedAsyncioTestCase):
@@ -94,6 +104,79 @@ class DeviceRuntimeTests(unittest.IsolatedAsyncioTestCase):
             events = await self.chat_events(chat)
             self.assertTrue(any(event.get("content") == "Device set to 41" for event in events))
             self.assertFalse(host.device_service.pending)
+
+    async def test_media_capture_view_and_delivery_over_verified_tls(self):
+        identifier = str(uuid.uuid4())
+        path = f"assets/inbound/devices/{identifier}/content.png"
+        responses = [
+            (ReplyType.TOOL_CALL, [chat_test.FakeToolCall(name="device", call_id="capture", arguments=json.dumps({
+                "action": "call", "device_id": "desk", "capability": "camera.capture", "params": {}, "timeout_seconds": 90,
+            }))]),
+            (ReplyType.TOOL_CALL, [chat_test.FakeToolCall(name="see_image", call_id="view", arguments=json.dumps({"path": path}))]),
+            (ReplyType.TOOL_CALL, [chat_test.FakeToolCall(name="attach_artifact", call_id="deliver", arguments=json.dumps({"path": path, "caption": "Device photo"}))]),
+            (ReplyType.SIMPLE_REPLY, "The photo is ready."),
+        ]
+        host, _, root, _ = await self.start_host([])
+        model = chat_test.SnapshotModelClient(responses)
+        host.agent.model_client = model
+        # A temporary TLS listener models termination on the same Runtime app.
+        # The test explicitly trusts its CA and still verifies the hostname.
+        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "localhost")])
+        now = datetime.now(timezone.utc)
+        cert = (x509.CertificateBuilder().subject_name(name).issuer_name(name)
+            .public_key(key.public_key()).serial_number(x509.random_serial_number())
+            .not_valid_before(now - timedelta(minutes=1)).not_valid_after(now + timedelta(days=1))
+            .add_extension(x509.SubjectAlternativeName([x509.DNSName("localhost"), x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]), critical=False)
+            .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+            .sign(key, hashes.SHA256()))
+        certificate, private_key = root / "test-cert.pem", root / "test-key.pem"
+        certificate.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+        private_key.write_bytes(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
+        context = ssl.create_default_context(cafile=str(certificate))
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        port = listener.getsockname()[1]
+        server = uvicorn.Server(uvicorn.Config(host._servers["api"].config.app,
+            ssl_certfile=str(certificate), ssl_keyfile=str(private_key), log_level="error", lifespan="off"))
+        serving = asyncio.create_task(server.serve(sockets=[listener]))
+        try:
+            await self.wait_for(lambda: server.started)
+            base = f"wss://127.0.0.1:{port}"
+            async with websockets.connect(base + "/ws/devices/desk", ssl=context,
+                additional_headers={"Authorization": "Bearer desk-secret"}, **self.connection_options) as device:
+                await device.send(json.dumps(device_test.manifest(capability="camera.capture").model_dump()))
+                await self.wait_for(lambda: "desk" in host.device_service.devices)
+                async with websockets.connect(base + "/ws/chat", ssl=context, **self.connection_options) as chat:
+                    await chat.send(json.dumps({"user_id": "alice", "user_message": "Take a photo, inspect it and send it to me", "stream": False}))
+                    command = json.loads(await asyncio.wait_for(device.recv(), 5))
+                    self.assertEqual(command["capability"], "camera.capture")
+                    data = media_test.picture()
+                    async with httpx.AsyncClient(verify=context, trust_env=False) as client:
+                        response = await client.put(f"https://127.0.0.1:{port}/api/device-media/desk/{identifier}?filename=photo.png",
+                            content=data, headers={"Authorization": "Bearer desk-secret", "Content-Type": "image/png"})
+                    self.assertEqual(response.status_code, 201)
+                    await device.send(json.dumps({"type": "event", "event_id": "photo-event", "event_type": "camera", "context": "The camera saved a photo.",
+                        "attachments": [{"attachment_id": identifier}]}))
+                    await device.send(json.dumps({"type": "result", "command_id": command["command_id"], "ok": True,
+                        "data": {"captured": True}, "attachments": [{"attachment_id": identifier}]}))
+                    events = await self.chat_events(chat)
+                    displayed = [attachment for event in events for attachment in event.get("attachments", [])]
+                    self.assertTrue(any(item["path"] == path for item in displayed))
+                    self.assertEqual((root / "workspace" / path).read_bytes(), data)
+                    self.assertNotIn("data:image/", json.dumps(model.calls[0]))
+                    self.assertNotIn("data:image/", json.dumps(model.calls[1]))
+                    self.assertIn("data:image/", json.dumps(model.calls[2]))
+                    observation = await host.agent.message_storage.get_message_by_metadata("device_event_id", "photo-event")
+                    self.assertEqual(observation.metadata["attachments"][0]["path"], path)
+                    self.assertIn(path, observation.content)
+                    self.assertIsNone(observation.sender_id)
+                    self.assertFalse(host.device_service.uploads)
+        finally:
+            server.should_exit = True
+            await asyncio.wait_for(serving, 10)
+            listener.close()
 
     async def test_environment_event_survives_runtime_restart_and_remains_shared(self):
         async def recorded(host, event_id):
@@ -290,6 +373,30 @@ class DeviceRuntimeTests(unittest.IsolatedAsyncioTestCase):
             if process.returncode is None:
                 process.terminate()
             await asyncio.wait_for(process.communicate(), timeout=3)
+
+    async def test_example_executor_streams_a_configured_photo(self):
+        host, _, root, url = await self.start_host([], seed_credentials=False)
+        code = host.device_service.create_pairing()["pairing_code"]
+        photo = root / "capture.png"
+        photo.write_bytes(media_test.picture())
+        saved = root / "media-executor-credential.json"
+        script = Path(__file__).resolve().parents[1] / "examples" / "device_executor.py"
+        environment = dict(os.environ)
+        environment["XAGENT_PAIRING_CODE"] = code
+        process = await asyncio.create_subprocess_exec(sys.executable, str(script), "--api-url", url,
+            "--device-id", "desk", "--credentials-file", str(saved), "--capture-file", str(photo),
+            env=environment, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
+        try:
+            await self.wait_for(lambda: "desk" in host.device_service.devices)
+            result = await host.agent.tools["device"](action="call", device_id="desk", capability="camera.capture", params={}, timeout_seconds=90)
+            self.assertEqual(result["status"], "success")
+            attachment, = result["attachments"]
+            self.assertEqual((root / "workspace" / attachment["path"]).read_bytes(), photo.read_bytes())
+            self.assertEqual((await host.agent.tools["see_image"](path=attachment["path"]))["status"], "ok")
+        finally:
+            if process.returncode is None:
+                process.terminate()
+            await asyncio.wait_for(process.communicate(), 5)
 
     async def test_pairing_needs_no_config_and_all_callers_can_use_devices(self):
         host, _, root, url = await self.start_host([], seed_credentials=False)

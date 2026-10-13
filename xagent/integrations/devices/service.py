@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import secrets
+import sqlite3
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -15,8 +16,9 @@ from datetime import datetime, timezone
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StringConstraints
 
-from .config import DeviceConfig, DeviceId, Name
+from .config import CommandTimeout, DeviceConfig, DeviceId, Name
 from .credentials import DeviceCredentials
+from .media import DeviceMediaStore, MediaError, attachment_uuid
 
 
 logger = logging.getLogger(__name__)
@@ -47,6 +49,12 @@ class CallRequest(BaseModel):
     device_id: DeviceId
     capability: Name
     params: dict[str, Any] = Field(default_factory=dict)
+    timeout_seconds: CommandTimeout | None = None
+
+
+class AttachmentReference(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    attachment_id: uuid.UUID
 
 
 class DeviceResult(BaseModel):
@@ -56,6 +64,7 @@ class DeviceResult(BaseModel):
     ok: StrictBool
     data: Any = None
     error: str = Field(default="", max_length=4096)
+    attachments: list[AttachmentReference] = Field(default_factory=list, max_length=128)
 
 
 class DeviceEvent(BaseModel):
@@ -65,6 +74,7 @@ class DeviceEvent(BaseModel):
     event_type: Name
     context: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_MESSAGE_BYTES)]
     data: dict[str, Any] | None = None
+    attachments: list[AttachmentReference] = Field(default_factory=list, max_length=128)
 
 
 @dataclass(eq=False)
@@ -97,9 +107,12 @@ def load_message(raw: str | bytes):
 
 
 class DeviceService:
-    def __init__(self, config: DeviceConfig, credentials_path: Path | None = None):
+    def __init__(self, config: DeviceConfig, credentials_path: Path | None = None, *, workspace: Path | None = None):
         self.config = config
         self.credentials = DeviceCredentials(credentials_path)
+        self.media = DeviceMediaStore(workspace, credentials_path.parent, config.media) if workspace is not None and credentials_path is not None else None
+        self.uploads: dict[asyncio.Task, str] = {}
+        self._media_prepare: asyncio.Task | None = None
         self._pairing_code = ""
         self._pairing_deadline = 0.0
         self.devices: dict[str, Connection] = {}
@@ -110,12 +123,25 @@ class DeviceService:
 
     @property
     def resources_closed(self) -> bool:
-        return not self.devices and not self.pending
+        return not self.devices and not self.pending and not self.uploads and (self._media_prepare is None or self._media_prepare.done())
+
+    def _update_idle(self) -> None:
+        if self.pending or self.uploads:
+            self._idle.clear()
+        else:
+            self._idle.set()
 
     def start(self) -> None:
         if not self.resources_closed:
             raise RuntimeError("Previous device sessions have not finished cleanup")
         self.accepting = True
+        if self.media is not None:
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                return  # Synchronous embedding prepares lazily on first use.
+            self._media_prepare = asyncio.create_task(self.media.recover())
+            self._media_prepare.add_done_callback(lambda task: task.exception() if not task.cancelled() else None)
 
     def quiesce(self) -> None:
         self.accepting = False
@@ -159,6 +185,10 @@ class DeviceService:
 
     async def revoke(self, device_id: str) -> None:
         self.credentials.revoke(device_id)
+        uploads = [task for task, owner in self.uploads.items() if owner == device_id]
+        for task in uploads:
+            task.cancel()
+        await asyncio.gather(*uploads, return_exceptions=True)
         connection = self.devices.get(device_id)
         if connection is not None:
             await self.disconnect(connection)
@@ -176,8 +206,76 @@ class DeviceService:
         await self.close_sessions()
 
     async def close_sessions(self) -> None:
+        uploads = list(self.uploads)
+        for task in uploads:
+            task.cancel()
+        await asyncio.gather(*uploads, return_exceptions=True)
+        if self._media_prepare is not None:
+            await asyncio.gather(self._media_prepare, return_exceptions=True)
         await asyncio.gather(*(self.disconnect(conn) for conn in list(self.devices.values())))
         await self._idle.wait()
+
+    def authenticate_media(self, device_id: str, credential: str) -> bool:
+        return credential.startswith("Bearer ") and self.credentials.authenticate(device_id, credential[7:])
+
+    async def upload_media(self, device_id: str, credential: str, **kwargs) -> tuple[dict, bool]:
+        if not self.authenticate_media(device_id, credential):
+            raise MediaError(401, "device_unauthorized", "A paired device credential is required")
+        if not self.accepting or self.media is None:
+            raise MediaError(503, "device_unavailable", "Device media API is unavailable")
+        attachment_uuid(kwargs["attachment_id"])
+        if len(self.uploads) >= self.config.media.max_uploads or sum(owner == device_id for owner in self.uploads.values()) >= self.config.media.max_device_uploads:
+            raise MediaError(429, "upload_busy", "Device upload concurrency limit reached")
+        owner = self.credentials.digests[device_id]
+
+        async def execute():
+            try:
+                if self._media_prepare is not None:
+                    await asyncio.shield(self._media_prepare)
+                return await self.media.upload(
+                    device_id=device_id, owner=owner,
+                    authorized=lambda: self.authenticate_media(device_id, credential), **kwargs,
+                )
+            finally:
+                self.uploads.pop(asyncio.current_task(), None)
+                self._update_idle()
+
+        task = asyncio.create_task(execute())
+        self.uploads[task] = device_id
+        self._update_idle()
+        try:
+            metadata, created = await asyncio.wait_for(task, self.config.media.upload_timeout_seconds)
+            logger.info("Device media id=%s device=%s bytes=%s created=%s", metadata["attachment_id"], device_id, metadata["size_bytes"], created)
+            return metadata, created
+        except asyncio.TimeoutError:
+            raise MediaError(408, "upload_timeout", "Device upload timed out") from None
+        except asyncio.CancelledError:
+            if not self.authenticate_media(device_id, credential):
+                raise MediaError(401, "device_unauthorized", "Device credential was revoked") from None
+            if not self.accepting:
+                raise MediaError(503, "device_unavailable", "Device media API is closing") from None
+            raise
+        finally:
+            # Cancellation before execute's first instruction still releases
+            # admission; running workers finish their disk cleanup first.
+            self.uploads.pop(task, None)
+            self._update_idle()
+
+    async def resolve_attachments(self, connection: Connection, references: list[AttachmentReference]) -> list[dict]:
+        device_id = connection.registration.device_id
+        if self.devices.get(device_id) is not connection:
+            raise MediaError(400, "device_session_changed", "Device session has changed")
+        if not references:
+            return []
+        if self.media is None or device_id not in self.credentials.digests:
+            raise MediaError(400, "invalid_attachment", "Device attachments are unavailable")
+        owner = self.credentials.digests[device_id]
+        if self._media_prepare is not None:
+            await asyncio.shield(self._media_prepare)
+        attachments = await self.media.resolve(device_id, owner, [str(ref.attachment_id) for ref in references])
+        if self.devices.get(device_id) is not connection or self.credentials.digests.get(device_id) != owner:
+            raise MediaError(400, "device_session_changed", "Device session has changed")
+        return attachments
 
     def authenticate(self, device_id: str, credential: str) -> bool:
         if not credential.startswith("Bearer "):
@@ -243,6 +341,20 @@ class DeviceService:
             pass  # The transport may already have disconnected.
 
     def resolve(self, connection: Connection, result: DeviceResult) -> None:
+        self._resolve(connection, result)
+
+    async def resolve_result(self, connection: Connection, result: DeviceResult) -> None:
+        pending = self.pending.get(result.command_id)
+        if pending is None or pending.connection is not connection or not pending.sent or pending.future.done() or self.devices.get(connection.registration.device_id) is not connection:
+            return
+        try:
+            attachments = await self.resolve_attachments(connection, result.attachments)
+        except (MediaError, OSError, sqlite3.Error) as exc:
+            self._resolve(connection, result, attachment_error=str(exc))
+        else:
+            self._resolve(connection, result, attachments=attachments)
+
+    def _resolve(self, connection: Connection, result: DeviceResult, *, attachments=None, attachment_error=None) -> None:
         pending = self.pending.get(result.command_id)
         if (
             pending is None or pending.connection is not connection or not pending.sent
@@ -256,6 +368,12 @@ class DeviceService:
         }
         if not result.ok:
             response.update(code="device_error", message=result.error or "Device execution failed")
+        if attachments:
+            response["attachments"] = attachments
+        if attachment_error:
+            response["attachment_error"] = {"code": "invalid_attachment", "message": attachment_error}
+        elif result.attachments and attachments is None:
+            response["attachment_error"] = {"code": "invalid_attachment", "message": "Attachments require asynchronous resolution"}
         pending.future.set_result(response)
 
     async def call(self, request: CallRequest) -> dict:
@@ -293,7 +411,8 @@ class DeviceService:
 
         execution = asyncio.create_task(execute())
         try:
-            response = await asyncio.wait_for(asyncio.shield(pending.future), timeout=self.config.timeout_seconds)
+            timeout = request.timeout_seconds if request.timeout_seconds is not None else self.config.timeout_seconds
+            response = await asyncio.wait_for(asyncio.shield(pending.future), timeout=timeout)
         except asyncio.TimeoutError:
             response = outcome(
                 "unknown" if pending.sent else "error", "timeout" if pending.sent else "busy",
@@ -307,7 +426,6 @@ class DeviceService:
             finally:
                 pending.future.cancel()
                 self.pending.pop(command_id, None)
-                if not self.pending:
-                    self._idle.set()
+                self._update_idle()
         logger.info("Device command id=%s device=%s status=%s", command_id, request.device_id, response["status"])
         return response

@@ -82,6 +82,12 @@ devices:
   timeout_seconds: 10
 ```
 
+Calls may override this deadline with `timeout_seconds` (0.1–120 seconds),
+without changing the default for other capabilities. For capture followed by
+media upload, use `device(action="call", device_id="camera", capability="camera.capture",
+params={}, timeout_seconds=90)`. This deadline includes waiting for the device,
+capture, upload, and result delivery. A deadline does not cancel a remote action.
+
 Every paired device gets a distinct, generated credential bound to its ID and
 this Agent. The Runtime creates one device service before assembling tools.
 That service and the generic tool remain present for the lifetime of the Agent.
@@ -97,6 +103,7 @@ flow. Pairing authenticates execution devices. The existing chat and management
 access boundaries remain in use; this feature does not add public chat authentication.
 
 For public device access, expose **only** the device WebSocket route over WSS and
+the `/api/device-media/` upload route over HTTPS, and
 verify the server certificate. Keep chat and administration behind their existing
 trusted access boundary. Device management rejects browser requests from other
 hostnames, but this is not a substitute for administration authentication.
@@ -170,6 +177,139 @@ pong handle connection health. Device sockets carry commands, results, and
 environmental events, with no chat messages; a terminal
 that also chats opens a separate `/ws/chat` connection on the same API port.
 
+### Upload a photo, recording, or file
+
+Media travels as raw binary over HTTP(S); the existing device WebSocket carries
+only the completed attachment reference. Both use the existing Agent API port.
+No upload-session request, temporary token, Base64, or separate file server is
+needed. Public devices must use HTTPS/WSS and verify the server certificate.
+Loopback and trusted development environments may use HTTP/WS.
+
+After pairing, generate a UUID for each file and send:
+
+```http
+PUT /api/device-media/desk/550e8400-e29b-41d4-a716-446655440000?filename=photo.jpg
+Authorization: Bearer <saved-device-credential>
+Content-Type: image/jpeg
+Content-Length: <exact file length>
+X-Content-SHA256: <optional SHA-256 hex digest>
+
+<raw file bytes>
+```
+
+`filename` is optional and defaults to `attachment.bin`. The server sanitizes
+the display filename and chooses the workspace path. `Content-Type` and an
+exact, positive `Content-Length` are required; compressed request bodies are
+not supported. The server measures actual received bytes and computes SHA-256,
+checking `X-Content-SHA256` when supplied. Image headers, decodability and image
+resource limits are checked; a filename or MIME declaration alone does not
+make a file a valid image.
+
+Only the durable device credential authenticates uploads, never a pairing
+code. A registered WebSocket is not required for the upload itself. Ownership
+is bound to this Agent, device ID, and the current pairing; removing and pairing
+the same ID again does not grant access to its earlier uploads.
+
+A completed upload returns HTTP 201 and metadata:
+
+```json
+{
+  "attachment_id": "550e8400-e29b-41d4-a716-446655440000",
+  "file_name": "photo.jpg",
+  "mime_type": "image/jpeg",
+  "size_bytes": 245760,
+  "sha256": "<64 hexadecimal characters>"
+}
+```
+
+Retry with the same ID, content, filename, MIME and size if the response was
+lost. Identical retries return HTTP 200 with the original metadata; changes
+return 409 and never overwrite the existing attachment. A concurrent upload
+may return 429 (admission limit) or 409 (ID still uploading). Retransmitting the
+file must not repeat the capture action. Bound retries within the command's
+remaining deadline; retry transport errors, 408, 429 and transient server errors,
+but do not retry authentication or validation errors.
+
+Wait for successful upload confirmation, then include references in a result:
+
+```json
+{"type":"result","command_id":"cmd_123","ok":true,"data":{"captured":true},"attachments":[{"attachment_id":"550e8400-e29b-41d4-a716-446655440000"}]}
+```
+
+An environmental event can use the same optional `attachments` list. Each
+reference contains only `attachment_id`: paths, URLs and source identities are
+not accepted from devices. References must identify completed files from the
+current pairing. Older devices can omit the field. Invalid event references
+are rejected as protocol errors. An invalid command-result reference produces
+`attachment_error` alongside the device's reported execution status and `data`;
+an attachment failure does not turn a known execution into an unknown one.
+Late results and replaced sessions are ignored before looking up attachments.
+
+The `device` tool resolves references into the shared `WorkspaceAttachment`
+format, with `path`, `blob_url`, MIME, filename, size, SHA-256, and device source.
+Files reside in `assets/inbound/devices/` within the Agent workspace. Original
+files are preserved. The Agent can use `see_image(path=...)` to inspect a stored
+photo on its current turn, and `attach_artifact(path=...)` when it chooses to
+deliver a file through Web, Feishu, Weixin, or another supported channel.
+Receiving an attachment does not automatically inject a photo into vision or
+send it to users. Audio/video are stored attachments; transcription and video
+understanding are separate capabilities. Events still only update shared
+environmental context, without starting a conversation or sending a reply.
+
+Default upload limits are configurable without changing the WebSocket frame
+limit:
+
+```yaml
+devices:
+  timeout_seconds: 10
+  media:
+    max_image_bytes: 10485760       # 10 MiB; PNG, JPEG, WebP
+    max_file_bytes: 52428800        # 50 MiB; recordings and other files
+    max_attachments: 8
+    max_message_bytes: 209715200    # 200 MiB per result/event
+    max_device_uploads: 1
+    max_uploads: 4
+    upload_timeout_seconds: 60
+    idle_timeout_seconds: 15
+    device_quota_bytes: 1073741824  # 1 GiB
+    quota_bytes: 5368709120         # 5 GiB across this Agent's device media
+```
+
+Quotas count completed files and declared-size reservations for uploads in
+progress. Uploading an identical existing file does not add a second quota
+charge. Deleted workspace files release their index entries and quota on the
+next reconciliation. API admission closure rejects new uploads; accepted ones
+may finish within the Runtime's existing drain deadline. Revocation or expiry
+of the drain cancels outstanding uploads and removes temporary files.
+
+The private `.device-media/index.sqlite3` beside the Agent configuration stores
+ownership and completion metadata; it is not a workspace attachment and is not
+available through the workspace file API. A file is referenceable only after
+durable storage and index commit. Startup recovery removes incomplete uploads
+and temporary files. Completed files follow the normal workspace retention
+policy, including unreferenced uploads, so a late attachment is never deleted
+merely because no user message referenced it.
+
+The upload route exists only on a Runtime-backed API and deliberately avoids
+the `/api/devices` management forwarding path. Do not expose management or
+general workspace routes to make device upload work. At a reverse proxy,
+disable upload request buffering and set body/deadline limits to match the
+application. The upload endpoint grants no public file-read capability.
+
+| HTTP status | Meaning |
+| --- | --- |
+| 200 / 201 | Identical retry / newly committed attachment |
+| 400 / 411 / 422 | Invalid body or checksum / missing length / invalid identifier or digest |
+| 401 | Missing, invalid, revoked, or pairing-only credential |
+| 408 / 409 | Upload deadline / attachment ID or metadata conflict |
+| 413 / 415 | Size limit / unsupported encoding, MIME, or invalid image |
+| 429 | Upload concurrency or media storage quota exceeded |
+| 500 / 503 | Storage failure / device media API unavailable or closing |
+
+Error responses contain `code` and `detail`; upload responses use
+`Cache-Control: no-store`. Authentication credentials never appear in response
+metadata or upload logs.
+
 ### Report an environmental event
 
 After registering, a device may send an event on its existing connection,
@@ -230,6 +370,20 @@ restarts. Normal connection closure and API drain
 use reconnect backoff rather than being treated as bad credentials. Other
 devices implement the same protocol with their own handlers.
 
+To exercise media upload with an existing photo or recording:
+
+```bash
+XAGENT_PAIRING_CODE=code-from-page python examples/device_executor.py --api-url ws://127.0.0.1:8010 --device-id camera --capture-file /absolute/path/photo.jpg --media-file /absolute/path/recording.wav
+```
+
+The demo declares `camera.capture` for the configured photo (a simulated capture)
+and `media.read` for the configured recording/file. Replace the photo handler
+with the actual camera implementation on hardware. It streams files over
+HTTP(S), checks the response checksum, and retries uploads with the same UUID
+within a bounded budget. It never repeats a capture or command on reconnect.
+Ask the Agent to call the capability with `timeout_seconds=90`, view the photo,
+and send it only when requested.
+
 ## Minimal management API
 
 These routes belong to the trusted management API, not a public pairing server:
@@ -248,7 +402,8 @@ pairing codes, retrieve credentials, or revoke devices.
 
 One DeviceService belongs to each Agent Runtime. Its tools and API routes share
 that exact instance. Online connections and pending commands are held in memory;
-device discovery scans the online sessions. The separate `.devices.json` in the
+device discovery scans the online sessions. Upload work is tracked by the same
+service and its Runtime drain. The separate `.devices.json` in the
 Agent configuration directory contains only device IDs and credential digests.
 Writes are atomic with file mode `0600`, owned by the Runtime; no raw credential,
 manifest, command, or memory is stored there. Offline administration reads only
