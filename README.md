@@ -57,31 +57,15 @@ xagent restart --agent atlas
 xagent stop --agent atlas
 ```
 
-In the terminal launcher, use **Runtime → Start**, then **Channel → API / Feishu /
-Weixin / Voice → Connect / Disconnect**. Each channel shows its actual state;
-**Refresh** updates the available actions, and configuration remains accessible
-when the Agent is stopped. You can also use **Channels → Connect / Disconnect**
-in the Web client or the channel commands above.
-Restart restores channels that were connected, connecting or reconnecting,
-including Voice. Channels disabled in the new configuration are skipped;
-disconnected or failed channels stay offline, including a manually disconnected API.
-Stop then Start uses API-only startup; `channels.api.enabled: false`
-keeps the public API offline too. An explicit `--channels api,feishu` overrides
-the default startup or restored connections for one launch. CLI and local Web chat use the same core, even
-with the public API disconnected.
-Restart drains accepted work without waiting for a new diary-generation model call;
-ordinary Stop still attempts final diary maintenance. Configuration and identity
-edits take effect after restart. Interrupted tasks
-with uncertain execution or delivery wait for review instead of replaying.
-See [runtime operation and recovery](docs/runtime-core.md) for details and validation.
+In the terminal launcher, choose **Runtime → Start**, then open **Channel** to
+connect Feishu, Weixin, or Voice. In the Web client, manage connections from
+**Channels**. Restart the Agent after changing its configuration or identity.
 
-For external devices, pair them in Agent → Devices without editing configuration
-or restarting the Agent. All chat users can discover and use paired devices. Devices
-connect to `/ws/devices/{device_id}` on its existing API port and declare
-their own capabilities; Agent calls use one generic `device` tool. Chat remains
-on `/ws/chat`, with its existing protocol. There is no additional service to start.
-See [device execution and protocol](docs/device-execution.md) for pairing,
-protocol details, and a runnable software device example.
+To add a hardware or software device, open **Agent → Devices** and follow the
+pairing steps. No configuration edits or restart are needed.
+
+Learn more: [Managing channels and restarts](docs/runtime-core.md) ·
+[Connecting devices](docs/device-execution.md).
 
 ## Updating
 
