@@ -43,20 +43,6 @@ xagent
 
 The interactive launcher will guide you through creating and managing your agents.
 
-Each Agent runs one persistent core. The public API starts by default; Feishu,
-Weixin and Voice connect only when requested:
-
-```bash
-xagent run --agent atlas       # foreground
-xagent start --agent atlas     # background
-xagent channel feishu connect --agent atlas
-xagent channel feishu disconnect --agent atlas
-xagent status --agent atlas
-xagent logs --agent atlas --follow
-xagent restart --agent atlas
-xagent stop --agent atlas
-```
-
 In the terminal launcher, choose **Runtime → Start**, then open **Channel** to
 connect Feishu, Weixin, or Voice. In the Web client, manage connections from
 **Channels**. Restart the Agent after changing its configuration or identity.
