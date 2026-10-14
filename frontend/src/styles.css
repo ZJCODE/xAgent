@@ -3382,3 +3382,7 @@ body { -webkit-font-smoothing: antialiased; }
 .device-list-row > div { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .device-list-row p { margin: 4px 0 0; color: var(--text-muted); font-size: 12px; }
 @media (max-width: 600px) { .device-list-row { flex-wrap: wrap; } }
+.device-details-form { display: grid; gap: 12px; margin-top: 12px; padding: 16px; background: var(--bg-surface-subtle); border: 1px solid var(--border); border-radius: 10px; }
+.device-details-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.device-description { white-space: pre-wrap; }
+@media (max-width: 600px) { .device-details-fields { grid-template-columns: 1fr; } }

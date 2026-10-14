@@ -46,10 +46,17 @@ import type {
   WorkspaceUploadResult,
   DeviceStatus,
   DevicePairing,
+  DeviceProfileInput,
 } from "../types";
 
 export function getDevices(): Promise<DeviceStatus> {
   return requestJson("/api/devices");
+}
+
+export function updateDevice(deviceId: string, details: DeviceProfileInput): Promise<{ status: string }> {
+  return requestJson(`/api/devices/${encodeURIComponent(deviceId)}`, {
+    method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(details),
+  });
 }
 
 export function createDevicePairing(): Promise<DevicePairing> {

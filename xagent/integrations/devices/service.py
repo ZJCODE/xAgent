@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, StringConstraints
 
 from .config import CommandTimeout, DeviceConfig, DeviceId, Name
 from .credentials import DeviceCredentials
+from .profiles import DeviceProfiles
 from .media import DeviceMediaStore, MediaError, attachment_uuid
 
 
@@ -110,6 +111,7 @@ class DeviceService:
     def __init__(self, config: DeviceConfig, credentials_path: Path | None = None, *, workspace: Path | None = None):
         self.config = config
         self.credentials = DeviceCredentials(credentials_path)
+        self.profiles = DeviceProfiles(credentials_path.with_name(".device_profiles.json") if credentials_path else None)
         self.media = DeviceMediaStore(workspace, credentials_path.parent, config.media) if workspace is not None and credentials_path is not None else None
         self.uploads: dict[asyncio.Task, str] = {}
         self._media_prepare: asyncio.Task | None = None
@@ -291,12 +293,17 @@ class DeviceService:
             registration = connection.registration
             if device_id and key != device_id:
                 continue
-            if location and registration.location != location:
+            row = {**registration.model_dump(exclude={"type"}), **self.profile_fields(key)}
+            if location and row["location"] != location:
                 continue
             if capability and capability not in {cap.name for cap in registration.capabilities}:
                 continue
-            rows.append(registration.model_dump(exclude={"type"}))
+            rows.append(row)
         return {"status": "success", "devices": rows}
+
+    def profile_fields(self, device_id: str) -> dict:
+        owner = self.credentials.digests.get(device_id)
+        return self.profiles.fields(device_id, owner) if owner else {}
 
     async def register(self, websocket, registration: Registration) -> Connection:
         if not self.accepting:
@@ -304,6 +311,8 @@ class DeviceService:
         if registration.device_id not in self.credentials.digests:
             raise ValueError("Device is not paired with this Agent")
         self._validate_registration(registration)
+        self.profiles.reported(registration.device_id, self.credentials.digests[registration.device_id],
+                               name=registration.name, location=registration.location)
         connection = Connection(websocket, registration)
         previous = self.devices.get(registration.device_id)
         self.devices[registration.device_id] = connection

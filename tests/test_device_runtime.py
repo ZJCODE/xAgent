@@ -448,6 +448,10 @@ class DeviceRuntimeTests(unittest.IsolatedAsyncioTestCase):
             state = (await client.get("/api/devices")).json()
             self.assertTrue(state["runtime_available"])
             self.assertTrue(state["api_available"])
+            host.device_service.credentials.add("desk", "desk-secret")
+            edited = await client.patch("/api/devices/desk", json={"name": "Desk camera", "description": "Faces paper"})
+            self.assertEqual(edited.status_code, 200, edited.text)
+            self.assertEqual(host.device_service.profile_fields("desk")["description"], "Faces paper")
             created = await client.post("/api/devices/pairing")
             self.assertEqual(created.status_code, 200)
             self.assertEqual(created.headers["cache-control"], "no-store")
@@ -455,6 +459,10 @@ class DeviceRuntimeTests(unittest.IsolatedAsyncioTestCase):
             state = (await client.get("/api/devices")).json()
             self.assertFalse(state["api_available"])
             self.assertTrue(state["runtime_available"])
+            self.assertEqual(state["devices"][0]["name"], "Desk camera")
+            edited = await client.patch("/api/devices/desk", json={"location": "Study"})
+            self.assertEqual(edited.status_code, 200, edited.text)
+            self.assertEqual(host.device_service.profile_fields("desk")["location"], "Study")
             self.assertEqual((await client.post("/api/devices/pairing")).status_code, 409)
 
     async def test_quiescing_api_closes_new_device_handshake_as_temporarily_unavailable(self):

@@ -1,10 +1,21 @@
 export type RoutePath = "/" | "/memory" | "/message" | "/workspace" | "/skills" | "/tasks" | "/channels" | "/agent";
 
+export interface DeviceProfileInput { name: string; location: string; description?: string }
+export interface DeviceInfo {
+  device_id: string;
+  online: boolean;
+  name?: string;
+  location?: string;
+  description?: string;
+  reported_name?: string;
+  reported_location?: string;
+  capabilities?: { name: string }[];
+}
 export interface DeviceStatus {
   runtime_available: boolean;
   api_available: boolean;
   api_url: string;
-  devices: { device_id: string; online: boolean; name?: string; location?: string; capabilities?: { name: string }[] }[];
+  devices: DeviceInfo[];
 }
 export interface DevicePairing { pairing_code: string; expires_in: number; expires_at: string }
 

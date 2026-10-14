@@ -10,6 +10,8 @@ from starlette.responses import JSONResponse
 from ...core.runtime.client import RuntimeClient, RuntimeUnavailable
 from ...core.runtime.ownership import runtime_is_active
 from ...integrations.devices.credentials import DeviceCredentials
+from ...integrations.devices.config import DeviceId
+from ...integrations.devices.profiles import DeviceProfiles, ProfilePatch
 
 
 def register_device_admin_routes(app: FastAPI, resolve_admin) -> None:
@@ -34,6 +36,7 @@ def register_device_admin_routes(app: FastAPI, resolve_admin) -> None:
         service = server.device_service
         paired = service.credentials if service is not None else DeviceCredentials(server.config_dir / ".devices.json")
         online = service.devices if service is not None else {}
+        profiles = service.profiles if service is not None else DeviceProfiles(server.config_dir / ".device_profiles.json")
         api = (server.config.get("channels") or {}).get("api") or {}
         host = api.get("host", "127.0.0.1")
         if host in {"0.0.0.0", "::"}:
@@ -47,6 +50,7 @@ def register_device_admin_routes(app: FastAPI, resolve_admin) -> None:
             "devices": [{
                 "device_id": device_id, "online": device_id in online,
                 **(online[device_id].registration.model_dump(exclude={"type", "device_id"}) if device_id in online else {}),
+                **profiles.fields(device_id, paired.digests[device_id]),
             } for device_id in sorted(paired.digests)],
         }
 
@@ -66,6 +70,20 @@ def register_device_admin_routes(app: FastAPI, resolve_admin) -> None:
             except (RuntimeUnavailable, httpx.HTTPError) as exc:
                 raise HTTPException(503, "Agent runtime is temporarily unavailable") from exc
         return status(server)
+
+    @app.patch("/api/devices/{device_id}", tags=["Devices"])
+    async def update_device(device_id: DeviceId, patch: ProfilePatch):
+        server = resolve_admin()
+        service = server.device_service
+        paired = service.credentials if service is not None else DeviceCredentials(server.config_dir / ".devices.json")
+        if device_id not in paired.digests:
+            raise HTTPException(404, "Device is not paired with this Agent")
+        profiles = service.profiles if service is not None else DeviceProfiles(server.config_dir / ".device_profiles.json")
+        try:
+            profiles.update(device_id, paired.digests[device_id], patch)
+        except OSError as exc:
+            raise HTTPException(500, "Device details could not be saved. Please retry.") from exc
+        return {"status": "ok", "device_id": device_id, **profiles.fields(device_id, paired.digests[device_id])}
 
     @app.post("/api/devices/pairing", tags=["Devices"])
     async def devices_pairing(response: Response):

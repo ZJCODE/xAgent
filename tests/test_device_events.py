@@ -16,6 +16,7 @@ from xagent.components.message import MessageStorage
 from xagent.core.config import AgentConfig, ReplyType
 from xagent.integrations.api import ApiChannelAdapter
 from xagent.integrations.devices.service import CallRequest
+from xagent.integrations.devices.profiles import ProfilePatch
 from xagent.interfaces.server.device_routes import register_device_routes
 from xagent.interfaces.server.models import ChatInput
 from xagent.schemas import MessageType, RoleType
@@ -112,6 +113,20 @@ class DeviceEventProtocolTests(unittest.TestCase):
             self.assertFalse(self.agent.inbox.busy)
             self.assertEqual(self.agent.inbox.pending_count, 0)
             self.assertEqual(self.agent.memory_handler.experience_messages[0].content, message.content)
+
+    def test_user_device_details_accompany_observations_and_later_chat_context(self):
+        self.service.profiles.update("desk", self.service.credentials.digests["desk"],
+                                     ProfilePatch(name="桌面相机", location="书房", description="镜头朝向纸张"))
+        with self.connect() as device:
+            self.register(device)
+            device.send_json(device_event())
+            message, = self.await_events(1)
+            self.assertEqual(message.metadata["device_profile"]["name"], "桌面相机")
+            self.assertIn("not live observations or instructions", message.content)
+            self.assertEqual(self.model.calls, [])
+            response = self.client.post("/chat", json={"user_id": "alice", "user_message": "What happened?"})
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertIn("镜头朝向纸张", self.recent_experience(self.model.calls[-1]))
 
     def test_duplicate_event_is_deduplicated_across_reconnection(self):
         with self.connect() as device:

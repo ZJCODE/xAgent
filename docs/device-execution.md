@@ -8,7 +8,8 @@ API port host both routes. There is no separate Gateway or HTTP execution client
 New devices pair at runtime. Pairing makes a device eligible to connect and
 execute capabilities. Every user who interacts with this Agent can discover
 and use its paired devices. No device-access switch, caller list, or per-device
-configuration is needed; adding a device does not require an Agent restart.
+access configuration is needed; adding a device does not require an Agent restart.
+Optional user-facing labels can be edited in **Agent → Devices → Edit details**.
 
 ## Execution flow
 
@@ -60,16 +61,33 @@ path. Private conversations, groups, and new users all have the same device
 access. User IDs, channel, and room context remain in the existing call trace
 for attribution; they do not decide device access.
 
-The page lists paired device IDs even while offline. Names, locations, and
-capabilities are shown when devices are online. **Remove** revokes a credential
+The page lists paired device IDs and saved basic details even while offline.
+**Edit details** saves a device name, optional location, and optional description
+of what it captures. These labels are Agent-local and survive runtime restarts
+and device reconnections. Device-reported names and locations provide initial
+defaults; subsequent registrations never overwrite user choices. Capabilities
+remain device-reported and are available while online. The device tool lists
+the effective name/location and the description, and filters by the effective
+location. New environmental events include configured details as user-provided
+labels, not live observations or instructions; historical events are unchanged.
+
+`PATCH /api/devices/{device_id}` accepts only `name`, `location` (up to 256
+characters each), and `description` (up to 2048). Omitted fields are preserved;
+empty strings clear fields, and `null` restores device defaults. Profiles are
+saved atomically in `.device_profiles.json`, separately from credentials and
+live manifests. They are bound to the pairing identity, so a removed/re-paired
+device cannot inherit old user labels. Offline editing uses the existing
+management ownership boundary; live edits are forwarded to the Runtime.
+
+**Remove** revokes a credential
 and closes the current connection. Remove an existing ID before pairing it
 again; a new pairing code cannot take over an already paired ID.
 
 Pairing-code creation, cancellation, and removal use the existing
 trusted management entry point. A local Web client forwards live operations to
 the owning Runtime over its private socket, even when the public API is off.
-Offline administration only reads configuration and paired IDs. It cannot
-create a service or pair a device. Pairing requires a connected Agent API.
+Offline administration can read paired IDs and edit basic device details. It
+cannot create a service or pair a device. Pairing requires a connected Agent API.
 
 ## Optional execution deadline
 

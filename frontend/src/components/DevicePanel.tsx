@@ -6,6 +6,7 @@ import type { DevicePairing, DeviceStatus } from "../types";
 import { Button, IconButton, Panel, PanelHeader, StatusBadge } from "./ui";
 import { DeviceConnectionHelp } from "./DeviceConnectionHelp";
 import { copyText } from "../lib/clipboard";
+import { DeviceDetailsForm } from "./DeviceDetailsForm";
 
 export function DevicePanel() {
   const { agents, selectedAgent } = useAgentSession();
@@ -15,6 +16,7 @@ export function DevicePanel() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [editingId, setEditingId] = useState<string | null>(null);
   const previousIds = useRef<string[]>([]);
   const load = async () => {
     const data = await getDevices();
@@ -28,6 +30,7 @@ export function DevicePanel() {
     setError("");
     setNotice("");
     setHelpOpen(false);
+    setEditingId(null);
     void load().catch((err) => setError(String(err.message || err)));
   }, [selectedAgent]);
 
@@ -69,7 +72,7 @@ export function DevicePanel() {
       {error && <div className="error-strip">{error}</div>}
       {notice && <div className="success-strip">{notice}</div>}
       {!status ? <p className="wizard-hint">Loading devices…</p> : <>
-        {!status.runtime_available && <p className="wizard-hint">Start the Agent runtime to manage devices.</p>}
+        {!status.runtime_available && <p className="wizard-hint">Start the Agent runtime to pair or remove devices. You can still edit saved details.</p>}
         {status.runtime_available && !status.api_available && <p className="wizard-hint">Connect the API in Channels before adding a device.</p>}
         <div className="device-add-row">
           <Button variant="primary" disabled={busy || !status.api_available} onClick={() => void act(async () => {
@@ -93,13 +96,19 @@ export function DevicePanel() {
         </div>}
         <div className="device-list">
           {!status.devices.length && <p className="wizard-hint">No paired devices yet.</p>}
-          {status.devices.map((device) => <div className="device-list-row" key={device.device_id}>
+          {status.devices.map((device) => <div className="device-list-item" key={`${selectedAgent}:${device.device_id}`}>
+            <div className="device-list-row">
             <div><strong>{device.name || device.device_id}</strong><p>{device.device_id}{device.location ? ` · ${device.location}` : ""}</p>
+              {device.description && <p className="device-description">{device.description}</p>}
               {device.capabilities?.length ? <p>{device.capabilities.map((cap) => cap.name).join(", ")}</p> : null}</div>
             <StatusBadge tone={device.online ? "good" : "muted"}>{device.online ? "Online" : "Offline"}</StatusBadge>
-            <Button variant="danger" disabled={busy || !status.runtime_available} onClick={() => void act(async () => {
+            <Button disabled={busy || editingId !== null} onClick={() => { setError(""); setNotice(""); setEditingId(device.device_id); }}>Edit details</Button>
+            <Button variant="danger" disabled={busy || editingId !== null || !status.runtime_available} onClick={() => void act(async () => {
               await removeDevice(device.device_id); await load(); setNotice("Device removed. Pair again to reconnect.");
             })}>Remove</Button>
+            </div>
+            {editingId === device.device_id && <DeviceDetailsForm device={device} onCancel={() => setEditingId(null)}
+              onSaved={async () => { await load(); setEditingId(null); setNotice("Device details saved."); }} />}
           </div>)}
         </div>
       </>}
