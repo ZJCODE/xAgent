@@ -213,6 +213,71 @@ class RuntimeTransportTests(unittest.IsolatedAsyncioTestCase):
                     await host.stop()
                     await asyncio.wait_for(task, timeout=5)
 
+    async def test_shared_restart_restores_connections_and_keeps_empty_selection(self):
+        from tests.test_channel_lifecycle import FakeAdapter
+        from xagent.interfaces.cli.agent_runtime import restart_runtime
+        from xagent.integrations.weixin.state import WeixinCredentials, WeixinStateStore
+
+        class FakeVoice(FakeAdapter):
+            run_forever = FakeAdapter.run
+
+        for restore in (True, False):
+            with self.subTest(restore=restore), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                write_config(root)
+                config = yaml.safe_load((root / "config.yaml").read_text())
+                with socket.socket() as available:
+                    available.bind(("127.0.0.1", 0))
+                    port = available.getsockname()[1]
+                config["channels"] = {
+                    "api": {"enabled": True, "host": "127.0.0.1", "port": port},
+                    "feishu": {"app_id": "test", "app_secret": "test"},
+                    "weixin": {"account_id": "test"}, "voice": {"api_key": "test-key"},
+                }
+                (root / "config.yaml").write_text(yaml.safe_dump(config))
+                store = WeixinStateStore(root)
+                store.save_credentials(WeixinCredentials("test", "https://example.test", "test", "owner"))
+                loop = asyncio.get_running_loop()
+                hosts = []
+                selected = ["api", "feishu", "weixin", "voice"] if restore else []
+
+                def launch(root, channels):
+                    self.assertEqual(channels, selected)
+                    future = asyncio.run_coroutine_threadsafe(self._start_host(root, CapturingModelClient([]), channels=channels), loop)
+                    host, task = future.result(timeout=5)
+                    hosts.append((host, task))
+                    return host.status()
+
+                with patch("xagent.integrations.feishu.FeishuAdapter", FakeAdapter), patch(
+                    "xagent.integrations.weixin.WeixinAdapter", FakeAdapter,
+                ), patch("xagent.interfaces.voice.factory.create_local_voice_runtime", side_effect=lambda **kwargs: FakeVoice(**kwargs)), patch(
+                    "xagent.interfaces.cli.agent_runtime.start_runtime", side_effect=launch,
+                ):
+                    first, task = await self._start_host(root, CapturingModelClient([]), channels=selected)
+                    hosts.append((first, task))
+                    try:
+                        for _ in range(100):
+                            if all(first.channel_status[name]["state"] == "connected" for name in selected):
+                                break
+                            await asyncio.sleep(0.01)
+                        result = await restart_runtime(root)
+                        self.assertTrue(task.done())
+                        await task
+                        second = hosts[-1][0]
+                        for _ in range(100):
+                            if all(second.channel_status[name]["state"] == "connected" for name in selected):
+                                break
+                            await asyncio.sleep(0.01)
+                        connected = [name for name, row in second.channel_status.items() if row["state"] == "connected"]
+                        self.assertEqual(connected, selected)
+                        self.assertNotIn("restart_warnings", result)
+                        if not restore:
+                            self.assertNotIn("api", second._servers)
+                    finally:
+                        for host, running in reversed(hosts):
+                            await host.stop()
+                            await asyncio.wait_for(running, timeout=5)
+
     async def test_terminal_channel_controls_can_reconnect_using_live_capabilities(self):
         from tests.test_channel_lifecycle import FakeAdapter
         from xagent.interfaces.cli.launcher import _managed_channel_actions, _run_managed_channel_action

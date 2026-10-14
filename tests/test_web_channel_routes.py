@@ -109,24 +109,18 @@ class WebChannelRouteTests(unittest.IsolatedAsyncioTestCase):
         stop.assert_awaited_once_with(self.agent_b_path.resolve())
         self.assertFalse(response.json()["runtime_running"])
 
-    async def test_restart_stops_then_starts_selected_runtime(self):
+    async def test_restart_uses_shared_flow_for_selected_runtime_and_returns_warnings(self):
         self.server.session.select("agent_b")
-        calls = []
-        async def stop_runtime(root, *, restart=False):
-            self.assertTrue(restart)
-            calls.append(("stop", root))
-            return {"status": "stopped"}
-        def start_runtime(root):
-            calls.append(("start", root))
-            return {"status": "running", "pid": 2222}
         with patch(
-            "xagent.interfaces.cli.agent_runtime.stop_runtime", side_effect=stop_runtime,
-        ), patch("xagent.interfaces.cli.agent_runtime.start_runtime", side_effect=start_runtime):
+            "xagent.interfaces.cli.agent_runtime.restart_runtime", new_callable=AsyncMock,
+            return_value={"status": "running", "pid": 2222, "restart_warnings": ["voice: disabled"]},
+        ) as restart:
             async with await self._client() as client:
                 response = await client.post("/api/runtime/restart")
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(calls, [("stop", self.agent_b_path.resolve()), ("start", self.agent_b_path.resolve())])
+        restart.assert_awaited_once_with(self.agent_b_path.resolve())
+        self.assertEqual(response.json()["restart_warnings"], ["voice: disabled"])
 
     async def test_restart_does_not_start_after_runtime_stop_failure(self):
         with patch("xagent.interfaces.cli.agent_runtime.stop_runtime", new_callable=AsyncMock,

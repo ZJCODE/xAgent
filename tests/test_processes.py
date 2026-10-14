@@ -119,7 +119,7 @@ class ManagedProcessTests(unittest.TestCase):
                         "xagent.interfaces.cli.processes_status._start_background_web",
                         return_value=(True, False),
                     ) as web_restart:
-                        with patch("xagent.interfaces.cli.processes_status.start_runtime") as runtime_restart:
+                        with patch("xagent.interfaces.cli.processes_status.restart_runtime") as runtime_restart:
                             with patch("sys.stdout", new_callable=io.StringIO):
                                 exit_code = handle_processes_restart(args)
 
@@ -135,23 +135,20 @@ class ManagedProcessTests(unittest.TestCase):
             ref = ManagedProcessRef(scope="agent", agent="work", channel="runtime",
                                     config_dir=config_dir, pid_path=config_dir / "run" / "runtime.pid",
                                     log_path=config_dir / "logs" / "runtime.log")
-            calls = []
-            async def stop(path, *, restart=False):
-                self.assertTrue(restart)
-                calls.append(("stop", path))
-                return {"status": "stopped"}
-            def start(root):
-                calls.append(("start", root))
-                return {"status": "running"}
             with patch("xagent.interfaces.cli.processes_status.iter_running_process_refs", return_value=[ref]), patch(
-                "xagent.interfaces.cli.processes_status.stop_runtime", side_effect=stop,
-            ), patch("xagent.interfaces.cli.processes_status.start_runtime", side_effect=start), patch(
+                "xagent.interfaces.cli.processes_status.restart_runtime", new_callable=AsyncMock,
+                return_value={"status": "running", "channels": {"weixin": {"state": "connecting"}},
+                              "restart_warnings": ["voice: disabled"]},
+            ) as restart, patch(
                 "xagent.interfaces.cli.processes_status._start_background_web",
             ) as web_restart, patch("sys.stdout", new_callable=io.StringIO) as stdout:
                 exit_code = handle_processes_restart(argparse.Namespace(json_output=True))
             self.assertEqual(exit_code, 0)
-            self.assertEqual(calls, [("stop", config_dir), ("start", config_dir)])
-            self.assertEqual(json.loads(stdout.getvalue())["restarted"][0]["label"], "work/runtime")
+            restart.assert_awaited_once_with(config_dir)
+            row = json.loads(stdout.getvalue())["restarted"][0]
+            self.assertEqual(row["label"], "work/runtime")
+            self.assertEqual(row["channels"]["weixin"]["state"], "connecting")
+            self.assertEqual(row["restart_warnings"], ["voice: disabled"])
             web_restart.assert_not_called()
 
     def test_processes_restart_does_not_start_runtime_if_shutdown_fails(self):
@@ -162,15 +159,35 @@ class ManagedProcessTests(unittest.TestCase):
             ref = ManagedProcessRef(scope="agent", agent="work", channel="runtime", config_dir=root,
                                     pid_path=root / "runtime.pid", log_path=root / "runtime.log")
             with patch("xagent.interfaces.cli.processes_status.iter_running_process_refs", return_value=[ref]), patch(
-                "xagent.interfaces.cli.processes_status.stop_runtime", new_callable=AsyncMock,
+                "xagent.interfaces.cli.processes_status.restart_runtime", new_callable=AsyncMock,
                 side_effect=RuntimeError("still draining"),
-            ), patch("xagent.interfaces.cli.processes_status.start_runtime") as start, patch(
+            ) as restart, patch(
                 "sys.stdout", new_callable=io.StringIO,
             ) as stdout:
                 exit_code = handle_processes_restart(argparse.Namespace(json_output=True))
             self.assertEqual(exit_code, 1)
             self.assertEqual(json.loads(stdout.getvalue())["restarted"][0]["message"], "still draining")
-            start.assert_not_called()
+            restart.assert_awaited_once_with(root)
+
+    def test_batch_restart_keeps_agent_snapshots_separate_and_continues_after_failure(self):
+        import argparse
+        from xagent.interfaces.cli.processes import ManagedProcessRef
+        roots = [Path("/tmp/agents") / name for name in ("first", "second", "third")]
+        refs = [ManagedProcessRef(scope="agent", agent=root.name, channel="runtime", config_dir=root,
+                                  pid_path=root / "run/runtime.pid", log_path=root / "logs/runtime.log") for root in roots]
+        async def restart(root):
+            if root == roots[1]:
+                raise RuntimeError("shutdown failed")
+            return {"channels": {"weixin" if root == roots[0] else "voice": {"state": "connecting"}}}
+        with patch("xagent.interfaces.cli.processes_status.iter_running_process_refs", return_value=refs), patch(
+            "xagent.interfaces.cli.processes_status.restart_runtime", side_effect=restart,
+        ) as restart_call, patch("sys.stdout", io.StringIO()) as output:
+            self.assertEqual(handle_processes_restart(argparse.Namespace(json_output=True)), 1)
+        self.assertEqual([call.args[0] for call in restart_call.await_args_list], roots)
+        rows = json.loads(output.getvalue())["restarted"]
+        self.assertEqual(list(rows[0]["channels"]), ["weixin"])
+        self.assertFalse(rows[1]["ok"])
+        self.assertEqual(list(rows[2]["channels"]), ["voice"])
 
     def test_process_status_row_marks_running_and_stopped(self):
         with tempfile.TemporaryDirectory() as tmpdir:

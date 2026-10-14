@@ -198,11 +198,10 @@ def register_channel_routes(
 
     @app.post("/api/runtime/restart", tags=["Runtime"])
     async def restart_agent():
-        from ..cli.agent_runtime import start_runtime, stop_runtime
+        from ..cli.agent_runtime import restart_runtime
         config_dir = resolve_config_dir().expanduser().resolve()
         try:
-            await stop_runtime(config_dir, restart=True)
-            return await asyncio.to_thread(start_runtime, config_dir)
+            return await restart_runtime(config_dir)
         except Exception as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
 

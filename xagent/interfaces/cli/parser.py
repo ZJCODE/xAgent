@@ -46,7 +46,7 @@ class XAgentArgumentParser(argparse.ArgumentParser):
             "  run         Run this Agent in the foreground",
             "  start       Start this Agent with API; connect other channels on demand",
             "  stop        Stop this Agent gracefully",
-            "  restart     Apply configuration and restart this Agent",
+            "  restart     Apply configuration and restore this Agent's connections",
             "  logs        Read this Agent runtime logs",
             "  status      Show this Agent and channel health",
             "  processes   List or restart all managed background processes",
@@ -438,7 +438,8 @@ def build_parser() -> argparse.ArgumentParser:
         command_parser = subparsers.add_parser(action, help=f"{action.capitalize()} the Agent runtime")
         _add_agent_argument(command_parser)
         if action in {"run", "start", "restart"}:
-            command_parser.add_argument("--channels", action="append", default=None, help="Override API-only startup for this run")
+            channel_help = "Override the connections restored after restart" if action == "restart" else "Override API-only startup for this run"
+            command_parser.add_argument("--channels", action="append", default=None, help=channel_help)
         if action == "status":
             command_parser.add_argument("--json", action="store_true", dest="json_output")
         if action == "logs":
@@ -563,7 +564,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--restart",
         action=argparse.BooleanOptionalAction,
         default=None,
-        help="Restart running background processes after an update",
+        help="Restart running background processes and restore their channel connections after an update",
     )
     update_parser.set_defaults(handler=update.handle_update)
 
@@ -601,7 +602,9 @@ def build_parser() -> argparse.ArgumentParser:
     internal_run = subparsers.add_parser("_run-agent", help=argparse.SUPPRESS)
     _add_agent_argument(internal_run)
     internal_run.add_argument("--config-dir", dest="config_dir", default=None)
-    internal_run.add_argument("--channels", action="append", default=None)
+    internal_channels = internal_run.add_mutually_exclusive_group()
+    internal_channels.add_argument("--channels", action="append", default=None)
+    internal_channels.add_argument("--no-channels", action="store_true")
     internal_run.set_defaults(handler=agent_runtime.handle_run)
     _hide_subparser_choice(subparsers, "_run-agent")
 

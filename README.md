@@ -62,9 +62,12 @@ Weixin / Voice → Connect / Disconnect**. Each channel shows its actual state;
 **Refresh** updates the available actions, and configuration remains accessible
 when the Agent is stopped. You can also use **Channels → Connect / Disconnect**
 in the Web client or the channel commands above.
-Restarting returns to API-only startup; `channels.api.enabled: false`
+Restart restores channels that were connected, connecting or reconnecting,
+including Voice. Channels disabled in the new configuration are skipped;
+disconnected or failed channels stay offline, including a manually disconnected API.
+Stop then Start uses API-only startup; `channels.api.enabled: false`
 keeps the public API offline too. An explicit `--channels api,feishu` overrides
-this default for one launch. CLI and local Web chat use the same core, even
+the default startup or restored connections for one launch. CLI and local Web chat use the same core, even
 with the public API disconnected.
 Restart drains accepted work without waiting for a new diary-generation model call;
 ordinary Stop still attempts final diary maintenance. Configuration and identity

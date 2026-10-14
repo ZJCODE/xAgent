@@ -97,6 +97,7 @@ class RuntimeHost:
         self._channel_operations: dict[str, asyncio.Task] = {}
         self._api_app = None
         self._restarting = False
+        self._restart_channels: list[str] | None = None
         self.lifecycle_timings: dict[str, float] = {}
 
     def _configuration_fingerprint(self):
@@ -658,9 +659,21 @@ class RuntimeHost:
 
         @app.post("/runtime/stop")
         async def stop(payload: RuntimeStopInput | None = None):
-            self._restarting = bool(payload and payload.restart)
-            self._stop_event.set()
-            return {"stopping": True}
+            if not self._stop_event.is_set():
+                self._restarting = bool(payload and payload.restart)
+                if self._restarting:
+                    from ...interfaces.cli.channels import restart_channels_from_status
+                    # Capture intent and close admission without yielding. A
+                    # queued Disconnect must also win over automatic restoration.
+                    self._restart_channels = [
+                        channel for channel in restart_channels_from_status({"channels": self.channel_status}) or []
+                        if not (operation := self._channel_operations.get(channel)) or operation.done()
+                    ]
+                self._stop_event.set()
+            response = {"stopping": True}
+            if self._restart_channels is not None:
+                response["restart_channels"] = list(self._restart_channels)
+            return response
 
         @app.post("/runtime/turns/stop")
         async def abort(payload: TurnControl):

@@ -145,15 +145,17 @@ export function ChannelPage() {
     setError("");
     setNotice("");
     try {
+      let restartWarnings: string[] = [];
       if (action === "start") await startRuntime();
       if (action === "stop") await stopRuntime();
-      if (action === "restart") await restartRuntime();
+      if (action === "restart") restartWarnings = (await restartRuntime()).restart_warnings ?? [];
       if (agent !== currentAgent.current || epoch !== sessionEpoch.current) return;
       await load();
       if (agent !== currentAgent.current || epoch !== sessionEpoch.current) return;
       await refreshAgents();
       if (agent !== currentAgent.current || epoch !== sessionEpoch.current) return;
-      setNotice(action === "stop" ? "Agent stopped." : action === "restart" ? "Agent restarted." : "Agent started.");
+      const message = action === "stop" ? "Agent stopped." : action === "restart" ? "Agent restarted. Check channel status for connection progress." : "Agent started.";
+      setNotice([message, ...restartWarnings].join(" "));
     } catch (err) { if (agent === currentAgent.current && epoch === sessionEpoch.current) setError(err instanceof Error ? err.message : String(err)); }
     finally { if (agent === currentAgent.current && epoch === sessionEpoch.current) setPending(null); }
   };
@@ -237,7 +239,7 @@ export function ChannelPage() {
       </Panel>
       <div className="connections-heading"><h3>Connections</h3><p>API starts by default. Connect other channels when needed.</p></div>
       <div className="connection-list">{data?.channels.map((channel) => <ChannelRow key={channel.id} channel={channel} onSetup={setSetupChannelId} onConnection={(id, action) => void runConnection(id, action)} pending={connectionPending[channel.id]} disabled={busy || !runtime?.runtime_ready} />)}</div>
-      <p className="connections-footnote">Start the Agent before connecting channels. External channels reconnect only when requested after a restart. Local chat also works with the public API disconnected.</p>
+      <p className="connections-footnote">Restart restores active connections, including Voice, unless disabled in the new settings. Stop then Start uses default connections. Local chat also works with the public API disconnected.</p>
       </div>
       {setupChannelId ? <ChannelSetupWizard channel={setupChannelId} open onClose={() => setSetupChannelId(null)} onComplete={() => {
         if (renderEpoch !== sessionEpoch.current) return;

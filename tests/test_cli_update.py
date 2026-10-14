@@ -214,7 +214,7 @@ class UpdateCommandTests(unittest.TestCase):
                             exit_code = updater.handle_update_worker(argparse.Namespace(restart=True))
 
         self.assertEqual(exit_code, 0)
-        restart.assert_called_once_with(True)
+        restart.assert_called_once_with(True, installation.python)
         self.assertIn("1.2.3 -> 1.3.0", stdout.getvalue())
 
     def test_worker_returns_failure_and_recovery_command(self):
@@ -230,10 +230,10 @@ class UpdateCommandTests(unittest.TestCase):
 
     def test_noninteractive_restart_mode_only_prints_reminder(self):
         with patch.object(updater, "iter_running_process_refs", return_value=iter([object()])):
-            with patch.object(updater, "handle_processes_restart") as restart:
+            with patch.object(updater.subprocess, "run") as restart:
                 with patch("sys.stdin", io.StringIO()):
                     with patch("sys.stdout", new_callable=io.StringIO) as stdout:
-                        exit_code = updater._restart_running_processes(None)
+                        exit_code = updater._restart_running_processes(None, self._installation().python)
 
         self.assertEqual(exit_code, 0)
         restart.assert_not_called()
@@ -241,13 +241,35 @@ class UpdateCommandTests(unittest.TestCase):
 
     def test_forced_restart_propagates_restart_failure(self):
         with patch.object(updater, "iter_running_process_refs", return_value=iter([object(), object()])):
-            with patch.object(updater, "handle_processes_restart", return_value=1) as restart:
+            with patch.object(updater.subprocess, "run", return_value=_completed([], returncode=1)) as restart:
                 with patch("sys.stdout", new_callable=io.StringIO) as stdout:
-                    exit_code = updater._restart_running_processes(True)
+                    exit_code = updater._restart_running_processes(True, self._installation().python)
 
         self.assertEqual(exit_code, 1)
-        restart.assert_called_once()
+        restart.assert_called_once_with(
+            [str(self._installation().python), "-m", "xagent.interfaces.cli", "processes", "restart"], check=False,
+        )
         self.assertIn("failed to restart", stdout.getvalue())
+
+    def test_forced_restart_runs_fresh_installed_interpreter(self):
+        installation = self._installation()
+        with patch.object(updater, "detect_installation", return_value=installation), patch.object(
+            updater, "_fresh_installed_version", return_value="1.3.0",
+        ), patch.object(updater, "iter_running_process_refs", return_value=[object()]), patch.object(
+            updater.subprocess, "run", return_value=_completed([]),
+        ) as run, patch("sys.stdout", io.StringIO()):
+            self.assertEqual(updater.handle_update_worker(argparse.Namespace(restart=True)), 0)
+        self.assertEqual(run.call_args_list[0].args[0], list(installation.update_command))
+        self.assertEqual(run.call_args_list[1].args[0], [
+            str(installation.python), "-m", "xagent.interfaces.cli", "processes", "restart",
+        ])
+
+    def test_restart_launch_failure_prints_recovery_command(self):
+        with patch.object(updater, "iter_running_process_refs", return_value=[object()]), patch.object(
+            updater.subprocess, "run", side_effect=OSError("interpreter unavailable"),
+        ), patch("sys.stdout", io.StringIO()) as output:
+            self.assertEqual(updater._restart_running_processes(True, self._installation().python), 1)
+        self.assertIn("xagent processes restart", output.getvalue())
 
 
 if __name__ == "__main__":

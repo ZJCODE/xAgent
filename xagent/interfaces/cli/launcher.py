@@ -218,7 +218,7 @@ def _channel_connection_actions(runtime: dict[str, Any], row: dict[str, Any]) ->
     elif not row["ready"]:
         description = row.get("config_error") or "Configure this channel before connecting."
     else:
-        description = "Connect for this run; restart restores the default connections."
+        description = "Connect this channel; restart restores active connections."
     action = "disconnect" if disconnect else "connect"
     return [MenuOption(action, "Disconnect" if disconnect else "Connect", description,
                        disabled=not row[f"can_{action}"])]
@@ -230,7 +230,7 @@ def _channel_menu_subtitle(config_dir: Path, runtime: dict[str, Any], row: dict[
         lines.append(str(row.get("error") or row["config_error"]))
     if runtime.get("needs_restart"):
         lines.append("Configuration changed; restart the Agent to apply it.")
-    lines.append("Connections last until Agent restart; configuration and history are kept.")
+    lines.append("Restart restores active connections; Stop then Start uses default connections.")
     return "\n".join(lines)
 
 

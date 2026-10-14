@@ -17,7 +17,6 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from .processes import iter_running_process_refs
-from .processes_status import handle_processes_restart
 
 
 PACKAGE_NAME = "myxagent"
@@ -286,7 +285,7 @@ def _fresh_installed_version(python: Path) -> str | None:
     return version[-1].strip() if version else None
 
 
-def _restart_running_processes(restart: bool | None) -> int:
+def _restart_running_processes(restart: bool | None, python: Path) -> int:
     running_refs = list(iter_running_process_refs())
     if not running_refs:
         return 0
@@ -309,8 +308,15 @@ def _restart_running_processes(restart: bool | None) -> int:
         return 0
 
     print("Restarting running xAgent processes...")
-    exit_code = handle_processes_restart(argparse.Namespace(json_output=False))
-    if exit_code != 0:
+    # This worker has already imported the old version. Run the installed
+    # version's lifecycle code in a fresh interpreter after upgrading.
+    try:
+        result = subprocess.run([str(python), "-m", "xagent.interfaces.cli", "processes", "restart"], check=False)
+    except OSError as exc:
+        print(f"xAgent was updated, but the restart command could not start: {exc}")
+        print(f"Run '{COMMAND_NAME} processes restart' to retry.")
+        return 1
+    if result.returncode != 0:
         print("xAgent was updated, but one or more background processes failed to restart.")
         return 1
     return 0
@@ -356,7 +362,7 @@ def handle_update_worker(args: argparse.Namespace) -> int:
         return 0
 
     print(f"Updated xAgent: {installation.version} -> {updated_version}")
-    return _restart_running_processes(getattr(args, "restart", None))
+    return _restart_running_processes(getattr(args, "restart", None), installation.python)
 
 
 def handle_update(args: argparse.Namespace) -> int:

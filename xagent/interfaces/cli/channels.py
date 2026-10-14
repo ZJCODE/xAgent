@@ -53,6 +53,23 @@ def default_runtime_channels(config: Mapping[str, Any]) -> list[str]:
     return [] if api_config(config).get("enabled", True) is False else [CHANNEL_API]
 
 
+def restart_channels_from_status(status: Mapping[str, Any]) -> list[str] | None:
+    """Extract connection intent from a live snapshot, never cached status."""
+    channels = status.get("channels")
+    if not isinstance(channels, Mapping):
+        return None
+    selected = []
+    for name in (CHANNEL_API, CHANNEL_FEISHU, CHANNEL_WEIXIN, CHANNEL_VOICE):
+        if name not in channels:
+            continue
+        row = channels[name]
+        if not isinstance(row, Mapping):
+            return None
+        if (row.get("state") or row.get("status")) in {"connected", "connecting", "reconnecting", "running"}:
+            selected.append(name)
+    return selected
+
+
 def channel_readiness(config: Mapping[str, Any], channel: str, root: Path) -> tuple[bool, str]:
     """Validate the running configuration without opening devices or networks."""
     try:

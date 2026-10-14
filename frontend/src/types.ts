@@ -179,6 +179,7 @@ export interface AgentRuntimeStatus {
   runtime_ready?: boolean;
   needs_restart?: boolean;
   error?: string;
+  restart_warnings?: string[];
   channels: Record<string, { status?: string; state?: string; error?: string }>;
   queue?: { pending: number; active_turn_id?: string | null };
   memory?: JournalRuntimeStatus;

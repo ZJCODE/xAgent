@@ -8,15 +8,13 @@ import json
 from typing import Any
 
 from .processes import (
-    ManagedProcessRef,
     iter_managed_process_refs,
     iter_running_process_refs,
     process_status_row,
     stop_managed_process,
 )
 from .runtime import _start_background_web
-from .agent_runtime import start_runtime, stop_runtime
-from ...core.runtime.client import RuntimeUnavailable
+from .agent_runtime import restart_runtime
 from .web_client import web_client_paths
 
 
@@ -51,25 +49,6 @@ def handle_processes_status(args: argparse.Namespace) -> int:
     return 2 if running_count > 0 else 0
 
 
-def _channel_restart_namespace(ref: ManagedProcessRef) -> argparse.Namespace:
-    return argparse.Namespace(
-        agent=ref.agent,
-        config_dir=str(ref.config_dir) if ref.config_dir is not None else None,
-        channels=[ref.channel],
-        host=None,
-        port=None,
-        open_browser=False,
-        max_concurrent_chats=None,
-        queue_timeout=None,
-        chat_timeout=None,
-        user_id=None,
-        verbose=False,
-        input_device=None,
-        output_device=None,
-        api_url=None,
-    )
-
-
 def handle_processes_restart(args: argparse.Namespace) -> int:
     running_refs = list(iter_running_process_refs())
     if not running_refs:
@@ -84,6 +63,7 @@ def handle_processes_restart(args: argparse.Namespace) -> int:
 
     for ref in running_refs:
         label = "web" if ref.scope == "web" else f"{ref.agent}/{ref.channel}"
+        result = {}
 
         if ref.scope == "web":
             paths = web_client_paths()
@@ -100,33 +80,12 @@ def handle_processes_restart(args: argparse.Namespace) -> int:
             message = "restarted" if started else "failed to restart"
         else:
             try:
-                asyncio.run(stop_runtime(ref.config_dir, restart=True))
-                stopped, message = True, "stopped"
-            except RuntimeUnavailable:
-                # Retain signal-based recovery for an unreachable older core.
-                stopped, message = stop_managed_process(ref.pid_path)
-            except Exception as exc:
-                stopped, message = False, str(exc)
-            if not stopped:
-                ok = False
-                restarted.append({
-                    "label": label,
-                    "scope": ref.scope,
-                    "agent": ref.agent,
-                    "channel": ref.channel,
-                    "ok": False,
-                    "message": message,
-                })
-                if not getattr(args, "json_output", False):
-                    print(f"{label}: {message}")
-                continue
-
-            try:
-                start_runtime(ref.config_dir)
+                result = asyncio.run(restart_runtime(ref.config_dir))
                 entry_ok = True
-            except Exception:
+                message = "restarted; check channel status for connection progress"
+            except Exception as exc:
                 entry_ok = False
-            message = "restarted" if entry_ok else "failed to restart"
+                message = str(exc)
 
         ok = ok and entry_ok
         restarted.append({
@@ -136,9 +95,15 @@ def handle_processes_restart(args: argparse.Namespace) -> int:
             "channel": ref.channel,
             "ok": entry_ok,
             "message": message,
+            **({"channels": result.get("channels", {})} if ref.scope == "agent" and entry_ok else {}),
+            **({"restart_warnings": result["restart_warnings"]} if result.get("restart_warnings") else {}),
         })
         if not getattr(args, "json_output", False):
             print(f"{label}: {message}")
+            for name, row in result.get("channels", {}).items():
+                print(f"  {name}: {row.get('state') or row.get('status', 'unknown')}")
+            for warning in result.get("restart_warnings", []):
+                print(f"  Warning: {warning}")
 
     if getattr(args, "json_output", False):
         print(

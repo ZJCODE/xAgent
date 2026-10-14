@@ -211,6 +211,37 @@ class ChannelLifecycleTests(unittest.IsolatedAsyncioTestCase):
             await self.host.connect_channel("feishu")
         self.assertEqual(error.exception.status_code, 409)
 
+    async def test_restart_stop_captures_intent_atomically_and_reuses_first_snapshot(self):
+        self.host.channel_status = {
+            "api": {"state": "connected"}, "weixin": {"state": "connecting"},
+            "voice": {"state": "reconnecting"}, "feishu": {"state": "disconnecting"},
+        }
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=self.host._create_control_app()), base_url="http://test") as client:
+            first = await client.post("/runtime/stop", json={"restart": True})
+            self.assertEqual(first.json()["restart_channels"], ["api", "weixin", "voice"])
+            self.assertTrue(self.host._stop_event.is_set())
+            self.host.channel_status["voice"] = {"state": "failed"}
+            second = await client.post("/runtime/stop")
+            self.assertEqual(second.json(), first.json())
+            self.assertTrue(self.host._restarting)
+
+    async def test_restart_snapshot_excludes_queued_disconnect(self):
+        self.host.channel_status["feishu"] = {"state": "connected"}
+        pending = asyncio.create_task(asyncio.Event().wait())
+        self.host._channel_operations["feishu"] = pending
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=self.host._create_control_app()), base_url="http://test") as client:
+            response = await client.post("/runtime/stop", json={"restart": True})
+        self.assertEqual(response.json()["restart_channels"], [])
+
+    async def test_ordinary_stop_does_not_record_or_upgrade_to_restart_intent(self):
+        self.host.channel_status["weixin"] = {"state": "connected"}
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=self.host._create_control_app()), base_url="http://test") as client:
+            first = await client.post("/runtime/stop")
+            second = await client.post("/runtime/stop", json={"restart": True})
+        self.assertEqual(first.json(), {"stopping": True})
+        self.assertEqual(second.json(), first.json())
+        self.assertFalse(self.host._restarting)
+
     async def test_internal_routes_use_same_lifecycle(self):
         self.host.detailed_status = AsyncMock(return_value={})
         app = self.host._create_control_app()
