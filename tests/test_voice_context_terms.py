@@ -36,8 +36,8 @@ class ContextTermTests(unittest.TestCase):
                     {
                         "contacts": [
                             {
-                                "channel": "feishu",
-                                "user_id": "ou_123",
+                                "channel": "weixin",
+                                "user_id": "wx_123",
                                 "target": {"sender_name": "Mei"},
                                 "last_seen": "2026-01-01T00:00:00",
                             },

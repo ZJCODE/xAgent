@@ -28,7 +28,7 @@ class TaskRuntimeManagementTests(unittest.IsolatedAsyncioTestCase):
     async def test_host_constructs_one_scheduler_after_ownership_for_all_channels(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
-            host = RuntimeHost(root, channels=["api", "feishu", "weixin", "voice"])
+            host = RuntimeHost(root, channels=["api", "weixin", "voice"])
             agent = SimpleNamespace(
                 memory_handler=SimpleNamespace(recover_pending_commit=AsyncMock()),
                 turn_store=SimpleNamespace(recover=AsyncMock(return_value=0)),
@@ -43,7 +43,7 @@ class TaskRuntimeManagementTests(unittest.IsolatedAsyncioTestCase):
                 host.channel_status[channel] = {"state": "running"}
                 if channel != "api":
                     host.adapters[channel] = SimpleNamespace(agent=host.agent)
-                if len(starts) == 4:
+                if len(starts) == 3:
                     host._stop_event.set()
             schedulers = []
             def construct_scheduler(*args, **kwargs):
@@ -71,7 +71,7 @@ class TaskRuntimeManagementTests(unittest.IsolatedAsyncioTestCase):
             factory.assert_called_once()
             schedulers[0].start.assert_awaited_once()
             schedulers[0].stop.assert_awaited_once()
-            self.assertEqual(starts, ["api", "feishu", "weixin", "voice"])
+            self.assertEqual(starts, ["api", "weixin", "voice"])
             self.assertFalse(runtime_owned_here(root))
 
     async def test_detailed_runtime_status_and_task_view_preserve_review_identity(self):

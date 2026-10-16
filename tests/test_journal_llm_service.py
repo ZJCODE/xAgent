@@ -112,20 +112,20 @@ class JournalLLMServicePromptTests(unittest.IsolatedAsyncioTestCase):
             transcript,
         )
 
-    def test_format_transcript_includes_feishu_display_name_with_id(self):
+    def test_format_transcript_includes_display_name_with_id(self):
         transcript = JournalLLMService._format_transcript([
             {
                 "role": "user",
-                "sender_id": "ou_d988",
+                "sender_id": "wx_d988",
                 "content": "早啊",
                 "timestamp": "2026-08-16 16:36:44",
-                "channel": "feishu",
+                "channel": "weixin",
                 "metadata": {"sender_name": "Jun"},
             }
         ])
 
         self.assertIn(
-            "[speaker=Jun(ou_d988)][timestamp=2026-08-16 16:36:44][channel=feishu]",
+            "[speaker=Jun(wx_d988)][timestamp=2026-08-16 16:36:44][channel=weixin]",
             transcript,
         )
 

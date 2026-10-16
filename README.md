@@ -5,13 +5,13 @@
 
 xAgent is a local-first AI agent platform that gives each agent its own identity, memory, workspace, and ongoing life.
 
-Interact with your agents through the terminal, Web UI, voice, Feishu, or Weixin, and manage them from a unified interactive launcher.
+Interact with your agents through the terminal, Web UI, voice, or Weixin, and manage them from a unified interactive launcher.
 
 ## Features
 
 - **Local-first** — Agent data is stored on your own machine.
 - **Independent agents** — Each agent has its own identity, memory, diary, workspace, skills, tasks, logs, and channel state.
-- **Multiple interfaces** — Use xAgent from the terminal, Web UI, voice, Feishu, or Weixin.
+- **Multiple interfaces** — Use xAgent from the terminal, Web UI, voice, or Weixin.
 - **Unified management** — Create, configure, and manage agents from one interactive launcher.
 - **External execution** — Connect hardware or software devices to the Agent API and call their declared capabilities through one generic tool.
 
@@ -44,7 +44,7 @@ xagent
 The interactive launcher will guide you through creating and managing your agents.
 
 In the terminal launcher, choose **Runtime → Start**, then open **Channel** to
-connect Feishu, Weixin, or Voice. In the Web client, manage connections from
+connect Weixin or Voice. In the Web client, manage connections from
 **Channels**. Restart the Agent after changing its configuration or identity.
 
 To add a hardware or software device, open **Agent → Devices** and follow the

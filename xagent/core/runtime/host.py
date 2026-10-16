@@ -91,7 +91,7 @@ class RuntimeHost:
         self._startup_fingerprint = None
         self.channel_drain_timeout = 10.0
         self.channel_cleanup_timeout = 5.0
-        self._channel_locks = {name: asyncio.Lock() for name in ("api", "feishu", "weixin", "voice")}
+        self._channel_locks = {name: asyncio.Lock() for name in ("api", "weixin", "voice")}
         self._channel_generation = {name: 0 for name in self._channel_locks}
         self._channel_activity: dict[str, ChannelActivity] = {}
         self._channel_operations: dict[str, asyncio.Task] = {}
@@ -157,7 +157,7 @@ class RuntimeHost:
             from ...integrations.api import ApiChannelAdapter
             from . import AsyncTaskScheduler, create_runtime_heartbeat, resolve_contacts_path
 
-            legacy = [channel for channel in ("api", "feishu", "weixin", "voice")
+            legacy = [channel for channel in ("api", "weixin", "voice")
                       if running_pid(managed_paths(self.config_dir, channel).pid_path) is not None]
             if legacy:
                 raise RuntimeError("Close the legacy channel processes before starting the Agent: " + ", ".join(legacy))
@@ -180,7 +180,7 @@ class RuntimeHost:
             channels = self.requested_channels if self.requested_channels is not None else default_runtime_channels(self.runner.config)
             self.channel_status = {name: {"state": "disconnected"} for name in self._channel_locks}
             for channel in channels:
-                if channel not in {"api", "feishu", "weixin", "voice"}:
+                if channel not in {"api", "weixin", "voice"}:
                     raise ValueError(f"Unknown channel: {channel}")
                 self.channel_status[channel] = {"state": "starting"}
 
@@ -519,13 +519,6 @@ class RuntimeHost:
                 lifespan="off", access_log=False, timeout_graceful_shutdown=10))
             self._servers["api"] = server
             run = server.serve()
-        elif channel == "feishu":
-            from ...integrations.feishu import FeishuAdapter, FeishuAdapterConfig
-            from ...interfaces.cli.channels import feishu_config
-
-            adapter = FeishuAdapter(agent=self.agent, config=FeishuAdapterConfig.from_dict(feishu_config(config)))
-            self.adapters[channel] = adapter
-            run = adapter.run()
         elif channel == "weixin":
             from ...integrations.weixin import WeixinAdapter, WeixinAdapterConfig
             from ...interfaces.cli.channels import weixin_config

@@ -178,7 +178,7 @@ class TaskApiTests(unittest.TestCase):
 
         asyncio.run(run_test())
 
-    def test_http_subconscious_delivery_rejects_feishu_channel(self):
+    def test_http_subconscious_delivery_rejects_weixin_channel(self):
         async def run_test():
             with tempfile.TemporaryDirectory() as tmpdir:
                 agent = _TaskAgent(Path(tmpdir))
@@ -186,9 +186,9 @@ class TaskApiTests(unittest.TestCase):
                 delivery = SubconsciousDelivery(
                     content="A direct subconscious note",
                     recipient=ContactEntry(
-                        channel="feishu",
-                        user_id="ou_123",
-                        target={"chat_id": "oc_xxx", "sender_name": "张三"},
+                        channel="weixin",
+                        user_id="wx_123",
+                        target={"user_id": "wx_123", "sender_name": "张三"},
                         last_seen="2026-06-25 09:00:00",
                     ),
                     internal_content="The inner thought",
@@ -241,9 +241,9 @@ class TaskApiTests(unittest.TestCase):
                 content=content,
                 run_at=run_at,
                 tasks_dir=server.tasks_dir,
-                channel="feishu",
-                target={"chat_id": "oc_archive"},
-                user_id="ou_archive",
+                channel="weixin",
+                target={"user_id": "wx_archive"},
+                user_id="wx_archive",
                 title="归档提醒",
             )
 
@@ -261,7 +261,7 @@ class TaskApiTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmpdir:
             server = AgentHTTPServer(agent=_TaskAgent(Path(tmpdir)))
-            original = asyncio.run(archive_task(server, content="飞书归档提醒", minute=0))
+            original = asyncio.run(archive_task(server, content="微信归档提醒", minute=0))
             asyncio.run(archive_task(server, content="second archived task", minute=1))
             with TestClient(server.app) as client:
                 current = client.get("/api/tasks")
@@ -272,7 +272,7 @@ class TaskApiTests(unittest.TestCase):
                 self.assertEqual(first_page.json()["total"], 2)
                 self.assertTrue(first_page.json()["has_more"])
 
-                archived = client.get("/api/tasks?scope=archive&query=飞书&limit=1&offset=0")
+                archived = client.get("/api/tasks?scope=archive&query=微信&limit=1&offset=0")
                 self.assertEqual(archived.status_code, 200)
                 archived_task = archived.json()["tasks"][0]
                 self.assertEqual(archived_task["task_id"], original.task_id)
@@ -289,9 +289,9 @@ class TaskApiTests(unittest.TestCase):
                 self.assertEqual(duplicated.status_code, 201)
                 copy = duplicated.json()["task"]
                 self.assertNotEqual(copy["task_id"], original.task_id)
-                self.assertEqual(copy["channel"], "feishu")
-                self.assertEqual(copy["target"]["chat_id"], "oc_archive")
-                self.assertEqual(copy["user_id"], "ou_archive")
+                self.assertEqual(copy["channel"], "weixin")
+                self.assertEqual(copy["target"]["user_id"], "wx_archive")
+                self.assertEqual(copy["user_id"], "wx_archive")
 
                 rejected_override = client.post(
                     f"/api/tasks/{original.task_id}/duplicate",
@@ -399,9 +399,9 @@ class TaskApiTests(unittest.TestCase):
                     "/api/tasks",
                     json={
                         "task_type": "message",
-                        "content": "飞书提醒",
+                        "content": "微信提醒",
                         "delay_seconds": 60,
-                        "channel": "feishu",
+                        "channel": "weixin",
                     },
                 )
                 self.assertEqual(rejected.status_code, 400)

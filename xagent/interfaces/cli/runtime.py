@@ -16,13 +16,11 @@ from ..base import BaseAgentConfig
 from .agents import AgentRegistryError, management_root, resolve_agent_name
 from .channels import (
     CHANNEL_API,
-    CHANNEL_FEISHU,
     CHANNEL_VOICE,
     CHANNEL_WEIXIN,
     ChannelSelectionError,
     default_start_channel_from_config,
     enabled_channels_from_config,
-    feishu_config,
     normalize_channel_values,
     voice_config,
     weixin_config,
@@ -601,13 +599,6 @@ def handle_doctor(args: argparse.Namespace) -> int:
         return 1
 
     print(f"Channels: {', '.join(channels)}")
-    if CHANNEL_FEISHU in channels:
-        data = feishu_config(config)
-        if data.get("app_id") and data.get("app_secret"):
-            print("Feishu: configured")
-        else:
-            print("Feishu: missing app_id/app_secret")
-            ok = False
     if CHANNEL_WEIXIN in channels:
         data = weixin_config(config)
         if data.get("account_id"):

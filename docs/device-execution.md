@@ -268,7 +268,7 @@ format, with `path`, `blob_url`, MIME, filename, size, SHA-256, and device sourc
 Files reside in `assets/inbound/devices/` within the Agent workspace. Original
 files are preserved. The Agent can use `see_image(path=...)` to inspect a stored
 photo on its current turn, and `attach_artifact(path=...)` when it chooses to
-deliver a file through Web, Feishu, Weixin, or another supported channel.
+deliver a file through Web, Weixin, or another supported channel.
 Receiving an attachment does not automatically inject a photo into vision or
 send it to users. Audio/video are stored attachments; transcription and video
 understanding are separate capabilities. Events still only update shared

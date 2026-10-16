@@ -8,16 +8,9 @@ import yaml
 
 
 CHANNEL_API = "api"
-CHANNEL_FEISHU = "feishu"
 CHANNEL_WEIXIN = "weixin"
 CHANNEL_VOICE = "voice"
-VALID_CHANNELS = {CHANNEL_API, CHANNEL_FEISHU, CHANNEL_WEIXIN, CHANNEL_VOICE}
-
-
-def _feishu_channel_enabled(config: Mapping[str, Any]) -> bool:
-    if "enabled" in config:
-        return bool(config.get("enabled"))
-    return bool(config.get("app_id") and config.get("app_secret"))
+VALID_CHANNELS = {CHANNEL_API, CHANNEL_WEIXIN, CHANNEL_VOICE}
 
 
 def _weixin_channel_enabled(config: Mapping[str, Any]) -> bool:
@@ -59,7 +52,7 @@ def restart_channels_from_status(status: Mapping[str, Any]) -> list[str] | None:
     if not isinstance(channels, Mapping):
         return None
     selected = []
-    for name in (CHANNEL_API, CHANNEL_FEISHU, CHANNEL_WEIXIN, CHANNEL_VOICE):
+    for name in (CHANNEL_API, CHANNEL_WEIXIN, CHANNEL_VOICE):
         if name not in channels:
             continue
         row = channels[name]
@@ -79,9 +72,6 @@ def channel_readiness(config: Mapping[str, Any], channel: str, root: Path) -> tu
                 raise ValueError("Configure an API host")
             if not 0 < int(data.get("port", 8010)) < 65536:
                 raise ValueError("Configure a valid API port")
-        elif channel == CHANNEL_FEISHU:
-            from ...integrations.feishu.config import FeishuAdapterConfig
-            FeishuAdapterConfig.from_dict(feishu_config(config))
         elif channel == CHANNEL_WEIXIN:
             from ...integrations.weixin.config import WeixinAdapterConfig
             from ...integrations.weixin.state import WeixinStateStore
@@ -112,11 +102,6 @@ def enabled_channels_from_config(config: Optional[Mapping[str, Any]]) -> list[st
     if api_enabled:
         result.append(CHANNEL_API)
 
-    feishu_cfg = channels.get(CHANNEL_FEISHU)
-    feishu_cfg = feishu_cfg if isinstance(feishu_cfg, Mapping) else {}
-    if _feishu_channel_enabled(feishu_cfg):
-        result.append(CHANNEL_FEISHU)
-
     weixin_cfg = channels.get(CHANNEL_WEIXIN)
     weixin_cfg = weixin_cfg if isinstance(weixin_cfg, Mapping) else {}
     if _weixin_channel_enabled(weixin_cfg):
@@ -135,7 +120,7 @@ def default_start_channel_from_config(config: Optional[Mapping[str, Any]]) -> st
     enabled = enabled_channels_from_config(config)
     if not enabled:
         raise ChannelSelectionError(
-            "No enabled channels found. Configure channels.api, channels.feishu, channels.weixin, "
+            "No enabled channels found. Configure channels.api, channels.weixin, "
             "or channels.voice, "
             "or pass --channel explicitly."
         )
@@ -167,7 +152,7 @@ def normalize_channel_values(
 
     if not selected:
         raise ChannelSelectionError(
-            "No enabled channels found. Configure channels.api, channels.feishu, channels.weixin, "
+            "No enabled channels found. Configure channels.api, channels.weixin, "
             "or channels.voice, "
             "or pass --channel explicitly."
         )
@@ -180,19 +165,6 @@ def api_config(config: Mapping[str, Any]) -> dict[str, Any]:
         return {}
     data = channels.get(CHANNEL_API)
     return dict(data) if isinstance(data, Mapping) else {}
-
-
-def feishu_config(config: Mapping[str, Any]) -> dict[str, Any]:
-    channels = config.get("channels") if isinstance(config, Mapping) else None
-    if not isinstance(channels, Mapping):
-        return {}
-    data = channels.get(CHANNEL_FEISHU)
-    if not isinstance(data, Mapping):
-        return {}
-
-    runtime_config = dict(data)
-    runtime_config.pop("enabled", None)
-    return runtime_config
 
 
 def weixin_config(config: Mapping[str, Any]) -> dict[str, Any]:

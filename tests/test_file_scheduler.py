@@ -57,12 +57,12 @@ class ScheduledTaskTests(unittest.TestCase):
                 )
                 enqueue_scheduled_task(
                     task_type="message",
-                    content="feishu reminder",
+                    content="weixin reminder",
                     run_at=run_at,
                     tasks_dir=tmpdir,
-                    channel="feishu",
-                    target={"chat_id": "oc_x"},
-                    user_id="ou_user",
+                    channel="weixin",
+                    target={"user_id": "wx_user"},
+                    user_id="wx_user",
                 )
                 delivered = []
                 scheduler = AsyncTaskScheduler(
@@ -76,7 +76,7 @@ class ScheduledTaskTests(unittest.TestCase):
                 records = list_task_records(tmpdir)
 
             self.assertEqual(delivered, ["web reminder"])
-            self.assertEqual([record.content for record in records], ["feishu reminder"])
+            self.assertEqual([record.content for record in records], ["weixin reminder"])
 
         async def _append_delivered(delivered, message):
             delivered.append(message)
@@ -870,19 +870,18 @@ class ScheduledTaskTests(unittest.TestCase):
             with tempfile.TemporaryDirectory() as tmpdir:
                 tool = create_schedule_task_tool(tasks_dir=tmpdir)
                 context = ScheduledDeliveryContext(
-                    channel="feishu",
-                    user_id="ou_user",
-                    target={"chat_id": "oc_chat", "message_id": "om_anchor", "is_group": True},
+                    channel="weixin",
+                    user_id="wx_user",
+                    target={"user_id": "wx_user"},
                 )
                 with scheduled_delivery_context(context):
                     result = await tool(action="create", task_type="agent", content="查一下当前系统的温度然后发我", delay_seconds=60)
                 records = list_task_records(tmpdir)
 
             self.assertTrue(result["ok"])
-            self.assertEqual(result["task"]["channel"], "feishu")
+            self.assertEqual(result["task"]["channel"], "weixin")
             self.assertEqual(result["task"]["task_type"], "agent")
-            self.assertEqual(records[0].target["chat_id"], "oc_chat")
-            self.assertEqual(records[0].target["message_id"], "om_anchor")
+            self.assertEqual(records[0].target["user_id"], "wx_user")
             self.assertEqual(records[0].content, "查一下当前系统的温度然后发我")
 
         asyncio.run(run_test())
@@ -980,7 +979,7 @@ class ScheduledTaskTests(unittest.TestCase):
         self.assertTrue(service.can_handle(SimpleNamespace(kind="task", delivery_channel="api")))
         self.assertTrue(service.can_handle(SimpleNamespace(kind="task", delivery_channel="local")))
         self.assertTrue(service.can_handle(SimpleNamespace(kind="task", delivery_channel="")))
-        self.assertFalse(service.can_handle(SimpleNamespace(kind="task", delivery_channel="feishu")))
+        self.assertFalse(service.can_handle(SimpleNamespace(kind="task", delivery_channel="weixin")))
         self.assertFalse(service.can_handle(SimpleNamespace(kind="job", delivery_channel="api")))
 
     def test_manage_scheduled_tasks_validates_required_time_and_content(self):

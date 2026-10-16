@@ -130,23 +130,23 @@ class MessageStorageTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             storage = MessageStorage(path=str(Path(tmpdir) / "messages.sqlite3"))
             hall = Message.create("one", role=RoleType.USER, sender_id="alice")
-            hall.metadata["room_key"] = "feishu:hall"
+            hall.metadata["room_key"] = "weixin:hall"
             other = Message.create("other", role=RoleType.USER, sender_id="bob")
-            other.metadata["room_key"] = "feishu:other"
+            other.metadata["room_key"] = "weixin:other"
             later = Message.create("two", role=RoleType.USER, sender_id="alice")
-            later.metadata["room_key"] = "feishu:hall"
+            later.metadata["room_key"] = "weixin:hall"
             stored = await storage.add_messages([hall, other, later])
 
             self.assertEqual([message.content for message in stored], ["one", "other", "two"])
-            self.assertEqual(await storage.get_latest_room_cursor("feishu:hall"), stored[2].metadata["storage_cursor"])
+            self.assertEqual(await storage.get_latest_room_cursor("weixin:hall"), stored[2].metadata["storage_cursor"])
             self.assertEqual(
                 sorted(await storage.list_room_keys()),
-                ["feishu:hall", "feishu:other"],
+                ["weixin:hall", "weixin:other"],
             )
             interval = await storage.get_messages_for_room(
-                "feishu:hall",
+                "weixin:hall",
                 start_exclusive=stored[0].metadata["storage_cursor"],
             )
             self.assertEqual([message.content for message in interval], ["two"])
-            recent = await storage.get_messages_for_room("feishu:hall", limit=1)
+            recent = await storage.get_messages_for_room("weixin:hall", limit=1)
             self.assertEqual([message.content for message in recent], ["two"])

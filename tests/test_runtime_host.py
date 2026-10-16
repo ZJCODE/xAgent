@@ -77,7 +77,7 @@ class AgentAdmissionTests(unittest.IsolatedAsyncioTestCase):
             return [event async for event in agent.chat_events(text, user_id="alice", channel=channel)]
         first = asyncio.create_task(collect("first", "api"))
         await started.wait()
-        second = asyncio.create_task(collect("second", "feishu"))
+        second = asyncio.create_task(collect("second", "weixin"))
         for _ in range(100):
             if len(agent.message_storage.messages) == 2:
                 break
@@ -85,7 +85,7 @@ class AgentAdmissionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([row.content for row in agent.message_storage.messages], ["first", "second"])
         self.assertEqual(len(model.calls), 1)
         self.assertEqual(agent.inbox.pending_count, 1)
-        self.assertFalse(agent.abort(channel="feishu"))
+        self.assertFalse(agent.abort(channel="weixin"))
         release.set()
         await asyncio.gather(first, second)
         self.assertEqual(len(model.calls), 2)
@@ -102,7 +102,7 @@ class AgentAdmissionTests(unittest.IsolatedAsyncioTestCase):
     async def test_queue_has_one_shared_capacity_and_timeout(self):
         inbox = AgentInbox(max_pending=1, queue_timeout=0.02)
         await inbox.acquire_turn()
-        ticket = inbox.reserve_turn(channel="feishu")
+        ticket = inbox.reserve_turn(channel="weixin")
         with self.assertRaises(InboxCapacityError):
             inbox.reserve_turn(channel="voice")
         with self.assertRaises(InboxQueueTimeout):
@@ -159,9 +159,11 @@ class RuntimeTransportTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_default_start_and_restart_leave_external_channels_disconnected(self):
         from tests.test_channel_lifecycle import FakeAdapter
+        from xagent.integrations.weixin.state import WeixinCredentials, WeixinStateStore
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             write_config(root)
+            WeixinStateStore(root).save_credentials(WeixinCredentials("test", "https://example.test", "test", "owner"))
             config = yaml.safe_load((root / "config.yaml").read_text())
             with socket.socket() as available:
                 available.bind(("127.0.0.1", 0))
@@ -169,19 +171,18 @@ class RuntimeTransportTests(unittest.IsolatedAsyncioTestCase):
             config["channels"]["api"] = {"enabled": True, "host": "127.0.0.1", "port": port}
             config["channels"].update({
                 "voice": {"enabled": True, "api_key": "test-key"},
-                "feishu": {"enabled": True, "app_id": "test", "app_secret": "test"},
                 "weixin": {"enabled": True, "account_id": "test"},
             })
             (root / "config.yaml").write_text(yaml.safe_dump(config))
-            with patch("xagent.integrations.feishu.FeishuAdapter", FakeAdapter), patch(
+            with patch("xagent.integrations.weixin.WeixinAdapter", FakeAdapter), patch(
                 "xagent.interfaces.voice.factory.create_local_voice_runtime", side_effect=AssertionError("device accessed")
             ) as voice:
                 first, task = await self._start_host(root, CapturingModelClient([]))
                 try:
                     self.assertTrue(all(row["state"] == "disconnected" for name, row in first.channel_status.items() if name != "api"))
                     self.assertIn("api", first._servers)
-                    await first.connect_channel("feishu")
-                    self.assertIn("feishu", first.adapters)
+                    await first.connect_channel("weixin")
+                    self.assertIn("weixin", first.adapters)
                 finally:
                     await first.stop()
                     await asyncio.wait_for(task, timeout=5)
@@ -189,7 +190,7 @@ class RuntimeTransportTests(unittest.IsolatedAsyncioTestCase):
                 try:
                     self.assertTrue(all(row["state"] == "disconnected" for name, row in second.channel_status.items() if name != "api"))
                     self.assertIn("api", second._servers)
-                    self.assertNotIn("feishu", second.adapters)
+                    self.assertNotIn("weixin", second.adapters)
                     voice.assert_not_called()
                 finally:
                     await second.stop()
@@ -197,17 +198,19 @@ class RuntimeTransportTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_explicit_start_override_connects_requested_channel(self):
         from tests.test_channel_lifecycle import FakeAdapter
+        from xagent.integrations.weixin.state import WeixinCredentials, WeixinStateStore
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             write_config(root)
+            WeixinStateStore(root).save_credentials(WeixinCredentials("test", "https://example.test", "test", "owner"))
             config = yaml.safe_load((root / "config.yaml").read_text())
-            config["channels"]["feishu"] = {"enabled": False, "app_id": "test", "app_secret": "test"}
+            config["channels"]["weixin"] = {"enabled": False, "account_id": "test"}
             (root / "config.yaml").write_text(yaml.safe_dump(config))
-            with patch("xagent.integrations.feishu.FeishuAdapter", FakeAdapter):
-                host, task = await self._start_host(root, CapturingModelClient([]), channels=["feishu"])
+            with patch("xagent.integrations.weixin.WeixinAdapter", FakeAdapter):
+                host, task = await self._start_host(root, CapturingModelClient([]), channels=["weixin"])
                 try:
                     await asyncio.sleep(0)
-                    self.assertEqual(host.channel_status["feishu"]["state"], "connected")
+                    self.assertEqual(host.channel_status["weixin"]["state"], "connected")
                     self.assertEqual(host.channel_status["api"]["state"], "disconnected")
                 finally:
                     await host.stop()
@@ -231,7 +234,6 @@ class RuntimeTransportTests(unittest.IsolatedAsyncioTestCase):
                     port = available.getsockname()[1]
                 config["channels"] = {
                     "api": {"enabled": True, "host": "127.0.0.1", "port": port},
-                    "feishu": {"app_id": "test", "app_secret": "test"},
                     "weixin": {"account_id": "test"}, "voice": {"api_key": "test-key"},
                 }
                 (root / "config.yaml").write_text(yaml.safe_dump(config))
@@ -239,7 +241,7 @@ class RuntimeTransportTests(unittest.IsolatedAsyncioTestCase):
                 store.save_credentials(WeixinCredentials("test", "https://example.test", "test", "owner"))
                 loop = asyncio.get_running_loop()
                 hosts = []
-                selected = ["api", "feishu", "weixin", "voice"] if restore else []
+                selected = ["api", "weixin", "voice"] if restore else []
 
                 def launch(root, channels):
                     self.assertEqual(channels, selected)
@@ -248,7 +250,7 @@ class RuntimeTransportTests(unittest.IsolatedAsyncioTestCase):
                     hosts.append((host, task))
                     return host.status()
 
-                with patch("xagent.integrations.feishu.FeishuAdapter", FakeAdapter), patch(
+                with patch(
                     "xagent.integrations.weixin.WeixinAdapter", FakeAdapter,
                 ), patch("xagent.interfaces.voice.factory.create_local_voice_runtime", side_effect=lambda **kwargs: FakeVoice(**kwargs)), patch(
                     "xagent.interfaces.cli.agent_runtime.start_runtime", side_effect=launch,
@@ -280,29 +282,31 @@ class RuntimeTransportTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_terminal_channel_controls_can_reconnect_using_live_capabilities(self):
         from tests.test_channel_lifecycle import FakeAdapter
+        from xagent.integrations.weixin.state import WeixinCredentials, WeixinStateStore
         from xagent.interfaces.cli.launcher import _managed_channel_actions, _run_managed_channel_action
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             write_config(root)
+            WeixinStateStore(root).save_credentials(WeixinCredentials("test", "https://example.test", "test", "owner"))
             config = yaml.safe_load((root / "config.yaml").read_text())
-            config["channels"]["feishu"] = {"app_id": "test", "app_secret": "test"}
+            config["channels"]["weixin"] = {"account_id": "test"}
             (root / "config.yaml").write_text(yaml.safe_dump(config))
-            with patch("xagent.integrations.feishu.FeishuAdapter", FakeAdapter):
+            with patch("xagent.integrations.weixin.WeixinAdapter", FakeAdapter):
                 host, task = await self._start_host(root, CapturingModelClient([]))
                 try:
                     for _ in range(2):
-                        actions = await asyncio.to_thread(_managed_channel_actions, root, "feishu")
+                        actions = await asyncio.to_thread(_managed_channel_actions, root, "weixin")
                         self.assertFalse(next(row for row in actions if row.key == "connect").disabled)
                         self.assertEqual(await asyncio.to_thread(
-                            _run_managed_channel_action, root, "feishu", "connect"), 0)
-                        actions = await asyncio.to_thread(_managed_channel_actions, root, "feishu")
+                            _run_managed_channel_action, root, "weixin", "connect"), 0)
+                        actions = await asyncio.to_thread(_managed_channel_actions, root, "weixin")
                         self.assertFalse(next(row for row in actions if row.key == "disconnect").disabled)
                         self.assertEqual(await asyncio.to_thread(
-                            _run_managed_channel_action, root, "feishu", "disconnect"), 0)
+                            _run_managed_channel_action, root, "weixin", "disconnect"), 0)
                         self.assertTrue(host.runtime_ready)
-                        self.assertNotIn("feishu", host.adapters)
-                    actions = await asyncio.to_thread(_managed_channel_actions, root, "feishu")
+                        self.assertNotIn("weixin", host.adapters)
+                    actions = await asyncio.to_thread(_managed_channel_actions, root, "weixin")
                     self.assertFalse(next(row for row in actions if row.key == "connect").disabled)
                 finally:
                     await host.stop()
@@ -400,7 +404,7 @@ class RuntimeTransportTests(unittest.IsolatedAsyncioTestCase):
                 try:
                     status = await client.status()
                     self.assertEqual(status["state"], "running")
-                    self.assertEqual(set(status["channels"]), {"api", "feishu", "weixin", "voice"})
+                    self.assertEqual(set(status["channels"]), {"api", "weixin", "voice"})
                     self.assertTrue(all(row["state"] == "disconnected" for row in status["channels"].values()))
                     self.assertEqual(os.stat(host.paths.socket_path).st_mode & 0o777, 0o600)
                     events = [event async for event in client.chat_events(user_id="alice", user_message="hello", event_id="one")]

@@ -38,12 +38,10 @@ from .agents import (
 from .agent_runtime import handle_channel_connection, runtime_status
 from .channels import (
     CHANNEL_API,
-    CHANNEL_FEISHU,
     CHANNEL_VOICE,
     CHANNEL_WEIXIN,
     api_config,
     channel_readiness,
-    feishu_config,
     load_config_file,
     voice_config,
     weixin_config,
@@ -101,7 +99,6 @@ from .setup import (
     _format_init_command,
     build_voice_setup_schema,
     handle_init,
-    handle_init_feishu,
     handle_init_weixin,
 )
 from .terminal_ui import MenuOption, ReturnToLauncherHome, TerminalUI
@@ -251,7 +248,7 @@ def _launcher_channel_options(config_dir: Path) -> list[MenuOption]:
         "Failed": ("!", "bold red"),
         "Needs configuration": ("○", "yellow"),
     }
-    for channel, title in ((CHANNEL_API, "API"), (CHANNEL_FEISHU, "Feishu"),
+    for channel, title in ((CHANNEL_API, "API"),
                            (CHANNEL_WEIXIN, "Weixin"), (CHANNEL_VOICE, "Voice")):
         row = _channel_control_view(config_dir, channel, runtime)
         control = _channel_connection_actions(runtime, row)[0]
@@ -335,12 +332,6 @@ def _launcher_config_snapshot(config_dir: Path) -> dict[str, Any]:
         return load_config_file(config_dir)
     except Exception:
         return {}
-
-
-def _feishu_channel_is_configured(config_dir: Path) -> bool:
-    config = _launcher_config_snapshot(config_dir)
-    data = feishu_config(config)
-    return bool(data.get("app_id") and data.get("app_secret"))
 
 
 def _weixin_channel_is_configured(config_dir: Path) -> bool:
@@ -469,17 +460,6 @@ def _managed_channel_actions(
     if channel == CHANNEL_API:
         actions.append(MenuOption("configure", "Configure", "Set the API address and whether it is enabled."))
         actions.append(MenuOption("address", "Address", "Show the HTTP/WebSocket API address."))
-    if channel == CHANNEL_FEISHU:
-        channel_ready = _feishu_channel_is_configured(config_dir)
-        actions.append(
-            MenuOption(
-                "setup",
-                "Configure" if channel_ready else "Set up",
-                "Replace channels.feishu credentials."
-                if channel_ready
-                else "Configure channels.feishu before starting this channel.",
-            )
-        )
     if channel == CHANNEL_WEIXIN:
         channel_ready = _weixin_channel_is_configured(config_dir)
         actions.append(
@@ -521,7 +501,7 @@ def _launcher_help_content(*, config_dir: Path, initialized: bool) -> Text:
     content.append(_format_init_command("xagent start", config_dir=config_dir), style="cyan")
     content.append("\n    Start the Agent with API; connect other channels on demand.\n")
     content.append("  ")
-    content.append(_format_init_command("xagent channel <api|feishu|weixin|voice> connect|disconnect", config_dir=config_dir), style="cyan")
+    content.append(_format_init_command("xagent channel <api|weixin|voice> connect|disconnect", config_dir=config_dir), style="cyan")
     content.append("\n    Connect or disconnect one channel; also available in the Channel menu.\n")
     content.append("  ")
     content.append(_format_init_command("xagent web start", config_dir=config_dir), style="cyan")
@@ -540,11 +520,6 @@ def _launcher_help_content(*, config_dir: Path, initialized: bool) -> Text:
     content.append("\n    Follow the Agent runtime log.\n")
 
     content.append("\nIntegrations:\n")
-    content.append("  ")
-    content.append(_format_init_command("xagent feishu setup", config_dir=config_dir), style="cyan")
-    content.append("\n    Configure Feishu, restart the Agent to apply changes, then connect with ")
-    content.append(_format_init_command("xagent channel feishu connect", config_dir=config_dir), style="cyan")
-    content.append(".\n")
     content.append("  ")
     content.append(_format_init_command("xagent weixin setup", config_dir=config_dir), style="cyan")
     content.append("\n    Configure Weixin, restart the Agent to apply changes, then connect with ")
@@ -586,7 +561,7 @@ def _launcher_overview_subtitle(overview: RuntimeOverview) -> str:
         lines.append("")
     for item in active_items:
         line = f"{item.name:<10} {item.value}"
-        if item.name in {"API", "Web", "Voice", "Feishu", "Weixin"} and item.value == "running" and item.detail:
+        if item.name in {"API", "Web", "Voice", "Weixin"} and item.value == "running" and item.detail:
             line += f"  {item.detail}"
         elif item.name in {"Runtime", "Tasks"} and item.detail:
             line += f"  {item.detail}"
@@ -619,21 +594,6 @@ def _run_managed_channel_action(config_dir: Path, channel: str, action: str) -> 
                     show_next_steps=False,
                 )
             )
-        already_configured = _feishu_channel_is_configured(config_dir)
-        return handle_init_feishu(
-            _launcher_args(
-                config_dir=str(config_dir),
-                app_id=None,
-                app_secret=None,
-                manual=False,
-                force=already_configured,
-                stream=None,
-                group_fetch_limit=None,
-                group_reply_only_when_mentioned=None,
-                show_intro=False,
-                show_next_steps=False,
-            )
-        )
     if channel == CHANNEL_API and action == "address":
         print(_api_channel_url(config_dir))
         return 0
@@ -769,35 +729,12 @@ def _voice_summary_subtitle(config: dict[str, Any]) -> str:
     return f"Provider: Soniox\nInterruptions: {mode}\nAPI key: {credential}"
 
 
-def _feishu_config_subtitle(config_dir: Path) -> str:
-    if not _feishu_channel_is_configured(config_dir):
-        return "Feishu is not configured yet."
-    data = feishu_config(_launcher_config_snapshot(config_dir))
-    app_id = str(data.get("app_id") or "").strip()
-    return f"Configured App ID: {app_id}" if app_id else "Feishu is configured."
-
-
 def _weixin_config_subtitle(config_dir: Path) -> str:
     if not _weixin_channel_is_configured(config_dir):
         return "Weixin is not configured yet."
     data = weixin_config(_launcher_config_snapshot(config_dir))
     account_id = str(data.get("account_id") or "").strip()
     return f"Configured account: {account_id}" if account_id else "Weixin is configured."
-
-
-def _launcher_feishu_setup_args(config_dir: Path):
-    return _launcher_args(
-        config_dir=str(config_dir),
-        app_id=None,
-        app_secret=None,
-        manual=False,
-        force=_feishu_channel_is_configured(config_dir),
-        stream=None,
-        group_fetch_limit=None,
-        group_reply_only_when_mentioned=None,
-        show_intro=False,
-        show_next_steps=False,
-    )
 
 
 def _launcher_weixin_setup_args(config_dir: Path):
@@ -813,32 +750,6 @@ def _launcher_weixin_setup_args(config_dir: Path):
         show_intro=False,
         show_next_steps=False,
     )
-
-
-def _run_feishu_config_launcher(ui: TerminalUI, config_dir: Path) -> None:
-    while True:
-        option = ui.select_menu(
-            title="xAgent Channel / Feishu / Configure",
-            subtitle=_feishu_config_subtitle(config_dir),
-            options=[
-                MenuOption(
-                    "setup",
-                    "Configure",
-                    "Create or replace the Feishu bot credentials.",
-                ),
-                MenuOption("back", "Back", "Return to Feishu."),
-            ],
-            footer="↑/↓ Move • Enter Select  •  q Back",
-        )
-        if option is None or option.key == "back":
-            return
-        ui.clear()
-        result = handle_init_feishu(_launcher_feishu_setup_args(config_dir))
-        if result == SETUP_EXIT_CANCELLED:
-            continue
-        if result == 0:
-            ui.pause("Press Enter to return to the launcher")
-            raise ReturnToLauncherHome()
 
 
 def _run_weixin_config_launcher(ui: TerminalUI, config_dir: Path) -> None:
@@ -888,9 +799,6 @@ def _run_managed_channel_launcher(
             return
         ui.clear()
         if option.key == "refresh":
-            continue
-        if option.key == "setup" and channel == CHANNEL_FEISHU:
-            _run_feishu_config_launcher(ui, config_dir)
             continue
         if option.key == "setup" and channel == CHANNEL_WEIXIN:
             _run_weixin_config_launcher(ui, config_dir)

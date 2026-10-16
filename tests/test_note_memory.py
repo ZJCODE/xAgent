@@ -143,7 +143,7 @@ class NoteStoreTests(unittest.IsolatedAsyncioTestCase):
             "source:\n"
             "  diary:\n"
             "  - '2026-08-19'\n"
-            "  person: feishu:ou_a\n"
+            "  person: weixin:wx_a\n"
             "created: '2026-08-19'\n"
             "updated: '2026-08-19'\n"
             "---\n\n"
@@ -483,7 +483,7 @@ class MemoryHandlerNotebookTests(unittest.IsolatedAsyncioTestCase):
             note_store=self.notes if notes_enabled else None,
         )
 
-    def _batch(self, count=20, sender="jun", channel="feishu"):
+    def _batch(self, count=20, sender="jun", channel="weixin"):
         messages = [
             Message.create(content=f"message {index}", role=RoleType.USER, sender_id=sender)
             for index in range(count)

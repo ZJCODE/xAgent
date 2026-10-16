@@ -1448,7 +1448,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         decision = await Agent.decide_participation(
             agent,
             context="[room context]\nroom_id: oc_group\n\nAlice 2026-06-18 10:00: should we ship?\n[/room context]",
-            source="feishu",
+            source="weixin",
             event_type="group_message",
             metadata={"chat_id": "oc_group", "sender_name": "Alice"},
         )
@@ -1463,17 +1463,17 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_respond_uses_stored_interval_without_storing_another_user_message(self):
         first = Message.create("line one", role=RoleType.USER, sender_id="alice")
-        first.channel = "feishu"
+        first.channel = "weixin"
         first.metadata = {
-            "room_key": "feishu:oc_group",
+            "room_key": "weixin:oc_group",
             "storage_cursor": 1,
             "sender_name": "Alice",
             "addressed_to_agent": False,
         }
         second = Message.create("line two", role=RoleType.USER, sender_id="alice")
-        second.channel = "feishu"
+        second.channel = "weixin"
         second.metadata = {
-            "room_key": "feishu:oc_group",
+            "room_key": "weixin:oc_group",
             "storage_cursor": 2,
             "sender_name": "Alice",
             "addressed_to_agent": False,
@@ -1489,7 +1489,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
 
         events = [
             event
-            async for event in Agent.respond(agent, "feishu:oc_group", 2, stream=False)
+            async for event in Agent.respond(agent, "weixin:oc_group", 2, stream=False)
         ]
 
         self.assertEqual(
@@ -1511,7 +1511,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         decision = await Agent.decide_participation(
             agent,
             context="ambient group message",
-            source="feishu",
+            source="weixin",
             event_type="group_message",
         )
 
@@ -1876,12 +1876,12 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
             agent,
             user_message="hello",
             user_id="alice",
-            channel="feishu",
+            channel="weixin",
             room_name="group-1",
         )
 
-        self.assertEqual(observability.turn_kwargs["channel"], "feishu")
-        self.assertEqual(observability.turn_kwargs["session_id"], "feishu:group-1")
+        self.assertEqual(observability.turn_kwargs["channel"], "weixin")
+        self.assertEqual(observability.turn_kwargs["session_id"], "weixin:group-1")
 
     async def test_run_memory_maintenance_flushes_observability(self):
         storage = InMemoryMessageStorage()
@@ -1941,7 +1941,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
             agent,
             user_message="早啊",
             user_id="ou_new",
-            channel="feishu",
+            channel="weixin",
             sender_name="Alice",
             stream=False,
         ):
@@ -1954,7 +1954,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
             agent,
             user_message="早啊",
             user_id="ou_new",
-            channel="feishu",
+            channel="weixin",
             sender_name="ou_new",
             stream=False,
         ):
@@ -2253,7 +2253,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         result = await Agent.observe(
             agent,
             context="预拉取的群历史 recap。",
-            source="feishu",
+            source="weixin",
             event_type="history_recap",
         )
 
@@ -2303,7 +2303,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         await Agent.observe(
             agent,
             context="Alice said hello in the group.",
-            source="feishu",
+            source="weixin",
             event_type="group_message",
             metadata={"sender_id": "ou_user", "sender_name": "Alice"},
         )

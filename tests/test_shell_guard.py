@@ -179,11 +179,11 @@ class ToolExecutorGuardTests(unittest.IsolatedAsyncioTestCase):
             [FakeToolCall(name="lookup")],
             [],
             user_id="alice",
-            channel="feishu",
+            channel="weixin",
             room_name="Eng",
             inbox_kind="user_turn",
         )
         self.assertEqual(seen["user_id"], "alice")
-        self.assertEqual(seen["channel"], "feishu")
+        self.assertEqual(seen["channel"], "weixin")
         self.assertEqual(seen["room_name"], "Eng")
         self.assertEqual(seen["inbox_kind"], "user_turn")

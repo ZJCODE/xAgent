@@ -9,14 +9,14 @@ class ChatTurnRequestTests(unittest.TestCase):
         request = ChatTurnRequest(
             user_message="hello",
             user_id="alice",
-            channel="feishu",
+            channel="weixin",
             room_name="group-1",
             channel_instructions="mention with at tags",
         )
         kwargs = request.to_chat_kwargs()
         self.assertEqual(kwargs["user_message"], "hello")
         self.assertEqual(kwargs["user_id"], "alice")
-        self.assertEqual(kwargs["channel"], "feishu")
+        self.assertEqual(kwargs["channel"], "weixin")
         self.assertEqual(kwargs["inbox_kind"], InboxKind.USER_TURN.value)
         self.assertEqual(kwargs["room_name"], "group-1")
         self.assertEqual(kwargs["channel_instructions"], "mention with at tags")
@@ -28,18 +28,18 @@ class ChatTurnRequestTests(unittest.TestCase):
     def test_to_chat_kwargs_includes_sender_name_when_present(self):
         request = ChatTurnRequest(
             user_message="hello",
-            user_id="ou_user",
-            channel="feishu",
+            user_id="wx_user",
+            channel="weixin",
             sender_name="Alice",
         )
         kwargs = request.to_chat_kwargs()
         self.assertEqual(kwargs["sender_name"], "Alice")
 
-    def test_feishu_group_builder_shape_matches_chat_events(self):
+    def test_room_builder_shape_matches_chat_events(self):
         request = ChatTurnRequest(
             user_message="ping",
             user_id="Alice",
-            channel="feishu",
+            channel="weixin",
             inbox_kind="user_turn",
             room_name="Eng",
             channel_instructions="For mentions, use at tags",

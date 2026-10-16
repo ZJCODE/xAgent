@@ -6,7 +6,7 @@ import argparse
 import sys
 
 from . import agent_runtime, agents, processes_status, runtime, setup, update
-from .channels import CHANNEL_API, CHANNEL_FEISHU, CHANNEL_VOICE, CHANNEL_WEIXIN
+from .channels import CHANNEL_API, CHANNEL_VOICE, CHANNEL_WEIXIN
 
 
 class XAgentArgumentParser(argparse.ArgumentParser):
@@ -32,7 +32,6 @@ class XAgentArgumentParser(argparse.ArgumentParser):
             "Setup:",
             "  setup       Configure the active agent",
             "  agents      Create, select, inspect, or remove agents",
-            "  feishu      Configure the Feishu channel",
             "  weixin      Configure the Weixin channel",
             "  update      Update xAgent using its current installation method",
             "",
@@ -74,13 +73,10 @@ class XAgentArgumentParser(argparse.ArgumentParser):
             "  xagent logs -f",
             "  xagent voice setup",
             "  xagent channel voice connect",
-            "  xagent feishu setup",
-            "  xagent start",
-            "  xagent channel feishu connect",
             "  xagent weixin setup",
             "  xagent start",
             "  xagent channel weixin connect",
-            "  xagent channel feishu disconnect",
+            "  xagent channel weixin disconnect",
             "  xagent config show",
             "  xagent memory list --days 7",
             "  xagent doctor",
@@ -92,8 +88,8 @@ class XAgentArgumentParser(argparse.ArgumentParser):
 
 def _show_help_on_missing_action(parser: argparse.ArgumentParser) -> None:
     """Make a parser print its help instead of an error when a required
-    sub-action / sub-target is omitted (e.g. ``xagent feishu`` without
-    ``start`` or ``setup``)."""
+    sub-action / sub-target is omitted (e.g. ``xagent weixin`` without
+    ``setup``)."""
 
     _original_error = parser.error
 
@@ -126,7 +122,7 @@ def _add_channel_argument(
         action="append",
         default=None,
         metavar="CHANNELS",
-        help=f"Channel(s) to use: api, feishu, weixin, voice, or comma-separated values (default: {default_label})",
+        help=f"Channel(s) to use: api, weixin, voice, or comma-separated values (default: {default_label})",
     )
 
 
@@ -215,38 +211,6 @@ def _add_voice_runtime_arguments(
     )
 
 
-def _add_feishu_setup_arguments(parser: argparse.ArgumentParser) -> None:
-    _add_agent_argument(parser)
-    parser.add_argument("--app-id", dest="app_id", default=None, help="Feishu app id (cli_xxx)")
-    parser.add_argument("--app-secret", dest="app_secret", default=None, help="Feishu app secret")
-    parser.add_argument(
-        "--manual",
-        action="store_true",
-        help="Enter App ID/Secret manually instead of the one-click QR code flow",
-    )
-    parser.add_argument(
-        "--stream",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="Use Feishu streaming cards for in-progress replies",
-    )
-
-    parser.add_argument(
-        "--group-fetch-limit",
-        type=int,
-        default=None,
-        dest="group_fetch_limit",
-        help="How many recent group/topic messages to fetch before replying (default: 10)",
-    )
-    parser.add_argument(
-        "--group-reply-only-when-mentioned",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="Record unmentioned group/topic messages but only reply when @mentioned",
-    )
-    parser.add_argument("--force", action="store_true", help="Overwrite existing channels.feishu config")
-
-
 def _add_weixin_setup_arguments(parser: argparse.ArgumentParser) -> None:
     _add_agent_argument(parser)
     parser.add_argument("--base-url", default=None, help="Weixin iLink API base URL")
@@ -294,11 +258,7 @@ def _add_channel_lifecycle_subparsers(
     sub = parent_parser.add_subparsers(dest=dest, metavar="<action>")
     sub.required = True
 
-    if has_setup and channel == CHANNEL_FEISHU:
-        setup_parser = sub.add_parser("setup", help="Enable or reconfigure the Feishu channel")
-        _add_feishu_setup_arguments(setup_parser)
-        setup_parser.set_defaults(handler=setup.handle_init_feishu)
-    elif has_setup and channel == CHANNEL_WEIXIN:
+    if has_setup and channel == CHANNEL_WEIXIN:
         setup_parser = sub.add_parser("setup", help="Enable or reconfigure the Weixin DM channel")
         _add_weixin_setup_arguments(setup_parser)
         setup_parser.set_defaults(handler=setup.handle_init_weixin)
@@ -419,7 +379,6 @@ def build_parser() -> argparse.ArgumentParser:
     _show_help_on_missing_action(web_parser)
 
     for channel, setup_handler, add_arguments in (
-        ("feishu", setup.handle_init_feishu, _add_feishu_setup_arguments),
         ("weixin", setup.handle_init_weixin, _add_weixin_setup_arguments),
     ):
         channel_parser = subparsers.add_parser(channel, help=f"Configure the {channel} channel")
@@ -429,7 +388,7 @@ def build_parser() -> argparse.ArgumentParser:
         channel_setup.set_defaults(handler=setup_handler)
 
     channel_parser = subparsers.add_parser("channel", help="Connect or disconnect one channel")
-    channel_parser.add_argument("channel", choices=("api", "feishu", "weixin", "voice"))
+    channel_parser.add_argument("channel", choices=("api", "weixin", "voice"))
     channel_parser.add_argument("channel_action", choices=("connect", "disconnect"))
     _add_agent_argument(channel_parser)
     channel_parser.set_defaults(handler=agent_runtime.handle_channel_connection)

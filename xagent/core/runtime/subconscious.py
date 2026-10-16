@@ -871,7 +871,7 @@ class SubconsciousLoop:
             exact_tokens, _partial = token_map[id(contact)]
             if hint in exact_tokens:
                 return contact
-        # -- pass 2: the hint may wrap an exact token ("Telos (feishu)").
+        # -- pass 2: the hint may wrap an exact token ("Telos (weixin)").
         # A short hint must not match a longer name ("李" must not hit "李明").
         for contact in contacts:
             _exact, partial_tokens = token_map[id(contact)]

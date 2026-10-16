@@ -14,7 +14,6 @@ from xagent.integrations.api.adapter import ApiChannelAdapter
 from xagent.integrations.api.chat_service import ChatService
 from xagent.integrations.api.config import ChatLimits
 from xagent.integrations.api.task_dispatch import TaskDispatchService
-from xagent.integrations.feishu.adapter import FeishuAdapter
 from xagent.integrations.weixin.adapter import WeixinAdapter
 
 
@@ -45,15 +44,6 @@ class ArtifactContinuationDeliveryTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result.content, "Both reports are ready.")
         self.assertEqual([attachment["path"] for attachment in result.attachments], ["first.txt", "second.txt"])
-
-    async def test_feishu_scheduled_result_keeps_text_and_all_attachments(self):
-        adapter = FeishuAdapter.__new__(FeishuAdapter)
-        adapter.agent = SimpleNamespace(workspace_dir=self.root)
-
-        result = await adapter._scheduled_task_event_result(self.events, prompt="Send reports", user_id="alice")
-
-        self.assertEqual(result.content, "Both reports are ready.")
-        self.assertEqual([attachment.path.name for attachment in result.attachments], ["first.txt", "second.txt"])
 
     async def test_weixin_scheduled_result_keeps_text_and_all_attachments(self):
         adapter = WeixinAdapter.__new__(WeixinAdapter)

@@ -179,7 +179,7 @@ export interface TasksResponse {
   has_more: boolean;
 }
 
-export type ChannelId = "api" | "voice" | "feishu" | "weixin";
+export type ChannelId = "api" | "voice" | "weixin";
 
 export type ChannelRuntimeStatus = "running" | "connected" | "starting" | "connecting" | "reconnecting" | "disconnecting" | "disconnected" | "stopped" | "disabled" | "error" | "failed";
 
@@ -240,7 +240,7 @@ export interface ChannelLogsResponse {
   lines: number;
 }
 
-export type SetupChannelId = Extract<ChannelId, "voice" | "feishu" | "weixin">;
+export type SetupChannelId = Extract<ChannelId, "voice" | "weixin">;
 
 export interface VoiceSelectionInput {
   voice_api_key: string;
@@ -271,18 +271,6 @@ export interface VoiceSetupSchema {
   can_force: boolean;
 }
 
-export interface FeishuSetupSchema {
-  credential_modes: SetupOption[];
-  defaults: {
-    credential_mode: string;
-    stream: boolean;
-    group_fetch_limit: number;
-    group_reply_only_when_mentioned: boolean;
-  };
-  configured: boolean;
-  can_force: boolean;
-}
-
 export interface WeixinSetupSchema {
   defaults: {
     base_url: string;
@@ -295,7 +283,7 @@ export interface WeixinSetupSchema {
   can_force: boolean;
 }
 
-export type ChannelSetupSchema = VoiceSetupSchema | FeishuSetupSchema | WeixinSetupSchema;
+export type ChannelSetupSchema = VoiceSetupSchema | WeixinSetupSchema;
 
 export interface ChannelSetupInput {
   force: boolean;

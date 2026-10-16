@@ -16,7 +16,6 @@ import yaml
 from xagent.components.message import MessageStorage
 from xagent.interfaces.cli import (
     AgentCLI,
-    FeishuInitSelection,
     InitSelection,
     ReturnToLauncherHome,
     SetupCancelled,
@@ -36,12 +35,10 @@ from xagent.interfaces.cli import (
     _run_resetup_launcher,
     _run_web_launcher,
     build_parser,
-    collect_feishu_init_selection_terminal_ui,
     handle_agents,
     handle_chat,
     handle_doctor,
     handle_init,
-    handle_init_feishu,
     handle_init_voice,
     handle_init_weixin,
     handle_logs,
@@ -102,7 +99,7 @@ def _selection(**overrides) -> InitSelection:
     )
 
 
-def _write_runtime(directory: str, *, feishu: bool = False, weixin: bool = False, voice: bool = False) -> None:
+def _write_runtime(directory: str, *, weixin: bool = False, voice: bool = False) -> None:
     config = {
         "provider": {
             "name": "openai",
@@ -118,11 +115,6 @@ def _write_runtime(directory: str, *, feishu: bool = False, weixin: bool = False
             }
         },
     }
-    if feishu:
-        config["channels"]["feishu"] = {
-            "app_id": "cli_test",
-            "app_secret": "secret",
-        }
     if weixin:
         config["channels"]["weixin"] = {
             "account_id": "bot@im.bot",
@@ -289,39 +281,6 @@ class CLICommandTests(unittest.TestCase):
         self.assertIn(str(workspace / "assets" / "generated" / "images" / "result.png"), output)
         self.assertIn("Attachments:", output)
         self.assertNotIn("/api/workspace/blob", output)
-
-    def test_parser_supports_feishu_setup_command(self):
-        args = build_parser().parse_args([
-            "feishu",
-            "setup",
-            "--agent",
-            "work",
-            "--app-id",
-            "cli_test",
-            "--app-secret",
-            "secret",
-            "--force",
-        ])
-
-        self.assertEqual(args.command, "feishu")
-        self.assertEqual(args.feishu_action, "setup")
-        self.assertEqual(args.agent, "work")
-        self.assertEqual(args.app_id, "cli_test")
-        self.assertTrue(args.force)
-
-    def test_parser_supports_feishu_setup_runtime_options(self):
-        args = build_parser().parse_args([
-            "feishu",
-            "setup",
-            "--stream",
-            "--group-fetch-limit",
-            "20",
-            "--group-reply-only-when-mentioned",
-        ])
-
-        self.assertTrue(args.stream)
-        self.assertEqual(args.group_fetch_limit, 20)
-        self.assertTrue(args.group_reply_only_when_mentioned)
 
     def test_parser_supports_weixin_setup_command(self):
         args = build_parser().parse_args([
@@ -758,7 +717,7 @@ class CLICommandTests(unittest.TestCase):
             self.assertEqual(args.command, command)
             self.assertEqual(args.agent, "work")
         self.assertEqual(parser.parse_args(["start", "--channels", "api,voice"]).channels, ["api,voice"])
-        for command in (["api", "start"], ["feishu", "start"], ["weixin", "stop"], ["voice", "start"]):
+        for command in (["api", "start"], ["weixin", "stop"], ["voice", "start"]):
             with self.assertRaises(SystemExit), patch("sys.stderr"):
                 parser.parse_args(command)
 
@@ -884,7 +843,7 @@ class CLICommandTests(unittest.TestCase):
 
     def test_launcher_overview_subtitle_keeps_only_name_and_value(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            _write_runtime(tmpdir, feishu=True)
+            _write_runtime(tmpdir, weixin=True)
 
             with patch("xagent.interfaces.cli.overview.running_pid", return_value=None):
                 subtitle = _launcher_overview_subtitle(build_runtime_overview(Path(tmpdir)))
@@ -900,10 +859,10 @@ class CLICommandTests(unittest.TestCase):
 
     def test_launcher_overview_subtitle_shows_running_channel_details_only(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            _write_runtime(tmpdir, feishu=True, voice=True)
+            _write_runtime(tmpdir, weixin=True, voice=True)
 
             state = {"state": "running", "runtime_ready": True, "pid": 26807,
-                     "channels": {name: {"state": "running"} for name in ("api", "voice", "feishu")}}
+                     "channels": {name: {"state": "running"} for name in ("api", "voice", "weixin")}}
             with patch("xagent.interfaces.cli.overview.runtime_snapshot", return_value=state):
                 with patch("xagent.interfaces.cli.overview.running_pid", return_value=99999):
                     subtitle = _launcher_overview_subtitle(build_runtime_overview(Path(tmpdir)))
@@ -913,11 +872,11 @@ class CLICommandTests(unittest.TestCase):
         self.assertIn("API        running  127.0.0.1:8010", subtitle)
         self.assertIn("Web        running", subtitle)
         self.assertIn("99999", subtitle)
-        self.assertIn("Feishu     running", subtitle)
-        self.assertIn("Not configured: Weixin, Image", subtitle)
+        self.assertIn("Weixin     running", subtitle)
+        self.assertIn("Not configured: Image", subtitle)
         displayed_names = [line.split()[0] for line in subtitle.splitlines()
-                           if line and line.split()[0] in {"Runtime", "Web", "API", "Feishu", "Voice", "Model", "Search", "Tasks"}]
-        self.assertEqual(displayed_names, ["Runtime", "Web", "API", "Feishu", "Voice", "Model", "Search", "Tasks"])
+                           if line and line.split()[0] in {"Runtime", "Web", "API", "Weixin", "Voice", "Model", "Search", "Tasks"}]
+        self.assertEqual(displayed_names, ["Runtime", "Web", "API", "Weixin", "Voice", "Model", "Search", "Tasks"])
         self.assertNotIn("\nImage ", subtitle)
 
     def test_launcher_channel_options_are_entry_points(self):
@@ -926,7 +885,7 @@ class CLICommandTests(unittest.TestCase):
             options = _launcher_channel_options(Path(tmpdir))
         titles = [option.title for option in options]
 
-        self.assertEqual(titles, ["Chat", "API", "Feishu", "Weixin", "Voice", "Back"])
+        self.assertEqual(titles, ["Chat", "API", "Weixin", "Voice", "Back"])
         self.assertNotIn("All", titles)
         self.assertNotIn("Web", titles)
 
@@ -984,68 +943,6 @@ class CLICommandTests(unittest.TestCase):
         starter.assert_called_once()
         args = starter.call_args.args[0]
         self.assertEqual(args.config_dir, "/tmp/xagent")
-
-    def test_channel_launcher_feishu_setup_runs_init_feishu_when_missing(self):
-        class FakeUI:
-            def __init__(self):
-                self.channel_choices = iter([
-                    SimpleNamespace(key="feishu", title="Feishu"),
-                    SimpleNamespace(key="back"),
-                ])
-                self.action_choices = iter([
-                    SimpleNamespace(key="setup"),
-                    SimpleNamespace(key="back"),
-                ])
-                self.feishu_choices = iter([
-                    SimpleNamespace(key="setup"),
-                ])
-                self.action_option_titles = []
-
-            def select_menu(self, *, title, subtitle, options, footer):
-                del subtitle, footer
-                if title == "xAgent Channel":
-                    return next(self.channel_choices)
-                if title == "xAgent Channel / Feishu":
-                    self.action_option_titles = [option.title for option in options]
-                    return next(self.action_choices)
-                if title == "xAgent Channel / Feishu / Configure":
-                    return next(self.feishu_choices)
-                raise AssertionError(f"Unexpected menu: {title}")
-
-            def clear(self):
-                return None
-
-            def pause(self, message="Press Enter to continue"):
-                del message
-                return None
-
-            def print_panel(self, *args, **kwargs):
-                raise AssertionError("No error panel expected")
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            _write_runtime(tmpdir)
-            fake_ui = FakeUI()
-
-            with patch("xagent.interfaces.cli.launcher.TerminalUI", return_value=fake_ui):
-                with patch("xagent.interfaces.cli.launcher.handle_init_feishu", return_value=0) as init_feishu:
-                    exit_code = _run_channel_launcher(Path(tmpdir))
-
-        self.assertEqual(exit_code, 0)
-        self.assertIn("Set up", fake_ui.action_option_titles)
-        init_feishu.assert_called_once()
-        args = init_feishu.call_args.args[0]
-        self.assertEqual(args.config_dir, tmpdir)
-        self.assertFalse(args.force)
-        self.assertFalse(args.show_intro)
-        self.assertFalse(args.show_next_steps)
-
-    def test_channel_launcher_feishu_keeps_configure_when_configured(self):
-        from xagent.interfaces.cli.launcher import _managed_channel_actions
-        with tempfile.TemporaryDirectory() as tmpdir:
-            _write_runtime(tmpdir, feishu=True)
-            actions = _managed_channel_actions(Path(tmpdir), "feishu")
-        self.assertEqual([row.title for row in actions], ["Connect", "Configure", "Refresh", "Back"])
-        self.assertFalse(any(row.key in {"start", "stop", "restart"} for row in actions))
 
     def test_runtime_overview_flags_search_missing_key(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1651,165 +1548,7 @@ class CLICommandTests(unittest.TestCase):
             _run_partial_update_launcher(fake_ui, Path(tmpdir))
 
         self.assertEqual(fake_ui.option_keys, ["model", "search", "image_generation", "observability", "voice", "back"])
-        self.assertNotIn("feishu", fake_ui.option_keys)
         self.assertNotIn("weixin", fake_ui.option_keys)
-
-    def test_channel_feishu_configure_success_returns_to_home(self):
-        class FakeUI:
-            def __init__(self):
-                self.channel_choices = iter([
-                    SimpleNamespace(key="feishu", title="Feishu"),
-                ])
-                self.action_choices = iter([
-                    SimpleNamespace(key="setup"),
-                ])
-                self.feishu_choices = iter([
-                    SimpleNamespace(key="setup"),
-                ])
-                self.pause_messages = []
-
-            def select_menu(self, *, title, subtitle, options, footer):
-                del subtitle, options, footer
-                if title == "xAgent Channel":
-                    return next(self.channel_choices)
-                if title == "xAgent Channel / Feishu":
-                    return next(self.action_choices)
-                if title == "xAgent Channel / Feishu / Configure":
-                    return next(self.feishu_choices)
-                raise AssertionError(f"Unexpected menu: {title}")
-
-            def clear(self):
-                return None
-
-            def pause(self, message="Press Enter to continue"):
-                self.pause_messages.append(message)
-
-            def print_panel(self, *args, **kwargs):
-                raise AssertionError("No error panel expected")
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            _write_runtime(tmpdir, feishu=True)
-            fake_ui = FakeUI()
-
-            with patch("xagent.interfaces.cli.launcher.TerminalUI", return_value=fake_ui):
-                with patch("xagent.interfaces.cli.launcher.handle_init_feishu", return_value=0) as init_feishu:
-                    exit_code = _run_channel_launcher(Path(tmpdir))
-
-        self.assertEqual(exit_code, 0)
-        init_args = init_feishu.call_args.args[0]
-        self.assertFalse(init_args.show_intro)
-        self.assertFalse(init_args.show_next_steps)
-        self.assertTrue(init_args.force)
-        self.assertIn("Press Enter to return to the launcher", fake_ui.pause_messages)
-
-    def test_channel_feishu_configure_back_skips_pause(self):
-        class FakeUI:
-            def __init__(self):
-                self.channel_choices = iter([
-                    SimpleNamespace(key="feishu", title="Feishu"),
-                    SimpleNamespace(key="back"),
-                ])
-                self.action_choices = iter([
-                    SimpleNamespace(key="setup"),
-                    SimpleNamespace(key="back"),
-                ])
-                self.feishu_choices = iter([
-                    SimpleNamespace(key="setup"),
-                    SimpleNamespace(key="back"),
-                ])
-                self.pause_calls = []
-                self.menu_titles = []
-
-            def select_menu(self, *, title, subtitle, options, footer):
-                del subtitle, options, footer
-                self.menu_titles.append(title)
-                if title == "xAgent Channel":
-                    return next(self.channel_choices)
-                if title == "xAgent Channel / Feishu":
-                    return next(self.action_choices)
-                if title == "xAgent Channel / Feishu / Configure":
-                    return next(self.feishu_choices)
-                raise AssertionError(f"Unexpected menu: {title}")
-
-            def clear(self):
-                return None
-
-            def pause(self, message="Press Enter to continue"):
-                self.pause_calls.append(message)
-
-            def print_panel(self, *args, **kwargs):
-                raise AssertionError("No panel expected")
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            _write_runtime(tmpdir, feishu=True)
-            fake_ui = FakeUI()
-
-            with patch("xagent.interfaces.cli.launcher.TerminalUI", return_value=fake_ui):
-                with patch(
-                    "xagent.interfaces.cli.launcher.handle_init_feishu",
-                    return_value=SETUP_EXIT_CANCELLED,
-                ):
-                    exit_code = _run_channel_launcher(Path(tmpdir))
-
-        self.assertEqual(exit_code, 0)
-        self.assertEqual(fake_ui.pause_calls, [])
-        self.assertEqual(
-            [title for title in fake_ui.menu_titles if title == "xAgent Channel / Feishu / Configure"],
-            ["xAgent Channel / Feishu / Configure", "xAgent Channel / Feishu / Configure"],
-        )
-
-    def test_channel_launcher_feishu_setup_back_skips_pause(self):
-        class FakeUI:
-            def __init__(self):
-                self.channel_choices = iter([
-                    SimpleNamespace(key="feishu", title="Feishu"),
-                    SimpleNamespace(key="back"),
-                ])
-                self.action_choices = iter([
-                    SimpleNamespace(key="setup"),
-                    SimpleNamespace(key="back"),
-                ])
-                self.feishu_choices = iter([
-                    SimpleNamespace(key="back"),
-                ])
-                self.pause_calls = []
-                self.feishu_menu_titles = []
-
-            def select_menu(self, *, title, subtitle, options, footer):
-                del subtitle, footer
-                if title == "xAgent Channel":
-                    return next(self.channel_choices)
-                if title == "xAgent Channel / Feishu":
-                    self.feishu_menu_titles.append(title)
-                    return next(self.action_choices)
-                if title == "xAgent Channel / Feishu / Configure":
-                    return next(self.feishu_choices)
-                raise AssertionError(f"Unexpected menu: {title}")
-
-            def clear(self):
-                return None
-
-            def pause(self, message="Press Enter to continue"):
-                self.pause_calls.append(message)
-
-            def print_panel(self, *args, **kwargs):
-                raise AssertionError("No panel expected")
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            _write_runtime(tmpdir)
-            fake_ui = FakeUI()
-
-            with patch("xagent.interfaces.cli.launcher.TerminalUI", return_value=fake_ui):
-                with patch(
-                    "xagent.interfaces.cli.launcher.handle_init_feishu",
-                    return_value=SETUP_EXIT_CANCELLED,
-                ) as init_feishu:
-                    exit_code = _run_channel_launcher(Path(tmpdir))
-
-        self.assertEqual(exit_code, 0)
-        init_feishu.assert_not_called()
-        self.assertEqual(fake_ui.pause_calls, [])
-        self.assertEqual(len(fake_ui.feishu_menu_titles), 2)
 
     def test_voice_config_launcher_disables_dependent_actions_when_voice_not_enabled(self):
         class FakeUI:
@@ -1924,7 +1663,7 @@ class CLICommandTests(unittest.TestCase):
 
             from xagent.interfaces.cli.launcher import _managed_channel_actions
 
-            actions = {option.key: option for option in _managed_channel_actions(Path(tmpdir), "feishu")}
+            actions = {option.key: option for option in _managed_channel_actions(Path(tmpdir), "weixin")}
 
         self.assertEqual(actions["setup"].title, "Set up")
         self.assertFalse(actions["setup"].disabled)
@@ -1933,11 +1672,11 @@ class CLICommandTests(unittest.TestCase):
 
     def test_managed_channel_actions_keeps_configure_when_channel_ready(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            _write_runtime(tmpdir, feishu=True)
+            _write_runtime(tmpdir, weixin=True)
 
             from xagent.interfaces.cli.launcher import _managed_channel_actions
 
-            actions = {option.key: option for option in _managed_channel_actions(Path(tmpdir), "feishu")}
+            actions = {option.key: option for option in _managed_channel_actions(Path(tmpdir), "weixin")}
 
         self.assertEqual(actions["setup"].title, "Configure")
         self.assertFalse(actions["setup"].disabled)
@@ -2167,8 +1906,8 @@ class CLICommandTests(unittest.TestCase):
 
         self.assertIn("xagent setup", setup_help)
         self.assertIn("xagent setup --force", resetup_help)
-        self.assertIn("xagent channel <api|feishu|weixin|voice> connect|disconnect", setup_help)
-        self.assertIn("xagent channel feishu connect", setup_help)
+        self.assertIn("xagent channel <api|weixin|voice> connect|disconnect", setup_help)
+        self.assertIn("xagent channel weixin connect", setup_help)
         self.assertIn("restart the Agent to apply changes", setup_help)
         self.assertNotIn("--dir", setup_help)
         self.assertNotIn("--dir", resetup_help)
@@ -2185,12 +1924,11 @@ class CLICommandTests(unittest.TestCase):
         self.assertIn("  web", help_text)
         self.assertIn("  voice", help_text)
         self.assertIn("  channel", help_text)
-        self.assertIn("xagent channel feishu disconnect", help_text)
+        self.assertIn("xagent channel weixin disconnect", help_text)
         self.assertIn("connect other channels on demand", help_text)
         self.assertNotIn("its enabled channels", help_text)
         self.assertIn("  agents", help_text)
         self.assertIn("  run", help_text)
-        self.assertIn("  feishu", help_text)
         self.assertIn("  weixin", help_text)
         self.assertIn("  status", help_text)
         self.assertNotIn("  service", help_text)
@@ -2297,7 +2035,7 @@ class CLICommandTests(unittest.TestCase):
         self.assertIn("xagent chat --agent work", output)
         self.assertIn("xagent web start --agent work", output)
         self.assertIn("xagent start --agent work", output)
-        self.assertIn("xagent feishu setup --agent work", output)
+        self.assertIn("xagent weixin setup --agent work", output)
         self.assertIn("xagent start --agent work", output)
         self.assertIn("xagent voice setup --agent work", output)
         self.assertIn("xagent start --agent work", output)
@@ -2397,7 +2135,7 @@ class CLICommandTests(unittest.TestCase):
 
     def test_init_voice_updates_only_voice_channel(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            _write_runtime(tmpdir, feishu=True)
+            _write_runtime(tmpdir, weixin=True)
             identity_path = Path(tmpdir) / "identity.md"
             before_identity = identity_path.read_text(encoding="utf-8")
             args = argparse.Namespace(
@@ -2416,7 +2154,7 @@ class CLICommandTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(after_identity, before_identity)
         self.assertEqual(config["provider"]["model"], "gpt-5.4-mini")
-        self.assertEqual(config["channels"]["feishu"]["app_id"], "cli_test")
+        self.assertEqual(config["channels"]["weixin"]["account_id"], "bot@im.bot")
         self.assertEqual(
             config["channels"]["voice"],
             {
@@ -2490,7 +2228,6 @@ class CLICommandTests(unittest.TestCase):
             expected_runtime = f"Runtime: {Path(tmpdir).resolve()}"
             expected_config = f"Config: {config_file}"
             voice_ui = FakeUI()
-            feishu_ui = FakeUI()
             weixin_ui = FakeUI()
 
             voice_args = argparse.Namespace(
@@ -2498,17 +2235,6 @@ class CLICommandTests(unittest.TestCase):
                 agent=None,
                 api_key="voice-key",
                 force=False,
-            )
-            feishu_args = argparse.Namespace(
-                config_dir=tmpdir,
-                agent=None,
-                app_id="cli_test",
-                app_secret="secret",
-                manual=False,
-                force=False,
-                stream=None,
-                group_fetch_limit=None,
-                group_reply_only_when_mentioned=None,
             )
             weixin_args = argparse.Namespace(
                 config_dir=tmpdir,
@@ -2526,10 +2252,6 @@ class CLICommandTests(unittest.TestCase):
                 with patch("xagent.interfaces.cli.setup._print_voice_post_setup"):
                     self.assertEqual(handle_init_voice(voice_args), 0)
 
-            with patch("xagent.interfaces.cli.setup.TerminalUI", return_value=feishu_ui):
-                with patch("xagent.interfaces.cli.setup._print_feishu_post_setup"):
-                    self.assertEqual(handle_init_feishu(feishu_args), 0)
-
             with patch("xagent.interfaces.cli.setup.TerminalUI", return_value=weixin_ui):
                 with patch(
                     "xagent.interfaces.cli.setup.collect_weixin_init_selection_terminal_ui",
@@ -2543,336 +2265,10 @@ class CLICommandTests(unittest.TestCase):
                     with patch("xagent.interfaces.cli.setup._print_weixin_post_setup"):
                         self.assertEqual(handle_init_weixin(weixin_args), 0)
 
-        for ui, title in ((voice_ui, "Voice Setup"), (feishu_ui, "Feishu Setup"), (weixin_ui, "Weixin Setup")):
+        for ui, title in ((voice_ui, "Voice Setup"), (weixin_ui, "Weixin Setup")):
             panel_text = "\n".join(message for panel_title, message in ui.panels if panel_title == title)
             self.assertIn(expected_runtime, panel_text)
             self.assertIn(expected_config, panel_text)
-
-    def test_init_feishu_uses_terminal_wizard(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            _write_runtime(tmpdir)
-            args = argparse.Namespace(
-                config_dir=tmpdir,
-                app_id=None,
-                app_secret=None,
-                manual=False,
-                force=False,
-            )
-            selection = FeishuInitSelection(app_id="cli_test", app_secret="secret")
-
-            with patch("xagent.interfaces.cli.setup.TerminalUI") as terminal_ui:
-                with patch(
-                    "xagent.interfaces.cli.setup.collect_feishu_init_selection_terminal_ui",
-                    return_value=selection,
-                ) as wizard:
-                    with patch("xagent.interfaces.cli.setup._print_feishu_post_setup"):
-                        exit_code = handle_init_feishu(args)
-
-        self.assertEqual(exit_code, 0)
-        wizard.assert_called_once_with(args=args, ui=terminal_ui.return_value)
-
-    def test_init_feishu_updates_unified_config(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            _write_runtime(tmpdir)
-            args = argparse.Namespace(
-                config_dir=tmpdir,
-                app_id=None,
-                app_secret=None,
-                manual=True,
-                force=False,
-                stream=None,
-
-                group_fetch_limit=None,
-
-                group_reply_only_when_mentioned=None,
-            )
-
-            with patch("builtins.input", return_value="cli_test") as input_mock:
-                with patch("xagent.interfaces.cli.setup.getpass.getpass", return_value="secret") as getpass_mock:
-                    with patch("sys.stdout", new_callable=io.StringIO) as stdout:
-                        exit_code = handle_init_feishu(args)
-
-            config = yaml.safe_load((Path(tmpdir) / "config.yaml").read_text(encoding="utf-8"))
-
-        self.assertEqual(exit_code, 0)
-        input_mock.assert_called_once_with("Feishu App ID: ")
-        getpass_mock.assert_called_once_with("Feishu App Secret: ")
-        self.assertEqual(config["channels"]["feishu"]["app_id"], "cli_test")
-        self.assertNotIn("enabled", config["channels"]["feishu"])
-        self.assertNotIn("log_level", config["channels"]["feishu"])
-        self.assertIs(config["channels"]["feishu"]["stream"], False)
-        self.assertIs(config["channels"]["feishu"]["group_reply_only_when_mentioned"], False)
-
-        self.assertNotIn("runtime", config)
-        output = stdout.getvalue()
-        self.assertIn("xagent start", output)
-
-    def test_init_feishu_wizard_selection_writes_runtime_options(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            _write_runtime(tmpdir)
-            args = argparse.Namespace(
-                config_dir=tmpdir,
-                app_id=None,
-                app_secret=None,
-                manual=False,
-                force=False,
-                stream=None,
-
-                group_fetch_limit=None,
-
-                group_reply_only_when_mentioned=None,
-            )
-            selection = FeishuInitSelection(
-                app_id="cli_room",
-                app_secret="room_secret",
-                stream=True,
-                group_fetch_limit=20,
-
-                group_reply_only_when_mentioned=True,
-                credential_mode="manual",
-            )
-
-            with patch(
-                "xagent.interfaces.cli.setup.collect_feishu_init_selection_terminal_ui",
-                return_value=selection,
-            ):
-                with patch("xagent.interfaces.cli.setup._print_feishu_post_setup"):
-                    exit_code = handle_init_feishu(args)
-
-            config = yaml.safe_load((Path(tmpdir) / "config.yaml").read_text(encoding="utf-8"))
-
-        self.assertEqual(exit_code, 0)
-        self.assertEqual(config["channels"]["feishu"]["app_id"], "cli_room")
-        self.assertEqual(config["channels"]["feishu"]["app_secret"], "room_secret")
-        self.assertIs(config["channels"]["feishu"]["stream"], True)
-        self.assertEqual(config["channels"]["feishu"]["group_fetch_limit"], 20)
-
-        self.assertIs(config["channels"]["feishu"]["group_reply_only_when_mentioned"], True)
-
-    def test_init_feishu_one_click_writes_registered_credentials(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            _write_runtime(tmpdir)
-            args = argparse.Namespace(
-                config_dir=tmpdir,
-                app_id=None,
-                app_secret=None,
-                manual=False,
-                force=False,
-                stream=None,
-
-                group_fetch_limit=None,
-
-                group_reply_only_when_mentioned=None,
-            )
-
-            with patch(
-                "xagent.interfaces.cli.setup._register_feishu_app_via_qr",
-                return_value=("cli_qr_app", "qr_secret"),
-            ) as register_mock:
-                with patch("sys.stdout", new_callable=io.StringIO) as stdout:
-                    exit_code = handle_init_feishu(args)
-
-            config = yaml.safe_load((Path(tmpdir) / "config.yaml").read_text(encoding="utf-8"))
-            output = stdout.getvalue()
-
-        self.assertEqual(exit_code, 0)
-        register_mock.assert_called_once_with()
-        self.assertEqual(config["channels"]["feishu"]["app_id"], "cli_qr_app")
-        self.assertEqual(config["channels"]["feishu"]["app_secret"], "qr_secret")
-        self.assertIs(config["channels"]["feishu"]["stream"], False)
-        self.assertIs(config["channels"]["feishu"]["group_reply_only_when_mentioned"], False)
-        self.assertIn("Feishu Ready", output)
-        self.assertIn("Optional: Enable group chat support", output)
-        self.assertIn("Contact Scope", output)
-        self.assertNotIn("⚠️", output)
-        self.assertIn("xagent start", output)
-
-    def test_feishu_wizard_interactive_defaults_skip_optional_questions(self):
-        class FakeUI:
-            interactive = True
-
-            def __init__(self):
-                self.select_labels = []
-                self.app_access_titles = []
-
-            def select(self, *, label, subtitle="", options, default_index=0):
-                del subtitle, default_index
-                self.select_labels.append(label)
-                if label == "App Access":
-                    self.app_access_titles = [option.title for option in options]
-                    return SimpleNamespace(key="one_click", title="Create new Feishu app")
-                raise AssertionError(f"Unexpected wizard step: {label}")
-
-            def record(self, label, value, *, skipped=False):
-                del label, value, skipped
-
-            def ask_text(self, *args, **kwargs):
-                raise AssertionError("Optional text questions should be skipped")
-
-            def ask_secret(self, *args, **kwargs):
-                raise AssertionError("Optional secret questions should be skipped")
-
-            def print_panel(self, *args, **kwargs):
-                raise AssertionError("No extra confirmation panel should be shown")
-
-            def confirm(self, *args, **kwargs):
-                raise AssertionError("No confirmation question should be shown")
-
-        args = argparse.Namespace(
-            config_dir=".",
-            app_id=None,
-            app_secret=None,
-            manual=False,
-            force=False,
-            stream=None,
-            group_fetch_limit=None,
-
-            group_reply_only_when_mentioned=None,
-        )
-        ui = FakeUI()
-
-        with patch("xagent.interfaces.cli.setup._register_feishu_app_via_qr", return_value=("cli_qr_app", "qr_secret")):
-            selection = collect_feishu_init_selection_terminal_ui(args=args, ui=ui)
-
-        self.assertEqual(ui.select_labels, ["App Access"])
-        self.assertEqual(ui.app_access_titles, [
-            "Create new Feishu app",
-            "Use existing App ID / App Secret",
-            "Back",
-        ])
-        self.assertEqual(selection.app_id, "cli_qr_app")
-        self.assertEqual(selection.app_secret, "qr_secret")
-        self.assertIs(selection.stream, False)
-        self.assertEqual(selection.group_fetch_limit, 10)
-
-        self.assertIs(selection.group_reply_only_when_mentioned, False)
-        self.assertEqual(selection.credential_mode, "one_click")
-
-    def test_feishu_wizard_app_access_back_cancels_setup(self):
-        class FakeUI:
-            interactive = True
-
-            def select(self, *, label, subtitle="", options, default_index=0):
-                del subtitle, options, default_index
-                if label != "App Access":
-                    raise AssertionError(f"Unexpected wizard step: {label}")
-                return SimpleNamespace(key="back", title="Back")
-
-        args = argparse.Namespace(
-            config_dir=".",
-            app_id=None,
-            app_secret=None,
-            manual=False,
-            force=False,
-            stream=None,
-            group_fetch_limit=None,
-
-            group_reply_only_when_mentioned=None,
-        )
-
-        with self.assertRaises(SetupCancelled):
-            collect_feishu_init_selection_terminal_ui(args=args, ui=FakeUI())
-
-    def test_init_feishu_one_click_cancelled_leaves_config_untouched(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            _write_runtime(tmpdir)
-            args = argparse.Namespace(
-                config_dir=tmpdir,
-                app_id=None,
-                app_secret=None,
-                manual=False,
-                force=False,
-                stream=None,
-
-                group_fetch_limit=None,
-
-                group_reply_only_when_mentioned=None,
-            )
-
-            with patch("xagent.interfaces.cli.setup._register_feishu_app_via_qr", return_value=None):
-                with patch("sys.stdout"):
-                    exit_code = handle_init_feishu(args)
-
-            config = yaml.safe_load((Path(tmpdir) / "config.yaml").read_text(encoding="utf-8"))
-
-        self.assertEqual(exit_code, 1)
-        self.assertNotIn("feishu", config.get("channels", {}))
-
-    def test_init_feishu_explicit_credentials_skip_qr_flow(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            _write_runtime(tmpdir)
-            args = argparse.Namespace(
-                config_dir=tmpdir,
-                app_id="cli_explicit",
-                app_secret="explicit_secret",
-                manual=False,
-                force=False,
-                stream=None,
-
-                group_fetch_limit=None,
-
-                group_reply_only_when_mentioned=None,
-            )
-
-            with patch("xagent.interfaces.cli.setup._register_feishu_app_via_qr") as register_mock:
-                with patch("sys.stdout"):
-                    exit_code = handle_init_feishu(args)
-
-            config = yaml.safe_load((Path(tmpdir) / "config.yaml").read_text(encoding="utf-8"))
-
-        self.assertEqual(exit_code, 0)
-        register_mock.assert_not_called()
-        self.assertEqual(config["channels"]["feishu"]["app_id"], "cli_explicit")
-        self.assertEqual(config["channels"]["feishu"]["app_secret"], "explicit_secret")
-
-    def test_register_feishu_app_via_qr_formats_link_payload_and_returns_credentials(self):
-        from xagent.interfaces.cli.setup import _register_feishu_app_via_qr
-
-        def fake_register_app(*, on_qr_code, on_status_change, source, cancel_event):
-            on_qr_code({
-                "url": "https://open.feishu.cn/page/launcher?user_code=Z9YC-ZV4A&from=sdk&tp=sdk",
-                "expire_in": 3600,
-            })
-            on_status_change({"status": "polling"})
-            return {"client_id": "cli_reg", "client_secret": "reg_secret", "user_info": {"name": "Admin"}}
-
-        with patch("lark_oapi.register_app", side_effect=fake_register_app):
-            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
-                result = _register_feishu_app_via_qr()
-
-        output = stdout.getvalue()
-
-        self.assertEqual(result, ("cli_reg", "reg_secret"))
-        self.assertIn("Click this link to authorize", output)
-        self.assertIn("https://open.feishu.cn/page/launcher?user_code=Z9YC-ZV4A&from=sdk&tp=sdk", output)
-        # self.assertIn("Verification code: Z9YC-ZV4A", output)
-        # self.assertIn("Link expires in: 60 minutes", output)
-        self.assertIn("Waiting for authorization...", output)
-        self.assertNotIn("{'url':", output)
-        # QR code should either be shown or installation tip provided
-        qr_or_tip = "Scan this QR code" in output or "Install qrcode" in output
-        self.assertTrue(qr_or_tip, "Should display either QR code or installation tip")
-
-    def test_register_feishu_app_via_qr_handles_access_denied(self):
-        from lark_oapi.scene.registration import AppAccessDeniedError
-
-        from xagent.interfaces.cli.setup import _register_feishu_app_via_qr
-
-        def fake_register_app(**_kwargs):
-            raise AppAccessDeniedError("access_denied", "admin rejected")
-
-        with patch("lark_oapi.register_app", side_effect=fake_register_app):
-            with patch("sys.stdout"):
-                result = _register_feishu_app_via_qr()
-
-        self.assertIsNone(result)
-
-    def test_start_all_includes_feishu_when_credentials_exist_without_enabled(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            _write_runtime(tmpdir, feishu=True)
-            config = yaml.safe_load((Path(tmpdir) / "config.yaml").read_text(encoding="utf-8"))
-
-        self.assertEqual(enabled_channels_from_config(config), ["api", "feishu"])
 
     def test_start_all_includes_weixin_when_account_exists_without_enabled(self):
         config = {
@@ -2901,14 +2297,13 @@ class CLICommandTests(unittest.TestCase):
     def test_enabled_channels_do_not_implicitly_add_api_when_channels_are_explicit(self):
         config = {
             "channels": {
-                "feishu": {
-                    "app_id": "cli_test",
-                    "app_secret": "secret",
+                "weixin": {
+                    "account_id": "bot@im.bot",
                 }
             }
         }
 
-        self.assertEqual(enabled_channels_from_config(config), ["feishu"])
+        self.assertEqual(enabled_channels_from_config(config), ["weixin"])
 
     def test_enabled_channels_can_select_weixin_without_api(self):
         config = {"channels": {"weixin": {"account_id": "bot@im.bot"}}}
@@ -2936,7 +2331,7 @@ class CLICommandTests(unittest.TestCase):
 
     def test_web_client_runs_in_foreground(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            _write_runtime(tmpdir, feishu=True)
+            _write_runtime(tmpdir, weixin=True)
             args = argparse.Namespace(
                 config_dir=tmpdir,
                 host=None,
@@ -3044,7 +2439,7 @@ class CLICommandTests(unittest.TestCase):
         self.assertIn(f"http://127.0.0.1:{DEFAULT_WEB_CLIENT_PORT}", stdout_a.getvalue())
         self.assertIn(f"http://127.0.0.1:{DEFAULT_WEB_CLIENT_PORT}", stdout_b.getvalue())
 
-    def test_start_defaults_to_feishu_when_only_feishu_is_enabled(self):
+    def test_start_defaults_to_weixin_when_only_weixin_is_enabled(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             _write_runtime(tmpdir)
             args = argparse.Namespace(config_dir=tmpdir, channels=None)
@@ -3087,10 +2482,10 @@ class CLICommandTests(unittest.TestCase):
     def test_start_starts_one_runtime_with_selected_channels(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             _write_runtime(tmpdir)
-            args = argparse.Namespace(config_dir=tmpdir, channels=['api,feishu'])
+            args = argparse.Namespace(config_dir=tmpdir, channels=['api,weixin'])
             with patch("xagent.interfaces.cli.agent_runtime.start_runtime", return_value={"status": "running"}) as starter:
                 self.assertEqual(handle_start(args), 0)
-            starter.assert_called_once_with(Path(tmpdir).resolve(), ['api', 'feishu'])
+            starter.assert_called_once_with(Path(tmpdir).resolve(), ['api', 'weixin'])
 
     def test_start_voice_selects_channel_on_the_shared_runtime(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -3127,7 +2522,7 @@ class CLICommandTests(unittest.TestCase):
 
     def test_status_reports_core_channels_and_pending_restart(self):
         args = argparse.Namespace(config_dir="/tmp/xagent", json_output=True)
-        status = {"status": "degraded", "runtime_running": True, "needs_restart": True, "channels": {"feishu": {"status": "failed"}}}
+        status = {"status": "degraded", "runtime_running": True, "needs_restart": True, "channels": {"weixin": {"status": "failed"}}}
         with patch("xagent.interfaces.cli.agent_runtime.runtime_status", new_callable=AsyncMock, return_value=status):
             with patch("sys.stdout", new_callable=io.StringIO) as output:
                 self.assertEqual(handle_status(args), 0)
@@ -3168,7 +2563,7 @@ class CLICommandTests(unittest.TestCase):
         output = "".join(call.args[0] for call in stdout.write.call_args_list if call.args)
         self.assertIn("Unknown channel 'custom'", output)
         self.assertIn("api", output)
-        self.assertIn("feishu", output)
+        self.assertIn("weixin", output)
 
     def test_processes_parser_registers_status_and_restart(self):
         status_args = build_parser().parse_args(["processes", "status", "--json"])

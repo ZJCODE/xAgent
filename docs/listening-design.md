@@ -1,15 +1,13 @@
 # 持续听，但不逐条排队回答
 
-Status: implemented (v1). 飞书群 / 飞书私聊 / 微信私聊走感知环 + 注意环；
+Status: implemented (v1). 微信私聊走感知环 + 注意环；
 Web/API 与语音未改。说之前的陈旧复查、STEER 打断、重启回放积压仍按第 6 节推迟。
 
 ## 0. 问题
 
-今天 agent 把"一条消息到达"等同于"一个回合"。飞书群未 @ 的消息走
-`_dispatch → chat_lock → 拉飞书历史 → decide_participation → chat | observe`，
-每条一次；私聊每条直接 `chat`，按 chat 加锁串行。别人连续说五句，agent 就排队做
-五次"要不要接话"，后几次评估的还是已经被自己回复越过的消息；私聊里第 3 条改了
-主意，第 1 条已经在回了。
+今天 agent 把"一条消息到达"等同于"一个回合"。如果每条消息直接触发判断或回复：
+群聊里别人连续说五句，agent 就排队做五次"要不要接话"，后几次评估的还是已经被自己
+回复越过的消息；私聊里第 3 条改了主意，第 1 条已经在回了。
 
 `observe` 是决策为"否"之后才落地，听到不等于记住。
 
@@ -104,19 +102,17 @@ agent.respond(room_key, through_cursor)
 ### 2.6 所有输出都是送达
 
 `respond` 产出的文本通过渠道的送达接口发到 `room_key`，与定时任务、潜意识发言
-使用同一条 push 路径（飞书今天的 `_dispatch_scheduled_task` 那条）。飞书需要的
-`reply_to` 锚点（话题群）用区间里最后一条被 `addressing` 的消息。
+使用同一条 push 路径。`reply_to` 锚点用区间里最后一条被 `addressing` 的消息。
 
 入站消息不再"拥有"一个回复。渠道 adapter 的职责收缩为两件事：把到达的消息写进
 消息表并 `notice`；把 agent 要说的话送到房间。
 
 ## 3. 直接给我的话
 
-不做成单独对象。它是区间里某些消息的一个属性（`addressed_to_agent`，飞书群的
-观察元数据里今天已经有）。三条规则让"单独保留"成立：
+不做成单独对象。它是区间里某些消息的一个属性（`addressed_to_agent`）。三条规则让"单独保留"成立：
 
 1. 区间里有直接给我的话时，唤醒走短宽限，不等安静窗口。
-2. 判断不允许对含直接给我的话的区间返回"不说"（今天 @ 必回，规则不变）。
+2. 判断不允许对含直接给我的话的区间返回"不说"。
 3. `attended_through` 只在这一轮结束时推进。如果回合失败，游标不动，这些话留在
    区间里，下一轮再看。
 
@@ -127,9 +123,7 @@ agent.respond(room_key, through_cursor)
 
 | 渠道 | 房间 | 每条是否直接给我 | 变化 |
 | --- | --- | --- | --- |
-| 飞书群 / 话题群 | `feishu:<chat_id>` | @ 我 / 回复我 → 是；否则否 | 先写表再 notice；判断按区间；飞书历史 API 只在本地表有缺口时补一次 |
-| 飞书私聊 | `feishu:<chat_id>` | 是 | 不再逐条 chat；短宽限合并后一个回合 |
-| 微信私聊 | `weixin:<user_id>` | 是 | 同上 |
+| 微信私聊 | `weixin:<user_id>` | 是 | 不再逐条 chat；短宽限合并后一个回合 |
 | 语音 | 1:1 | 是 | 不变。Soniox 端点检测已经在音频层做了"等说完" |
 | Web / API | 请求方等待响应 | 是 | 不变。这是 pull 介质，客户端在等这一次响应，合并没有意义 |
 | 定时 / 潜意识 | 目标房间 | — | 不变，已经是 push；成为 `respond` 输出的同路 |
@@ -145,9 +139,6 @@ Web/API 保留 `chat_events` 原样。本方案只改 push 介质。
 - **核心** `agent.respond(room_key, through_cursor)`：复用 `_drive_claimed_turn`，
   输入来自消息表区间。
 - **核心** `decide_participation`：接受区间形状的输入；返回 `addressing`。
-- **飞书 adapter**：`_route` 的群分支与 p2p 分支都改为"写表 + notice"；
-  `_handle_chat` 的回复发送部分抽成送达接口，供 `respond` 输出调用；
-  `_fetch_group_history` 降级为补洞。
 - **微信 adapter**：`_handle_dm` 改为"写表 + notice"；送达接口复用现有发送。
 
 ## 6. 明确不在第一版做的
@@ -164,8 +155,8 @@ Web/API 保留 `chat_events` 原样。本方案只改 push 介质。
 
 每步可独立合入、独立验证。
 
-1. **消息表按房间读 + 飞书群先写表再 notice。** 已落地。
-2. **`attention.py` + `respond`。** 已落地。飞书群与私聊切到 notice；真实 Agent 用 `respond` 读区间，测试假 Agent 仍走原来的 `chat_events` 发送。
+1. **消息表按房间读。** 已落地。
+2. **`attention.py` + `respond`。** 已落地。真实 Agent 用 `respond` 读区间，测试假 Agent 仍走原来的 `chat_events` 发送。
 3. **微信私聊接入。** 已落地。
 4. 视指标决定是否做第 6 节里的项目。
 

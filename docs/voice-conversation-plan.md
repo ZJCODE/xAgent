@@ -88,7 +88,7 @@ no new dependency, fully reversible.
 ### 1.1 Voice channel instructions
 
 Add a voice `channel_instructions` block. The plumbing exists
-(`prompt_registry.py`, and Feishu already uses it); only the content is new.
+(`prompt_registry.py`); only the content is new.
 Draft rules, to be tuned against recordings:
 
 - One idea per turn. Two or three short sentences unless explicitly asked for
@@ -357,7 +357,7 @@ separation, not identity:
 
 Design for being wrong: the docs are explicit that endpoint detection reduces
 diarization accuracy, and we are not giving up endpointing. So voice attribution
-will be noisier than Feishu's, and the correct response is to make errors cheap
+will be noisier than transport-level attribution, and the correct response is to make errors cheap
 and repairable rather than to pretend they will not happen. Noisy separation is
 still categorically better than collapsing a household into `local_voice`.
 

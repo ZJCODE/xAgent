@@ -223,7 +223,7 @@ class RuntimeTurnFaultTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(RuntimeError, "cleanup failed"):
             _ = [event async for event in agent.chat_events("hello", user_id="alice", channel="api")]
         self.assertFalse(agent.inbox.busy)
-        ticket = agent.inbox.reserve_turn(channel="feishu")
+        ticket = agent.inbox.reserve_turn(channel="weixin")
         await asyncio.wait_for(agent.inbox.acquire_turn(ticket), 0.1)
         agent.inbox.release_turn()
 

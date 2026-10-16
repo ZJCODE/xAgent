@@ -37,9 +37,9 @@ class ContactManagementTests(unittest.TestCase):
             contacts_file = Path(tmpdir) / "contacts.json"
             contacts = [
                 ContactEntry(
-                    channel="feishu",
-                    user_id="ou_123",
-                    target={"chat_id": "oc_xxx", "sender_name": "张三"},
+                    channel="weixin",
+                    user_id="wx_123",
+                    target={"user_id": "wx_123", "sender_name": "张三"},
                     last_seen="2026-06-22 15:30:00",
                     interaction_count=5,
                 ),
@@ -47,9 +47,9 @@ class ContactManagementTests(unittest.TestCase):
             save_contacts(contacts_file, contacts)
             loaded = load_contacts(contacts_file)
             self.assertEqual(len(loaded), 1)
-            self.assertEqual(loaded[0].channel, "feishu")
-            self.assertEqual(loaded[0].user_id, "ou_123")
-            self.assertEqual(loaded[0].target["chat_id"], "oc_xxx")
+            self.assertEqual(loaded[0].channel, "weixin")
+            self.assertEqual(loaded[0].user_id, "wx_123")
+            self.assertEqual(loaded[0].target["user_id"], "wx_123")
             self.assertEqual(loaded[0].interaction_count, 5)
 
     def test_upsert_contact_new(self):
@@ -89,7 +89,7 @@ class ContactManagementTests(unittest.TestCase):
     def test_upsert_contact_different_channels_independent(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             contacts_file = Path(tmpdir) / "contacts.json"
-            upsert_contact(contacts_file, "feishu", "user_1", {"chat_id": "oc_1"})
+            upsert_contact(contacts_file, "api", "user_1", {"user_id": "user_1"})
             upsert_contact(contacts_file, "weixin", "user_1", {"user_id": "user_1"})
             loaded = load_contacts(contacts_file)
             self.assertEqual(len(loaded), 2)
@@ -345,8 +345,8 @@ class SubconsciousLoopTests(unittest.TestCase):
     def test_pick_recipient_does_not_let_short_hint_match_longer_name(self):
         contacts = [
             ContactEntry(
-                channel="feishu",
-                user_id="ou_liming",
+                channel="weixin",
+                user_id="wx_liming",
                 target={"sender_name": "李明"},
                 last_seen="2026-08-16 00:00:00",
             ),
@@ -354,25 +354,25 @@ class SubconsciousLoopTests(unittest.TestCase):
         self.assertIsNone(SubconsciousLoop._pick_recipient(contacts, "李"))
         self.assertEqual(
             SubconsciousLoop._pick_recipient(contacts, "李明").user_id,
-            "ou_liming",
+            "wx_liming",
         )
         self.assertEqual(
-            SubconsciousLoop._pick_recipient(contacts, "李明 (feishu)").user_id,
-            "ou_liming",
+            SubconsciousLoop._pick_recipient(contacts, "李明 (weixin)").user_id,
+            "wx_liming",
         )
 
     def test_record_interaction(self):
         agent = self._make_agent_mock()
         with tempfile.TemporaryDirectory() as tmpdir:
-            loop = SubconsciousLoop(agent, workspace=Path(tmpdir), deliverable_channels={"feishu"})
+            loop = SubconsciousLoop(agent, workspace=Path(tmpdir), deliverable_channels={"weixin"})
             loop.record_interaction(
-                channel="feishu",
-                user_id="ou_123",
-                target={"chat_id": "oc_xxx", "sender_name": "张三"},
+                channel="weixin",
+                user_id="wx_123",
+                target={"user_id": "wx_123", "sender_name": "张三"},
             )
             contacts = load_contacts(loop.contacts_file)
             self.assertEqual(len(contacts), 1)
-            self.assertEqual(contacts[0].channel, "feishu")
+            self.assertEqual(contacts[0].channel, "weixin")
 
     def test_recent_messages_injected_into_prompt(self):
         """Verify recent conversation messages are included in the LLM prompt."""
@@ -506,26 +506,26 @@ class SubconsciousLoopTests(unittest.TestCase):
     def test_collect_relationship_context_reads_store_cards_without_contacts(self):
         agent = self._make_agent_mock()
         memory_handler = MagicMock()
-        memory_handler.relationship_store.list_keys = AsyncMock(return_value=["feishu:alice"])
+        memory_handler.relationship_store.list_keys = AsyncMock(return_value=["weixin:alice"])
         memory_handler.get_relationship_context = AsyncMock(return_value="## Alice\nAn older open thread.")
         agent.memory_handler = memory_handler
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            loop = SubconsciousLoop(agent, workspace=Path(tmpdir), deliverable_channels={"feishu"})
+            loop = SubconsciousLoop(agent, workspace=Path(tmpdir), deliverable_channels={"weixin"})
             context = asyncio.run(loop._collect_relationship_context())
 
         self.assertIn("older open thread", context)
         memory_handler.get_relationship_context.assert_awaited_once()
         kwargs = memory_handler.get_relationship_context.await_args.kwargs
-        self.assertEqual(kwargs["speaker_keys"], ["feishu:alice"])
+        self.assertEqual(kwargs["speaker_keys"], ["weixin:alice"])
         self.assertTrue(kwargs["include_routing_id"])
 
     def test_collect_relationship_context_omits_other_channel_cards(self):
-        """This runtime only sees people it can send to; Feishu ids stay off the API loop."""
+        """This runtime only sees people it can send to; Weixin ids stay off the API loop."""
         agent = self._make_agent_mock()
         memory_handler = MagicMock()
         memory_handler.relationship_store.list_keys = AsyncMock(
-            return_value=["feishu:alice", "api:web_user"]
+            return_value=["weixin:alice", "api:web_user"]
         )
         memory_handler.get_relationship_context = AsyncMock(
             return_value="## Web user [user_id: web_user]\nReachable here."
@@ -550,9 +550,9 @@ class SubconsciousLoopTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             loop = SubconsciousLoop(agent, workspace=Path(tmpdir), deliverable_channels={"api"})
             loop.record_interaction(
-                channel="feishu",
-                user_id="ou_telos",
-                target={"chat_id": "oc_xxx", "sender_name": "Telos"},
+                channel="weixin",
+                user_id="wx_telos",
+                target={"user_id": "wx_telos", "sender_name": "Telos"},
             )
             loop.record_interaction(
                 channel="api",
@@ -569,7 +569,7 @@ class SubconsciousLoopTests(unittest.TestCase):
         agent = self._make_agent_mock()
         memory_handler = MagicMock()
         memory_handler.relationship_store.list_keys = AsyncMock(
-            return_value=["feishu:alice", "api:web_user"]
+            return_value=["weixin:alice", "api:web_user"]
         )
         memory_handler.get_relationship_context = AsyncMock(return_value="should not be used")
         agent.memory_handler = memory_handler
@@ -586,9 +586,9 @@ class SubconsciousLoopTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             loop = SubconsciousLoop(agent, workspace=Path(tmpdir), deliverable_channels={"api"})
             loop.record_interaction(
-                channel="feishu",
-                user_id="ou_123",
-                target={"chat_id": "oc_xxx", "sender_name": "张三"},
+                channel="weixin",
+                user_id="wx_123",
+                target={"user_id": "wx_123", "sender_name": "张三"},
             )
             loop.record_interaction(
                 channel="api",
@@ -602,16 +602,16 @@ class SubconsciousLoopTests(unittest.TestCase):
             self.assertEqual(channels, {"api"})
             user_ids = {contact.user_id for contact in deliverable}
             self.assertIn("api_user", user_ids)
-            self.assertNotIn("ou_123", user_ids)
+            self.assertNotIn("wx_123", user_ids)
 
     def test_deliverable_filter_without_declared_channels_exposes_no_contacts(self):
         agent = self._make_agent_mock()
         with tempfile.TemporaryDirectory() as tmpdir:
             loop = SubconsciousLoop(agent, workspace=Path(tmpdir))
             loop.record_interaction(
-                channel="feishu",
-                user_id="ou_123",
-                target={"chat_id": "oc_xxx", "sender_name": "张三"},
+                channel="weixin",
+                user_id="wx_123",
+                target={"user_id": "wx_123", "sender_name": "张三"},
             )
 
             deliverable = loop._filter_deliverable_contacts(load_contacts(loop.contacts_file))
@@ -726,9 +726,9 @@ class SubconsciousLoopTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             loop = SubconsciousLoop(agent, workspace=Path(tmpdir))
             loop.record_interaction(
-                channel="feishu",
-                user_id="ou_123",
-                target={"chat_id": "oc_xxx", "sender_name": "张三"},
+                channel="weixin",
+                user_id="wx_123",
+                target={"user_id": "wx_123", "sender_name": "张三"},
             )
             loop._probability = 1.0
 
@@ -795,7 +795,7 @@ class SubconsciousLoopTests(unittest.TestCase):
                 agent,
                 workspace=Path(tmpdir),
                 delivery_sink=delivery_sink,
-                deliverable_channels={"feishu"},
+                deliverable_channels={"weixin"},
             )
             loop._probability = 1.0
 
@@ -821,12 +821,12 @@ class SubconsciousLoopTests(unittest.TestCase):
                 agent,
                 workspace=Path(tmpdir),
                 delivery_sink=delivery_sink,
-                deliverable_channels={"feishu"},
+                deliverable_channels={"weixin"},
             )
             loop.record_interaction(
-                channel="feishu",
-                user_id="ou_123",
-                target={"chat_id": "oc_xxx", "sender_name": "张三"},
+                channel="weixin",
+                user_id="wx_123",
+                target={"user_id": "wx_123", "sender_name": "张三"},
             )
             loop._probability = 1.0
 
@@ -856,12 +856,12 @@ class SubconsciousLoopTests(unittest.TestCase):
                 agent,
                 workspace=Path(tmpdir),
                 delivery_sink=delivery_sink,
-                deliverable_channels={"feishu"},
+                deliverable_channels={"weixin"},
             )
             loop.record_interaction(
-                channel="feishu",
-                user_id="ou_123",
-                target={"chat_id": "oc_xxx", "sender_name": "张三"},
+                channel="weixin",
+                user_id="wx_123",
+                target={"user_id": "wx_123", "sender_name": "张三"},
             )
             loop._probability = 1.0
 
@@ -876,17 +876,17 @@ class SubconsciousLoopTests(unittest.TestCase):
             delivery = delivery_sink.await_args.args[0]
             self.assertEqual(delivery.content, "A daytime insight!")
             self.assertEqual(delivery.internal_content, "This insight might help 张三 move the thread forward.")
-            self.assertEqual(delivery.recipient.channel, "feishu")
-            self.assertEqual(delivery.recipient.user_id, "ou_123")
+            self.assertEqual(delivery.recipient.channel, "weixin")
+            self.assertEqual(delivery.recipient.user_id, "wx_123")
             agent.message_handler.store_context_event.assert_not_called()
 
     def test_undeliverable_channel_worthy_writes_subconscious_thought(self):
         agent = self._make_agent_mock()
         self._set_model_json(agent, {
-            "internal_content": "This should not pretend to reach Feishu.",
+            "internal_content": "This should not pretend to reach Weixin.",
             "worthy": True,
             "recipient_hint": "张三",
-            "external_content": "A Feishu-only note.",
+            "external_content": "A Weixin-only note.",
         })
         delivery_sink = AsyncMock()
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -897,9 +897,9 @@ class SubconsciousLoopTests(unittest.TestCase):
                 deliverable_channels={"api"},
             )
             loop.record_interaction(
-                channel="feishu",
-                user_id="ou_123",
-                target={"chat_id": "oc_xxx", "sender_name": "张三"},
+                channel="weixin",
+                user_id="wx_123",
+                target={"user_id": "wx_123", "sender_name": "张三"},
             )
             loop._probability = 1.0
 
@@ -909,7 +909,7 @@ class SubconsciousLoopTests(unittest.TestCase):
             agent.record_subconscious_thought.assert_called_once()
             self.assertEqual(
                 agent.record_subconscious_thought.call_args[0][0],
-                "This should not pretend to reach Feishu.\nI didn't send this.",
+                "This should not pretend to reach Weixin.\nI didn't send this.",
             )
             agent.message_handler.store_context_event.assert_not_called()
 
@@ -931,9 +931,9 @@ class SubconsciousLoopTests(unittest.TestCase):
             )
             save_contacts(loop.contacts_file, [
                 ContactEntry(
-                    channel="feishu",
-                    user_id="ou_123",
-                    target={"chat_id": "oc_xxx", "sender_name": "张三"},
+                    channel="weixin",
+                    user_id="wx_123",
+                    target={"user_id": "wx_123", "sender_name": "张三"},
                     last_seen="2026-06-25 09:00:00",
                 ),
                 ContactEntry(
@@ -1022,7 +1022,7 @@ class SubconsciousLoopTests(unittest.TestCase):
         """An unnamed worthy thought must not be dumped on whoever this channel can reach."""
         agent = self._make_agent_mock()
         self._set_model_json(agent, {
-            "internal_content": "This was about Telos on Feishu, not the web user.",
+            "internal_content": "This was about Telos on Weixin, not the web user.",
             "worthy": True,
             "recipient_hint": None,
             "external_content": "A reachable note.",
@@ -1043,9 +1043,9 @@ class SubconsciousLoopTests(unittest.TestCase):
                     last_seen="2026-06-25 08:00:00",
                 ),
                 ContactEntry(
-                    channel="feishu",
-                    user_id="ou_123",
-                    target={"chat_id": "oc_xxx", "sender_name": "Telos"},
+                    channel="weixin",
+                    user_id="wx_123",
+                    target={"user_id": "wx_123", "sender_name": "Telos"},
                     last_seen="2026-06-25 11:00:00",
                 ),
                 ContactEntry(
@@ -1063,7 +1063,7 @@ class SubconsciousLoopTests(unittest.TestCase):
             agent.record_subconscious_thought.assert_called_once()
             self.assertEqual(
                 agent.record_subconscious_thought.call_args[0][0],
-                "This was about Telos on Feishu, not the web user.\nI didn't send this.",
+                "This was about Telos on Weixin, not the web user.\nI didn't send this.",
             )
 
     def test_delivery_sink_failure_keeps_subconscious_thought(self):
@@ -1081,13 +1081,13 @@ class SubconsciousLoopTests(unittest.TestCase):
                 agent,
                 workspace=Path(tmpdir),
                 delivery_sink=delivery_sink,
-                deliverable_channels={"feishu"},
+                deliverable_channels={"weixin"},
             )
             loop._delivery_retry_delay_seconds = 0
             loop.record_interaction(
-                channel="feishu",
-                user_id="ou_123",
-                target={"chat_id": "oc_xxx", "sender_name": "张三"},
+                channel="weixin",
+                user_id="wx_123",
+                target={"user_id": "wx_123", "sender_name": "张三"},
             )
             loop._probability = 1.0
 
@@ -1115,13 +1115,13 @@ class SubconsciousLoopTests(unittest.TestCase):
                 agent,
                 workspace=Path(tmpdir),
                 delivery_sink=delivery_sink,
-                deliverable_channels={"feishu"},
+                deliverable_channels={"weixin"},
             )
             loop._delivery_retry_delay_seconds = 0
             loop.record_interaction(
-                channel="feishu",
-                user_id="ou_123",
-                target={"chat_id": "oc_xxx", "sender_name": "张三"},
+                channel="weixin",
+                user_id="wx_123",
+                target={"user_id": "wx_123", "sender_name": "张三"},
             )
             loop._probability = 1.0
 
@@ -1168,9 +1168,9 @@ class SubconsciousLoopTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             loop = SubconsciousLoop(agent, workspace=Path(tmpdir))
             loop.record_interaction(
-                channel="feishu",
-                user_id="ou_123",
-                target={"chat_id": "oc_xxx", "sender_name": "张三"},
+                channel="weixin",
+                user_id="wx_123",
+                target={"user_id": "wx_123", "sender_name": "张三"},
             )
             loop._probability = 1.0
 
@@ -1299,12 +1299,12 @@ class SubconsciousLoopTests(unittest.TestCase):
                 agent,
                 workspace=Path(tmpdir),
                 delivery_sink=delivery_sink,
-                deliverable_channels={"feishu"},
+                deliverable_channels={"weixin"},
             )
             loop.record_interaction(
-                channel="feishu",
-                user_id="ou_123",
-                target={"chat_id": "oc_xxx", "sender_name": "张三"},
+                channel="weixin",
+                user_id="wx_123",
+                target={"user_id": "wx_123", "sender_name": "张三"},
             )
             loop._probability = 1.0
             loop._last_experience_cursor = 3

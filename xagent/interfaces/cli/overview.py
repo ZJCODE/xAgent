@@ -16,11 +16,9 @@ from ..base import BaseAgentConfig, BaseAgentRunner
 from ..voice.config import VoiceChannelConfig
 from .channels import (
     CHANNEL_API,
-    CHANNEL_FEISHU,
     CHANNEL_VOICE,
     CHANNEL_WEIXIN,
     api_config,
-    feishu_config,
     load_config_file,
     voice_config,
     weixin_config,
@@ -111,7 +109,6 @@ def build_runtime_overview(config_dir: Path) -> RuntimeOverview:
                 _runtime_item(runtime),
                 _web_client_item(config_dir, config),
                 _service_item(config_dir, CHANNEL_API, api_config(config), runtime=runtime),
-                _service_item(config_dir, CHANNEL_FEISHU, feishu_config(config), runtime=runtime),
                 _service_item(config_dir, CHANNEL_WEIXIN, weixin_config(config), runtime=runtime),
                 _voice_item(config_dir, config, runtime=runtime),
                 _model_item(config),
@@ -283,13 +280,11 @@ def _api_service_url(config: dict[str, Any]) -> str:
 
 def _service_item(config_dir: Path, channel: str, config: dict[str, Any], *, runtime: dict[str, Any] | None = None) -> OverviewItem:
     runtime = runtime or runtime_snapshot(config_dir)
-    title = {CHANNEL_API: "API", CHANNEL_FEISHU: "Feishu", CHANNEL_WEIXIN: "Weixin"}.get(channel, channel)
+    title = {CHANNEL_API: "API", CHANNEL_WEIXIN: "Weixin"}.get(channel, channel)
     active = runtime.get("channels", {}).get(channel)
     if isinstance(active, dict):
         state, status, error = _channel_state(runtime, channel)
         return OverviewItem(title, state, status, error or (_api_service_target(config) if channel == CHANNEL_API else ""))
-    if channel == CHANNEL_FEISHU and not (config.get("app_id") and config.get("app_secret")):
-        return OverviewItem("Feishu", "not set", STATUS_DISABLED, "Setup")
     if channel == CHANNEL_WEIXIN and not config.get("account_id"):
         return OverviewItem("Weixin", "not set", STATUS_DISABLED, "Setup")
     if channel == CHANNEL_API and config.get("enabled", True) is False:

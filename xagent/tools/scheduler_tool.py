@@ -275,7 +275,7 @@ def create_schedule_task_tool(*, tasks_dir: str):
                 "action": "create",
                 "error": (
                     "No active delivery channel was available. "
-                    "Create this reminder from Web Chat, Feishu, Weixin, Voice, or CLI chat "
+                    "Create this reminder from Web Chat, Weixin, Voice, or CLI chat "
                     "so it has a place to deliver when due."
                 ),
             }

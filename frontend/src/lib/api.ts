@@ -16,7 +16,6 @@ import type {
   ChannelSetupResponse,
   ChannelSetupSchema,
   ChannelsResponse,
-  FeishuSetupSchema,
   QrSessionResponse,
   SetupChannelId,
   VoiceSetupSchema,
@@ -447,19 +446,19 @@ export async function setupChannel(
   });
 }
 
-export async function startChannelQr(channel: Extract<ChannelId, "feishu" | "weixin">): Promise<QrSessionResponse> {
+export async function startChannelQr(channel: Extract<ChannelId, "weixin">): Promise<QrSessionResponse> {
   return requestJson(`/api/channels/${channel}/qr/start`, { method: "POST" });
 }
 
 export async function pollChannelQr(
-  channel: Extract<ChannelId, "feishu" | "weixin">,
+  channel: Extract<ChannelId, "weixin">,
   sessionId: string,
 ): Promise<QrSessionResponse> {
   return requestJson(`/api/channels/${channel}/qr/${encodeURIComponent(sessionId)}`);
 }
 
 export async function cancelChannelQr(
-  channel: Extract<ChannelId, "feishu" | "weixin">,
+  channel: Extract<ChannelId, "weixin">,
   sessionId: string,
 ): Promise<{ status: string; session_id: string }> {
   return requestJson(`/api/channels/${channel}/qr/${encodeURIComponent(sessionId)}`, {

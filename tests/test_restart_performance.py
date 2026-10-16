@@ -108,11 +108,11 @@ class RestartDrainTests(unittest.IsolatedAsyncioTestCase):
         attention = AttentionLoop(addressed_grace=0)
         activity = ChannelActivity()
         activity.quiesce()
-        attention.attach_channel("feishu", activity)
+        attention.attach_channel("weixin", activity)
         speak = AsyncMock()
-        attention.register_speaker("feishu", speak)
+        attention.register_speaker("weixin", speak)
         try:
-            await attention.notice("feishu:room", addressed=True, content="pending")
+            await attention.notice("weixin:room", addressed=True, content="pending")
             # No loop is started for blocked work; the event loop stays available.
             self.assertEqual(attention._next_due(), (None, 0.0))
             self.assertEqual(attention._armed_rooms(), [])

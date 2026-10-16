@@ -635,21 +635,6 @@ wheels = [
 ]
 
 [[package]]
-name = "lark-oapi"
-version = "1.7.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "httpx" },
-    { name = "pycryptodome" },
-    { name = "requests" },
-    { name = "requests-toolbelt" },
-    { name = "websockets" },
-]
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/45/83/67095719058122617d663eaad89e06c93bffec414b5aff45a76cb4d46ae5/lark_oapi-1.7.0-py3-none-any.whl", hash = "sha256:d38ca7be0f6b42e51d459c00cf0a8975de1e4e5752e8f59e1bbce5bda0735282", size = 7806351, upload-time = "2026-06-30T03:19:35.216Z" },
-]
-
-[[package]]
 name = "lxml"
 version = "6.1.1"
 source = { registry = "https://pypi.org/simple" }
@@ -815,7 +800,6 @@ dependencies = [
     { name = "fastapi" },
     { name = "httpx" },
     { name = "langfuse" },
-    { name = "lark-oapi" },
     { name = "lxml", extra = ["html-clean"] },
     { name = "openai" },
     { name = "pillow" },
@@ -841,7 +825,6 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.116.1" },
     { name = "httpx", specifier = ">=0.28.0" },
     { name = "langfuse", specifier = ">=4.14.2,<5" },
-    { name = "lark-oapi", specifier = ">=1.5.5" },
     { name = "lxml", extras = ["html-clean"], specifier = ">=5.0.0" },
     { name = "openai", specifier = ">=1.98.0" },
     { name = "pillow", specifier = ">=10.0.0" },

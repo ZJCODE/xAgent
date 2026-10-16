@@ -18,8 +18,8 @@ from xagent.integrations.langfuse.runtime import (
 class BuildSessionIdTests(unittest.TestCase):
     def test_uses_channel_and_user(self):
         self.assertEqual(
-            build_session_id(channel="feishu", user_id="u1"),
-            "feishu:u1",
+            build_session_id(channel="weixin", user_id="u1"),
+            "weixin:u1",
         )
 
     def test_prefers_room_name_over_user(self):

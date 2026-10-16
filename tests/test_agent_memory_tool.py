@@ -97,7 +97,7 @@ class MemoryToolTests(unittest.IsolatedAsyncioTestCase):
         finally:
             os.unlink(db_path)
 
-    async def test_search_memory_keyword_finds_feishu_display_name(self):
+    async def test_search_memory_keyword_finds_sender_display_name(self):
         """A name that lives in sender_name, not message text, is still searchable."""
         with tempfile.NamedTemporaryFile(suffix=".sqlite3", delete=False) as tmp:
             db_path = tmp.name
@@ -106,9 +106,9 @@ class MemoryToolTests(unittest.IsolatedAsyncioTestCase):
             msg = Message.create(
                 content="你知道我是谁不",
                 role=RoleType.USER,
-                sender_id="ou_d988df0a30ef9202a01bd962d8c07c21",
+                sender_id="user_d988df0a30ef9202a01bd962d8c07c21",
             )
-            msg.channel = "feishu"
+            msg.channel = "weixin"
             msg.metadata = {"sender_name": "Telos"}
             await msg_storage.add_messages(msg)
 
