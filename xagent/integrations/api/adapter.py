@@ -37,9 +37,11 @@ class ApiChannelAdapter:
         limits: ChatLimits | None = None,
         logger: Optional[logging.Logger] = None,
         device_service: DeviceService | None = None,
+        voice_config: dict[str, Any] | None = None,
     ) -> None:
         self.agent = agent
         self.device_service = device_service
+        self.voice_config = dict(voice_config or {})
         self.contacts_file = contacts_file
         self.tasks_dir = tasks_dir
         self.limits = limits or ChatLimits()
@@ -98,4 +100,11 @@ class ApiChannelAdapter:
     def register_routes(self, app: FastAPI) -> None:
         register_runtime_routes(app, self)
         if self.device_service is not None:
-            register_device_routes(app, self.device_service, on_event=self.observe_device_event)
+            register_device_routes(
+                app,
+                self.device_service,
+                on_event=self.observe_device_event,
+                agent=self.agent,
+                tasks_dir=self.tasks_dir,
+                voice_config_provider=lambda: self.voice_config,
+            )

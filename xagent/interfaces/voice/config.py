@@ -63,6 +63,7 @@ class VoiceRuntimeProfile:
     source: str = "default"
     # A session preference does not overwrite detected hardware capability.
     interruptions_override: bool | None = None
+    room_name: str = "local_room"
 
 
 @dataclass(frozen=True)
@@ -301,7 +302,7 @@ class VoiceChannelConfig(BaseModel):
 
     @property
     def room_name(self) -> str:
-        return _ROOM_NAME
+        return (self._runtime_profile.room_name or "").strip() or _ROOM_NAME
 
     @property
     def enable_diarization(self) -> bool:

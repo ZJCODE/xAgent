@@ -26,6 +26,12 @@ from .config import (
 from .presence import SttLifecycleController, VoicePresenceConfig
 from .runtime import VoiceRuntime, VoiceRuntimeOptions
 from .soniox import SonioxSTTCallbacks, create_soniox_adapters
+from .ws import (
+    WebSocketMicrophone,
+    WebSocketPlayer,
+    WebSocketVoiceBridge,
+    make_websocket_output_sink,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -179,3 +185,76 @@ def create_local_voice_runtime(
     )
     runtime_holder[0] = runtime
     return runtime
+
+
+def create_websocket_voice_runtime(
+    *,
+    agent: Any,
+    config: VoiceChannelConfig,
+    bridge: WebSocketVoiceBridge,
+    options: VoiceRuntimeOptions,
+    device_id: str = "",
+) -> tuple[VoiceRuntime, WebSocketMicrophone, WebSocketPlayer]:
+    """Construct a VoiceRuntime backed by a paired device WebSocket audio stream."""
+    runtime_profile = VoiceRuntimeProfile(
+        name=bridge.hello.profile,
+        echo_managed=bridge.hello.echo_managed,
+        source=f"websocket:{device_id or 'device'}",
+        interruptions_override=bridge.hello.interruptions,
+        room_name=bridge.room_name,
+    )
+    config.apply_runtime_profile(runtime_profile)
+    default_style = VoiceSpeechStyle()
+    config.apply_speech_style(
+        VoiceSpeechStyle(
+            voice=str(getattr(agent, "voice", "") or "").strip() or default_style.voice,
+            speed=default_style.speed,
+        )
+    )
+    presence_cfg = VoicePresenceConfig(
+        close_stt_after_idle_seconds=config.presence.close_stt_after_idle_seconds,
+        wake_energy_rms=config.presence.wake_energy_rms,
+        recent_speech_hours=config.presence.recent_speech_hours,
+    )
+    lifecycle = SttLifecycleController(presence_cfg)
+    recognizer, synthesizer = create_soniox_adapters(
+        config,
+        stt_callbacks=SonioxSTTCallbacks(),
+        lifecycle=lifecycle,
+    )
+    extra_terms = startup_context_terms(agent)
+    set_terms = getattr(recognizer, "set_extra_context_terms", None)
+    if callable(set_terms):
+        set_terms(extra_terms)
+    microphone = WebSocketMicrophone(
+        bridge,
+        sample_rate=SONIOX_STT_SAMPLE_RATE,
+        channels=SONIOX_STT_CHANNELS,
+    )
+    player = WebSocketPlayer(
+        bridge,
+        sample_rate=SONIOX_TTS_SAMPLE_RATE,
+        channels=SONIOX_TTS_CHANNELS,
+    )
+    wake_terms = normalize_terms(list(config.attention.wake_terms) + agent_identity_terms(agent))
+    attention_gate = VoiceAttentionGate(
+        config=VoiceAttentionConfig(
+            open_window_seconds=config.attention.open_window_seconds,
+            wake_terms=list(config.attention.wake_terms),
+            use_decide_participation=config.attention.use_decide_participation,
+        ),
+        wake_terms=wake_terms,
+    )
+    runtime = VoiceRuntime(
+        agent=agent,
+        config=config,
+        microphone=microphone,
+        recognizer=recognizer,
+        synthesizer=synthesizer,
+        player=player,
+        options=options,
+        output=make_websocket_output_sink(bridge),
+        attention_gate=attention_gate,
+        stt_lifecycle=lifecycle,
+    )
+    return runtime, microphone, player

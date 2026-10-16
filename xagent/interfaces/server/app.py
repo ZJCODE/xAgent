@@ -39,6 +39,10 @@ class AgentHTTPServer(AdminService):
 
         self.logger = logging.getLogger(f"{self.__class__.__name__}")
         contacts_file = resolve_contacts_path(self.workspace)
+        channels_cfg = self.config.get("channels") if isinstance(self.config, dict) else None
+        raw_voice_cfg = channels_cfg.get("voice") if isinstance(channels_cfg, dict) else None
+        if api_adapter is not None and not api_adapter.voice_config and isinstance(raw_voice_cfg, dict):
+            api_adapter.voice_config = dict(raw_voice_cfg)
         self.api = api_adapter or ApiChannelAdapter(
             self.agent,
             contacts_file=contacts_file,
@@ -49,6 +53,8 @@ class AgentHTTPServer(AdminService):
                 chat_timeout=chat_timeout,
             ),
             logger=self.logger,
+            device_service=self.device_service,
+            voice_config=raw_voice_cfg if isinstance(raw_voice_cfg, dict) else None,
         )
         self.app = self._create_app()
         self.app.add_middleware(

@@ -172,9 +172,10 @@ class RuntimeHost:
             if callable(recovery):
                 await recovery()
             self.recovered_turns = await self.agent.turn_store.recover()
+            from ...interfaces.cli.channels import voice_config
             self.api = ApiChannelAdapter(self.agent,
                 contacts_file=resolve_contacts_path(self.config_dir), tasks_dir=self.runner.tasks_dir,
-                device_service=self.device_service)
+                device_service=self.device_service, voice_config=voice_config(self.runner.config))
             self.adapters["api"] = self.api
             channels = self.requested_channels if self.requested_channels is not None else default_runtime_channels(self.runner.config)
             self.channel_status = {name: {"state": "disconnected"} for name in self._channel_locks}

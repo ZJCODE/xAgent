@@ -92,6 +92,18 @@ class PendingCommand:
     sent: bool = False
 
 
+@dataclass(eq=False)
+class VoiceDeviceSession:
+    device_id: str
+    websocket: Any
+    runtime: Any
+    microphone: Any
+    player: Any
+    runtime_task: asyncio.Task | None = None
+    room_name: str = "local_room"
+    closed: bool = False
+
+
 def outcome(status: str, code: str, message: str, **details) -> dict:
     return {"status": status, "code": code, "message": message, **details}
 
@@ -118,6 +130,7 @@ class DeviceService:
         self._pairing_code = ""
         self._pairing_deadline = 0.0
         self.devices: dict[str, Connection] = {}
+        self.voice_sessions: dict[str, VoiceDeviceSession] = {}
         self.pending: dict[str, PendingCommand] = {}
         self.accepting = False
         self._idle = asyncio.Event()
@@ -125,7 +138,13 @@ class DeviceService:
 
     @property
     def resources_closed(self) -> bool:
-        return not self.devices and not self.pending and not self.uploads and (self._media_prepare is None or self._media_prepare.done())
+        return (
+            not self.devices
+            and not self.voice_sessions
+            and not self.pending
+            and not self.uploads
+            and (self._media_prepare is None or self._media_prepare.done())
+        )
 
     def _update_idle(self) -> None:
         if self.pending or self.uploads:
@@ -194,6 +213,9 @@ class DeviceService:
         connection = self.devices.get(device_id)
         if connection is not None:
             await self.disconnect(connection)
+        voice_session = self.voice_sessions.get(device_id)
+        if voice_session is not None:
+            await self.disconnect_voice(voice_session)
         logger.info("Device removed id=%s", device_id)
 
     async def stop(self, drain_timeout: float = 0) -> None:
@@ -214,8 +236,74 @@ class DeviceService:
         await asyncio.gather(*uploads, return_exceptions=True)
         if self._media_prepare is not None:
             await asyncio.gather(self._media_prepare, return_exceptions=True)
-        await asyncio.gather(*(self.disconnect(conn) for conn in list(self.devices.values())))
+        await asyncio.gather(
+            *(self.disconnect(conn) for conn in list(self.devices.values())),
+            *(self.disconnect_voice(sess) for sess in list(self.voice_sessions.values())),
+        )
         await self._idle.wait()
+
+    def authenticate_paired(self, device_id: str, credential: str) -> bool:
+        """Authenticate an already-paired device credential (rejects one-time pairing codes)."""
+        return credential.startswith("Bearer ") and self.credentials.authenticate(device_id, credential[7:])
+
+    def resolve_room_name(self, device_id: str) -> str:
+        """Resolve a human-meaningful room/location name for a paired device."""
+        fields = self.profile_fields(device_id)
+        for candidate in (fields.get("location"), fields.get("name")):
+            cleaned = str(candidate or "").strip()
+            if cleaned:
+                return cleaned
+        connection = self.devices.get(device_id)
+        if connection is not None:
+            for candidate in (connection.registration.location, connection.registration.name):
+                cleaned = str(candidate or "").strip()
+                if cleaned:
+                    return cleaned
+        return device_id or "local_room"
+
+    async def register_voice(self, session: VoiceDeviceSession) -> VoiceDeviceSession:
+        if not self.accepting:
+            raise RuntimeError("Device service is unavailable")
+        if session.device_id not in self.credentials.digests:
+            raise ValueError("Device is not paired with this Agent")
+        previous = self.voice_sessions.get(session.device_id)
+        self.voice_sessions[session.device_id] = session
+        if previous is not None and previous is not session:
+            try:
+                await self.disconnect_voice(previous)
+            except asyncio.CancelledError:
+                await self.disconnect_voice(session)
+                raise
+        logger.info("Device voice session registered id=%s room=%s", session.device_id, session.room_name)
+        return session
+
+    async def disconnect_voice(self, session: VoiceDeviceSession) -> None:
+        if session.closed:
+            return
+        session.closed = True
+        if self.voice_sessions.get(session.device_id) is session:
+            del self.voice_sessions[session.device_id]
+        try:
+            session.microphone.close()
+        except Exception:
+            pass
+        try:
+            session.player.close()
+        except Exception:
+            pass
+        stop = getattr(session.runtime, "stop", None)
+        if callable(stop):
+            try:
+                await asyncio.wait_for(stop(), timeout=2.0)
+            except Exception:
+                pass
+        if session.runtime_task is not None and not session.runtime_task.done():
+            session.runtime_task.cancel()
+            await asyncio.gather(session.runtime_task, return_exceptions=True)
+        try:
+            await asyncio.wait_for(session.websocket.close(code=1001), timeout=1.0)
+        except Exception:
+            pass
 
     def authenticate_media(self, device_id: str, credential: str) -> bool:
         return credential.startswith("Bearer ") and self.credentials.authenticate(device_id, credential[7:])

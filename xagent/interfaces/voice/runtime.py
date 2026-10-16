@@ -410,6 +410,18 @@ class VoiceRuntime:
         worker.add_done_callback(finished)
         return await asyncio.shield(worker)
 
+    def _active_spoken_ledger(self) -> SpokenLedger | None:
+        return getattr(self, "_current_spoken_ledger", None)
+
+    def note_remote_playback_progress(self, played_bytes: int) -> None:
+        """Record client-confirmed playback progress for remote WebSocket voice sessions."""
+        ledger = self._active_spoken_ledger()
+        if ledger is None or played_bytes <= 0:
+            return
+        delta = max(0, int(played_bytes) - int(ledger._playback_bytes))
+        if delta > 0:
+            ledger.note_playback_bytes(delta)
+
     @property
     def _duplex_capture_enabled(self) -> bool:
         return bool(self.config.enable_interruptions) and not self._self_interruption.tripped
@@ -479,6 +491,7 @@ class VoiceRuntime:
                 sample_rate=SONIOX_TTS_SAMPLE_RATE,
                 channels=SONIOX_TTS_CHANNELS,
             )
+            self._current_spoken_ledger = spoken_ledger
             await self._execute_floor_commands(
                 self._floor.handle(FloorEvent(FloorEventKind.STT_ENDPOINT, text=transcript))
             )
@@ -514,6 +527,7 @@ class VoiceRuntime:
                 metrics.error_class = type(exc).__name__
                 raise
             finally:
+                self._current_spoken_ledger = None
                 steer_event.set()
                 self._active_steer_event = None
                 if steer_task is not None:
@@ -851,6 +865,8 @@ class VoiceRuntime:
             **synth_kwargs,
         )
 
+        tracks_remote_progress = bool(getattr(self.player, "tracks_remote_playback_progress", False))
+
         def timed_audio() -> Iterator[bytes]:
             first = True
             for chunk in audio_chunks:
@@ -860,7 +876,7 @@ class VoiceRuntime:
                         timing.mark_first_audio(self.logger)
                 if metrics is not None and chunk:
                     metrics.playback_audio_bytes += len(chunk)
-                if spoken_ledger is not None and chunk:
+                if spoken_ledger is not None and chunk and not tracks_remote_progress:
                     spoken_ledger.note_playback_bytes(len(chunk))
                 yield chunk
 
