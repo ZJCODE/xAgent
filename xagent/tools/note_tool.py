@@ -58,14 +58,13 @@ def create_write_note_tool(store: NoteStore, is_enabled: bool = True):
             "plans, preferences, and constraints; do not copy their 'I' as yours. Use it "
             "only when this turn produced a standing fact that will still hold across "
             "days — a preference, constraint, decision and what it turned on, or an "
-            "approach that worked. Your diary already records what happened, and weekly "
-            "distillation will surface post-hoc conclusions later — do not summarise the "
-            "conversation, guess what might be useful, or do the week's processing "
-            "yourself. Do not write one-off scheduling, how you stand with a person, or "
-            "anything that only matters today. If it must not travel, it is not a note: "
-            "put it in the diary or on a relationship card. Link related notes when you "
-            "can. If a note on the topic already exists the tool says so; update that "
-            "one instead."
+            "approach that worked. Your diary already records what happened — do not "
+            "summarise the conversation or guess what might be useful later. Do not "
+            "write one-off scheduling, how you stand with a person, or anything that "
+            "only matters today. If it must not travel, it is not a note: put it in "
+            "the diary or on a relationship card. Link related notes when you can. If "
+            "a note on the topic already exists the tool says so; update that one "
+            "instead."
         ),
         param_descriptions={
             "title": (

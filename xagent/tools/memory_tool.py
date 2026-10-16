@@ -16,37 +16,6 @@ _SEARCH_MAX_RESULTS_WITH_DATE = 30
 _SEARCH_MAX_CHARS = 6000
 
 
-def create_write_memory_tool(
-    memory: MarkdownMemory,
-    is_enabled: bool = True,
-):
-    """Create a tool that records long-term useful memory."""
-
-    @function_tool(
-        name="write_memory",
-        description=(
-            "Record a concise, attributable diary-memory note for durable preferences, "
-            "facts, decisions, commitments, or context. Skip trivial or temporary notes."
-        ),
-        param_descriptions={
-            "content": "Memory note to record. Keep it concise, grounded, and attributed when needed.",
-        },
-    )
-    async def write_memory(content: str) -> dict:
-        """Record a long-term memory note."""
-        if not is_enabled:
-            return {"status": "disabled", "message": "Memory writing is disabled for this turn."}
-
-        content = content.strip()
-        if not content:
-            return {"status": "skipped", "message": "Empty content, nothing written."}
-
-        await memory.append_daily(content)
-        return {"status": "ok", "message": "Memory recorded."}
-
-    return write_memory
-
-
 def create_search_memory_tool(
     memory: MarkdownMemory,
     is_enabled: bool = True,

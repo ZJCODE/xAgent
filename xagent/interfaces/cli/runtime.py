@@ -5,17 +5,14 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import logging
 import os
-import signal
 import subprocess
 import sys
 import time
 from pathlib import Path
 from typing import Any, Optional
 
-from ...core.runtime import create_runtime_heartbeat
-from ..base import BaseAgentConfig, BaseAgentRunner
+from ..base import BaseAgentConfig
 from .agents import AgentRegistryError, management_root, resolve_agent_name
 from .channels import (
     CHANNEL_API,
@@ -23,7 +20,6 @@ from .channels import (
     CHANNEL_VOICE,
     CHANNEL_WEIXIN,
     ChannelSelectionError,
-    api_config,
     default_start_channel_from_config,
     enabled_channels_from_config,
     feishu_config,
@@ -41,7 +37,6 @@ from .paths import (
     runtime_dir_or_management_root,
 )
 from .processes import (
-    managed_paths,
     running_pid,
     start_background,
     stop_managed_process,
@@ -122,48 +117,6 @@ def _handle_channel_error(exc: ChannelSelectionError) -> int:
     return 1
 
 
-def _channel_command(channel: str, args: argparse.Namespace) -> list[str]:
-    command = [sys.executable, "-m", "xagent.interfaces.cli", "_run-channel", channel]
-    config_dir = getattr(args, "config_dir", None)
-    if config_dir:
-        command.extend(["--config-dir", config_dir])
-    else:
-        command.extend(["--agent", resolve_agent_name(getattr(args, "agent", None))])
-
-    for flag, attr in (
-        ("--host", "host"),
-        ("--port", "port"),
-        ("--max-concurrent-chats", "max_concurrent_chats"),
-        ("--queue-timeout", "queue_timeout"),
-        ("--chat-timeout", "chat_timeout"),
-    ):
-        value = getattr(args, attr, None)
-        if value is not None:
-            command.extend([flag, str(value)])
-    if channel == CHANNEL_VOICE:
-        user_id = getattr(args, "user_id", None)
-        if user_id:
-            command.extend(["--user-id", str(user_id)])
-        if getattr(args, "verbose", False):
-            command.append("--verbose")
-        input_device = getattr(args, "input_device", None)
-        if input_device is not None:
-            command.extend(["--input-device", str(input_device)])
-        output_device = getattr(args, "output_device", None)
-        if output_device is not None:
-            command.extend(["--output-device", str(output_device)])
-        profile = getattr(args, "voice_profile", None)
-        if profile not in (None, "auto"):
-            command.extend(["--profile", str(profile)])
-        interruptions = _voice_interruptions_override(args)
-        if interruptions is not None:
-            command.extend(["--interruptions", str(interruptions).lower()])
-        speed = getattr(args, "speech_speed", None)
-        if speed is not None:
-            command.extend(["--speed", str(speed)])
-    return command
-
-
 def _web_spawn_target(args: argparse.Namespace) -> tuple[Optional[str], Optional[str]]:
     """Return ``(config_dir, agent_name)`` for a managed web client subprocess."""
     config_dir = getattr(args, "config_dir", None)
@@ -190,45 +143,6 @@ def _web_command(args: argparse.Namespace) -> list[str]:
     if getattr(args, "open_browser", False):
         command.append("--open")
     return command
-
-
-def _api_runtime_values(
-    args: argparse.Namespace,
-    config: dict[str, Any],
-) -> tuple[dict[str, Any], Optional[str], Optional[int]]:
-    api_cfg = api_config(config)
-    raw_config_dir = getattr(args, "config_dir", None)
-    server_kwargs: dict[str, Any] = {
-        "config_dir": raw_config_dir or str(runtime_dir(args)),
-    }
-
-    runtime_mapping = (
-        ("max_concurrent_chats", "max_concurrent_chats"),
-        ("queue_timeout", "chat_queue_timeout"),
-        ("chat_timeout", "chat_timeout"),
-    )
-    for args_attr, server_key in runtime_mapping:
-        value = getattr(args, args_attr, None)
-        if value is None:
-            value = api_cfg.get(args_attr)
-        if value is not None:
-            server_kwargs[server_key] = value
-
-    host = getattr(args, "host", None) or api_cfg.get("host")
-    port = getattr(args, "port", None)
-    if port is None:
-        port = api_cfg.get("port")
-    return server_kwargs, host, port
-
-
-def _run_api_channel(args: argparse.Namespace, config: dict[str, Any]) -> int:
-    from ..server import AgentHTTPServer
-
-    server_kwargs, host, port = _api_runtime_values(args, config)
-    server = AgentHTTPServer(**server_kwargs)
-    print(f"xAgent api channel ready (model={server.agent.model}).")
-    server.run(host=host, port=port)
-    return 0
 
 
 def _web_client_runtime_values(
@@ -268,317 +182,6 @@ def _run_web_client(args: argparse.Namespace, config: dict[str, Any]) -> int:
     print(f"xAgent web client ready at http://{host}:{port} (api={api_url}).")
     server.run(open_browser=open_browser)
     return 0
-
-
-def _run_feishu_channel(args: argparse.Namespace, config: dict[str, Any]) -> int:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
-    try:
-        from ...integrations.feishu import FeishuAdapter, FeishuAdapterConfig
-    except ImportError as exc:  # pragma: no cover - defensive
-        print(f"Failed to import Feishu adapter: {exc}")
-        return 1
-
-    feishu_data = feishu_config(config)
-    if not feishu_data:
-        print("Feishu channel is not configured. Run: xagent feishu setup")
-        return 1
-
-    try:
-        feishu_runtime_config = FeishuAdapterConfig.from_dict(feishu_data)
-    except Exception as exc:
-        print(f"Invalid Feishu channel config: {exc}")
-        return 1
-
-    runner = BaseAgentRunner(config_dir=str(runtime_dir(args)))
-    adapter = FeishuAdapter(agent=runner.agent, config=feishu_runtime_config)
-
-    async def _run_daemon() -> bool:
-        heartbeat = create_runtime_heartbeat(
-            runner.agent,
-            config.get("runtime") if isinstance(config, dict) else None,
-            logger_=logging.getLogger(__name__),
-            subconscious_delivery_sink=getattr(adapter, "deliver_subconscious_message", None),
-            subconscious_deliverable_channels={"feishu"},
-        )
-        stop_requested = False
-        loop = asyncio.get_running_loop()
-        old_handlers: dict[int, object] = {}
-        signal_handlers: list[int] = []
-
-        def _request_stop() -> None:
-            nonlocal stop_requested
-            stop_requested = True
-            adapter._stop_event.set()
-            adapter._safe_stop()
-
-        def _handle_stop(_signum: int, _frame) -> None:
-            loop.call_soon_threadsafe(_request_stop)
-
-        for signum in (signal.SIGINT, getattr(signal, "SIGTERM", None)):
-            if signum is None:
-                continue
-            try:
-                loop.add_signal_handler(signum, _request_stop)
-                signal_handlers.append(signum)
-            except (NotImplementedError, RuntimeError):
-                old_handlers[signum] = signal.getsignal(signum)
-                signal.signal(signum, _handle_stop)
-
-        try:
-            if heartbeat is not None:
-                await heartbeat.start()
-            await adapter.run()
-        finally:
-            for signum in signal_handlers:
-                try:
-                    loop.remove_signal_handler(signum)
-                except (NotImplementedError, RuntimeError):
-                    pass
-            for signum, previous_handler in old_handlers.items():
-                signal.signal(signum, previous_handler)
-            if heartbeat is not None:
-                await heartbeat.stop()
-        return stop_requested
-
-    print(f"xAgent Feishu channel ready (model={runner.agent.model}).")
-    print(f"Connecting to Feishu (app_id={feishu_runtime_config.app_id})...")
-    try:
-        stop_requested = asyncio.run(_run_daemon())
-    except KeyboardInterrupt:
-        stop_requested = True
-    except RuntimeError as exc:
-        print(f"{exc}")
-        return 1
-
-    if stop_requested:
-        print("Feishu channel stopped.")
-    return 0
-
-
-def _run_weixin_channel(args: argparse.Namespace, config: dict[str, Any]) -> int:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
-    try:
-        from ...integrations.weixin import WeixinAdapter, WeixinAdapterConfig
-    except ImportError as exc:  # pragma: no cover - defensive
-        print(f"Failed to import Weixin adapter: {exc}")
-        return 1
-
-    weixin_data = weixin_config(config)
-    if not weixin_data:
-        print("Weixin channel is not configured. Run: xagent weixin setup")
-        return 1
-
-    try:
-        weixin_runtime_config = WeixinAdapterConfig.from_dict(weixin_data)
-    except Exception as exc:
-        print(f"Invalid Weixin channel config: {exc}")
-        return 1
-
-    runner = BaseAgentRunner(config_dir=str(runtime_dir(args)))
-    adapter = WeixinAdapter(
-        agent=runner.agent,
-        config=weixin_runtime_config,
-        runtime_dir=runner.config_dir,
-    )
-
-    async def _run_daemon() -> bool:
-        heartbeat = create_runtime_heartbeat(
-            runner.agent,
-            config.get("runtime") if isinstance(config, dict) else None,
-            logger_=logging.getLogger(__name__),
-            subconscious_delivery_sink=getattr(adapter, "deliver_subconscious_message", None),
-            subconscious_deliverable_channels={"weixin"},
-        )
-        stop_requested = False
-        loop = asyncio.get_running_loop()
-        old_handlers: dict[int, object] = {}
-        signal_handlers: list[int] = []
-
-        def _request_stop() -> None:
-            nonlocal stop_requested
-            stop_requested = True
-            adapter._stop_event.set()
-
-        def _handle_stop(_signum: int, _frame) -> None:
-            loop.call_soon_threadsafe(_request_stop)
-
-        for signum in (signal.SIGINT, getattr(signal, "SIGTERM", None)):
-            if signum is None:
-                continue
-            try:
-                loop.add_signal_handler(signum, _request_stop)
-                signal_handlers.append(signum)
-            except (NotImplementedError, RuntimeError):
-                old_handlers[signum] = signal.getsignal(signum)
-                signal.signal(signum, _handle_stop)
-
-        try:
-            if heartbeat is not None:
-                await heartbeat.start()
-            await adapter.run()
-        finally:
-            for signum in signal_handlers:
-                try:
-                    loop.remove_signal_handler(signum)
-                except (NotImplementedError, RuntimeError):
-                    pass
-            for signum, previous_handler in old_handlers.items():
-                signal.signal(signum, previous_handler)
-            if heartbeat is not None:
-                await heartbeat.stop()
-        return stop_requested
-
-    print(f"xAgent Weixin channel ready (model={runner.agent.model}).")
-    print(f"Connecting to Weixin iLink (account_id={weixin_runtime_config.account_id})...")
-    try:
-        stop_requested = asyncio.run(_run_daemon())
-    except KeyboardInterrupt:
-        stop_requested = True
-    except RuntimeError as exc:
-        print(f"{exc}")
-        return 1
-
-    if stop_requested:
-        print("Weixin channel stopped.")
-    return 0
-
-
-def _voice_profile_override(args: argparse.Namespace) -> str | None:
-    value = str(getattr(args, "voice_profile", "auto") or "auto").strip().lower()
-    return None if value == "auto" else value
-
-
-def _voice_interruptions_override(args: argparse.Namespace) -> bool | None:
-    value = getattr(args, "interruptions", None)
-    return None if value is None else value == "true"
-
-
-def _voice_speed_override(args: argparse.Namespace) -> float | None:
-    value = getattr(args, "speech_speed", None)
-    if value is None:
-        return None
-    speed = float(value)
-    if not 0.7 <= speed <= 1.3:
-        raise ValueError("--speed must be between 0.7 and 1.3")
-    return speed
-
-
-def _run_voice_channel(args: argparse.Namespace, config: dict[str, Any]) -> int:
-    log_level = logging.INFO if getattr(args, "verbose", False) else logging.INFO
-    logging.basicConfig(
-        level=log_level,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
-    try:
-        runner = BaseAgentRunner(config_dir=str(runtime_dir(args)))
-        voice_data = voice_config(runner.config)
-        if not voice_data:
-            print("Voice channel is not configured. Run: xagent voice setup")
-            return 1
-
-        from ..voice.config import VoiceChannelConfig
-        from ..voice.factory import create_local_voice_runtime
-        from ..voice.runtime import VoiceRuntimeOptions
-
-        voice_runtime_config = VoiceChannelConfig.from_dict(voice_data)
-        runtime = create_local_voice_runtime(
-            agent=runner.agent,
-            config=voice_runtime_config,
-            options=VoiceRuntimeOptions(
-                user_id=getattr(args, "user_id", None) or "local_voice",
-                stream=True,
-                tasks_dir=getattr(runner, "tasks_dir", None),
-            ),
-            input_device=getattr(args, "input_device", None),
-            output_device=getattr(args, "output_device", None),
-            profile_override=_voice_profile_override(args),
-            interruptions_override=_voice_interruptions_override(args),
-            speed_override=_voice_speed_override(args),
-        )
-    except Exception as exc:
-        print(f"Failed to start voice channel: {exc}")
-        return 1
-
-    async def _run_daemon() -> bool:
-        heartbeat = create_runtime_heartbeat(
-            runner.agent,
-            config.get("runtime") if isinstance(config, dict) else None,
-            logger_=logging.getLogger(__name__),
-            subconscious_delivery_sink=None,
-            subconscious_deliverable_channels=set(),
-        )
-        stop_requested = False
-        loop = asyncio.get_running_loop()
-        old_handlers: dict[int, object] = {}
-        signal_handlers: list[int] = []
-
-        def _request_stop() -> None:
-            nonlocal stop_requested
-            stop_requested = True
-            stop_event = getattr(runtime, "stop_event", None)
-            if stop_event is not None:
-                stop_event.set()
-
-        def _handle_stop(_signum: int, _frame) -> None:
-            loop.call_soon_threadsafe(_request_stop)
-
-        for signum in (signal.SIGINT, getattr(signal, "SIGTERM", None)):
-            if signum is None:
-                continue
-            try:
-                loop.add_signal_handler(signum, _request_stop)
-                signal_handlers.append(signum)
-            except (NotImplementedError, RuntimeError):
-                old_handlers[signum] = signal.getsignal(signum)
-                signal.signal(signum, _handle_stop)
-
-        try:
-            if heartbeat is not None:
-                await heartbeat.start()
-            await runtime.run_forever()
-        finally:
-            for signum in signal_handlers:
-                try:
-                    loop.remove_signal_handler(signum)
-                except (NotImplementedError, RuntimeError):
-                    pass
-            for signum, previous_handler in old_handlers.items():
-                signal.signal(signum, previous_handler)
-            if heartbeat is not None:
-                await heartbeat.stop()
-        return stop_requested
-
-    print(f"xAgent voice channel ready (model={runner.agent.model}).")
-    try:
-        stop_requested = asyncio.run(_run_daemon())
-    except KeyboardInterrupt:
-        stop_requested = True
-    except RuntimeError as exc:
-        print(f"{exc}")
-        return 1
-    except Exception as exc:
-        print(f"Voice channel error: {exc}")
-        return 1
-
-    if stop_requested:
-        print("Voice channel stopped.")
-    return 0
-
-
-def _run_channel(channel: str, args: argparse.Namespace, config: dict[str, Any]) -> int:
-    print("Independent channel processes have been removed. Use xagent run --agent <name>.")
-    return 1
-
-
-def handle_run_channel_internal(args: argparse.Namespace) -> int:
-    print("Independent channel processes have been removed. Use xagent run --agent <name>.")
-    return 1
 
 
 def handle_run_web_internal(args: argparse.Namespace) -> int:

@@ -123,7 +123,7 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
             system_prompt="",
             message_storage=_FakeMessageStorage(),
         )
-        instructions = handler.build_instructions(tool_names=["write_memory"])
+        instructions = handler.build_instructions(tool_names=["search_memory"])
         self.assertIn("<tool_policy>", instructions)
         self.assertIn("never invent unavailable tools", instructions)
         self.assertIn("Do not claim a tool action succeeded", instructions)
@@ -162,7 +162,7 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         )
 
         messages = handler.build_instruction_messages(
-            tool_names=["write_memory", "run_command"],
+            tool_names=["search_memory", "run_command"],
         )
 
         self.assertEqual(

@@ -250,8 +250,6 @@ class BaseAgentRunner:
                 "subconscious_activity",
                 "diary_context_days",
                 "notes_enabled",
-                # Legacy key accepted and ignored; note distillation now follows notes_enabled.
-                "notes_auto_distill",
             }
             unsupported_agent_keys = sorted(set(agent_cfg) - allowed_agent_keys)
             if unsupported_agent_keys:

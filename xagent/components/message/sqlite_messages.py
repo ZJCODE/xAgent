@@ -732,14 +732,3 @@ class MessageStorage:
             safe_room = message.room_name.replace("\n", " ").replace("]", "")
             header += f"[room={safe_room}]"
         return f"{header}\n{message.content.strip()}"
-
-    @staticmethod
-    def _date_str_to_timestamp(date_str: str, is_end: bool = False) -> float:
-        """Convert YYYY-MM-DD to a UTC timestamp."""
-        try:
-            dt = datetime.strptime(date_str, "%Y-%m-%d")
-            if is_end:
-                dt = dt.replace(hour=23, minute=59, second=59)
-            return dt.replace(tzinfo=timezone.utc).timestamp()
-        except (ValueError, OverflowError):
-            return 0.0

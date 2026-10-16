@@ -1,4 +1,4 @@
-"""Tests for memory tool factories (write_memory, search_memory)."""
+"""Tests for the search_memory tool factory."""
 
 import os
 import tempfile
@@ -8,10 +8,7 @@ from datetime import date
 from xagent.components.memory import MarkdownMemory
 from xagent.components.message import MessageStorage
 from xagent.schemas import Message, RoleType
-from xagent.tools.memory_tool import (
-    create_write_memory_tool,
-    create_search_memory_tool,
-)
+from xagent.tools.memory_tool import create_search_memory_tool
 
 
 class MemoryToolTests(unittest.IsolatedAsyncioTestCase):
@@ -21,26 +18,6 @@ class MemoryToolTests(unittest.IsolatedAsyncioTestCase):
 
     def tearDown(self):
         self._tmpdir.cleanup()
-
-    async def test_write_memory_records_entry(self):
-        tool = create_write_memory_tool(self.memory, is_enabled=True)
-        result = await tool("This is a test memory note")
-        self.assertEqual(result["status"], "ok")
-        self.assertEqual(result["message"], "Memory recorded.")
-        self.assertNotIn("file", result)
-
-        text = await self.memory.read_file(self.memory.daily_path(date.today()))
-        self.assertIn("test memory note", text)
-
-    async def test_write_memory_disabled(self):
-        tool = create_write_memory_tool(self.memory, is_enabled=False)
-        result = await tool("Should not be written")
-        self.assertEqual(result["status"], "disabled")
-
-    async def test_write_memory_empty_content(self):
-        tool = create_write_memory_tool(self.memory, is_enabled=True)
-        result = await tool("   ")
-        self.assertEqual(result["status"], "skipped")
 
     async def test_search_memory_keyword(self):
         await self.memory.append_daily("Meeting with Alice about project X")

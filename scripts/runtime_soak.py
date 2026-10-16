@@ -54,9 +54,6 @@ class Journal:
     async def update_relationship_cards(self, **kwargs):
         return []
 
-    async def distill_notes(self, **kwargs):
-        return []
-
     async def generate_summary(self, source_content, period_type, period_label):
         return f"I reviewed my {period_type} experiences for {period_label}."
 
