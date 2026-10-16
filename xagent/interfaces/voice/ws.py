@@ -62,24 +62,42 @@ class WebSocketVoiceBridge:
     send_lock: asyncio.Lock
     closed: threading.Event
 
-    def send_json(self, payload: dict[str, Any]) -> None:
+    def _schedule_send(self, work) -> None:
         if self.closed.is_set():
             return
+        try:
+            running_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            running_loop = None
 
+        if running_loop is self.loop:
+            task = self.loop.create_task(work())
+            task.add_done_callback(self._on_task_done)
+            return
+
+        try:
+            future = asyncio.run_coroutine_threadsafe(work(), self.loop)
+            future.result(timeout=5.0)
+        except Exception:
+            self.closed.set()
+
+    def _on_task_done(self, task: asyncio.Task[Any]) -> None:
+        if task.cancelled():
+            return
+        if task.exception() is not None:
+            self.closed.set()
+
+    def send_json(self, payload: dict[str, Any]) -> None:
         async def _send() -> None:
             if self.closed.is_set():
                 return
             async with self.send_lock:
                 await self.websocket.send_json(payload)
 
-        try:
-            future = asyncio.run_coroutine_threadsafe(_send(), self.loop)
-            future.result(timeout=5.0)
-        except Exception:
-            self.closed.set()
+        self._schedule_send(_send)
 
     def send_bytes(self, data: bytes) -> None:
-        if not data or self.closed.is_set():
+        if not data:
             return
 
         async def _send() -> None:
@@ -88,11 +106,7 @@ class WebSocketVoiceBridge:
             async with self.send_lock:
                 await self.websocket.send_bytes(data)
 
-        try:
-            future = asyncio.run_coroutine_threadsafe(_send(), self.loop)
-            future.result(timeout=5.0)
-        except Exception:
-            self.closed.set()
+        self._schedule_send(_send)
 
 
 class WebSocketMicrophone:

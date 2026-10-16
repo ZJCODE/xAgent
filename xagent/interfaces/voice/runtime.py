@@ -418,8 +418,10 @@ class VoiceRuntime:
         ledger = self._active_spoken_ledger()
         if ledger is None or played_bytes <= 0:
             return
-        delta = max(0, int(played_bytes) - int(ledger._playback_bytes))
+        previous = int(getattr(self, "_current_remote_played_bytes", 0))
+        delta = max(0, int(played_bytes) - previous)
         if delta > 0:
+            self._current_remote_played_bytes = int(played_bytes)
             ledger.note_playback_bytes(delta)
 
     @property
@@ -492,6 +494,7 @@ class VoiceRuntime:
                 channels=SONIOX_TTS_CHANNELS,
             )
             self._current_spoken_ledger = spoken_ledger
+            self._current_remote_played_bytes = 0
             await self._execute_floor_commands(
                 self._floor.handle(FloorEvent(FloorEventKind.STT_ENDPOINT, text=transcript))
             )
@@ -528,6 +531,7 @@ class VoiceRuntime:
                 raise
             finally:
                 self._current_spoken_ledger = None
+                self._current_remote_played_bytes = 0
                 steer_event.set()
                 self._active_steer_event = None
                 if steer_task is not None:

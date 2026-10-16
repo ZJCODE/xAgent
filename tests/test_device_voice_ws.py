@@ -75,7 +75,10 @@ class _FakeWSSynthesizer:
         full_text = "".join(chunks)
         audio = b"\x01\x00" * 480  # 20ms at 24kHz mono PCM16 (960 bytes)
         if spoken_ledger is not None and full_text:
-            spoken_ledger.add_word(full_text, start_ms=0.0, end_ms=20.0)
+            spoken_ledger.ingest_timestamps(
+                characters=list(full_text),
+                character_end_times_seconds=[0.01 * (i + 1) for i in range(len(full_text))],
+            )
         if not stop_event.is_set():
             yield audio
 
@@ -225,7 +228,7 @@ class DeviceVoiceWebSocketTests(unittest.IsolatedAsyncioTestCase):
                     stored = await host.agent.message_storage.get_messages(10)
                     user_msg = next(msg for msg in stored if msg.sender_id == "alice")
                     self.assertEqual(user_msg.channel, "voice")
-                    self.assertEqual(user_msg.metadata.get("room_name"), "客厅")
+                    self.assertEqual(user_msg.room_name, "客厅")
 
                     # Verify ping/pong control message
                     await voice_ws.send(json.dumps({"type": "ping"}))
@@ -238,7 +241,7 @@ class DeviceVoiceWebSocketTests(unittest.IsolatedAsyncioTestCase):
     async def test_unpaired_or_one_time_pairing_code_cannot_open_voice_socket(self):
         host, _, _, url = await self.start_host([])
         code = host.device_service.create_pairing()["pairing_code"]
-        with self.assertRaises( Exception ):
+        with self.assertRaises(Exception):
             async with websockets.connect(
                 url + "/ws/devices/new-device/voice",
                 additional_headers={"Authorization": "Bearer " + code},
@@ -246,3 +249,43 @@ class DeviceVoiceWebSocketTests(unittest.IsolatedAsyncioTestCase):
             ) as ws:
                 await ws.recv()
         self.assertFalse(host.device_service.voice_sessions)
+
+    async def test_revoke_device_closes_active_voice_session_and_resampling_works(self):
+        host, _, _, url = await self.start_host([])
+        fake_recognizer = _FakeWSRecognizer("测试重采样")
+        fake_synth = _FakeWSSynthesizer()
+        with patch(
+            "xagent.interfaces.voice.factory.create_soniox_adapters",
+            return_value=(fake_recognizer, fake_synth),
+        ):
+            async with websockets.connect(
+                url + "/ws/devices/living-speaker/voice",
+                additional_headers={"Authorization": "Bearer speaker-secret"},
+                **self.connection_options,
+            ) as voice_ws:
+                await voice_ws.send(
+                    json.dumps(
+                        {
+                            "type": "hello",
+                            "input_sample_rate": 48000,
+                            "input_channels": 2,
+                            "output_sample_rate": 16000,
+                            "output_channels": 1,
+                            "profile": "room",
+                            "echo_managed": False,
+                        }
+                    )
+                )
+                ready = json.loads(await asyncio.wait_for(voice_ws.recv(), timeout=3))
+                self.assertEqual(ready["type"], "ready")
+                # Without a prior profile location, room_name falls back to device_id
+                self.assertEqual(ready["room_name"], "living-speaker")
+                self.assertIn("living-speaker", host.device_service.voice_sessions)
+
+                # Revoking the device closes the active voice session
+                await host.device_service.revoke("living-speaker")
+                await self.wait_for(lambda: not host.device_service.voice_sessions)
+                with self.assertRaises(websockets.exceptions.ConnectionClosed):
+                    while True:
+                        await asyncio.wait_for(voice_ws.recv(), timeout=2)
+
