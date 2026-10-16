@@ -411,8 +411,8 @@ class WebChannelRouteTests(unittest.IsolatedAsyncioTestCase):
         from xagent.interfaces.web.qr_sessions import get_qr_session_manager
 
         manager = get_qr_session_manager()
-        with patch.object(manager, "_run_weixin_login", lambda session, cancel_event: None):
-            session = manager.start_weixin()
+        with patch.object(manager, "_run_weixin_login", lambda session, cancel_event, config_dir, options: None):
+            session = manager.start_weixin(config_dir=self.root)
         async with await self._client() as client:
             response = await client.delete(f"/api/channels/weixin/qr/{session.id}")
             self.assertEqual(response.status_code, 200)
