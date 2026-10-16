@@ -43,6 +43,7 @@ class JournalLLMService:
             # DeepSeek enables thinking by default; bounded maintenance calls
             # can otherwise spend their entire output limit without text.
             self.reasoning = ReasoningConfig(enabled=False)
+        self._model_client: Optional[Any] = None
 
     async def format_diary_entry(
         self,
@@ -326,21 +327,26 @@ New experience:
                 result[normalized_key] = body
         return result
 
+    def _get_model_client(self):
+        if self._model_client is None:
+            from .handlers.model import ModelClient
+
+            self._model_client = ModelClient(
+                client=self.client,
+                model=self.model,
+                provider_name=self.provider_name,
+                model_api=self.model_api,
+                max_tokens=self.max_tokens,
+                reasoning=self.reasoning,
+            )
+        return self._model_client
+
     async def _call_text(
         self,
         system_prompt: str,
         user_prompt: str,
     ) -> str:
-        from .handlers.model import ModelClient
-
-        model_client = ModelClient(
-            client=self.client,
-            model=self.model,
-            provider_name=self.provider_name,
-            model_api=self.model_api,
-            max_tokens=self.max_tokens,
-            reasoning=self.reasoning,
-        )
+        model_client = self._get_model_client()
         reply_type, payload = await model_client.call(
             messages=[{"role": "user", "content": user_prompt}],
             tool_specs=None,

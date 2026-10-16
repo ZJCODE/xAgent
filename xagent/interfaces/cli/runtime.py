@@ -19,7 +19,6 @@ from .channels import (
     CHANNEL_VOICE,
     CHANNEL_WEIXIN,
     ChannelSelectionError,
-    default_start_channel_from_config,
     enabled_channels_from_config,
     normalize_channel_values,
     voice_config,
@@ -89,25 +88,6 @@ def handle_voice(args: argparse.Namespace) -> int:
         return 0
     print("Configure voice with xagent voice setup; run it with xagent run --channels voice.")
     return 0
-
-
-def _channel_arg_values(args: argparse.Namespace) -> Optional[list[str]]:
-    values = getattr(args, "channels", None)
-    if values is None:
-        return None
-    if isinstance(values, str):
-        return [values]
-    return list(values)
-
-
-def _select_channels(args: argparse.Namespace, *, default: str) -> tuple[list[str], dict[str, Any]]:
-    config = load_runtime_config(args)
-    values = _channel_arg_values(args)
-    if values is None and default == "auto":
-        channels = [default_start_channel_from_config(config)]
-    else:
-        channels = normalize_channel_values(values, default=default, config=config)
-    return channels, config
 
 
 def _handle_channel_error(exc: ChannelSelectionError) -> int:
@@ -194,25 +174,6 @@ def handle_run(args: argparse.Namespace) -> int:
     from .agent_runtime import handle_run as handler
     return handler(args)
 
-def _start_background_channels(args: argparse.Namespace, channels: list[str]) -> int:
-    from .agent_runtime import start_runtime
-    try:
-        start_runtime(runtime_dir(args), channels=channels)
-        return 0
-    except Exception as exc:
-        print(f"Cannot start Agent: {exc}")
-        return 1
-
-
-def _start_background_channel(args: argparse.Namespace, *, channel: str, config_dir: Path | None = None) -> bool:
-    from .agent_runtime import start_runtime
-    try:
-        start_runtime(config_dir or runtime_dir(args), channels=[channel])
-        return True
-    except Exception as exc:
-        print(f"Cannot start Agent: {exc}")
-        return False
-
 
 def handle_start(args: argparse.Namespace) -> int:
     from .agent_runtime import handle_start as handler
@@ -229,9 +190,6 @@ def handle_restart(args: argparse.Namespace) -> int:
 def handle_status(args: argparse.Namespace) -> int:
     from .agent_runtime import handle_status as handler
     return handler(args)
-
-def handle_status_all(args: argparse.Namespace) -> int:
-    return handle_status(args)
 
 def _start_background_web(args: argparse.Namespace) -> tuple[bool, bool]:
     """Start the web client. Returns (success, already_running)."""

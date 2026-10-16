@@ -18,13 +18,14 @@ from ...core.runtime.task_receipts import DeliveryUncertainError, is_strict_task
 from ...core.runtime import (
     AsyncTaskScheduler,
     ScheduledDeliveryContext,
+    collect_scheduled_turn_events,
     current_delivery_context,
     SubconsciousDelivery,
+    persist_subconscious_delivery,
     resolve_contacts_path,
     scheduled_delivery_context,
     upsert_contact,
 )
-from ...interfaces.channel import ChatTurnRequest
 from ...schemas.attachment import (
     ATTACHMENT_KIND_IMAGE,
     attachment_kind,
@@ -397,7 +398,7 @@ class WeixinAdapter:
             self.logger.debug("Failed to record contact for subconscious", exc_info=True)
 
         source_message_id = str(message.get("message_id") or "")
-        chat_kwargs = self._chat_kwargs(user_id=user_id, text=text, inbound=inbound).to_chat_kwargs()
+        chat_kwargs = self._chat_kwargs(user_id=user_id, text=text, inbound=inbound)
         context = ScheduledDeliveryContext(
             channel="weixin",
             user_id=user_id,
@@ -522,18 +523,20 @@ class WeixinAdapter:
         )
         return attachment, "", attachment_markdown(attachment)
 
-    def _chat_kwargs(self, *, user_id: str, text: str, inbound: _WeixinInboundPayload) -> ChatTurnRequest:
-        image_source = None
+    def _chat_kwargs(self, *, user_id: str, text: str, inbound: _WeixinInboundPayload) -> dict[str, Any]:
+        kwargs: dict[str, Any] = {
+            "user_message": text,
+            "user_id": user_id,
+            "channel": "weixin",
+            "inbox_kind": "user_turn",
+        }
         if inbound.image_sources and bool(getattr(self.agent, "supports_vision", True)):
-            image_source = inbound.image_sources[0] if len(inbound.image_sources) == 1 else inbound.image_sources
-        return ChatTurnRequest(
-            user_message=text,
-            user_id=user_id,
-            channel="weixin",
-            inbox_kind="user_turn",
-            image_source=image_source,
-            attachments=inbound.attachments or None,
-        )
+            kwargs["image_source"] = (
+                inbound.image_sources[0] if len(inbound.image_sources) == 1 else inbound.image_sources
+            )
+        if inbound.attachments:
+            kwargs["attachments"] = inbound.attachments
+        return kwargs
 
     async def _send_event_replies(
         self,
@@ -756,29 +759,15 @@ class WeixinAdapter:
             attachments=[],
             stable_key=f"subconscious:{delivery.created_at.isoformat(sep=' ')}:{user_id}",
         )
-        message_handler = getattr(self.agent, "message_handler", None)
-        store_model_reply = getattr(message_handler, "store_model_reply", None)
-        if callable(store_model_reply):
-            try:
-                await store_model_reply(
-                    delivery.content,
-                    getattr(self.agent, "_assistant_sender_id", "agent"),
-                    metadata={
-                        "subconscious": {
-                            "source": "subconscious",
-                            "created_at": delivery.created_at.isoformat(sep=" "),
-                            "recipient": {
-                                "channel": delivery.recipient.channel,
-                                "user_id": delivery.recipient.user_id,
-                                "target": delivery.recipient.target,
-                            },
-                        }
-                    },
-                    channel="weixin",
-                    recipient_id=user_id,
-                )
-            except Exception:
-                self.logger.debug("Failed to persist Weixin subconscious delivery", exc_info=True)
+        try:
+            await persist_subconscious_delivery(
+                self.agent,
+                delivery,
+                channel="weixin",
+                recipient_id=user_id,
+            )
+        except Exception:
+            self.logger.debug("Failed to persist Weixin subconscious delivery", exc_info=True)
 
     async def _scheduled_task_result(self, task, *, user_id: str) -> _WeixinScheduledTaskResult:
         if task.task_type == "message":
@@ -796,26 +785,19 @@ class WeixinAdapter:
             metadata={**(current_delivery_context().metadata if current_delivery_context() else {}),
                       "source": "scheduled_task", "task_id": task.task_id},
         )
-        content = ""
-        last_error = ""
-        attachments: list[_WeixinOutboundAttachment] = []
         with scheduled_delivery_context(context):
-            async for event in chat_events(
-                user_message=prompt,
-                user_id=user_id,
-                stream=False,
-                channel="weixin",
-                inbox_kind="scheduled_turn",
-            ):
-                if event.get("type") in {"error", "aborted"} and event.get("needs_review"):
-                    raise DeliveryUncertainError(str(event.get("error") or "scheduled tool outcome is unknown"))
-                if event.get("type") == "message_done" and str(event.get("phase") or "final") == "final":
-                    content = str(event.get("content") or "").strip() or content
-                    attachments = self._dedupe_outbound_attachments([
-                        *attachments, *self._outbound_attachments_from_event(event),
-                    ])
-                elif event.get("type") == "error" and not content:
-                    last_error = str(event.get("error") or "").strip()
+            content, raw_attachments, last_error = await collect_scheduled_turn_events(
+                chat_events(
+                    user_message=prompt,
+                    user_id=user_id,
+                    stream=False,
+                    channel="weixin",
+                    inbox_kind="scheduled_turn",
+                )
+            )
+        attachments = self._dedupe_outbound_attachments(
+            self._outbound_attachments_from_event({"attachments": raw_attachments})
+        )
         if not content and not attachments:
             if last_error:
                 raise RuntimeError(last_error)

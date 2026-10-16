@@ -115,20 +115,6 @@ def enabled_channels_from_config(config: Optional[Mapping[str, Any]]) -> list[st
     return result
 
 
-def default_start_channel_from_config(config: Optional[Mapping[str, Any]]) -> str:
-    """Choose the safest implicit channel for run/start commands."""
-    enabled = enabled_channels_from_config(config)
-    if not enabled:
-        raise ChannelSelectionError(
-            "No enabled channels found. Configure channels.api, channels.weixin, "
-            "or channels.voice, "
-            "or pass --channel explicitly."
-        )
-    if CHANNEL_API in enabled:
-        return CHANNEL_API
-    return enabled[0]
-
-
 def normalize_channel_values(
     values: Optional[Sequence[str]],
     *,

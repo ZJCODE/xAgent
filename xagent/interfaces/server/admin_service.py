@@ -129,25 +129,10 @@ class AdminService(BaseAgentRunner):
 
         # Describe the standard runtime without constructing an Agent, tool
         # clients, or background work in this read-only data view.
-        from ...core.config import AgentConfig
-        from ...tools.search_tool import SEARCH_PROVIDER_NONE, normalize_search_provider
-        from ...tools.image_generation_tool import IMAGE_GENERATION_PROVIDER_NONE, normalize_image_generation_provider
-
-        names = ["run_command", "manage_scheduled_tasks", "attach_artifact", "web_fetch"]
-        search = self.config.get("search") or {}
-        images = self.config.get("image_generation") or {}
-        if normalize_search_provider(search.get("provider")) != SEARCH_PROVIDER_NONE:
-            names.append("web_search")
-        if normalize_image_generation_provider(images.get("provider")) != IMAGE_GENERATION_PROVIDER_NONE:
-            names.append("generate_image")
-        names.extend(["read_skill", "device"])
-        names.append("search_memory")
-        agent_config = self.config.get("agent") or {}
-        if agent_config.get("notes_enabled", AgentConfig.NOTES_ENABLED):
-            names.extend(["write_note", "update_note", "search_note", "read_note"])
-        if self._provider_supports_vision(self.config):
-            names.append("see_image")
-        return names
+        return self.configured_tool_names(
+            self.config,
+            supports_vision=self._provider_supports_vision(self.config),
+        )
 
     def _get_memory_root(self) -> Path:
         memory = self.agent.markdown_memory

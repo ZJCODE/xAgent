@@ -18,8 +18,10 @@ from xagent.core.runtime import (
     AsyncTaskScheduler,
     ScheduledDeliveryContext,
     ScheduledTaskRecord,
+    collect_scheduled_turn_events,
     current_delivery_context,
     SubconsciousDelivery,
+    persist_subconscious_delivery,
     resolve_contacts_path,
     scheduled_delivery_context,
     upsert_contact,
@@ -1192,34 +1194,21 @@ class VoiceRuntime:
             language=self._language_tracker.language_before_turn(),
         )
         self._proactive_limiter.record()
-        message_handler = getattr(self.agent, "message_handler", None)
-        store_model_reply = getattr(message_handler, "store_model_reply", None)
-        if callable(store_model_reply):
-            try:
-                recipient_id = str(
-                    delivery.recipient.target.get("user_id")
-                    or delivery.recipient.user_id
-                    or self.options.user_id
-                )
-                await store_model_reply(
-                    text,
-                    getattr(self.agent, "_assistant_sender_id", "agent"),
-                    metadata={
-                        "subconscious": {
-                            "source": "subconscious",
-                            "created_at": delivery.created_at.isoformat(sep=" "),
-                            "recipient": {
-                                "channel": delivery.recipient.channel,
-                                "user_id": delivery.recipient.user_id,
-                                "target": delivery.recipient.target,
-                            },
-                        }
-                    },
-                    channel="voice",
-                    recipient_id=recipient_id,
-                )
-            except Exception:
-                self.logger.debug("Failed to persist voice subconscious delivery", exc_info=True)
+        try:
+            recipient_id = str(
+                delivery.recipient.target.get("user_id")
+                or delivery.recipient.user_id
+                or self.options.user_id
+            )
+            await persist_subconscious_delivery(
+                self.agent,
+                delivery,
+                channel="voice",
+                recipient_id=recipient_id,
+                content=text,
+            )
+        except Exception:
+            self.logger.debug("Failed to persist voice subconscious delivery", exc_info=True)
 
     def _schedule_notice(self, category: str) -> None:
         loop = self._event_loop
@@ -1269,23 +1258,18 @@ class VoiceRuntime:
 
         prompt = str(task.content or "").strip()
         with scheduled_delivery_context(self._delivery_context(task=task)):
-            final_content = ""
-            async for event in self.agent.chat_events(
-                user_message=prompt,
-                user_id=task.delivery_user_id or self.options.user_id or AgentConfig.DEFAULT_USER_ID,
-                stream=False,
-                channel="voice",
-                inbox_kind="scheduled_turn",
-                channel_instructions=VOICE_CHANNEL_INSTRUCTIONS,
-            ):
-                event_type = event.get("type")
-                if event_type in {"error", "aborted"} and event.get("needs_review"):
-                    from xagent.core.runtime.task_receipts import DeliveryUncertainError
-                    raise DeliveryUncertainError(str(event.get("error") or "scheduled tool outcome is unknown"))
-                if event_type == "message_done" and str(event.get("phase") or "final") == "final":
-                    final_content = str(event.get("content") or "").strip()
-                elif event_type == "error":
-                    raise RuntimeError(str(event.get("error") or "Agent processing error."))
+            final_content, _raw_attachments, last_error = await collect_scheduled_turn_events(
+                self.agent.chat_events(
+                    user_message=prompt,
+                    user_id=task.delivery_user_id or self.options.user_id or AgentConfig.DEFAULT_USER_ID,
+                    stream=False,
+                    channel="voice",
+                    inbox_kind="scheduled_turn",
+                    channel_instructions=VOICE_CHANNEL_INSTRUCTIONS,
+                )
+            )
+            if not final_content and last_error:
+                raise RuntimeError(last_error)
             return final_content
 
 

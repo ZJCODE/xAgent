@@ -242,11 +242,6 @@ def scheduled_delivery_context(context: ScheduledDeliveryContext) -> Iterator[No
         _delivery_context_var.reset(token)
 
 
-def normalize_task_recurrence(recurrence: Any) -> list[dict[str, Any]]:
-    """Normalize optional recurrence rules."""
-    return normalize_recurrence_rules(recurrence)
-
-
 def resolve_scheduled_task_run_at(
     *,
     run_at: Optional[str | datetime] = None,
@@ -421,16 +416,6 @@ def get_scheduled_task(tasks_dir: Path | str, task_id: str) -> ScheduledTaskReco
         if record.task_id == normalized_task_id:
             return record
     raise FileNotFoundError(f"task not found: {normalized_task_id}")
-
-
-def delete_task_file(tasks_dir: Path | str, name: str) -> ScheduledTaskRecord:
-    """Delete a pending, failed, or archived task file by name."""
-    path = _resolve_task_file(tasks_dir, name)
-    record = _record_from_any_file(path)
-    if record is None:
-        raise ValueError(f"unsupported task file: {name}")
-    path.unlink()
-    return record
 
 
 def delete_scheduled_task(tasks_dir: Path | str, task_id: str) -> ScheduledTaskRecord:
@@ -1417,16 +1402,6 @@ def _safe_error_summary(error: Exception) -> str:
     return text[:500]
 
 
-def _record_from_any_file(path: Path) -> Optional[ScheduledTaskRecord]:
-    if TASK_JSON_SUFFIX in path.name:
-        if path.parent.name == FAILED_DIRNAME:
-            return _record_from_failed_file(path)
-        if ARCHIVE_DIRNAME in path.parts:
-            return _record_from_json_file(path, state=TASK_STATE_COMPLETED)
-        return _record_from_json_file(path)
-    return None
-
-
 def _record_from_failed_file(path: Path) -> Optional[ScheduledTaskRecord]:
     reason = "failed"
     original_name = path.name
@@ -1478,16 +1453,22 @@ def _parse_task_time_from_json_name(name: str) -> Optional[datetime]:
         return None
 
 
-def _resolve_task_file(tasks_dir: Path | str, name: str) -> Path:
-    if not name or any(char in name for char in ("/", "\\", "*", "?", "[", "]")) or name in {".", ".."}:
-        raise ValueError("invalid task name")
-    root, failed = ensure_scheduler_dirs(tasks_dir)
-    archive = root / ARCHIVE_DIRNAME
-    candidates = [root / name, failed / name]
-    if archive.is_dir():
-        candidates.extend(archive.rglob(name))
-    for path in candidates:
-        resolved = path.resolve()
-        if resolved.is_relative_to(root) and resolved.is_file():
-            return resolved
-    raise FileNotFoundError(f"task not found: {name}")
+async def collect_scheduled_turn_events(
+    event_stream,
+) -> tuple[str, list[dict[str, Any]], str]:
+    """Consume a scheduled agent turn event stream and return (final_content, raw_attachments, last_error)."""
+    final_content = ""
+    raw_attachments: list[dict[str, Any]] = []
+    last_error = ""
+    async for event in event_stream:
+        event_type = event.get("type")
+        if event_type in {"error", "aborted"} and event.get("needs_review"):
+            raise DeliveryUncertainError(str(event.get("error") or "scheduled tool outcome is unknown"))
+        if event_type == "message_done" and str(event.get("phase") or "final") == "final":
+            final_content = str(event.get("content") or "").strip() or final_content
+            attachments = event.get("attachments")
+            if isinstance(attachments, list):
+                raw_attachments.extend(item for item in attachments if isinstance(item, dict))
+        elif event_type == "error" and not final_content:
+            last_error = str(event.get("error") or "Agent processing error.").strip()
+    return final_content, raw_attachments, last_error

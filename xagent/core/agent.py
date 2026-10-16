@@ -1098,35 +1098,6 @@ class Agent:
             stream=stream,
         )
 
-    async def submit(self, item: InboxItem):
-        """Submit a classified inbox item.
-
-        Observations persist without waking a model turn. Waking items are
-        driven through ``chat_events``.
-        """
-        if item.kind is InboxKind.OBSERVATION:
-            return await self.observe(
-                context=item.content,
-                source=str((item.metadata or {}).get("source") or "environment"),
-                event_type=str((item.metadata or {}).get("event_type") or "observation"),
-                metadata=item.metadata,
-                room_name=item.room_name,
-                channel=item.channel,
-                user_id=item.user_id,
-            )
-        return self.chat_events(
-            user_message=item.content,
-            user_id=item.user_id,
-            image_source=item.image_source,
-            attachments=item.attachments,
-            stream=item.stream,
-            channel_instructions=item.channel_instructions,
-            room_name=item.room_name,
-            channel=item.channel,
-            inbox_kind=item.kind,
-            sender_name=str((item.metadata or {}).get("sender_name") or ""),
-        )
-
     async def observe(
         self,
         context: str,

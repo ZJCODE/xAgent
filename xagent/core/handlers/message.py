@@ -1009,12 +1009,6 @@ class MessageHandler:
         return self.prompt_registry.assemble(KIND_DECISION, ctx)
 
     @staticmethod
-    def _build_tool_policy(tool_names: Optional[List[str]] = None) -> str:
-        if not tool_names:
-            return ""
-        return AgentConfig.TOOL_POLICY_BASELINE
-
-    @staticmethod
     def sanitize_input_messages(input_messages: list) -> list:
         """Remove leading tool result messages, which are invalid without a prior assistant tool call."""
         while input_messages and (
@@ -1023,11 +1017,3 @@ class MessageHandler:
         ):
             input_messages.pop(0)
         return input_messages
-
-    @staticmethod
-    def filter_non_tool_messages(messages: list) -> list:
-        """Filter messages to only user and assistant roles."""
-        return [
-            msg for msg in messages
-            if msg.get("role") in (RoleType.USER.value, RoleType.ASSISTANT.value)
-        ]

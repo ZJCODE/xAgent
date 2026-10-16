@@ -59,28 +59,8 @@ class ChatService:
         self._chat_timeout = max(0.001, float(limits.chat_timeout))
         self._core_admission = isinstance(agent, Agent)
 
-    async def run_chat(self, input_data: ChatInput, *, client: str = CLIENT_HTTP) -> Any:
-        try:
-            await self._acquire_slot()
-        except PublicChatError as exc:
-            raise PublicHTTPException(exc.payload) from exc
-        try:
-            deadline = time.monotonic() + self._chat_timeout + (self.agent.inbox.queue_timeout if self._core_admission else 0)
-            return await self._await_before_deadline(
-                self._call_agent(input_data, client=client),
-                deadline,
-            )
-        except asyncio.TimeoutError as exc:
-            raise PublicHTTPException(
-                build_public_error(code=ERROR_TIMEOUT, cause="chat timeout")
-            ) from exc
-        finally:
-            self.release_slot()
-
     async def run_chat_response(self, input_data: ChatInput, *, client: str = CLIENT_HTTP) -> dict:
         """Return the durable turn identifiers alongside a synchronous reply."""
-        if not self._core_admission:
-            return {"reply": response_payload(await self.run_chat(input_data, client=client))}
         payload = {"reply": ""}
         async for event in self.chat_event_stream(input_data, client=client):
             payload.update({key: event[key] for key in ("turn_id", "event_id", "request_id") if event.get(key)})
@@ -199,28 +179,48 @@ class ChatService:
             deadline = time.monotonic() + self._chat_timeout + (self.agent.inbox.queue_timeout if self._core_admission else 0)
 
             chat_events = getattr(self.agent, "chat_events", None)
-            if not callable(chat_events):
-                raise RuntimeError("Agent does not support chat_events().")
             attachments = input_attachments(input_data)
+            image_source = input_image_sources(input_data, attachments=attachments)
             self._record_contact(input_data.user_id)
             context = self._scheduled_delivery_context(input_data, client=client)
             with scheduled_delivery_context(context):
-                response = chat_events(
-                    user_message=input_data.user_message,
-                    user_id=input_data.user_id,
-                    image_source=input_image_sources(input_data, attachments=attachments),
-                    attachments=attachments,
-                    stream=bool(getattr(input_data, "stream", False)),
-                    channel=CHANNEL_API,
-                    inbox_kind="user_turn",
-                    **({"event_id": input_data.event_id} if input_data.event_id else {}),
-                    **({"turn_id": input_data.turn_id} if input_data.turn_id else {}),
-                    **({"request_id": input_data.request_id} if input_data.request_id else {}),
-                )
-                async for event in self._iterate_before_deadline(response, deadline):
-                    if event.get("type") == "done":
-                        done_sent = True
-                    yield event
+                if callable(chat_events):
+                    response = chat_events(
+                        user_message=input_data.user_message,
+                        user_id=input_data.user_id,
+                        image_source=image_source,
+                        attachments=attachments,
+                        stream=bool(getattr(input_data, "stream", False)),
+                        channel=CHANNEL_API,
+                        inbox_kind="user_turn",
+                        **({"event_id": input_data.event_id} if input_data.event_id else {}),
+                        **({"turn_id": input_data.turn_id} if input_data.turn_id else {}),
+                        **({"request_id": input_data.request_id} if input_data.request_id else {}),
+                    )
+                    async for event in self._iterate_before_deadline(response, deadline):
+                        if event.get("type") == "done":
+                            done_sent = True
+                        yield event
+                elif callable(self.agent):
+                    reply = await self._await_before_deadline(
+                        self.agent(
+                            user_message=input_data.user_message,
+                            user_id=input_data.user_id,
+                            image_source=image_source,
+                            attachments=attachments,
+                            channel=CHANNEL_API,
+                        ),
+                        deadline,
+                    )
+                    yield {
+                        "type": "message_done",
+                        "phase": "final",
+                        "content": str(response_payload(reply) or ""),
+                    }
+                    done_sent = True
+                    yield {"type": "done"}
+                else:
+                    raise RuntimeError("Agent does not support chat_events().")
         except PublicChatError as exc:
             self.logger.warning(
                 "WebSocket chat rejected for %s: %s",
@@ -274,33 +274,6 @@ class ChatService:
                 cause="chat queue timeout",
             )
             raise PublicChatError(payload) from exc
-
-    async def _call_agent(self, input_data: ChatInput, *, client: str) -> Any:
-        attachments = input_attachments(input_data)
-        image_sources = input_image_sources(input_data, attachments=attachments)
-        self._record_contact(input_data.user_id)
-        context = self._scheduled_delivery_context(input_data, client=client)
-        with scheduled_delivery_context(context):
-            if input_data.event_id or input_data.turn_id:
-                final = ""
-                async for event in self.agent.chat_events(
-                    user_message=input_data.user_message, user_id=input_data.user_id,
-                    image_source=image_sources, attachments=attachments, channel=CHANNEL_API,
-                    event_id=input_data.event_id, turn_id=input_data.turn_id,
-                    **({"request_id": input_data.request_id} if input_data.request_id else {}),
-                ):
-                    if event.get("type") == "message_done" and event.get("phase") == "final":
-                        final = str(event.get("content") or "")
-                    elif event.get("type") == "error":
-                        final = str(event.get("error") or "")
-                return final
-            return await self.agent(
-                user_message=input_data.user_message,
-                user_id=input_data.user_id,
-                image_source=image_sources,
-                attachments=attachments,
-                channel=CHANNEL_API,
-            )
 
     async def _call_observe(self, input_data: ObserveInput) -> Any:
         return await self.agent.observe(

@@ -389,20 +389,6 @@ def resolve_daily_run_at(value: str, *, now: datetime | None = None) -> datetime
     return candidate
 
 
-def calculate_next_daily_run_at(value: datetime, *, now: datetime | None = None) -> datetime:
-    """Advance a daily recurring task to the next future wall-clock occurrence."""
-    current = (now or datetime.now()).replace(microsecond=0)
-    candidate = current.replace(
-        hour=value.hour,
-        minute=value.minute,
-        second=value.second,
-        microsecond=0,
-    )
-    if candidate <= current:
-        candidate += timedelta(days=1)
-    return candidate
-
-
 def resolve_weekly_run_at(
     value: str,
     *,
@@ -414,19 +400,6 @@ def resolve_weekly_run_at(
     if not parsed_weekdays:
         raise ValueError("weekly recurring tasks require weekdays like ['wed']")
     return _next_weekly_occurrence(parse_time_of_day(value), weekdays=parsed_weekdays, now=now)
-
-
-def calculate_next_weekly_run_at(
-    value: datetime,
-    *,
-    weekdays: str | list[str] | tuple[str, ...] | set[str],
-    now: datetime | None = None,
-) -> datetime:
-    """Advance a weekly recurring task to the next future matching weekday/time."""
-    parsed_weekdays = normalize_weekdays(weekdays)
-    if not parsed_weekdays:
-        raise ValueError("weekly recurring tasks require weekdays like ['wed']")
-    return _next_weekly_occurrence(value.time().replace(microsecond=0), weekdays=parsed_weekdays, now=now)
 
 
 def resolve_monthly_run_at(rule: Mapping[str, Any], *, now: datetime | None = None) -> datetime:
@@ -663,28 +636,6 @@ def _validate_recurrence_rule_mix(rules: list[dict[str, Any]]) -> None:
     interval_count = sum(1 for rule in rules if rule.get("kind") == RECURRENCE_KIND_INTERVAL)
     if interval_count and len(rules) != 1:
         raise ValueError("interval recurrence cannot be combined with other recurrence rules")
-
-
-def ensure_scheduler_dirs(tasks_dir: Path | str) -> tuple[Path, Path]:
-    """Ensure the scheduler task root and failed directory exist."""
-    root = Path(tasks_dir).expanduser().resolve()
-    failed = root / FAILED_DIRNAME
-    root.mkdir(parents=True, exist_ok=True)
-    failed.mkdir(parents=True, exist_ok=True)
-    return root, failed
-
-
-def _fsync_directory(path: Path) -> None:
-    try:
-        directory_fd = os.open(path, os.O_RDONLY)
-    except OSError:
-        return
-    try:
-        os.fsync(directory_fd)
-    except OSError:
-        pass
-    finally:
-        os.close(directory_fd)
 
 
 def _unique_failed_path(failed_dir: Path, name: str, reason: str) -> Path:

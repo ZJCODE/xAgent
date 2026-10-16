@@ -214,7 +214,7 @@ class AgentHTTPServerLimitTests(unittest.IsolatedAsyncioTestCase):
             })
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"reply": "ok"})
+        self.assertEqual(response.json(), {"reply": "done"})
 
     async def test_observe_endpoint_returns_ingestion_result(self):
         agent = ObservingAgent()

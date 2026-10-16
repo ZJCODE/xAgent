@@ -189,14 +189,13 @@ class AgentInboxTests(unittest.IsolatedAsyncioTestCase):
         model_client = CapturingModelClient([])
         agent = self._build_agent(storage, model_client, memory_handler=memory_handler)
 
-        result = await agent.submit(
-            InboxItem(
-                kind=InboxKind.OBSERVATION,
-                content="door sensor tripped",
-                user_id="alice",
-                channel="api",
-                metadata={"source": "camera", "event_type": "presence"},
-            )
+        result = await agent.observe(
+            context="door sensor tripped",
+            source="camera",
+            event_type="presence",
+            metadata={"source": "camera", "event_type": "presence"},
+            channel="api",
+            user_id="alice",
         )
 
         self.assertFalse(result.replied)

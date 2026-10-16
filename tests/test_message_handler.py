@@ -131,8 +131,12 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         self.assertNotIn("write_daily_memory", instructions)
 
     def test_tool_policy_empty_without_tools(self):
-        self.assertEqual(MessageHandler._build_tool_policy([]), "")
-        self.assertEqual(MessageHandler._build_tool_policy(None), "")
+        handler = MessageHandler(
+            system_prompt="",
+            message_storage=_FakeMessageStorage(),
+        )
+        messages = handler.build_instruction_messages(tool_names=[])
+        self.assertTrue(all(msg.get("name") != AgentConfig.TOOL_POLICY_NAME for msg in messages))
 
     def test_tool_policy_is_cross_tool_baseline(self):
         handler = MessageHandler(

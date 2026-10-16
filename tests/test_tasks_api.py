@@ -152,7 +152,7 @@ class TaskApiTests(unittest.TestCase):
                 agent = _TaskAgent(Path(tmpdir))
                 server = AgentHTTPServer(agent=agent)
                 subscriber = _Subscriber()
-                await server._register_task_subscriber("web_user", subscriber)
+                await server.api.delivery.register_subscriber("web_user", subscriber)
                 delivery = SubconsciousDelivery(
                     content="A direct subconscious note",
                     recipient=ContactEntry(
@@ -497,7 +497,7 @@ class TaskApiTests(unittest.TestCase):
                     delivered.append((task_record.task_type, content, stored_message, attachments))
 
                 server.api.delivery.broadcast_scheduled_message = capture_broadcast
-                await server._dispatch_scheduled_task(record)
+                await server.api.tasks.dispatch(record)
 
             self.assertEqual(len(delivered), 1)
             self.assertEqual(delivered[0][:2], ("agent", "agent scheduled result"))
@@ -533,7 +533,7 @@ class TaskApiTests(unittest.TestCase):
                     delivered.append((task_record.task_type, content, stored_message, attachments))
 
                 server.api.delivery.broadcast_scheduled_message = capture_broadcast
-                await server._dispatch_scheduled_task(record)
+                await server.api.tasks.dispatch(record)
 
             self.assertEqual(len(delivered), 1)
             self.assertEqual(delivered[0][:2], ("agent", ""))

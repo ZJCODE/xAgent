@@ -9,7 +9,7 @@ from typing import Any, Dict, Optional
 from fastapi import WebSocket
 
 from ...core.agent import Agent
-from ...core.runtime import SubconsciousDelivery
+from ...core.runtime import SubconsciousDelivery, persist_subconscious_delivery
 from ...interfaces.server.serializers import message_item
 from ...schemas.attachment import dedupe_attachments
 from .constants import CHANNEL_API
@@ -88,27 +88,12 @@ class DeliveryBus:
         if not user_id:
             raise ValueError("subconscious delivery is missing user_id")
 
-        message_handler = getattr(agent, "message_handler", None)
-        store_model_reply = getattr(message_handler, "store_model_reply", None)
-        stored_message = None
-        if callable(store_model_reply):
-            stored_message = await store_model_reply(
-                delivery.content,
-                getattr(agent, "_assistant_sender_id", "agent"),
-                metadata={
-                    "subconscious": {
-                        "source": "subconscious",
-                        "created_at": delivery.created_at.isoformat(sep=" "),
-                        "recipient": {
-                            "channel": delivery.recipient.channel,
-                            "user_id": delivery.recipient.user_id,
-                            "target": delivery.recipient.target,
-                        },
-                    }
-                },
-                channel=delivery.recipient.channel,
-                recipient_id=user_id,
-            )
+        stored_message = await persist_subconscious_delivery(
+            agent,
+            delivery,
+            channel=delivery.recipient.channel,
+            recipient_id=user_id,
+        )
 
         payload: Dict[str, Any] = {
             "type": "subconscious_message",

@@ -44,6 +44,7 @@ from ..tools.image_generation_tool import (
 )
 from ..tools.search_tool import (
     DEFAULT_QWEN_SEARCH_MODEL,
+    SEARCH_PROVIDER_NONE,
     SEARCH_PROVIDER_OPENAI,
     SEARCH_PROVIDER_QWEN,
     is_placeholder_api_key,
@@ -731,6 +732,36 @@ class BaseAgentRunner:
                 return DEFAULT_QWEN_SEARCH_MODEL
         return self._get_agent_model(agent_cfg)
     
+    @classmethod
+    def configured_tool_names(
+        cls,
+        agent_cfg: Dict[str, Any],
+        *,
+        supports_vision: Optional[bool] = None,
+    ) -> List[str]:
+        """Return the canonical list of built-in tool names for a configuration."""
+        names = ["run_command", "manage_scheduled_tasks", "attach_artifact", "web_fetch"]
+        search = agent_cfg.get("search") or {}
+        images = agent_cfg.get("image_generation") or {}
+        if isinstance(search, dict) and normalize_search_provider(search.get("provider")) != SEARCH_PROVIDER_NONE:
+            names.append("web_search")
+        if isinstance(images, dict) and normalize_image_generation_provider(images.get("provider")) != IMAGE_GENERATION_PROVIDER_NONE:
+            names.append("generate_image")
+        names.extend(["read_skill", "device", "search_memory"])
+        agent_section = agent_cfg.get("agent") or {}
+        if not isinstance(agent_section, dict) or agent_section.get("notes_enabled", AgentConfig.NOTES_ENABLED):
+            names.extend(["write_note", "update_note", "search_note", "read_note"])
+        vision_enabled = (
+            supports_vision
+            if supports_vision is not None
+            else provider_supports_vision(
+                agent_cfg.get("provider") if isinstance(agent_cfg.get("provider"), dict) else {}
+            )
+        )
+        if vision_enabled:
+            names.append("see_image")
+        return names
+
     def _load_agent_tools(
         self,
         agent_cfg: Dict[str, Any],

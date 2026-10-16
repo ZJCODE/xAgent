@@ -26,7 +26,7 @@ except ImportError:  # pragma: no cover - POSIX platforms
     msvcrt = None
 
 from ..config import AgentConfig
-from .scheduler import _fsync_directory
+from .task_receipts import sync_task_directory as _fsync_directory
 
 logger = logging.getLogger(__name__)
 
@@ -192,6 +192,38 @@ def upsert_contact(
 def resolve_contacts_path(workspace: Path) -> Path:
     """Resolve the contacts JSON file path inside the workspace."""
     return workspace / CONTACTS_FILENAME
+
+
+async def persist_subconscious_delivery(
+    agent: Any,
+    delivery: SubconsciousDelivery,
+    *,
+    channel: str,
+    recipient_id: str,
+    content: Optional[str] = None,
+) -> Any:
+    """Persist a delivered subconscious message into the agent's message storage."""
+    message_handler = getattr(agent, "message_handler", None)
+    store_model_reply = getattr(message_handler, "store_model_reply", None)
+    if not callable(store_model_reply):
+        return None
+    return await store_model_reply(
+        delivery.content if content is None else content,
+        getattr(agent, "_assistant_sender_id", "agent"),
+        metadata={
+            "subconscious": {
+                "source": "subconscious",
+                "created_at": delivery.created_at.isoformat(sep=" "),
+                "recipient": {
+                    "channel": delivery.recipient.channel,
+                    "user_id": delivery.recipient.user_id,
+                    "target": delivery.recipient.target,
+                },
+            }
+        },
+        channel=channel,
+        recipient_id=recipient_id,
+    )
 
 
 class SubconsciousLoop:

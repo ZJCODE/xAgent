@@ -42,8 +42,10 @@ class ApiServerRouteTests(unittest.IsolatedAsyncioTestCase):
             image_source=[f"https://example.com/{index}.png" for index in range(6)],
         )
 
+        from xagent.integrations.api import input_image_sources
+
         with self.assertRaises(HTTPException) as error:
-            AgentHTTPServer._input_image_sources(input_data)
+            input_image_sources(input_data)
 
         self.assertEqual(error.exception.status_code, 413)
 
