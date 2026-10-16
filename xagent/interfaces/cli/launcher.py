@@ -930,7 +930,6 @@ def _provider_option_descriptions(kind: str) -> dict[str, str]:
         "anthropic": "Use Anthropic.",
         "deepseek": "Use DeepSeek.",
         "qwen": "Use Qwen / DashScope.",
-        "minimax": "Use MiniMax.",
         "soniox": "Use Soniox realtime voice.",
         "custom": "Choose STT and TTS providers separately.",
     }
