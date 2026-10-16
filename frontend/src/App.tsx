@@ -8,6 +8,7 @@ import type { RoutePath } from "./types";
 import { AgentPage } from "./pages/AgentPage";
 import { ChannelPage } from "./pages/ChannelPage";
 import { ChatPage } from "./pages/ChatPage";
+import { DevicesPage } from "./pages/DevicesPage";
 import { MemoryPage } from "./pages/MemoryPage";
 import { MessagePage } from "./pages/MessagePage";
 import { SkillsPage } from "./pages/SkillsPage";
@@ -16,7 +17,7 @@ import { WelcomePage } from "./pages/WelcomePage";
 import { WorkspacePage } from "./pages/WorkspacePage";
 import { AppLayout } from "./components/AppLayout";
 
-const routeSet = new Set<RoutePath>(["/", "/memory", "/message", "/workspace", "/skills", "/tasks", "/channels", "/agent"]);
+const routeSet = new Set<RoutePath>(["/", "/memory", "/message", "/workspace", "/skills", "/tasks", "/channels", "/devices", "/agent"]);
 
 function normalizeRoute(pathname: string): RoutePath {
   return routeSet.has(pathname as RoutePath) ? (pathname as RoutePath) : "/";
@@ -85,6 +86,8 @@ function RoutedApp() {
         return <TasksPage />;
       case "/channels":
         return <ChannelPage />;
+      case "/devices":
+        return <DevicesPage />;
       case "/agent":
         return <AgentPage />;
       case "/":

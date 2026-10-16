@@ -3369,8 +3369,11 @@ body { -webkit-font-smoothing: antialiased; }
   .agent-grid > .ui-panel { padding: 20px; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
-.device-panel { grid-column: 1 / -1; }
+.device-panel { grid-column: 1 / -1; border: 1px solid var(--border); background: var(--bg-surface); border-radius: 14px; padding: 26px 28px; }
 .device-panel-body { display: grid; gap: 14px; }
+.device-readiness-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 12px 16px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-surface-subtle); }
+.device-readiness-banner p { margin: 0; }
+.device-badges { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .device-connection-help .markdown-content { font-size: 13px; line-height: 1.55; }
 .device-connection-help .markdown-content > div > :first-child { margin-top: 0; }
 .device-connection-help .markdown-content pre { white-space: pre-wrap; overflow-wrap: anywhere; }

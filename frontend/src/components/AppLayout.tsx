@@ -2,6 +2,7 @@ import {
   Activity,
   Bot,
   CircleHelp,
+  Cpu,
   Database,
   Files,
   ListTodo,
@@ -36,6 +37,7 @@ const navItems: Array<{ route: RoutePath; label: string; icon: ReactNode }> = [
   { route: "/skills", label: "Skills", icon: <Package size={15} /> },
   { route: "/tasks", label: "Tasks", icon: <ListTodo size={15} /> },
   { route: "/channels", label: "Channels", icon: <RadioTower size={15} /> },
+  { route: "/devices", label: "Devices", icon: <Cpu size={15} /> },
   { route: "/agent", label: "Agent", icon: <Bot size={15} /> },
 ];
 

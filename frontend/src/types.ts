@@ -1,15 +1,16 @@
-export type RoutePath = "/" | "/memory" | "/message" | "/workspace" | "/skills" | "/tasks" | "/channels" | "/agent";
+export type RoutePath = "/" | "/memory" | "/message" | "/workspace" | "/skills" | "/tasks" | "/channels" | "/devices" | "/agent";
 
 export interface DeviceProfileInput { name: string; location: string; description?: string }
 export interface DeviceInfo {
   device_id: string;
   online: boolean;
+  voice_online?: boolean;
   name?: string;
   location?: string;
   description?: string;
   reported_name?: string;
   reported_location?: string;
-  capabilities?: { name: string }[];
+  capabilities?: { name: string; description?: string }[];
 }
 export interface DeviceStatus {
   runtime_available: boolean;
