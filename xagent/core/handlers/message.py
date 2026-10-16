@@ -196,18 +196,6 @@ class MessageHandler:
     ) -> List[Message]:
         return await self.message_storage.get_messages(limit)
 
-    async def get_input_messages(
-        self,
-        limit: int,
-    ) -> list:
-        """Retrieve and serialize recent messages for model input."""
-        messages = await self.get_recent_messages(limit)
-        return [msg.to_model_input() for msg in messages]
-
-    @staticmethod
-    def to_model_input(messages: List[Message]) -> list:
-        return [msg.to_model_input() for msg in messages]
-
     @staticmethod
     def filter_conversation_messages(messages: List[Message]) -> List[Message]:
         """Keep only persisted user/assistant natural-language messages."""
@@ -221,94 +209,6 @@ class MessageHandler:
     def filter_context_events(messages: List[Message]) -> List[Message]:
         """Keep persisted environment observations/context events."""
         return [msg for msg in messages if msg.type == MessageType.CONTEXT_EVENT]
-
-    @staticmethod
-    def build_recent_transcript_message(
-        messages: List[Message],
-        current_user_id: str,
-        memory_context: str = "",
-        context_events: Optional[List[Message]] = None,
-        max_messages: int = AgentConfig.DEFAULT_RECENT_MESSAGES,
-        max_context_events: int = AgentConfig.MAX_CONTEXT_EVENTS,
-        include_images: bool = True,
-        workspace_dir: Optional[Union[str, Path]] = None,
-    ) -> dict:
-        """Collapse recent conversation history into one user transcript message.
-
-                Includes per-turn dynamic context that changes each call:
-                    - Runtime metadata (date and current speaker)
-          - Recent memory (conditional)
-                    - Recent experience in chronological order
-        """
-        conversation_messages = MessageHandler.filter_conversation_messages(messages)
-        observation_messages = (
-            MessageHandler.filter_context_events(messages)
-            if context_events is None
-            else MessageHandler.filter_context_events(context_events)
-        )
-        budgeted_entries, omitted_count = MessageHandler._budget_transcript_entries(
-            conversation_messages,
-            max_messages=max_messages,
-        )
-        budgeted_messages = [msg for msg, _ in budgeted_entries]
-        budgeted_observations, omitted_observation_count = MessageHandler._budget_context_events(
-            observation_messages,
-            max_events=max_context_events,
-        )
-        experience_entries = MessageHandler._merge_experience_entries(
-            budgeted_entries,
-            budgeted_observations,
-        )
-
-        transcript_lines: list[str] = []
-
-        # --- Runtime context ---
-        transcript_lines.append(AgentConfig.DEFAULT_SYSTEM_PROMPT.rstrip())
-        transcript_lines.append(
-            f"- Current speaker: {MessageHandler._speaker_address_for(messages, current_user_id)}"
-        )
-        transcript_lines.append(f"- Date: {time.strftime('%Y-%m-%d')}")
-        transcript_lines.append("")
-
-        # --- Recent memory (conditional) ---
-        if memory_context:
-            transcript_lines.append(
-            "**Recent Memory** "
-                "(attribution rules per instructions):\n\n"
-                + memory_context
-            )
-            transcript_lines.append("")
-
-        # --- Recent experience ---
-        transcript_lines.append("==========\n")
-        transcript_lines.append("")
-        transcript_lines.append("**Recent Experience** (conversation and observations in chronological order):")
-        transcript_lines.append("")
-
-        if omitted_count or omitted_observation_count:
-            transcript_lines.append(
-                MessageHandler._format_omitted_experience_note(
-                    omitted_messages=omitted_count,
-                    omitted_observations=omitted_observation_count,
-                )
-            )
-            transcript_lines.append("")
-
-        for entry_type, msg, content in experience_entries:
-            transcript_lines.extend(
-                MessageHandler._format_experience_entry(entry_type, msg, content)
-            )
-            transcript_lines.append("")
-
-        transcript_lines.append(AgentConfig.build_turn_reply_prompt(current_user_id))
-
-        transcript_text = "\n".join(transcript_lines).strip()
-
-        # print("=== Built transcript message content ===")
-        # print(transcript_text)
-        # print("=== End transcript message content ===")
-
-        return {"role": RoleType.USER.value, "content": transcript_text}
 
     @staticmethod
     def build_turn_context_messages(

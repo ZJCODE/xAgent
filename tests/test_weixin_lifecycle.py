@@ -5,7 +5,6 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from xagent.core.attention import AttentionLoop
 from xagent.integrations.weixin.adapter import WeixinAdapter
 from xagent.integrations.weixin.config import WeixinAdapterConfig
 from xagent.integrations.weixin.state import WeixinCredentials, WeixinStateStore
@@ -41,7 +40,7 @@ class WeixinLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
     def adapter(self, client):
         return WeixinAdapter(
-            SimpleNamespace(attention=AttentionLoop(), workspace_dir=self.root),
+            SimpleNamespace(workspace_dir=self.root),
             WeixinAdapterConfig(account_id="bot"), runtime_dir=self.root, client=client,
         )
 
@@ -61,7 +60,6 @@ class WeixinLifecycleTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 await adapter.stop()
                 await asyncio.wait_for(running, timeout=1)
-                await adapter.agent.attention.stop()
         self.assertIsNotNone(self.store.load_credentials("bot"))
         self.assertEqual(self.store.load_sync_buf("bot"), "next-cursor")
 
@@ -76,7 +74,6 @@ class WeixinLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self.store.load_credentials("bot"))
         self.assertEqual(self.store.load_sync_buf("bot"), "")
         self.assertEqual(self.store.load_context_tokens("bot"), {})
-        await adapter.agent.attention.stop()
 
     async def test_missing_credentials_fail_before_polling(self):
         self.store.delete_credentials("bot")

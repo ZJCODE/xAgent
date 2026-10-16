@@ -603,119 +603,6 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
 
         self.assertIsInstance(context_messages[-1]["content"], str)
 
-    def test_recent_transcript_message_stops_reusing_image_after_third_followup(self):
-        image_url = "data:image/png;base64,AAAA"
-        messages = [
-            Message.create("Please inspect this image", role=RoleType.USER, sender_id="bob", image_source=image_url),
-            Message.create("It looks like a chart.", role=RoleType.ASSISTANT, sender_id="agent"),
-            Message.create("What does the label say?", role=RoleType.USER, sender_id="bob"),
-            Message.create("The label is small.", role=RoleType.ASSISTANT, sender_id="agent"),
-            Message.create("Zoom in on the lower right.", role=RoleType.USER, sender_id="bob"),
-            Message.create("The icon is blue.", role=RoleType.ASSISTANT, sender_id="agent"),
-            Message.create("And what about the title?", role=RoleType.USER, sender_id="bob"),
-        ]
-
-        transcript_message = MessageHandler.build_recent_transcript_message(
-            messages,
-            current_user_id="bob",
-        )
-
-        self.assertIsInstance(transcript_message["content"], str)
-
-    def test_transcript_includes_memory_context(self):
-        """memory_context is injected into the transcript message under 'Recent Memory'."""
-        handler = MessageHandler(
-            system_prompt="You are a helpful assistant.",
-            message_storage=_FakeMessageStorage(),
-        )
-        messages = [
-            Message.create("Hello", role=RoleType.USER, sender_id="alice"),
-        ]
-        memory_context = "[2026-03-18]\n今天主要围绕路线图推进。"
-        transcript = handler.build_recent_transcript_message(
-            messages,
-            current_user_id="alice",
-            memory_context=memory_context,
-        )
-        self.assertIn("Recent Memory", transcript["content"] if isinstance(transcript["content"], str) else transcript["content"][0]["text"])
-        self.assertIn("[2026-03-18]", transcript["content"] if isinstance(transcript["content"], str) else transcript["content"][0]["text"])
-        self.assertIn("今天主要围绕路线图推进。", transcript["content"] if isinstance(transcript["content"], str) else transcript["content"][0]["text"])
-
-    def test_transcript_omits_memory_section_when_context_empty(self):
-        """Empty memory_context should not inject a memory section in transcript."""
-        handler = MessageHandler(
-            system_prompt="You are a helpful assistant.",
-            message_storage=_FakeMessageStorage(),
-        )
-        messages = [
-            Message.create("Hello", role=RoleType.USER, sender_id="alice"),
-        ]
-        transcript = handler.build_recent_transcript_message(
-            messages,
-            current_user_id="alice",
-            memory_context="",
-        )
-        content = transcript["content"] if isinstance(transcript["content"], str) else transcript["content"][0]["text"]
-        self.assertNotIn("Recent Memory", content)
-
-    def test_build_recent_transcript_message_contains_runtime_context(self):
-        handler = MessageHandler(
-            system_prompt="You are a helpful assistant.",
-            message_storage=_FakeMessageStorage(),
-        )
-        messages = [
-            Message.create("Hello", role=RoleType.USER, sender_id="alice"),
-        ]
-        transcript = handler.build_recent_transcript_message(messages, current_user_id="alice")
-        content = transcript["content"] if isinstance(transcript["content"], str) else transcript["content"][0]["text"]
-        self.assertIn("Current speaker: alice", content)
-        self.assertIn("Date:", content)
-
-    def test_build_recent_transcript_message_records_images_without_attaching_them(self):
-        handler = MessageHandler(
-            system_prompt="You are a helpful assistant.",
-            message_storage=_FakeMessageStorage(),
-        )
-        messages = [
-            Message.create("Need help with this screenshot", role=RoleType.USER, sender_id="alice"),
-            Message.create(
-                "Please inspect this image",
-                role=RoleType.USER,
-                sender_id="bob",
-                image_source="https://example.com/screenshot.png",
-            ),
-        ]
-
-        transcript_message = handler.build_recent_transcript_message(messages, current_user_id="bob")
-
-        self.assertEqual(transcript_message["role"], "user")
-        self.assertIsInstance(transcript_message["content"], str)
-        self.assertIn("[Attached image: 1]", transcript_message["content"])
-
-    def test_build_recent_transcript_message_can_omit_images(self):
-        handler = MessageHandler(
-            system_prompt="You are a helpful assistant.",
-            message_storage=_FakeMessageStorage(),
-        )
-        messages = [
-            Message.create(
-                "Please inspect this image",
-                role=RoleType.USER,
-                sender_id="bob",
-                image_source="https://example.com/screenshot.png",
-            ),
-        ]
-
-        transcript_message = handler.build_recent_transcript_message(
-            messages,
-            current_user_id="bob",
-            include_images=False,
-        )
-
-        self.assertEqual(transcript_message["role"], "user")
-        self.assertIsInstance(transcript_message["content"], str)
-        self.assertIn("[Attached image: 1]", transcript_message["content"])
-
     def test_build_turn_context_messages_can_omit_current_task_images(self):
         messages = [
             Message.create(
@@ -733,47 +620,6 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         )
 
         self.assertIsInstance(context_messages[-1]["content"], str)
-
-    def test_observations_are_interleaved_in_recent_experience(self):
-        alice = Message.create("Hi", role=RoleType.USER, sender_id="alice")
-        alice.timestamp = 1.0
-        observation = Message.create_context_event(
-            "Bob mentioned the room is getting noisy.",
-            source="microphone",
-            event_type="overheard_speech",
-            metadata={
-                "speaker_id": "bob",
-                "addressed_to_agent": False,
-            },
-        )
-        observation.timestamp = 2.0
-        bob = Message.create("Can you hear that?", role=RoleType.USER, sender_id="bob")
-        bob.timestamp = 3.0
-
-        transcript = MessageHandler.build_recent_transcript_message(
-            [bob, observation, alice],
-            current_user_id="alice",
-        )["content"]
-        alice_timestamp = datetime.fromtimestamp(alice.timestamp).strftime("%Y-%m-%d %H:%M:%S")
-        observation_timestamp = datetime.fromtimestamp(observation.timestamp).strftime("%Y-%m-%d %H:%M:%S")
-        bob_timestamp = datetime.fromtimestamp(bob.timestamp).strftime("%Y-%m-%d %H:%M:%S")
-
-        self.assertIn("Recent Experience", transcript)
-        self.assertNotIn("Recent Observations", transcript)
-        self.assertIn(f"[ambient context][timestamp={observation_timestamp}]", transcript)
-        self.assertNotIn("[observation ", transcript)
-        self.assertIn("Current speaker: alice", transcript)
-        self.assertIn(f"[speaker=alice][timestamp={alice_timestamp}]", transcript)
-        self.assertIn(f"[speaker=bob][timestamp={bob_timestamp}]", transcript)
-        self.assertLess(
-            transcript.index(f"[speaker=alice][timestamp={alice_timestamp}]"),
-            transcript.index(f"[ambient context][timestamp={observation_timestamp}]"),
-        )
-        self.assertLess(
-            transcript.index(f"[ambient context][timestamp={observation_timestamp}]"),
-            transcript.index(f"[speaker=bob][timestamp={bob_timestamp}]"),
-        )
-        self.assertIn("what alice just said", transcript)
 
     def test_long_observation_is_not_truncated_in_recent_experience(self):
         long_observation = "sensor log: " + ("x" * 1800)
@@ -802,15 +648,16 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         message.channel = "weixin"
         message.metadata = {"sender_name": "Jun"}
 
-        transcript = MessageHandler.build_recent_transcript_message(
-            [message],
-            current_user_id="wx_user",
-        )["content"]
         context_messages = MessageHandler.build_turn_context_messages(
             [message],
             current_user_id="wx_user",
             current_message=message,
             current_time="2026-08-16 16:36",
+        )
+        recent_experience = next(
+            item["content"]
+            for item in context_messages
+            if item["name"] == AgentConfig.RECENT_EXPERIENCE_NAME
         )
         current_task = next(
             item["content"]
@@ -818,10 +665,9 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
             if item["name"] == AgentConfig.CURRENT_TASK_NAME
         )
 
-        self.assertIn("[speaker=Jun(wx_user)]", transcript)
-        self.assertIn("Current speaker: Jun\n", transcript)
-        self.assertNotIn("Current speaker: Jun(wx_user)", transcript)
+        self.assertIn("[speaker=Jun(wx_user)]", recent_experience)
         self.assertIn("Current speaker: Jun\n", current_task)
+        self.assertNotIn("Current speaker: Jun(wx_user)", current_task)
         self.assertIn("Focus on what Jun just said", current_task)
         self.assertNotIn("wx_user", current_task)
 

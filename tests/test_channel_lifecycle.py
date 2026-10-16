@@ -11,7 +11,6 @@ from unittest.mock import AsyncMock, Mock, patch
 import httpx
 from fastapi import HTTPException
 
-from xagent.core.attention import AttentionLoop
 from xagent.core.inbox import AgentInbox
 from xagent.core.runtime.host import RuntimeHost
 from xagent.core.runtime.channel_activity import ChannelActivity
@@ -70,7 +69,7 @@ class ChannelLifecycleTests(unittest.IsolatedAsyncioTestCase):
             "api": {"enabled": False}, "weixin": {"account_id": "test"},
             "voice": {},
         }}, tasks_dir=self.root / "tasks")
-        self.host.agent = SimpleNamespace(inbox=AgentInbox(), attention=AttentionLoop(addressed_grace=0))
+        self.host.agent = SimpleNamespace(inbox=AgentInbox())
         self.host.api = SimpleNamespace(tasks=SimpleNamespace(can_handle=lambda task: True))
         self.host.adapters["api"] = self.host.api
         self.host.channel_status = {name: {"state": "disconnected"} for name in ("api", "weixin", "voice")}
@@ -96,7 +95,6 @@ class ChannelLifecycleTests(unittest.IsolatedAsyncioTestCase):
             if not task.done():
                 task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
-        await self.host.agent.attention.stop()
 
     async def connect(self):
         await self.host.connect_channel("weixin")
@@ -277,30 +275,6 @@ class ChannelLifecycleTests(unittest.IsolatedAsyncioTestCase):
         await self.connect()
         await scheduler.tick()
         self.assertEqual(delivered, [task.task_id])
-
-    async def test_attention_cancel_does_not_stop_other_channels_or_replay(self):
-        await self.connect()
-        attention = self.host.agent.attention
-        started = asyncio.Event()
-        replies = []
-        async def slow_speak(*args, **kwargs):
-            started.set()
-            await asyncio.Event().wait()
-        async def other_speak(*args, **kwargs):
-            replies.append("api")
-        attention.register_speaker("weixin", slow_speak)
-        attention.register_speaker("api", other_speak)
-        await attention.notice("weixin:room", addressed=True, content="old")
-        await started.wait()
-        await attention.notice("api:room", addressed=True, content="keep working")
-        await self.host.disconnect_channel("weixin")
-        await attention.idle()
-        self.assertEqual(replies, ["api"])
-        self.assertFalse(attention._task.done())
-        self.assertEqual(attention.cursors("weixin:room").events, [])
-        await self.connect()
-        await attention.idle()
-        self.assertEqual(replies, ["api"])
 
     async def test_active_scheduled_task_is_reviewed_after_disconnect_timeout(self):
         await self.connect()

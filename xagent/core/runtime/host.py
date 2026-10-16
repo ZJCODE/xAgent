@@ -172,7 +172,6 @@ class RuntimeHost:
             if callable(recovery):
                 await recovery()
             self.recovered_turns = await self.agent.turn_store.recover()
-            await self.agent.attention.reset_to_present(self.agent.message_storage)
             self.api = ApiChannelAdapter(self.agent,
                 contacts_file=resolve_contacts_path(self.config_dir), tasks_dir=self.runner.tasks_dir,
                 device_service=self.device_service)
@@ -382,9 +381,6 @@ class RuntimeHost:
             activity = self._channel_activity.get(channel)
             if activity is not None:
                 activity.quiesce()
-            attention = getattr(self.agent, "attention", None)
-            if channel != "api" and attention is not None:
-                attention.pause_channel(channel)
             adapter = self.adapters.get(channel) if channel != "api" else None
             if adapter is not None:
                 adapter.quiesce()
@@ -467,9 +463,6 @@ class RuntimeHost:
             if task is not None and not task.cancelled():
                 task.exception()
         if channel != "api":
-            attention = getattr(self.agent, "attention", None)
-            if attention is not None:
-                await attention.detach_channel(channel)
             self.adapters.pop(channel, None)
         for key in (channel, f"{channel}-readiness", f"{channel}-stop"):
             self._tasks.pop(key, None)
@@ -539,7 +532,6 @@ class RuntimeHost:
             run = adapter.run_forever()
         if channel != "api":
             adapter.runtime_activity = activity
-            self.agent.attention.attach_channel(channel, activity)
             loop = asyncio.get_running_loop()
             adapter.runtime_status = lambda state: loop.call_soon_threadsafe(self._channel_connection, channel, state, generation)
         self._tasks[channel] = asyncio.create_task(self._watch_channel(channel, run, generation), name=f"xagent-channel-{channel}")
@@ -804,9 +796,6 @@ class RuntimeHost:
         self._publish_status()
         if self.agent is not None:
             self.agent.inbox.stop_accepting()
-            pause_attention = getattr(self.agent.attention, "pause_all", None)
-            if callable(pause_attention):
-                pause_attention()
         for activity in self._channel_activity.values():
             activity.quiesce()
         for name, adapter in list(self.adapters.items()):
@@ -830,8 +819,6 @@ class RuntimeHost:
             if self.agent.inbox.busy or self.agent.inbox.pending_count:
                 self.agent.abort()
                 self.agent.inbox.cancel_pending()
-        if self.agent is not None:
-            await self.agent.attention.stop()
         self._stop_devices()
         for name, adapter in list(self.adapters.items()):
             stop = getattr(adapter, "stop", None)

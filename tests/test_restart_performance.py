@@ -10,8 +10,6 @@ from unittest.mock import AsyncMock, Mock, patch
 import httpx
 
 from xagent.core.runtime.host import RuntimeHost
-from xagent.core.attention import AttentionLoop
-from xagent.core.runtime.channel_activity import ChannelActivity
 from xagent.interfaces.web.proxy import _local_websocket
 from xagent.interfaces.cli.processes import start_background
 
@@ -104,23 +102,6 @@ class RestartDrainTests(unittest.IsolatedAsyncioTestCase):
                 await asyncio.gather(stopping, return_exceptions=True)
                 host._release_ownership_when_idle()
 
-    async def test_closed_channel_cannot_keep_attention_spinning(self):
-        attention = AttentionLoop(addressed_grace=0)
-        activity = ChannelActivity()
-        activity.quiesce()
-        attention.attach_channel("weixin", activity)
-        speak = AsyncMock()
-        attention.register_speaker("weixin", speak)
-        try:
-            await attention.notice("weixin:room", addressed=True, content="pending")
-            # No loop is started for blocked work; the event loop stays available.
-            self.assertEqual(attention._next_due(), (None, 0.0))
-            self.assertEqual(attention._armed_rooms(), [])
-            await asyncio.sleep(0)
-            speak.assert_not_called()
-        finally:
-            await attention.stop()
-
     async def test_restart_does_not_generate_new_diary_and_finalizes_receipts_once(self):
         for restart in (False, True):
             with self.subTest(restart=restart), tempfile.TemporaryDirectory() as tmp:
@@ -131,7 +112,7 @@ class RestartDrainTests(unittest.IsolatedAsyncioTestCase):
                 turns = SimpleNamespace(recover=AsyncMock(return_value=0))
                 host.agent = SimpleNamespace(inbox=SimpleNamespace(busy=False, pending_count=0,
                     stop_accepting=Mock(), cancel_pending=Mock()), abort=Mock(),
-                    attention=SimpleNamespace(stop=AsyncMock()), memory_handler=memory, turn_store=turns)
+                    memory_handler=memory, turn_store=turns)
                 try:
                     await host._shutdown()
                     if restart:
@@ -149,8 +130,10 @@ class RestartDrainTests(unittest.IsolatedAsyncioTestCase):
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=host._create_control_app()), base_url="http://test") as client:
                 self.assertEqual((await client.post("/runtime/stop", json={"restart": True})).status_code, 200)
                 self.assertTrue(host._restarting)
+            default_host = RuntimeHost(tmp)
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=default_host._create_control_app()), base_url="http://test") as client:
                 self.assertEqual((await client.post("/runtime/stop")).status_code, 200)
-                self.assertFalse(host._restarting)
+                self.assertFalse(default_host._restarting)
 
     async def test_readiness_does_not_read_memory_or_task_status(self):
         with tempfile.TemporaryDirectory() as tmp:
