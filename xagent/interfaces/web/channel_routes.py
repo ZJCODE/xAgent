@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sys
 import asyncio
 from pathlib import Path
 from typing import Any, Callable, Literal
@@ -25,8 +24,6 @@ from ..cli.channels import (
 from ..cli.processes import (
     managed_paths,
     running_pid,
-    start_background,
-    stop_managed_process,
     tail_text,
 )
 from ..voice.config import VoiceChannelConfig
@@ -236,18 +233,6 @@ def _safe_load_config(config_dir: Path) -> dict[str, Any]:
         return load_config_file(config_dir)
     except Exception:
         return {}
-
-
-def _channel_command(channel: str, config_dir: Path) -> list[str]:
-    return [
-        sys.executable,
-        "-m",
-        "xagent.interfaces.cli",
-        "_run-channel",
-        channel,
-        "--config-dir",
-        str(config_dir),
-    ]
 
 
 def _channel_status(config_dir: Path, config: dict[str, Any], channel: str) -> dict[str, Any]:

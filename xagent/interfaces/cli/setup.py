@@ -168,13 +168,11 @@ SEARCH_PROVIDERS = (
     "none",
     "openai",
     "qwen",
-    "minimax",
 )
 IMAGE_GENERATION_PROVIDERS = (
     "none",
     "openai",
     "qwen",
-    "minimax",
 )
 
 _PROVIDER_DESCRIPTIONS = {

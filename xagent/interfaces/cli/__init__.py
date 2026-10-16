@@ -48,7 +48,6 @@ from .runtime import (
     handle_observe,
     handle_restart,
     handle_run,
-    handle_run_channel_internal,
     handle_run_web_internal,
     handle_start,
     handle_status,

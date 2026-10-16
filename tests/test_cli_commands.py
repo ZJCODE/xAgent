@@ -49,7 +49,6 @@ from xagent.interfaces.cli import (
     handle_messages,
     handle_observe,
     handle_restart,
-    handle_run_channel_internal,
     handle_run_web_internal,
     handle_start,
     handle_status,
@@ -84,7 +83,6 @@ from xagent.interfaces.cli.launcher import (
 )
 from xagent.interfaces.cli.overview import STATUS_ERROR, build_runtime_overview
 from xagent.interfaces.cli.processes import StartResult
-from xagent.interfaces.cli.runtime import _channel_command, _voice_interruptions_override
 from xagent.interfaces.cli.setup import SETUP_EXIT_CANCELLED
 from xagent.interfaces.cli.web_client import DEFAULT_WEB_CLIENT_PORT, web_client_config
 from xagent.schemas import Message, RoleType
@@ -2869,30 +2867,6 @@ class CLICommandTests(unittest.TestCase):
 
         self.assertIsNone(result)
 
-    def test_legacy_feishu_entrypoint_does_not_initialize_agent(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            _write_runtime(tmpdir, feishu=True)
-            args = argparse.Namespace(channel="feishu", config_dir=tmpdir)
-            with patch("xagent.interfaces.cli.runtime.BaseAgentRunner") as bootstrap:
-                self.assertEqual(handle_run_channel_internal(args), 1)
-            bootstrap.assert_not_called()
-
-    def test_legacy_weixin_entrypoint_does_not_initialize_agent(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            _write_runtime(tmpdir, weixin=True)
-            args = argparse.Namespace(channel="weixin", config_dir=tmpdir)
-            with patch("xagent.interfaces.cli.runtime.BaseAgentRunner") as bootstrap:
-                self.assertEqual(handle_run_channel_internal(args), 1)
-            bootstrap.assert_not_called()
-
-    def test_legacy_voice_entrypoint_does_not_initialize_agent(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            _write_runtime(tmpdir, voice=True)
-            args = argparse.Namespace(channel="voice", config_dir=tmpdir)
-            with patch("xagent.interfaces.cli.runtime.BaseAgentRunner") as bootstrap:
-                self.assertEqual(handle_run_channel_internal(args), 1)
-            bootstrap.assert_not_called()
-
     def test_start_all_includes_feishu_when_credentials_exist_without_enabled(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             _write_runtime(tmpdir, feishu=True)
@@ -3085,12 +3059,6 @@ class CLICommandTests(unittest.TestCase):
             with patch("xagent.interfaces.cli.agent_runtime.start_runtime", return_value={"status": "running"}) as starter:
                 self.assertEqual(handle_start(args), 0)
             starter.assert_called_once_with(Path(tmpdir).resolve(), None)
-
-    def test_legacy_api_entrypoint_does_not_initialize_server(self):
-        args = argparse.Namespace(channel="api", config_dir="./agent-dir")
-        with patch("xagent.interfaces.server.AgentHTTPServer") as server:
-            self.assertEqual(handle_run_channel_internal(args), 1)
-        server.assert_not_called()
 
     def test_run_web_passes_options_to_server(self):
         args = argparse.Namespace(

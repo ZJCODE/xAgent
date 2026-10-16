@@ -22,12 +22,10 @@ from xagent.utils.tool_decorator import function_tool
 logger = logging.getLogger(__name__)
 
 IMAGE_GENERATION_PROVIDER_OPENAI = "openai"
-IMAGE_GENERATION_PROVIDER_MINIMAX = "minimax"
 IMAGE_GENERATION_PROVIDER_QWEN = "qwen"
 IMAGE_GENERATION_PROVIDER_NONE = "none"
 SUPPORTED_IMAGE_GENERATION_PROVIDERS = {
     IMAGE_GENERATION_PROVIDER_OPENAI,
-    IMAGE_GENERATION_PROVIDER_MINIMAX,
     IMAGE_GENERATION_PROVIDER_QWEN,
     IMAGE_GENERATION_PROVIDER_NONE,
 }
@@ -37,34 +35,17 @@ DEFAULT_IMAGE_GENERATION_SIZE = "auto"
 DEFAULT_IMAGE_GENERATION_QUALITY = "auto"
 DEFAULT_IMAGE_GENERATION_FORMAT = "png"
 DEFAULT_IMAGE_GENERATION_BACKGROUND = "auto"
-DEFAULT_MINIMAX_IMAGE_GENERATION_MODEL = "image-01"
-DEFAULT_MINIMAX_IMAGE_GENERATION_ASPECT_RATIO = "1:1"
 DEFAULT_QWEN_IMAGE_GENERATION_MODEL = "qwen-image-2.0-pro"
 DEFAULT_QWEN_IMAGE_GENERATION_SIZE = "2048*2048"
 IMAGE_GENERATION_OUTPUT_DIR = "assets/generated/images"
-MINIMAX_IMAGE_GENERATION_ENDPOINT = "https://api.minimaxi.com/v1/image_generation"
-MINIMAX_IMAGE_GENERATION_TIMEOUT = 180.0
 QWEN_IMAGE_GENERATION_ENDPOINT = "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
 QWEN_IMAGE_GENERATION_TIMEOUT = 300.0
-MINIMAX_API_KEY_ENV_VARS = ("MINIMAX_API_KEY", "MINIMAX_API_TOKEN")
 QWEN_API_KEY_ENV_VARS = ("DASHSCOPE_API_KEY", "DASHSCOPE_API_TOKEN", "QWEN_API_KEY", "QWEN_API_TOKEN")
-MINIMAX_IMAGE_GENERATION_ASPECT_RATIOS = {
-    "1:1",
-    "16:9",
-    "4:3",
-    "3:2",
-    "2:3",
-    "3:4",
-    "9:16",
-    "21:9",
-}
 PLACEHOLDER_API_KEYS = {
     "your_api_key",
     "your_api_key_here",
     "your_openai_api_key",
     "your_openai_api_key_here",
-    "your_minimax_api_key",
-    "your_minimax_api_key_here",
     "your_qwen_api_key",
     "your_qwen_api_key_here",
     "your_dashscope_api_key",
@@ -81,17 +62,6 @@ IMAGE_GENERATION_TOOL_PARAMETERS = {
         "output_compression",
         "n",
         "moderation",
-    },
-    IMAGE_GENERATION_PROVIDER_MINIMAX: {
-        "prompt",
-        "size",
-        "aspect_ratio",
-        "reference_image_url",
-        "reference_image_urls",
-        "n",
-        "seed",
-        "prompt_optimizer",
-        "aigc_watermark",
     },
     IMAGE_GENERATION_PROVIDER_QWEN: {
         "prompt",
@@ -122,16 +92,11 @@ class ConfiguredImageGenerationProvider:
         output_format: Optional[str] = None,
         background: Optional[str] = None,
         output_compression: Optional[int] = None,
-        aspect_ratio: Optional[str] = None,
-        reference_image_url: Optional[str] = None,
-        reference_image_urls: Optional[list[str]] = None,
         n: Optional[int] = None,
         seed: Optional[int] = None,
         negative_prompt: Optional[str] = None,
         prompt_extend: Optional[bool] = None,
         watermark: Optional[bool] = None,
-        prompt_optimizer: Optional[bool] = None,
-        aigc_watermark: Optional[bool] = None,
         moderation: Optional[str] = None,
     ) -> dict:
         prompt = prompt.strip()
@@ -139,15 +104,10 @@ class ConfiguredImageGenerationProvider:
             return _error_response(self.provider, "prompt is required")
         if self.provider == IMAGE_GENERATION_PROVIDER_OPENAI:
             unsupported = {
-                "aspect_ratio": aspect_ratio,
-                "reference_image_url": reference_image_url,
-                "reference_image_urls": reference_image_urls,
                 "seed": seed,
                 "negative_prompt": negative_prompt,
                 "prompt_extend": prompt_extend,
                 "watermark": watermark,
-                "prompt_optimizer": prompt_optimizer,
-                "aigc_watermark": aigc_watermark,
             }
             unsupported_names = [name for name, value in unsupported.items() if value not in (None, "", [])]
             if unsupported_names:
@@ -165,43 +125,12 @@ class ConfiguredImageGenerationProvider:
                 n=n,
                 moderation=moderation,
             )
-        if self.provider == IMAGE_GENERATION_PROVIDER_MINIMAX:
-            unsupported = {
-                "quality": quality,
-                "output_format": output_format,
-                "background": background,
-                "output_compression": output_compression,
-                "moderation": moderation,
-                "negative_prompt": negative_prompt,
-                "prompt_extend": prompt_extend,
-                "watermark": watermark,
-            }
-            unsupported_names = [name for name, value in unsupported.items() if value not in (None, "", [])]
-            if unsupported_names:
-                return _error_response(
-                    self.provider,
-                    f"MiniMax image generation does not support parameter(s): {', '.join(unsupported_names)}",
-                )
-            return await self._generate_minimax(
-                prompt=prompt,
-                size=size,
-                aspect_ratio=aspect_ratio,
-                reference_image_url=reference_image_url,
-                reference_image_urls=reference_image_urls,
-                n=n,
-                seed=seed,
-                prompt_optimizer=prompt_optimizer,
-                aigc_watermark=aigc_watermark,
-            )
         if self.provider == IMAGE_GENERATION_PROVIDER_QWEN:
             unsupported = {
                 "quality": quality,
                 "output_format": output_format,
                 "background": background,
                 "output_compression": output_compression,
-                "aspect_ratio": aspect_ratio,
-                "reference_image_url": reference_image_url,
-                "reference_image_urls": reference_image_urls,
                 "moderation": moderation,
             }
             unsupported_names = [name for name, value in unsupported.items() if value not in (None, "", [])]
@@ -216,8 +145,8 @@ class ConfiguredImageGenerationProvider:
                 n=n,
                 seed=seed,
                 negative_prompt=negative_prompt,
-                prompt_extend=prompt_extend if prompt_extend is not None else prompt_optimizer,
-                watermark=watermark if watermark is not None else aigc_watermark,
+                prompt_extend=prompt_extend,
+                watermark=watermark,
             )
         return _error_response(self.provider, "image generation is disabled")
 
@@ -320,152 +249,6 @@ class ConfiguredImageGenerationProvider:
             extra={
                 "moderation": params.get("moderation"),
                 "n": params.get("n"),
-            },
-        )
-
-    async def _generate_minimax(
-        self,
-        *,
-        prompt: str,
-        size: Optional[str],
-        aspect_ratio: Optional[str],
-        reference_image_url: Optional[str],
-        reference_image_urls: Optional[list[str]],
-        n: Optional[int],
-        seed: Optional[int],
-        prompt_optimizer: Optional[bool],
-        aigc_watermark: Optional[bool],
-    ) -> dict:
-        api_key = _get_minimax_api_key(self.config)
-        if not api_key:
-            return _error_response(
-                self.provider,
-                "MiniMax image generation requires image_generation.api_key or MINIMAX_API_KEY",
-            )
-
-        payload: dict[str, Any] = {
-            "model": self.config.get("model") or DEFAULT_MINIMAX_IMAGE_GENERATION_MODEL,
-            "prompt": prompt,
-            "response_format": "base64",
-        }
-        try:
-            requested_aspect_ratio = _clean_optional(aspect_ratio or self.config.get("aspect_ratio"))
-            normalized_width = _normalize_minimax_dimension(self.config.get("width"))
-            normalized_height = _normalize_minimax_dimension(self.config.get("height"))
-            if requested_aspect_ratio:
-                payload["aspect_ratio"] = _normalize_minimax_aspect_ratio(requested_aspect_ratio)
-            elif normalized_width is not None and normalized_height is not None:
-                payload["width"] = normalized_width
-                payload["height"] = normalized_height
-            else:
-                payload["aspect_ratio"] = (
-                    _minimax_aspect_ratio_from_size(size or self.config.get("size"))
-                    or DEFAULT_MINIMAX_IMAGE_GENERATION_ASPECT_RATIO
-                )
-
-            normalized_count = _normalize_count(n if n is not None else self.config.get("n"), max_count=9)
-        except ValueError as exception:
-            return _error_response(self.provider, str(exception))
-        if normalized_count is not None:
-            payload["n"] = normalized_count
-        normalized_seed = _normalize_int(seed if seed is not None else self.config.get("seed"))
-        if normalized_seed is not None:
-            payload["seed"] = normalized_seed
-        try:
-            normalized_prompt_optimizer = _normalize_optional_bool(
-                prompt_optimizer if prompt_optimizer is not None else self.config.get("prompt_optimizer")
-            )
-        except ValueError as exception:
-            return _error_response(self.provider, str(exception))
-        if normalized_prompt_optimizer is not None:
-            payload["prompt_optimizer"] = normalized_prompt_optimizer
-        try:
-            normalized_watermark = _normalize_optional_bool(
-                aigc_watermark if aigc_watermark is not None else self.config.get("aigc_watermark")
-            )
-        except ValueError as exception:
-            return _error_response(self.provider, str(exception))
-        if normalized_watermark is not None:
-            payload["aigc_watermark"] = normalized_watermark
-
-        subject_reference = self.config.get("subject_reference")
-        if isinstance(subject_reference, list) and subject_reference:
-            payload["subject_reference"] = subject_reference
-        else:
-            reference_urls = _normalize_reference_image_urls(
-                reference_image_url,
-                reference_image_urls,
-                self.config.get("reference_image_url"),
-                self.config.get("reference_image_urls"),
-            )
-            if reference_urls:
-                payload["subject_reference"] = [
-                    {"type": "character", "image_file": image_url}
-                    for image_url in reference_urls
-                ]
-
-        style = self.config.get("style")
-        if isinstance(style, dict) and style:
-            payload["style"] = style
-
-        endpoint = _minimax_image_generation_endpoint(self.config)
-        try:
-            async with httpx.AsyncClient(timeout=MINIMAX_IMAGE_GENERATION_TIMEOUT) as http_client:
-                response = await http_client.post(
-                    endpoint,
-                    headers={
-                        "Authorization": f"Bearer {api_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json=payload,
-                )
-                response.raise_for_status()
-                response_json = response.json()
-        except httpx.HTTPStatusError as exception:
-            response_text = exception.response.text[:300] if exception.response is not None else str(exception)
-            logger.warning("MiniMax image generation failed: %s", response_text)
-            return _error_response(self.provider, response_text)
-        except Exception as exception:
-            logger.warning("MiniMax image generation failed: %s", exception)
-            return _error_response(self.provider, str(exception))
-
-        base_resp = _field(response_json, "base_resp", {}) or {}
-        status_code = _field(base_resp, "status_code")
-        if status_code not in (None, 0, "0"):
-            status_message = _field(base_resp, "status_msg", "MiniMax image generation failed")
-            return _error_response(self.provider, str(status_message))
-
-        image_base64_values = _extract_minimax_base64_images(response_json)
-        if not image_base64_values:
-            return _error_response(self.provider, "MiniMax response did not contain base64 image data")
-
-        saved_images: list[dict] = []
-        for image_base64 in image_base64_values:
-            try:
-                image_bytes = base64.b64decode(image_base64, validate=True)
-            except (binascii.Error, ValueError) as exception:
-                return _error_response(self.provider, f"MiniMax returned invalid image data: {exception}")
-            image_format = _detect_image_format(image_bytes, fallback="jpeg")
-            saved_images.append(self._save_image_file(image_bytes, image_format))
-
-        return _generated_image_response(
-            provider=self.provider,
-            prompt=prompt,
-            revised_prompt="",
-            model=payload["model"],
-            size=size or self.config.get("size"),
-            quality=None,
-            background=None,
-            output_format=saved_images[0]["format"],
-            images=saved_images,
-            extra={
-                "aspect_ratio": payload.get("aspect_ratio"),
-                "width": payload.get("width"),
-                "height": payload.get("height"),
-                "n": payload.get("n"),
-                "seed": payload.get("seed"),
-                "prompt_optimizer": payload.get("prompt_optimizer"),
-                "aigc_watermark": payload.get("aigc_watermark"),
             },
         )
 
@@ -640,16 +423,11 @@ def create_image_generation_tool(
             "output_format": "Optional output format: png, jpeg, or webp.",
             "background": "Optional background value such as auto, opaque, or transparent when supported.",
             "output_compression": "Optional JPEG/WebP compression level from 0 to 100.",
-            "aspect_ratio": "Optional MiniMax aspect ratio such as 1:1, 16:9, 4:3, 3:2, 2:3, 3:4, 9:16, or 21:9.",
-            "reference_image_url": "Optional MiniMax reference image URL for image-to-image subject consistency.",
-            "reference_image_urls": "Optional MiniMax reference image URLs for image-to-image subject consistency.",
             "n": "Optional number of images to generate.",
-            "seed": "Optional MiniMax or Qwen seed for more reproducible outputs.",
+            "seed": "Optional Qwen seed for more reproducible outputs.",
             "negative_prompt": "Optional Qwen negative prompt describing content to avoid.",
             "prompt_extend": "Optional Qwen prompt rewriting toggle.",
             "watermark": "Optional Qwen watermark toggle.",
-            "prompt_optimizer": "Optional MiniMax prompt optimizer toggle.",
-            "aigc_watermark": "Optional MiniMax AIGC watermark toggle.",
             "moderation": "Optional OpenAI moderation strictness such as auto or low.",
         },
     )
@@ -660,16 +438,11 @@ def create_image_generation_tool(
         output_format: Optional[str] = None,
         background: Optional[str] = None,
         output_compression: Optional[int] = None,
-        aspect_ratio: Optional[str] = None,
-        reference_image_url: Optional[str] = None,
-        reference_image_urls: Optional[list[str]] = None,
         n: Optional[int] = None,
         seed: Optional[int] = None,
         negative_prompt: Optional[str] = None,
         prompt_extend: Optional[bool] = None,
         watermark: Optional[bool] = None,
-        prompt_optimizer: Optional[bool] = None,
-        aigc_watermark: Optional[bool] = None,
         moderation: Optional[str] = None,
     ) -> dict:
         return await image_provider.generate(
@@ -679,16 +452,11 @@ def create_image_generation_tool(
             output_format=output_format,
             background=background,
             output_compression=output_compression,
-            aspect_ratio=aspect_ratio,
-            reference_image_url=reference_image_url,
-            reference_image_urls=reference_image_urls,
             n=n,
             seed=seed,
             negative_prompt=negative_prompt,
             prompt_extend=prompt_extend,
             watermark=watermark,
-            prompt_optimizer=prompt_optimizer,
-            aigc_watermark=aigc_watermark,
             moderation=moderation,
         )
 
@@ -723,10 +491,6 @@ def normalize_image_generation_provider(provider: Any) -> str:
         "openai_image_generation": IMAGE_GENERATION_PROVIDER_OPENAI,
         "openai_images": IMAGE_GENERATION_PROVIDER_OPENAI,
         "openai": IMAGE_GENERATION_PROVIDER_OPENAI,
-        "minimax_image_generation": IMAGE_GENERATION_PROVIDER_MINIMAX,
-        "minimax_images": IMAGE_GENERATION_PROVIDER_MINIMAX,
-        "mini_max": IMAGE_GENERATION_PROVIDER_MINIMAX,
-        "minimax": IMAGE_GENERATION_PROVIDER_MINIMAX,
         "qwen_image_generation": IMAGE_GENERATION_PROVIDER_QWEN,
         "qwen_images": IMAGE_GENERATION_PROVIDER_QWEN,
         "dashscope": IMAGE_GENERATION_PROVIDER_QWEN,
@@ -858,24 +622,6 @@ def _extract_image_response(response: Any) -> tuple[str, str]:
     for image_base64, revised_prompt in _extract_image_responses(response):
         return image_base64, revised_prompt
     return "", ""
-
-
-def _extract_minimax_base64_images(response: Any) -> list[str]:
-    data = _field(response, "data", {}) or {}
-    raw_images = _field(data, "image_base64") or _field(data, "images") or []
-    if isinstance(raw_images, str):
-        return [raw_images]
-    if not isinstance(raw_images, list):
-        return []
-    images: list[str] = []
-    for item in raw_images:
-        if isinstance(item, str):
-            images.append(item)
-        else:
-            image_base64 = _field(item, "b64_json") or _field(item, "image_base64") or _field(item, "base64")
-            if image_base64:
-                images.append(str(image_base64))
-    return images
 
 
 def _extract_qwen_image_urls(response: Any) -> list[str]:
@@ -1018,51 +764,6 @@ def _normalize_optional_bool(value: Any) -> Optional[bool]:
     raise ValueError("Boolean image generation options must be true or false")
 
 
-def _normalize_minimax_aspect_ratio(value: Any) -> str:
-    normalized = str(value or "").strip()
-    if normalized in MINIMAX_IMAGE_GENERATION_ASPECT_RATIOS:
-        return normalized
-    allowed = ", ".join(sorted(MINIMAX_IMAGE_GENERATION_ASPECT_RATIOS))
-    raise ValueError(f"aspect_ratio must be one of: {allowed}")
-
-
-def _minimax_aspect_ratio_from_size(value: Any) -> Optional[str]:
-    size = str(value or "").strip().lower()
-    if not size or size == "auto":
-        return None
-    if "x" not in size:
-        raise ValueError("size must be auto or WIDTHxHEIGHT")
-    width_text, height_text = size.split("x", 1)
-    try:
-        width = int(width_text.strip())
-        height = int(height_text.strip())
-    except ValueError:
-        raise ValueError("size must be auto or WIDTHxHEIGHT")
-    if width <= 0 or height <= 0:
-        raise ValueError("size width and height must be positive")
-    common_divisor = _greatest_common_divisor(width, height)
-    ratio = f"{width // common_divisor}:{height // common_divisor}"
-    if ratio in MINIMAX_IMAGE_GENERATION_ASPECT_RATIOS:
-        return ratio
-    allowed = ", ".join(sorted(MINIMAX_IMAGE_GENERATION_ASPECT_RATIOS))
-    raise ValueError(f"size aspect ratio must resolve to one of: {allowed}")
-
-
-def _greatest_common_divisor(left: int, right: int) -> int:
-    while right:
-        left, right = right, left % right
-    return left
-
-
-def _normalize_minimax_dimension(value: Any) -> Optional[int]:
-    dimension = _normalize_int(value)
-    if dimension is None:
-        return None
-    if dimension < 512 or dimension > 2048 or dimension % 8 != 0:
-        raise ValueError("MiniMax width/height must be integers from 512 to 2048 and multiples of 8")
-    return dimension
-
-
 def _normalize_qwen_size(value: Any) -> str:
     normalized = str(value or DEFAULT_QWEN_IMAGE_GENERATION_SIZE).strip().lower()
     if normalized == "auto":
@@ -1101,35 +802,6 @@ def _normalize_qwen_seed(value: Any) -> Optional[int]:
     return seed
 
 
-def _normalize_reference_image_urls(*values: Any) -> list[str]:
-    urls: list[str] = []
-    for value in values:
-        if value is None:
-            continue
-        if isinstance(value, str):
-            text = value.strip()
-            if text:
-                urls.append(text)
-            continue
-        if isinstance(value, list):
-            for item in value:
-                item_text = str(item or "").strip()
-                if item_text:
-                    urls.append(item_text)
-    return urls
-
-
-def _get_minimax_api_key(config: dict) -> str:
-    configured_key = str(config.get("api_key") or "").strip()
-    if configured_key and not _is_placeholder_api_key(configured_key):
-        return configured_key
-    for env_name in MINIMAX_API_KEY_ENV_VARS:
-        env_value = os.getenv(env_name, "").strip()
-        if env_value:
-            return env_value
-    return ""
-
-
 def _get_qwen_api_key(config: dict) -> str:
     configured_key = str(config.get("api_key") or "").strip()
     if configured_key and not _is_placeholder_api_key(configured_key):
@@ -1144,17 +816,6 @@ def _get_qwen_api_key(config: dict) -> str:
 def _is_placeholder_api_key(api_key: str) -> bool:
     normalized = api_key.strip().lower()
     return not normalized or normalized in PLACEHOLDER_API_KEYS
-
-
-def _minimax_image_generation_endpoint(config: dict) -> str:
-    configured_endpoint = str(config.get("endpoint") or config.get("base_url") or "").strip().rstrip("/")
-    if not configured_endpoint:
-        return MINIMAX_IMAGE_GENERATION_ENDPOINT
-    if configured_endpoint.endswith("/image_generation"):
-        return configured_endpoint
-    if configured_endpoint.endswith("/v1"):
-        return f"{configured_endpoint}/image_generation"
-    return f"{configured_endpoint}/v1/image_generation"
 
 
 def _qwen_image_generation_endpoint(config: dict) -> str:

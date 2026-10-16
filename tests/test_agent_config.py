@@ -66,7 +66,7 @@ class AgentConfigPromptTests(unittest.TestCase):
         self.assertIn("the notebook is conclusions you have already worked out and will want later", prompt)
         self.assertIn("Use `write_note` only when this turn produced a standing fact", prompt)
         self.assertIn("First-person in a note is you", prompt)
-        self.assertIn("weekly distillation", prompt)
+        self.assertIn("the diary already records what happened", prompt)
 
     def test_decision_prompt_preserves_agent_owned_participation(self):
         prompt = AgentConfig.DECISION_SYSTEM_PROMPT
@@ -179,10 +179,6 @@ class ProviderConfigTests(unittest.TestCase):
                 "max_tokens": 4096,
                 "reasoning": {"enabled": True, "budget_tokens": 4096},
             }, "must be less"),
-            ({
-                "name": "minimax",
-                "reasoning": {"enabled": False},
-            }, "not supported"),
         )
         for provider_cfg, message in invalid_configs:
             with self.subTest(provider=provider_cfg.get("name")):
@@ -250,10 +246,6 @@ provider:
         )
         self.assertEqual(
             provider_model_api({"name": "anthropic"}),
-            MODEL_API_ANTHROPIC_MESSAGES,
-        )
-        self.assertEqual(
-            provider_model_api({"name": "minimax"}),
             MODEL_API_ANTHROPIC_MESSAGES,
         )
 
@@ -422,9 +414,9 @@ provider:
             config_path.write_text(
                 """
 provider:
-    name: "minimax"
-    model: "MiniMax-M2.7"
-    base_url: "https://api.minimaxi.com/anthropic"
+    name: "anthropic"
+    model: "claude-opus-4-6"
+    base_url: "https://api.anthropic.com"
     api_key: "test-key"
 search:
     provider: "none"
@@ -435,11 +427,11 @@ search:
 
             runner = BaseAgentRunner(config_dir=tmpdir)
 
-            self.assertEqual(runner.agent.model, "MiniMax-M2.7")
+            self.assertEqual(runner.agent.model, "claude-opus-4-6")
             self.assertNotIn("backend", runner.config["provider"])
             self.assertEqual(runner.agent.model_api, MODEL_API_ANTHROPIC_MESSAGES)
             self.assertEqual(runner.agent.model_client.model_api, MODEL_API_ANTHROPIC_MESSAGES)
-            self.assertEqual(str(runner.agent.client.base_url).rstrip("/"), "https://api.minimaxi.com/anthropic")
+            self.assertEqual(str(runner.agent.client.base_url).rstrip("/"), "https://api.anthropic.com")
             self.assertFalse(runner.agent.supports_vision)
             self.assertNotIn("see_image", runner.agent.tools)
 
@@ -869,8 +861,6 @@ provider:
             )
             schema = build_setup_schema()
             self.assertEqual(schema["reasoning"]["providers"]["qwen"]["controls"], ["budget_tokens"])
-            self.assertNotIn("minimax", schema["reasoning"]["providers"])
-            self.assertNotIn("minimax", schema["models"])
             self.assertEqual(
                 schema["reasoning"]["custom_model_apis"][MODEL_API_ANTHROPIC_MESSAGES]["min_budget_tokens"],
                 1024,
@@ -1226,54 +1216,6 @@ search:
                 "https://dashscope.aliyuncs.com/compatible-mode/v1",
             )
 
-    def test_config_rejects_minimax_search_for_non_minimax_provider_without_search_key(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            config_path = Path(tmpdir) / "config.yaml"
-            config_path.write_text(
-                """
-provider:
-    name: "openai"
-    model: "gpt-5.4-mini"
-    api_key: "test-key"
-search:
-    provider: "minimax"
-""",
-                encoding="utf-8",
-            )
-            write_identity(tmpdir)
-
-            with self.assertRaisesRegex(ValueError, "requires search.api_key"):
-                BaseAgentRunner(config_dir=tmpdir)
-
-    def test_config_loads_minimax_search_tool_with_main_key(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            config_path = Path(tmpdir) / "config.yaml"
-            config_path.write_text(
-                """
-provider:
-    name: "minimax"
-    base_url: "https://api.minimaxi.com/anthropic"
-    model: "MiniMax-M3"
-    api_key: "minimax-key"
-search:
-    provider: "minimax"
-""",
-                encoding="utf-8",
-            )
-            write_identity(tmpdir)
-
-            runner = BaseAgentRunner(config_dir=tmpdir)
-            web_search_tool = runner.agent.tools["web_search"]
-            search_provider = next(
-                cell.cell_contents
-                for cell in web_search_tool.__closure__
-                if cell.cell_contents.__class__.__name__ == "ConfiguredSearchProvider"
-            )
-
-            self.assertIn("web_search", runner.agent.tools)
-            self.assertEqual(search_provider.provider, "minimax")
-            self.assertEqual(search_provider.config["api_key"], "minimax-key")
-
     def test_config_loads_qwen_search_tool_with_main_key(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "config.yaml"
@@ -1362,35 +1304,6 @@ image_generation:
 
             runner = BaseAgentRunner(config_dir=tmpdir)
             self.assertIn("generate_image", runner.agent.tools)
-
-    def test_config_loads_minimax_image_generation_tool_with_main_key(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            config_path = Path(tmpdir) / "config.yaml"
-            config_path.write_text(
-                """
-provider:
-    name: "minimax"
-    base_url: "https://api.minimaxi.com/anthropic"
-    model: "MiniMax-M3"
-    api_key: "minimax-key"
-image_generation:
-    provider: "minimax"
-""",
-                encoding="utf-8",
-            )
-            write_identity(tmpdir)
-
-            runner = BaseAgentRunner(config_dir=tmpdir)
-            image_tool = runner.agent.tools["generate_image"]
-            image_provider = next(
-                cell.cell_contents
-                for cell in image_tool.__closure__
-                if cell.cell_contents.__class__.__name__ == "ConfiguredImageGenerationProvider"
-            )
-
-            self.assertIn("generate_image", runner.agent.tools)
-            self.assertEqual(image_provider.provider, "minimax")
-            self.assertEqual(image_provider.config["api_key"], "minimax-key")
 
     def test_config_loads_qwen_image_generation_tool_with_main_key(self):
         with tempfile.TemporaryDirectory() as tmpdir:

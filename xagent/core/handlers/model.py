@@ -12,7 +12,6 @@ from ..providers import (
     MODEL_API_OPENAI_CHAT_COMPLETIONS,
     MODEL_API_OPENAI_RESPONSES,
     PROVIDER_DEEPSEEK,
-    PROVIDER_MINIMAX,
     PROVIDER_OPENAI,
     PROVIDER_QWEN,
     ReasoningConfig,
@@ -541,8 +540,6 @@ class ModelClient:
             params["tools"] = self._to_anthropic_tools(tool_specs)
             params["tool_choice"] = {"type": "auto"}
         if self.reasoning is not None:
-            if self.provider_name == PROVIDER_MINIMAX:
-                raise ValueError("reasoning is not supported for the MiniMax Anthropic-compatible API")
             if not self.reasoning.enabled:
                 params["thinking"] = {"type": "disabled"}
             elif self.reasoning.effort is not None:

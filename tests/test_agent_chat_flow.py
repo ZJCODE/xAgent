@@ -689,7 +689,7 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
         ])
         model = ModelClient(
             client=client,
-            model="MiniMax-M2.7",
+            model="claude-test",
             model_api=MODEL_API_ANTHROPIC_MESSAGES,
             max_tokens=1234,
         )
@@ -710,7 +710,7 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(reply_type, ReplyType.SIMPLE_REPLY)
         self.assertEqual(payload, "ok")
         call = client.messages.calls[0]
-        self.assertEqual(call["model"], "MiniMax-M2.7")
+        self.assertEqual(call["model"], "claude-test")
         self.assertEqual(call["max_tokens"], 1234)
         self.assertEqual(call["system"], "Core Rules")
         self.assertEqual(call["messages"], [{"role": "user", "content": "hello"}])
@@ -865,7 +865,7 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
             {"type": "tool_use", "id": "toolu_1", "name": "lookup", "input": {"query": "x"}},
         ]
         client = FakeAnthropicClient([_anthropic_response(response_blocks)])
-        model = ModelClient(client=client, model="MiniMax-M2.7", model_api=MODEL_API_ANTHROPIC_MESSAGES)
+        model = ModelClient(client=client, model="claude-test", model_api=MODEL_API_ANTHROPIC_MESSAGES)
 
         reply_type, payload = await model.call(
             messages=[{"role": "user", "content": "hello"}],
@@ -889,7 +889,7 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
         client = FakeAnthropicClient([
             _anthropic_response([{"type": "text", "text": "done"}])
         ])
-        model = ModelClient(client=client, model="MiniMax-M2.7", model_api=MODEL_API_ANTHROPIC_MESSAGES)
+        model = ModelClient(client=client, model="claude-test", model_api=MODEL_API_ANTHROPIC_MESSAGES)
 
         await model.call(
             messages=[

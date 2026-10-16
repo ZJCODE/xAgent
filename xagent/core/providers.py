@@ -17,7 +17,6 @@ MODEL_APIS = {
 
 PROVIDER_OPENAI = "openai"
 PROVIDER_DEEPSEEK = "deepseek"
-PROVIDER_MINIMAX = "minimax"
 PROVIDER_QWEN = "qwen"
 PROVIDER_ANTHROPIC = "anthropic"
 PROVIDER_CUSTOM = "custom"
@@ -33,7 +32,6 @@ KNOWN_PROVIDERS = (
 PROVIDER_MODEL_APIS = {
     PROVIDER_OPENAI: MODEL_API_OPENAI_RESPONSES,
     PROVIDER_DEEPSEEK: MODEL_API_OPENAI_CHAT_COMPLETIONS,
-    PROVIDER_MINIMAX: MODEL_API_ANTHROPIC_MESSAGES,
     PROVIDER_QWEN: MODEL_API_OPENAI_CHAT_COMPLETIONS,
     PROVIDER_ANTHROPIC: MODEL_API_ANTHROPIC_MESSAGES,
 }
@@ -41,7 +39,6 @@ PROVIDER_MODEL_APIS = {
 PROVIDER_BASE_URLS = {
     PROVIDER_OPENAI: "https://api.openai.com/v1",
     PROVIDER_DEEPSEEK: "https://api.deepseek.com",
-    PROVIDER_MINIMAX: "https://api.minimaxi.com/anthropic",
     PROVIDER_QWEN: "https://dashscope.aliyuncs.com/compatible-mode/v1",
     PROVIDER_ANTHROPIC: "https://api.anthropic.com",
 }
@@ -236,8 +233,6 @@ def reasoning_capability(
 ) -> ReasoningCapability:
     """Return the framework-supported reasoning controls for one endpoint."""
     provider = normalize_provider_name(provider_name)
-    if provider == PROVIDER_MINIMAX:
-        return ReasoningCapability(supported=False)
     if provider == PROVIDER_OPENAI:
         return ReasoningCapability(
             supported=True,
