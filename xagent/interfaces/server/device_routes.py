@@ -144,7 +144,7 @@ def register_device_routes(
     @app.websocket("/ws/devices/{device_id}/voice")
     async def device_voice_socket(websocket: WebSocket, device_id: str):
         credential = websocket.headers.get("authorization", "")
-        if not service.authenticate_paired(device_id, credential):
+        if not service.authenticate(device_id, credential):
             await websocket.close(code=1008)
             return
         await websocket.accept()
@@ -158,6 +158,12 @@ def register_device_routes(
             raw_voice_cfg = voice_config_provider() if callable(voice_config_provider) else {}
             voice_cfg = VoiceChannelConfig.from_dict(raw_voice_cfg)
             voice_cfg.resolved_api_key()
+            issued = service.complete_pairing_for_voice(
+                device_id,
+                credential,
+                name=hello.name,
+                location=hello.location,
+            )
             room_name = service.resolve_room_name(device_id)
             bridge = WebSocketVoiceBridge(
                 websocket=websocket,
@@ -170,6 +176,8 @@ def register_device_routes(
             options = VoiceRuntimeOptions(
                 user_id=(hello.user_id or "").strip() or f"device:{device_id}",
                 tasks_dir=tasks_dir,
+                allow_proactive_output=True,
+                device_id=device_id,
             )
             runtime, microphone, player = create_websocket_voice_runtime(
                 agent=agent,
@@ -187,18 +195,19 @@ def register_device_routes(
                 room_name=room_name,
             )
             await service.register_voice(session)
+            ready_frame: dict[str, Any] = {
+                "type": "ready",
+                "device_id": device_id,
+                "room_name": room_name,
+                "input_sample_rate": hello.input_sample_rate,
+                "input_channels": hello.input_channels,
+                "output_sample_rate": hello.output_sample_rate or SONIOX_TTS_SAMPLE_RATE,
+                "output_channels": hello.output_channels or SONIOX_TTS_CHANNELS,
+            }
+            if issued is not None:
+                ready_frame["credential"] = issued
             await asyncio.wait_for(
-                websocket.send_json(
-                    {
-                        "type": "ready",
-                        "device_id": device_id,
-                        "room_name": room_name,
-                        "input_sample_rate": hello.input_sample_rate,
-                        "input_channels": hello.input_channels,
-                        "output_sample_rate": hello.output_sample_rate or SONIOX_TTS_SAMPLE_RATE,
-                        "output_channels": hello.output_channels or SONIOX_TTS_CHANNELS,
-                    }
-                ),
+                websocket.send_json(ready_frame),
                 timeout=5,
             )
             session.runtime_task = asyncio.create_task(runtime.run_forever())

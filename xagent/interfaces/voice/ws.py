@@ -40,6 +40,8 @@ class VoiceSessionHello(BaseModel):
     echo_managed: StrictBool = True
     interruptions: StrictBool | None = None
     user_id: str | None = Field(default=None, max_length=128)
+    name: str = Field(default="", max_length=256)
+    location: str = Field(default="", max_length=256)
 
 
 class VoiceClientControl(BaseModel):

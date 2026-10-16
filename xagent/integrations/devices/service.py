@@ -42,7 +42,7 @@ class Registration(BaseModel):
     name: str = Field(default="", max_length=256)
     location: str = Field(default="", max_length=256)
     metadata: dict[str, Any] = Field(default_factory=dict)
-    capabilities: list[Capability] = Field(min_length=1, max_length=64)
+    capabilities: list[Capability] = Field(default_factory=list, min_length=0, max_length=64)
 
 
 class CallRequest(BaseModel):
@@ -131,6 +131,7 @@ class DeviceService:
         self._pairing_deadline = 0.0
         self.devices: dict[str, Connection] = {}
         self.voice_sessions: dict[str, VoiceDeviceSession] = {}
+        self.on_voice_sessions_changed: Any = None
         self.pending: dict[str, PendingCommand] = {}
         self.accepting = False
         self._idle = asyncio.Event()
@@ -204,6 +205,42 @@ class DeviceService:
         logger.info("Device paired id=%s", device_id)
         return issued
 
+    def complete_pairing_for_voice(
+        self,
+        device_id: str,
+        credential: str,
+        *,
+        name: str = "",
+        location: str = "",
+    ) -> str | None:
+        """Complete one-time pairing directly from a voice WebSocket handshake."""
+        if not self.accepting:
+            raise RuntimeError("Device service is unavailable")
+        token = credential.removeprefix("Bearer ") if credential.startswith("Bearer ") else ""
+        if self.credentials.authenticate(device_id, token):
+            if name or location:
+                self.profiles.reported(
+                    device_id,
+                    self.credentials.digests[device_id],
+                    name=name,
+                    location=location,
+                )
+            return None
+        if device_id in self.credentials.digests or not self._valid_pairing(token):
+            raise ValueError("Invalid pairing code or device ID is already paired")
+        issued = "dvc_" + secrets.token_urlsafe(32)
+        self.credentials.add(device_id, issued)
+        self.cancel_pairing()
+        if name or location:
+            self.profiles.reported(
+                device_id,
+                self.credentials.digests[device_id],
+                name=name,
+                location=location,
+            )
+        logger.info("Voice device paired id=%s", device_id)
+        return issued
+
     async def revoke(self, device_id: str) -> None:
         self.credentials.revoke(device_id)
         uploads = [task for task, owner in self.uploads.items() if owner == device_id]
@@ -261,6 +298,36 @@ class DeviceService:
                     return cleaned
         return device_id or "local_room"
 
+    def _notify_voice_sessions_changed(self) -> None:
+        callback = self.on_voice_sessions_changed
+        if callable(callback):
+            try:
+                callback()
+            except Exception:
+                logger.debug("Voice session change callback failed", exc_info=True)
+
+    def resolve_voice_session(self, target: dict[str, Any] | None = None, *, user_id: str = "") -> VoiceDeviceSession | None:
+        """Resolve an active VoiceDeviceSession matching target device_id, room_name, or user_id."""
+        if not self.voice_sessions:
+            return None
+        target_dict = target if isinstance(target, dict) else {}
+        device_id = str(target_dict.get("device_id") or "").strip()
+        if device_id and device_id in self.voice_sessions:
+            return self.voice_sessions[device_id]
+        room_name = str(target_dict.get("room_name") or "").strip()
+        if room_name:
+            for session in self.voice_sessions.values():
+                if session.room_name == room_name or self.resolve_room_name(session.device_id) == room_name:
+                    return session
+        candidate_user = str(target_dict.get("user_id") or user_id or "").strip()
+        if candidate_user.startswith("device:"):
+            inferred_id = candidate_user.removeprefix("device:").strip()
+            if inferred_id in self.voice_sessions:
+                return self.voice_sessions[inferred_id]
+        if len(self.voice_sessions) == 1 and not device_id and not room_name:
+            return next(iter(self.voice_sessions.values()))
+        return None
+
     async def register_voice(self, session: VoiceDeviceSession) -> VoiceDeviceSession:
         if not self.accepting:
             raise RuntimeError("Device service is unavailable")
@@ -274,6 +341,7 @@ class DeviceService:
             except asyncio.CancelledError:
                 await self.disconnect_voice(session)
                 raise
+        self._notify_voice_sessions_changed()
         logger.info("Device voice session registered id=%s room=%s", session.device_id, session.room_name)
         return session
 
@@ -281,8 +349,10 @@ class DeviceService:
         if session.closed:
             return
         session.closed = True
+        removed = False
         if self.voice_sessions.get(session.device_id) is session:
             del self.voice_sessions[session.device_id]
+            removed = True
         try:
             session.microphone.close()
         except Exception:
@@ -304,6 +374,8 @@ class DeviceService:
             await asyncio.wait_for(session.websocket.close(code=1001), timeout=1.0)
         except Exception:
             pass
+        if removed:
+            self._notify_voice_sessions_changed()
 
     def authenticate_media(self, device_id: str, credential: str) -> bool:
         return credential.startswith("Bearer ") and self.credentials.authenticate(device_id, credential[7:])
@@ -377,14 +449,32 @@ class DeviceService:
 
     def list_devices(self, *, device_id: str = "", location: str = "", capability: str = "") -> dict:
         rows = []
-        for key, connection in self.devices.items():
-            registration = connection.registration
+        all_keys = list(dict.fromkeys(list(self.devices) + list(self.voice_sessions)))
+        for key in all_keys:
             if device_id and key != device_id:
                 continue
-            row = {**registration.model_dump(exclude={"type"}), **self.profile_fields(key)}
+            connection = self.devices.get(key)
+            if connection is not None:
+                registration = connection.registration
+                base = registration.model_dump(exclude={"type"})
+                cap_names = {cap.name for cap in registration.capabilities}
+            else:
+                base = {
+                    "device_id": key,
+                    "name": key,
+                    "location": "",
+                    "metadata": {},
+                    "capabilities": [],
+                }
+                cap_names = set()
+            row = {
+                **base,
+                **self.profile_fields(key),
+                "voice_online": key in self.voice_sessions,
+            }
             if location and row["location"] != location:
                 continue
-            if capability and capability not in {cap.name for cap in registration.capabilities}:
+            if capability and capability not in cap_names:
                 continue
             rows.append(row)
         return {"status": "success", "devices": rows}

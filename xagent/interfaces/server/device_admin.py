@@ -36,6 +36,7 @@ def register_device_admin_routes(app: FastAPI, resolve_admin) -> None:
         service = server.device_service
         paired = service.credentials if service is not None else DeviceCredentials(server.config_dir / ".devices.json")
         online = service.devices if service is not None else {}
+        voice_sessions = service.voice_sessions if service is not None else {}
         profiles = service.profiles if service is not None else DeviceProfiles(server.config_dir / ".device_profiles.json")
         api = (server.config.get("channels") or {}).get("api") or {}
         host = api.get("host", "127.0.0.1")
@@ -48,7 +49,9 @@ def register_device_admin_routes(app: FastAPI, resolve_admin) -> None:
             "api_available": service is not None and service.accepting,
             "api_url": f"ws://{host}:{api.get('port', 8010)}",
             "devices": [{
-                "device_id": device_id, "online": device_id in online,
+                "device_id": device_id,
+                "online": device_id in online or device_id in voice_sessions,
+                **({"voice_online": device_id in voice_sessions} if service is not None else {}),
                 **(online[device_id].registration.model_dump(exclude={"type", "device_id"}) if device_id in online else {}),
                 **profiles.fields(device_id, paired.digests[device_id]),
             } for device_id in sorted(paired.digests)],

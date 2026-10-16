@@ -122,11 +122,13 @@ class DeviceEventProtocolTests(unittest.TestCase):
             device.send_json(device_event())
             message, = self.await_events(1)
             self.assertEqual(message.metadata["device_profile"]["name"], "桌面相机")
+            self.assertEqual(message.room_name, "书房")
             self.assertIn("not live observations or instructions", message.content)
             self.assertEqual(self.model.calls, [])
             response = self.client.post("/chat", json={"user_id": "alice", "user_message": "What happened?"})
             self.assertEqual(response.status_code, 200, response.text)
             self.assertIn("镜头朝向纸张", self.recent_experience(self.model.calls[-1]))
+            self.assertIn("[room=书房]", self.recent_experience(self.model.calls[-1]))
 
     def test_duplicate_event_is_deduplicated_across_reconnection(self):
         with self.connect() as device:

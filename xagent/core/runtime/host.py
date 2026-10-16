@@ -165,6 +165,8 @@ class RuntimeHost:
             self._startup_fingerprint = self._configuration_fingerprint()
             self.agent = self.runner.agent
             self.device_service = getattr(self.runner, "device_service", None)
+            if self.device_service is not None:
+                self.device_service.on_voice_sessions_changed = self._sync_delivery_channels
             self.admin = AdminService(config_dir=str(self.config_dir), agent=self.agent,
                 device_service=self.device_service)
             self.admin.is_runtime_owner = True
@@ -274,7 +276,10 @@ class RuntimeHost:
 
     def _deliverable_channels(self) -> set[str]:
         # The internal API delivery sink remains available without a public listener.
-        return {"api"} | {name for name, row in self.channel_status.items() if row["state"] == "connected"}
+        channels = {"api"} | {name for name, row in self.channel_status.items() if row["state"] == "connected"}
+        if self.device_service is not None and self.device_service.voice_sessions:
+            channels.add("voice")
+        return channels
 
     def _sync_delivery_channels(self) -> None:
         loop = getattr(self.heartbeat, "subconscious_loop", None)
@@ -549,18 +554,38 @@ class RuntimeHost:
                     self.device_service.start()
             self._tasks["api-readiness"] = asyncio.create_task(ready())
 
+    def _resolve_voice_adapter(self, target: Any, *, user_id: str = ""):
+        target_dict = target if isinstance(target, dict) else {}
+        if self.device_service is not None and self.device_service.voice_sessions:
+            if target_dict.get("device_id") or target_dict.get("room_name") or str(user_id or "").startswith("device:"):
+                session = self.device_service.resolve_voice_session(target_dict, user_id=user_id)
+                if session is not None and getattr(session, "runtime", None) is not None:
+                    return session.runtime
+        local_voice = self.adapters.get("voice")
+        if local_voice is not None and self.channel_status.get("voice", {}).get("state") == "connected":
+            return local_voice
+        if self.device_service is not None and self.device_service.voice_sessions:
+            session = self.device_service.resolve_voice_session(target_dict, user_id=user_id)
+            if session is not None and getattr(session, "runtime", None) is not None:
+                return session.runtime
+        return local_voice
+
     def _task_adapter(self, task):
         channel = task.delivery_channel
         if channel in {"", "local", "cli", "api"}:
             return self.api
+        if channel == "voice":
+            target = task.delivery.get("target") if isinstance(getattr(task, "delivery", None), dict) else {}
+            return self._resolve_voice_adapter(target, user_id=getattr(task, "delivery_user_id", "") or "")
         return self.adapters.get(channel)
 
     def _can_handle_task(self, task) -> bool:
-        if task.delivery_channel not in {"", "local", "cli", "api"} and self.channel_status.get(task.delivery_channel, {}).get("state") != "connected":
-            return False
         adapter = self._task_adapter(task)
         if adapter is None:
             return False
+        if task.delivery_channel not in {"", "local", "cli", "api"}:
+            if adapter is self.adapters.get(task.delivery_channel) and self.channel_status.get(task.delivery_channel, {}).get("state") != "connected":
+                return False
         check = getattr(adapter, "_can_handle_scheduled_task", None)
         if adapter is self.api:
             return self.api.tasks.can_handle(task)
@@ -583,11 +608,20 @@ class RuntimeHost:
         return await adapter.deliver_scheduled_task(task, result, run_id)
 
     async def _deliver_subconscious(self, delivery):
-        adapter = self.adapters.get(delivery.recipient.channel)
+        channel = delivery.recipient.channel
+        if channel == "voice":
+            adapter = self._resolve_voice_adapter(
+                delivery.recipient.target,
+                user_id=delivery.recipient.user_id,
+            )
+        else:
+            adapter = self.adapters.get(channel)
         if adapter is None:
             raise RuntimeError("Subconscious delivery channel is unavailable")
-        channel = delivery.recipient.channel
         if channel == "api":
+            await adapter.deliver_subconscious_message(delivery)
+            return
+        if adapter is not self.adapters.get(channel):
             await adapter.deliver_subconscious_message(delivery)
             return
         if self.channel_status.get(channel, {}).get("state") != "connected":

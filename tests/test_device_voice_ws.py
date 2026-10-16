@@ -238,17 +238,203 @@ class DeviceVoiceWebSocketTests(unittest.IsolatedAsyncioTestCase):
 
             await self.wait_for(lambda: not host.device_service.voice_sessions)
 
-    async def test_unpaired_or_one_time_pairing_code_cannot_open_voice_socket(self):
+    async def test_pure_voice_device_can_pair_directly_on_voice_socket_and_reports_voice_online(self):
         host, _, _, url = await self.start_host([])
         code = host.device_service.create_pairing()["pairing_code"]
-        with self.assertRaises(Exception):
+        fake_recognizer = _FakeWSRecognizer("早上好")
+        fake_synth = _FakeWSSynthesizer()
+        with patch(
+            "xagent.interfaces.voice.factory.create_soniox_adapters",
+            return_value=(fake_recognizer, fake_synth),
+        ):
             async with websockets.connect(
-                url + "/ws/devices/new-device/voice",
+                url + "/ws/devices/kitchen-mic/voice",
                 additional_headers={"Authorization": "Bearer " + code},
                 **self.connection_options,
             ) as ws:
-                await ws.recv()
-        self.assertFalse(host.device_service.voice_sessions)
+                await ws.send(
+                    json.dumps(
+                        {
+                            "type": "hello",
+                            "name": "厨房麦克风",
+                            "location": "厨房",
+                            "profile": "room",
+                        }
+                    )
+                )
+                ready = json.loads(await asyncio.wait_for(ws.recv(), timeout=3))
+                self.assertEqual(ready["type"], "ready")
+                self.assertEqual(ready["device_id"], "kitchen-mic")
+                self.assertEqual(ready["room_name"], "厨房")
+                issued = ready.get("credential", "")
+                self.assertTrue(issued.startswith("dvc_"))
+
+                # Pure-voice device appears in list_devices and admin status with voice_online=True
+                listed = host.device_service.list_devices()["devices"]
+                kitchen_entry = next(item for item in listed if item["device_id"] == "kitchen-mic")
+                self.assertTrue(kitchen_entry["voice_online"])
+                self.assertEqual(kitchen_entry["location"], "厨房")
+                self.assertEqual(kitchen_entry["name"], "厨房麦克风")
+
+                from xagent.core.runtime.client import RuntimeClient
+                admin_rows = (await RuntimeClient(host.config_dir).request("GET", "/api/devices")).json()["devices"]
+                admin_kitchen = next(item for item in admin_rows if item["device_id"] == "kitchen-mic")
+                self.assertTrue(admin_kitchen["online"])
+                self.assertTrue(admin_kitchen["voice_online"])
+
+                await ws.send(json.dumps({"type": "stop"}))
+
+            await self.wait_for(lambda: not host.device_service.voice_sessions)
+
+            # One-time pairing code cannot be reused after pairing completed
+            with self.assertRaises(Exception):
+                async with websockets.connect(
+                    url + "/ws/devices/kitchen-mic/voice",
+                    additional_headers={"Authorization": "Bearer " + code},
+                    **self.connection_options,
+                ) as ws2:
+                    await ws2.recv()
+
+            # Issued dvc_ credential can reconnect without a control socket
+            async with websockets.connect(
+                url + "/ws/devices/kitchen-mic/voice",
+                additional_headers={"Authorization": "Bearer " + issued},
+                **self.connection_options,
+            ) as ws3:
+                await ws3.send(json.dumps({"type": "hello", "profile": "room"}))
+                ready2 = json.loads(await asyncio.wait_for(ws3.recv(), timeout=3))
+                self.assertEqual(ready2["type"], "ready")
+                self.assertNotIn("credential", ready2)
+                self.assertEqual(ready2["room_name"], "厨房")
+                await ws3.send(json.dumps({"type": "stop"}))
+
+    async def test_scheduled_task_and_subconscious_route_to_remote_device_voice_session(self):
+        from xagent.core.runtime import ContactEntry, ScheduledTaskRecord, SubconsciousDelivery, load_contacts
+
+        host, _, root, url = await self.start_host(
+            [
+                (ReplyType.SIMPLE_REPLY, "已为您设置提醒。"),
+                (ReplyType.SIMPLE_REPLY, "主人，水已经烧开了。"),
+            ]
+        )
+        fake_recognizer = _FakeWSRecognizer("十分钟后提醒我关火")
+        fake_synth = _FakeWSSynthesizer()
+        with patch(
+            "xagent.interfaces.voice.factory.create_soniox_adapters",
+            return_value=(fake_recognizer, fake_synth),
+        ):
+            async with websockets.connect(
+                url + "/ws/devices/living-speaker/voice",
+                additional_headers={"Authorization": "Bearer speaker-secret"},
+                **self.connection_options,
+            ) as voice_ws:
+                await voice_ws.send(
+                    json.dumps(
+                        {
+                            "type": "hello",
+                            "name": "客厅音箱",
+                            "location": "客厅",
+                            "profile": "headset",
+                            "echo_managed": True,
+                            "user_id": "alice",
+                        }
+                    )
+                )
+                ready = json.loads(await asyncio.wait_for(voice_ws.recv(), timeout=3))
+                self.assertEqual(ready["room_name"], "客厅")
+
+                # Even though local voice channel is disconnected, remote voice session makes 'voice' deliverable
+                self.assertEqual(host.channel_status["voice"]["state"], "disconnected")
+                self.assertIn("voice", host._deliverable_channels())
+
+                # Trigger one live voice turn so contacts.json is updated with device_id and room_name
+                await voice_ws.send(b"\x10\x00" * 320)
+                while True:
+                    frame = await asyncio.wait_for(voice_ws.recv(), timeout=3)
+                    if isinstance(frame, str) and json.loads(frame).get("type") == "playback_done":
+                        break
+
+                contacts = load_contacts(root / "contacts.json")
+                voice_contact = next(c for c in contacts if c.channel == "voice" and c.user_id == "alice")
+                self.assertEqual(voice_contact.target.get("device_id"), "living-speaker")
+                self.assertEqual(voice_contact.target.get("room_name"), "客厅")
+
+                # Execute and deliver a scheduled voice task targeted at this device
+                from datetime import datetime, timezone
+                task = ScheduledTaskRecord(
+                    path=root / "tasks" / "task-kettle.json",
+                    run_at=datetime(2026, 10, 16, 8, 0, tzinfo=timezone.utc),
+                    kind="task",
+                    payload={
+                        "id": "task-kettle",
+                        "title": "关火提醒",
+                        "task": {"type": "message", "content": "请记得关火。"},
+                        "delivery": {
+                            "channel": "voice",
+                            "user_id": "alice",
+                            "target": {"user_id": "alice", "device_id": "living-speaker", "room_name": "客厅"},
+                        },
+                    },
+                )
+                self.assertTrue(host._can_handle_task(task))
+                result = await host._execute_task(task)
+                delivery_receipt = await host._deliver_task(task, result, "run-1")
+                self.assertTrue(delivery_receipt["accepted"])
+                self.assertGreater(delivery_receipt["audio_bytes"], 0)
+
+                # Drain the scheduled task playback frames from the WebSocket
+                scheduled_audio: list[bytes] = []
+                while True:
+                    frame = await asyncio.wait_for(voice_ws.recv(), timeout=3)
+                    if isinstance(frame, bytes):
+                        scheduled_audio.append(frame)
+                    elif json.loads(frame).get("type") == "playback_done":
+                        break
+                self.assertTrue(scheduled_audio)
+
+                # Deliver a subconscious voice message to the same device session
+                sub_delivery = SubconsciousDelivery(
+                    content="顺便提一下，外面好像要下雨了。",
+                    recipient=voice_contact,
+                    internal_content="Outside looks cloudy.",
+                    created_at=datetime(2026, 10, 16, 8, 5, tzinfo=timezone.utc),
+                )
+                await host._deliver_subconscious(sub_delivery)
+                sub_audio: list[bytes] = []
+                while True:
+                    frame = await asyncio.wait_for(voice_ws.recv(), timeout=3)
+                    if isinstance(frame, bytes):
+                        sub_audio.append(frame)
+                    elif json.loads(frame).get("type") == "playback_done":
+                        break
+                self.assertTrue(sub_audio)
+
+                await voice_ws.send(json.dumps({"type": "stop"}))
+
+    async def test_sensor_only_device_registers_with_empty_capabilities(self):
+        host, _, _, url = await self.start_host([])
+        async with websockets.connect(
+            url + "/ws/devices/living-speaker",
+            additional_headers={"Authorization": "Bearer speaker-secret"},
+            **self.connection_options,
+        ) as ws:
+            await ws.send(
+                json.dumps(
+                    {
+                        "type": "register",
+                        "device_id": "living-speaker",
+                        "name": "玄关人体传感器",
+                        "location": "玄关",
+                        "metadata": {"device_type": "sensor"},
+                        "capabilities": [],
+                    }
+                )
+            )
+            await self.wait_for(lambda: "living-speaker" in host.device_service.devices)
+            listed = host.device_service.list_devices(device_id="living-speaker")["devices"]
+            self.assertEqual(len(listed), 1)
+            self.assertEqual(listed[0]["capabilities"], [])
+            self.assertFalse(listed[0]["voice_online"])
 
     async def test_revoke_device_closes_active_voice_session_and_resampling_works(self):
         host, _, _, url = await self.start_host([])

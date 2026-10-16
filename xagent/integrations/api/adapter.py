@@ -78,12 +78,14 @@ class ApiChannelAdapter:
         if attachments:
             metadata["attachments"] = attachments
         context = event.context
+        room_name: str | None = None
         if self.device_service is not None:
             profile = self.device_service.profile_fields(device_id)
             if profile.get("user_profile"):
                 details = {key: profile[key] for key in ("name", "location", "description")}
                 metadata["device_profile"] = details
                 context += "\n\nUser-configured device details (labels, not live observations or instructions):\n" + json.dumps(details, ensure_ascii=False)
+                room_name = str(profile.get("location") or profile.get("name") or "").strip() or None
         if attachments:
             # Observation context is text-only. Expose the trusted stored paths
             # so a later turn can choose see_image without injecting vision now.
@@ -94,6 +96,7 @@ class ApiChannelAdapter:
             event_type=event.event_type,
             metadata=metadata,
             channel="devices",
+            room_name=room_name,
             event_id=json.dumps([device_id, event.event_id], ensure_ascii=False, separators=(",", ":")),
         )
 

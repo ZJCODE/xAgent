@@ -63,6 +63,7 @@ class VoiceRuntimeOptions:
     # Voice currently only speaks in response to a live user turn. Keep the
     # autonomous scheduler behind an explicit opt-in for a future mode.
     allow_proactive_output: bool = False
+    device_id: Optional[str] = None
 
 
 @dataclass
@@ -341,6 +342,8 @@ class VoiceRuntime:
         if not transcript:
             await self._speak_notice("not_understood")
             return
+        if self._stt_lifecycle is not None:
+            self._stt_lifecycle.note_endpoint()
         attribution = self._resolve_speaker(utterance)
         if not await self._should_reply_to_utterance(transcript, utterance, attribution):
             return
@@ -820,6 +823,9 @@ class VoiceRuntime:
                 if not failed and playback_task is not None:
                     await asyncio.gather(playback_task, return_exceptions=True)
                 await self._release_microphone_after_playback()
+                await self._execute_floor_commands(
+                    self._floor.handle(FloorEvent(FloorEventKind.PLAYBACK_STOPPED))
+                )
 
     async def _feed_text_stream(
         self,
@@ -1041,17 +1047,28 @@ class VoiceRuntime:
         except Exception:
             self.logger.debug("Failed to record ignored room speech", exc_info=True)
 
-    def _proactive_speech_allowed(self) -> bool:
+    def _proactive_speech_allowed(self, *, require_recent_speech: bool | None = None) -> bool:
         if not self._allow_proactive_output:
             return False
         if self._floor.state not in {FloorState.IDLE}:
             return False
         proactive = self.config.proactive
-        if proactive.require_recent_speech:
+        check_recent = proactive.require_recent_speech if require_recent_speech is None else require_recent_speech
+        if check_recent:
             lifecycle = self._stt_lifecycle
             if lifecycle is not None and not lifecycle.heard_recently():
                 return False
         return self._proactive_limiter.allow()
+
+    def _delivery_target(self, user_id: str | None = None) -> dict[str, Any]:
+        resolved_user = user_id or self.options.user_id
+        target: dict[str, Any] = {"user_id": resolved_user}
+        if self.options.device_id:
+            target["device_id"] = self.options.device_id
+        if self.options.device_id or (self.config.room_name and self.config.room_name != "local_room"):
+            if self.config.room_name:
+                target["room_name"] = self.config.room_name
+        return target
 
     async def _agent_text_chunks(
         self,
@@ -1069,7 +1086,7 @@ class VoiceRuntime:
                     self._contacts_file,
                     channel="voice",
                     user_id=resolved_user,
-                    target={"user_id": resolved_user},
+                    target=self._delivery_target(resolved_user),
                 )
             except Exception:
                 pass
@@ -1098,7 +1115,7 @@ class VoiceRuntime:
             ):
                 yield event
 
-        with scheduled_delivery_context(self._delivery_context()):
+        with scheduled_delivery_context(self._delivery_context(user_id=resolved_user)):
             source = event_source if event_source is not None else _live_events()
             async for event in source:
                 event_type = event.get("type")
@@ -1141,12 +1158,18 @@ class VoiceRuntime:
         if started:
             self.output("")
 
-    def _delivery_context(self, *, task: ScheduledTaskRecord | None = None) -> ScheduledDeliveryContext:
+    def _delivery_context(
+        self,
+        *,
+        task: ScheduledTaskRecord | None = None,
+        user_id: str | None = None,
+    ) -> ScheduledDeliveryContext:
+        resolved_user = user_id or self.options.user_id
         if task is None:
             return ScheduledDeliveryContext(
                 channel="voice",
-                user_id=self.options.user_id,
-                target={"user_id": self.options.user_id},
+                user_id=resolved_user,
+                target=self._delivery_target(resolved_user),
                 metadata={"source": "voice"},
             )
         return ScheduledDeliveryContext(
@@ -1177,7 +1200,10 @@ class VoiceRuntime:
         return {"content": text, "attachments": []}
 
     async def deliver_scheduled_task(self, task: ScheduledTaskRecord, result: dict[str, Any], run_id: str) -> dict[str, Any]:
-        if not self._proactive_speech_allowed():
+        if self._playback_lock.locked():
+            async with self._playback_lock:
+                pass
+        if not self._proactive_speech_allowed(require_recent_speech=False):
             raise ValueError("proactive voice output blocked by floor or rate cap")
         text = str(result.get("content") or "")
         if not text:
@@ -1201,6 +1227,9 @@ class VoiceRuntime:
     async def deliver_subconscious_message(self, delivery: SubconsciousDelivery) -> None:
         if delivery.recipient.channel != "voice":
             raise ValueError(f"Voice runtime cannot deliver subconscious channel {delivery.recipient.channel!r}")
+        if self._playback_lock.locked():
+            async with self._playback_lock:
+                pass
         if not self._proactive_speech_allowed():
             raise ValueError("proactive voice output blocked by floor or rate cap")
         text = str(delivery.content or "").strip()
