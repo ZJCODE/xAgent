@@ -302,7 +302,10 @@ class RuntimeHost:
             return True
         if channel == "voice":
             adapter = self._resolve_voice_adapter(target, user_id=user_id)
-            return adapter is not None
+            if adapter is None:
+                return False
+            allowed = getattr(adapter, "_proactive_speech_allowed", None)
+            return bool(allowed()) if callable(allowed) else True
         return True
 
     def _sync_delivery_channels(self) -> None:

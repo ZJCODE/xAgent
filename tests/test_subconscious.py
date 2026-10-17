@@ -1554,6 +1554,102 @@ class SubconsciousLoopTests(unittest.TestCase):
             deliverable = loop._filter_deliverable_contacts(load_contacts(loop.contacts_file))
             self.assertEqual([c.user_id for c in deliverable], ["wx_routable"])
 
+    def test_duplicate_subconscious_thought_is_not_written_twice(self):
+        agent = self._make_agent_mock()
+        self._set_model_events(agent, [
+            [self._json_event({
+                "internal_content": "The rain has not stopped all afternoon.",
+                "worthy": False,
+                "recipient_hint": None,
+                "external_content": None,
+            })],
+            [self._json_event({
+                "internal_content": "The   rain has not stopped all afternoon.",
+                "worthy": False,
+                "recipient_hint": None,
+                "external_content": None,
+            })],
+        ])
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop = SubconsciousLoop(agent, workspace=Path(tmpdir))
+            loop._probability = 1.0
+            asyncio.run(loop.maybe_think())
+            asyncio.run(loop.maybe_think())
+
+            agent.record_subconscious_thought.assert_called_once_with(
+                "The rain has not stopped all afternoon."
+            )
+
+    def test_deliver_with_retries_fails_fast_on_value_error(self):
+        agent = self._make_agent_mock()
+        calls = 0
+
+        async def bad_sink(_delivery):
+            nonlocal calls
+            calls += 1
+            raise ValueError("no cached context_token")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop = SubconsciousLoop(
+                agent,
+                workspace=Path(tmpdir),
+                delivery_sink=bad_sink,
+                deliverable_channels={"weixin"},
+            )
+            loop.record_interaction("weixin", "wx_123", {"user_id": "wx_123"})
+            self._set_model_json(agent, {
+                "internal_content": "Try sending.",
+                "worthy": True,
+                "recipient_hint": "wx_123",
+                "external_content": "Ping!",
+            })
+            loop._probability = 1.0
+            asyncio.run(loop.maybe_think())
+            self.assertEqual(calls, 1)
+
+    def test_subconscious_message_shows_recipient_in_recent_experience(self):
+        from xagent.schemas import Message, RoleType
+
+        agent = self._make_agent_mock()
+        agent.message_handler.get_recent_messages = AsyncMock(return_value=[
+            Message(
+                role=RoleType.ASSISTANT,
+                sender_id="agent",
+                recipient_id="wx_123",
+                channel="weixin",
+                content="Just remembered that book you asked about.",
+                timestamp=1716000000.0,
+                metadata={
+                    "subconscious": {
+                        "source": "subconscious",
+                        "recipient": {
+                            "channel": "weixin",
+                            "user_id": "wx_123",
+                            "target": {"user_id": "wx_123", "sender_name": "张三"},
+                        },
+                    }
+                },
+            ),
+        ])
+        self._set_model_json(agent, {
+            "internal_content": "",
+            "worthy": False,
+            "recipient_hint": None,
+            "external_content": None,
+        })
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop = SubconsciousLoop(agent, workspace=Path(tmpdir))
+            loop._probability = 1.0
+            asyncio.run(loop.maybe_think())
+
+            messages = agent.model_client.calls[0]["messages"]
+            recent_experience = next(
+                msg for msg in messages if msg.get("name") == AgentConfig.RECENT_EXPERIENCE_NAME
+            )
+            self.assertIn("[to=张三(wx_123)]", recent_experience["content"])
+
 
 if __name__ == "__main__":
     unittest.main()

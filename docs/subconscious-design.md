@@ -184,6 +184,7 @@ $$\frac{dS}{dt} = g(S, E, t)$$
 | `xagent/core/journal_commits.py` | 增强 `JournalCommitStore.apply()` 对合法尾部追加的前缀兼容 CAS 合并，保护日记管线不因并发追加而死锁 |
 | `xagent/core/handlers/memory.py` | 提供与维护锁协同的 `append_daily_entry()` 接口，确保潜意识写日记与批量维护事务安全共存 |
 | `xagent/core/agent.py` | `record_subconscious_thought()` 走 `memory_handler.append_daily_entry()` 协调写入 |
-| `xagent/core/runtime/subconscious.py` | 接入 `WorkingContext`、聚焦笔记召回查询、清理伪循环、增加 Busy/Refractory 门控、修复游标自激 Bug、状态持久化、未回复防连发守卫与 `contact_deliverable` 校验 |
-| `xagent/core/runtime/host.py` & `heartbeat.py` | 透传细粒度联系人可投递性校验（如 Weixin `context_token` 可用性） |
-| `tests/test_subconscious.py` & `tests/test_journal_commits.py` | 覆盖上述全部修复场景的单元测试 |
+| `xagent/core/handlers/message.py` | 在 `<recent_experience>` 中为潜意识外发消息追加 `[to=Name(user_id)]` 接收人标记，消除多联系人上下文串线 |
+| `xagent/core/runtime/subconscious.py` | 接入 `WorkingContext`、聚焦笔记召回查询、清理伪循环、增加 Busy/Refractory 门控、修复游标自激 Bug、状态持久化、未回复防连发前置过滤、`contact_deliverable` 校验与连续重复日记去重 |
+| `xagent/core/runtime/host.py` & `heartbeat.py` | 透传细粒度联系人可投递性校验（Weixin `context_token` 可用性与 Voice `_proactive_speech_allowed` 预检） |
+| `tests/test_subconscious.py` & `tests/test_memory_handler.py` | 覆盖上述全部修复与体验优化场景的单元测试 |

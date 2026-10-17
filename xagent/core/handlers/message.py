@@ -541,12 +541,38 @@ class MessageHandler:
                 MessageHandler._format_transcript_speaker(message)
             )
             header = f"[speaker={speaker}][timestamp={timestamp}]"
+            recipient = MessageHandler._format_subconscious_recipient(message)
+            if recipient:
+                header += f"[to={recipient}]"
         if message.channel:
             header += f"[channel={message.channel}]"
         if message.room_name:
             safe_room = MessageHandler._sanitize_marker_field(message.room_name)
             header += f"[room={safe_room}]"
         return header
+
+    @staticmethod
+    def _format_subconscious_recipient(message: Message) -> str:
+        if message.role != RoleType.ASSISTANT or not isinstance(message.metadata, dict):
+            return ""
+        sub = message.metadata.get("subconscious")
+        if not isinstance(sub, dict) or sub.get("source") != "subconscious":
+            return ""
+        recip = sub.get("recipient") if isinstance(sub.get("recipient"), dict) else {}
+        target = recip.get("target") if isinstance(recip.get("target"), dict) else {}
+        user_id = str(
+            recip.get("user_id") or target.get("user_id") or message.recipient_id or ""
+        ).strip()
+        if not user_id:
+            return ""
+        sender_name = str(
+            target.get("sender_name") or target.get("display_name") or ""
+        ).strip()
+        from ...components.memory import format_speaker_label
+
+        return MessageHandler._sanitize_marker_field(
+            format_speaker_label(user_id, sender_name) or user_id
+        )
 
     @staticmethod
     def _sanitize_marker_field(value: Optional[str]) -> str:
