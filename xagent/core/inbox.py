@@ -29,10 +29,6 @@ class InboxKind(str, Enum):
     OBSERVATION = "observation"
     STEER = "steer"
 
-    @property
-    def wakes(self) -> bool:
-        return self in {InboxKind.USER_TURN, InboxKind.SCHEDULED_TURN, InboxKind.STEER}
-
 
 def is_scheduled_work(metadata: Optional[Dict[str, Any]] = None) -> bool:
     """True when a stored message is a due task, not a human utterance."""
@@ -91,10 +87,6 @@ class InboxItem:
     channel_instructions: str = ""
     metadata: Dict[str, Any] = field(default_factory=dict)
     stream: bool = False
-
-    @property
-    def wakeup(self) -> bool:
-        return self.kind.wakes
 
     def message_metadata(self) -> Dict[str, Any]:
         """Metadata persisted on the stored user message or context event."""

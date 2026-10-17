@@ -12,7 +12,6 @@ from ..providers import (
     MODEL_API_OPENAI_CHAT_COMPLETIONS,
     MODEL_API_OPENAI_RESPONSES,
     PROVIDER_DEEPSEEK,
-    PROVIDER_MINIMAX,
     PROVIDER_OPENAI,
     PROVIDER_QWEN,
     ReasoningConfig,
@@ -172,8 +171,6 @@ class ModelClient:
                 messages,
                 tool_specs,
                 instructions=instructions,
-                stream=stream,
-                store_reply=store_reply,
             )
         except Exception as e:
             logger.exception("Model call failed: %s", e)
@@ -189,51 +186,54 @@ class ModelClient:
         retry=retry_if_exception(is_retryable_model_exception),
         reraise=True,
     )
+    async def _create_non_stream_response(
+        self,
+        messages: list,
+        tool_specs: Optional[list],
+        instructions: Optional[Union[str, list[dict]]] = None,
+    ):
+        if self.model_api == MODEL_API_ANTHROPIC_MESSAGES:
+            return await self.client.messages.create(
+                **self._build_anthropic_create_params(
+                    messages=messages,
+                    tool_specs=tool_specs,
+                    instructions=instructions,
+                    stream=False,
+                )
+            )
+        if self.model_api == MODEL_API_OPENAI_RESPONSES:
+            return await self.client.responses.create(
+                **self._build_responses_create_params(
+                    messages=messages,
+                    tool_specs=tool_specs,
+                    instructions=instructions,
+                    stream=False,
+                )
+            )
+        return await self.client.chat.completions.create(
+            **self._build_create_params(
+                messages=messages,
+                tool_specs=tool_specs,
+                instructions=instructions,
+                stream=False,
+            )
+        )
+
     async def _call_once(
         self,
         messages: list,
         tool_specs: Optional[list],
         instructions: Optional[Union[str, list[dict]]] = None,
-        stream: bool = False,
-        store_reply: Optional[Callable[..., Awaitable]] = None,
     ) -> tuple[ReplyType, object]:
-        if self.model_api == MODEL_API_ANTHROPIC_MESSAGES:
-            response = await self.client.messages.create(
-                **self._build_anthropic_create_params(
-                    messages=messages,
-                    tool_specs=tool_specs,
-                    instructions=instructions,
-                    stream=stream,
-                )
-            )
-            if stream:
-                return await self._handle_anthropic_stream(response, store_reply)
-            return self._handle_anthropic_non_stream(response)
-
-        if self.model_api == MODEL_API_OPENAI_RESPONSES:
-            response = await self.client.responses.create(
-                **self._build_responses_create_params(
-                    messages=messages,
-                    tool_specs=tool_specs,
-                    instructions=instructions,
-                    stream=stream,
-                )
-            )
-            if stream:
-                return await self._handle_responses_stream(response, store_reply)
-            return self._handle_responses_non_stream(response)
-
-        response = await self.client.chat.completions.create(
-            **self._build_create_params(
-                messages=messages,
-                tool_specs=tool_specs,
-                instructions=instructions,
-                stream=stream,
-            )
+        response = await self._create_non_stream_response(
+            messages=messages,
+            tool_specs=tool_specs,
+            instructions=instructions,
         )
-
-        if stream:
-            return await self._handle_stream(response, store_reply)
+        if self.model_api == MODEL_API_ANTHROPIC_MESSAGES:
+            return self._handle_anthropic_non_stream(response)
+        if self.model_api == MODEL_API_OPENAI_RESPONSES:
+            return self._handle_responses_non_stream(response)
         return self._handle_non_stream(response)
 
     async def stream_turn(
@@ -317,35 +317,16 @@ class ModelClient:
         tool_specs: Optional[list],
         instructions: Optional[Union[str, list[dict]]] = None,
     ) -> AsyncGenerator[ModelStreamEvent, None]:
+        response = await self._create_non_stream_response(
+            messages=messages,
+            tool_specs=tool_specs,
+            instructions=instructions,
+        )
         if self.model_api == MODEL_API_ANTHROPIC_MESSAGES:
-            response = await self.client.messages.create(
-                **self._build_anthropic_create_params(
-                    messages=messages,
-                    tool_specs=tool_specs,
-                    instructions=instructions,
-                    stream=False,
-                )
-            )
             events = self._anthropic_non_stream_turn_events(response)
         elif self.model_api == MODEL_API_OPENAI_RESPONSES:
-            response = await self.client.responses.create(
-                **self._build_responses_create_params(
-                    messages=messages,
-                    tool_specs=tool_specs,
-                    instructions=instructions,
-                    stream=False,
-                )
-            )
             events = self._responses_non_stream_turn_events(response)
         else:
-            response = await self.client.chat.completions.create(
-                **self._build_create_params(
-                    messages=messages,
-                    tool_specs=tool_specs,
-                    instructions=instructions,
-                    stream=False,
-                )
-            )
             events = self._chat_non_stream_turn_events(response)
 
         for event in events:
@@ -541,8 +522,6 @@ class ModelClient:
             params["tools"] = self._to_anthropic_tools(tool_specs)
             params["tool_choice"] = {"type": "auto"}
         if self.reasoning is not None:
-            if self.provider_name == PROVIDER_MINIMAX:
-                raise ValueError("reasoning is not supported for the MiniMax Anthropic-compatible API")
             if not self.reasoning.enabled:
                 params["thinking"] = {"type": "disabled"}
             elif self.reasoning.effort is not None:
@@ -891,74 +870,6 @@ class ModelClient:
                 ),
             ))
         return events
-
-    async def _handle_stream(
-        self,
-        response,
-        store_reply: Optional[Callable[..., Awaitable]] = None,
-    ) -> tuple[ReplyType, object]:
-        """Handle a streaming model response."""
-        return await self._collect_stream_result(
-            self._iter_chat_turn_events(response),
-            store_reply,
-        )
-
-    async def _handle_responses_stream(
-        self,
-        response,
-        store_reply: Optional[Callable[..., Awaitable]] = None,
-    ) -> tuple[ReplyType, object]:
-        """Handle a streaming OpenAI Responses API response."""
-        return await self._collect_stream_result(
-            self._iter_responses_turn_events(response),
-            store_reply,
-        )
-
-    async def _handle_anthropic_stream(
-        self,
-        response,
-        store_reply: Optional[Callable[..., Awaitable]] = None,
-    ) -> tuple[ReplyType, object]:
-        """Handle a streaming Anthropic Messages response."""
-        return await self._collect_stream_result(
-            self._iter_anthropic_turn_events(response),
-            store_reply,
-        )
-
-    async def _collect_stream_result(
-        self,
-        events: AsyncGenerator[ModelStreamEvent, None],
-        store_reply: Optional[Callable[..., Awaitable]] = None,
-    ) -> tuple[ReplyType, object]:
-        """Collect model stream events into the ReplyType contract."""
-        text_parts: list[str] = []
-        async for event in events:
-            if event.type in {"delta", "text"} and event.delta:
-                text_parts.append(event.delta)
-                continue
-            if event.type == "tool_calls":
-                return ReplyType.TOOL_CALL, event.tool_calls
-            if event.type == "error":
-                return ReplyType.ERROR, event.error or ModelErrorEvent(
-                    code="model_stream_error",
-                    message="Model stream failed.",
-                )
-
-        if text_parts:
-            async def stream_generator():
-                for part in text_parts:
-                    yield part
-                final_text = "".join(text_parts)
-                if final_text and store_reply:
-                    await store_reply(final_text)
-
-            return ReplyType.SIMPLE_REPLY, stream_generator()
-
-        logger.warning("Stream response contains no recognized output")
-        return ReplyType.ERROR, ModelErrorEvent(
-            code="empty_stream_response",
-            message="No valid output from model response.",
-        )
 
     async def _iter_chat_turn_events(self, response) -> AsyncGenerator[ModelStreamEvent, None]:
         text_parts: list[str] = []
@@ -1353,14 +1264,6 @@ class ModelClient:
         return tool_calls
 
     @staticmethod
-    def _chunk_has_tool_calls(chunk) -> bool:
-        for choice in ModelClient._chunk_choices(chunk):
-            delta = ModelClient._field(choice, "delta")
-            if ModelClient._field(delta, "tool_calls"):
-                return True
-        return False
-
-    @staticmethod
     def _merge_stream_tool_calls(tool_call_parts: dict[int, dict], chunk) -> None:
         for choice in ModelClient._chunk_choices(chunk):
             delta = ModelClient._field(choice, "delta")
@@ -1418,13 +1321,6 @@ class ModelClient:
             return ""
         delta = ModelClient._field(event, "delta")
         return delta if isinstance(delta, str) else ""
-
-    @staticmethod
-    def _responses_event_starts_tool_call(event) -> bool:
-        if ModelClient._field(event, "type") != "response.output_item.added":
-            return False
-        item = ModelClient._field(event, "item")
-        return ModelClient._field(item, "type") == "function_call"
 
     @classmethod
     def _merge_responses_stream_event(
@@ -1567,13 +1463,6 @@ class ModelClient:
             return ""
         text = ModelClient._field(delta, "text")
         return text if isinstance(text, str) else ""
-
-    @staticmethod
-    def _anthropic_event_starts_tool_use(event) -> bool:
-        if ModelClient._field(event, "type") != "content_block_start":
-            return False
-        block = ModelClient._field(event, "content_block")
-        return ModelClient._field(block, "type") == "tool_use"
 
     @staticmethod
     def _merge_anthropic_stream_event(content_blocks: dict[int, dict], event) -> None:

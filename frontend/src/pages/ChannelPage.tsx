@@ -8,7 +8,7 @@ import type { AgentRuntimeStatus, ChannelId, ChannelStatus, ChannelsResponse, Se
 
 type ConnectionAction = "connect" | "disconnect";
 type RuntimeAction = "start" | "stop" | "restart";
-const SETUP_CHANNELS = new Set<ChannelId>(["voice", "feishu", "weixin"]);
+const SETUP_CHANNELS = new Set<ChannelId>(["voice", "weixin"]);
 
 function isSetupChannel(channel: ChannelId): channel is SetupChannelId {
   return SETUP_CHANNELS.has(channel);
@@ -25,11 +25,10 @@ function channelLabel(channel: ChannelStatus): string {
   return "Stopped";
 }
 
-const CHANNEL_ICONS = { api: Globe2, voice: Mic, feishu: MessageCircle, weixin: MessageCircle };
+const CHANNEL_ICONS = { api: Globe2, voice: Mic, weixin: MessageCircle };
 const CHANNEL_DESCRIPTIONS = {
   api: "Connect your apps over HTTP and WebSocket",
   voice: "Listen and speak on this device",
-  feishu: "Private and group conversations in Feishu",
   weixin: "Conversations through your WeChat account",
 };
 

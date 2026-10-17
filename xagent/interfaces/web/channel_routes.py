@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sys
 import asyncio
 from pathlib import Path
 from typing import Any, Callable, Literal
@@ -13,11 +12,9 @@ from pydantic import BaseModel, Field
 from ..base import BaseAgentConfig
 from ..cli.channels import (
     CHANNEL_API,
-    CHANNEL_FEISHU,
     CHANNEL_VOICE,
     CHANNEL_WEIXIN,
     api_config,
-    feishu_config,
     load_config_file,
     voice_config,
     weixin_config,
@@ -25,25 +22,22 @@ from ..cli.channels import (
 from ..cli.processes import (
     managed_paths,
     running_pid,
-    start_background,
-    stop_managed_process,
     tail_text,
 )
 from ..voice.config import VoiceChannelConfig
 from .qr_sessions import get_qr_session_manager
 from .session import WebAgentSession
 
-ChannelId = Literal["api", "voice", "feishu", "weixin"]
-SetupChannelId = Literal["voice", "feishu", "weixin"]
+ChannelId = Literal["api", "voice", "weixin"]
+SetupChannelId = Literal["voice", "weixin"]
 
 CHANNEL_LABELS: dict[str, str] = {
     CHANNEL_API: "API",
     CHANNEL_VOICE: "Voice",
-    CHANNEL_FEISHU: "Feishu",
     CHANNEL_WEIXIN: "Weixin",
 }
-MANAGED_CHANNELS: tuple[str, ...] = (CHANNEL_API, CHANNEL_VOICE, CHANNEL_FEISHU, CHANNEL_WEIXIN)
-SETUP_CHANNELS: tuple[str, ...] = (CHANNEL_VOICE, CHANNEL_FEISHU, CHANNEL_WEIXIN)
+MANAGED_CHANNELS: tuple[str, ...] = (CHANNEL_API, CHANNEL_VOICE, CHANNEL_WEIXIN)
+SETUP_CHANNELS: tuple[str, ...] = (CHANNEL_VOICE, CHANNEL_WEIXIN)
 
 class ChannelSetupInput(BaseModel):
     force: bool = False
@@ -146,14 +140,11 @@ def register_channel_routes(
         @app.post("/api/channels/{channel}/qr/start", tags=["Channels"])
         async def start_channel_qr(channel: str):
             normalized = _normalize_setup_channel(channel)
-            if normalized not in {CHANNEL_FEISHU, CHANNEL_WEIXIN}:
+            if normalized != CHANNEL_WEIXIN:
                 raise HTTPException(status_code=400, detail=f"{normalized} does not use QR setup")
             manager = get_qr_session_manager()
-            if normalized == CHANNEL_FEISHU:
-                qr_session = manager.start_feishu()
-            else:
-                config_dir = resolve_config_dir().expanduser().resolve()
-                qr_session = manager.start_weixin(config_dir=config_dir)
+            config_dir = resolve_config_dir().expanduser().resolve()
+            qr_session = manager.start_weixin(config_dir=config_dir)
             return qr_session.to_dict()
 
         @app.get("/api/channels/{channel}/qr/{session_id}", tags=["Channels"])
@@ -238,18 +229,6 @@ def _safe_load_config(config_dir: Path) -> dict[str, Any]:
         return {}
 
 
-def _channel_command(channel: str, config_dir: Path) -> list[str]:
-    return [
-        sys.executable,
-        "-m",
-        "xagent.interfaces.cli",
-        "_run-channel",
-        channel,
-        "--config-dir",
-        str(config_dir),
-    ]
-
-
 def _channel_status(config_dir: Path, config: dict[str, Any], channel: str) -> dict[str, Any]:
     paths = managed_paths(config_dir, "runtime")
     pid = running_pid(paths.pid_path)
@@ -294,12 +273,6 @@ def _readiness(config: dict[str, Any], channel: str) -> tuple[bool, bool, str, s
         except ValueError as exc:
             return True, False, str(exc), ""
         return True, True, "soniox half-duplex", ""
-
-    if channel == CHANNEL_FEISHU:
-        data = feishu_config(config)
-        configured = bool(data.get("app_id") and data.get("app_secret"))
-        detail = f"app {data.get('app_id')}" if data.get("app_id") else ""
-        return configured, configured, detail, ""
 
     if channel == CHANNEL_WEIXIN:
         data = weixin_config(config)

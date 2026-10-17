@@ -14,7 +14,6 @@ from ...core.providers import (
     MODEL_API_OPENAI_CHAT_COMPLETIONS,
     MODEL_API_OPENAI_RESPONSES,
     PROVIDER_CUSTOM,
-    PROVIDER_MINIMAX,
     PROVIDER_OPENAI,
     PROVIDER_QWEN,
     ReasoningConfig,
@@ -29,11 +28,8 @@ from ...tools.image_generation_tool import (
     DEFAULT_IMAGE_GENERATION_MODEL,
     DEFAULT_IMAGE_GENERATION_QUALITY,
     DEFAULT_IMAGE_GENERATION_SIZE,
-    DEFAULT_MINIMAX_IMAGE_GENERATION_ASPECT_RATIO,
-    DEFAULT_MINIMAX_IMAGE_GENERATION_MODEL,
     DEFAULT_QWEN_IMAGE_GENERATION_MODEL,
     DEFAULT_QWEN_IMAGE_GENERATION_SIZE,
-    IMAGE_GENERATION_PROVIDER_MINIMAX,
     IMAGE_GENERATION_PROVIDER_NONE,
     IMAGE_GENERATION_PROVIDER_OPENAI,
     IMAGE_GENERATION_PROVIDER_QWEN,
@@ -47,11 +43,10 @@ from ..voice.config import (
 )
 
 SEARCH_PROVIDER_NONE = "none"
-SEARCH_PROVIDERS = (SEARCH_PROVIDER_NONE, PROVIDER_OPENAI, PROVIDER_QWEN, PROVIDER_MINIMAX)
+SEARCH_PROVIDERS = (SEARCH_PROVIDER_NONE, PROVIDER_OPENAI, PROVIDER_QWEN)
 IMAGE_GENERATION_PROVIDERS = (
     IMAGE_GENERATION_PROVIDER_NONE,
     IMAGE_GENERATION_PROVIDER_OPENAI,
-    IMAGE_GENERATION_PROVIDER_MINIMAX,
     IMAGE_GENERATION_PROVIDER_QWEN,
 )
 MODEL_APIS = (
@@ -226,12 +221,6 @@ def _image_generation_defaults(provider: str) -> dict[str, Any]:
             "model": DEFAULT_IMAGE_GENERATION_MODEL,
             "size": DEFAULT_IMAGE_GENERATION_SIZE,
             "quality": DEFAULT_IMAGE_GENERATION_QUALITY,
-        }
-    if provider == IMAGE_GENERATION_PROVIDER_MINIMAX:
-        return {
-            "provider": provider,
-            "model": DEFAULT_MINIMAX_IMAGE_GENERATION_MODEL,
-            "aspect_ratio": DEFAULT_MINIMAX_IMAGE_GENERATION_ASPECT_RATIO,
         }
     if provider == IMAGE_GENERATION_PROVIDER_QWEN:
         return {
@@ -599,12 +588,10 @@ _SEARCH_PROVIDER_DESCRIPTIONS = {
     "none": "Do not enable a provider-native web search tool.",
     "openai": "Use OpenAI web search.",
     "qwen": "Use Qwen web search via DashScope.",
-    "minimax": "Use MiniMax web search.",
 }
 _IMAGE_GENERATION_DESCRIPTIONS = {
     "none": "Do not enable image generation.",
     "openai": "Use OpenAI image generation.",
-    "minimax": "Use MiniMax image generation.",
     "qwen": "Use Qwen image generation via DashScope.",
 }
 

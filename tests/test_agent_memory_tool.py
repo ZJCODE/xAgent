@@ -1,4 +1,4 @@
-"""Tests for memory tool factories (write_memory, search_memory)."""
+"""Tests for the search_memory tool factory."""
 
 import os
 import tempfile
@@ -8,10 +8,7 @@ from datetime import date
 from xagent.components.memory import MarkdownMemory
 from xagent.components.message import MessageStorage
 from xagent.schemas import Message, RoleType
-from xagent.tools.memory_tool import (
-    create_write_memory_tool,
-    create_search_memory_tool,
-)
+from xagent.tools.memory_tool import create_search_memory_tool
 
 
 class MemoryToolTests(unittest.IsolatedAsyncioTestCase):
@@ -21,26 +18,6 @@ class MemoryToolTests(unittest.IsolatedAsyncioTestCase):
 
     def tearDown(self):
         self._tmpdir.cleanup()
-
-    async def test_write_memory_records_entry(self):
-        tool = create_write_memory_tool(self.memory, is_enabled=True)
-        result = await tool("This is a test memory note")
-        self.assertEqual(result["status"], "ok")
-        self.assertEqual(result["message"], "Memory recorded.")
-        self.assertNotIn("file", result)
-
-        text = await self.memory.read_file(self.memory.daily_path(date.today()))
-        self.assertIn("test memory note", text)
-
-    async def test_write_memory_disabled(self):
-        tool = create_write_memory_tool(self.memory, is_enabled=False)
-        result = await tool("Should not be written")
-        self.assertEqual(result["status"], "disabled")
-
-    async def test_write_memory_empty_content(self):
-        tool = create_write_memory_tool(self.memory, is_enabled=True)
-        result = await tool("   ")
-        self.assertEqual(result["status"], "skipped")
 
     async def test_search_memory_keyword(self):
         await self.memory.append_daily("Meeting with Alice about project X")
@@ -120,7 +97,7 @@ class MemoryToolTests(unittest.IsolatedAsyncioTestCase):
         finally:
             os.unlink(db_path)
 
-    async def test_search_memory_keyword_finds_feishu_display_name(self):
+    async def test_search_memory_keyword_finds_sender_display_name(self):
         """A name that lives in sender_name, not message text, is still searchable."""
         with tempfile.NamedTemporaryFile(suffix=".sqlite3", delete=False) as tmp:
             db_path = tmp.name
@@ -129,9 +106,9 @@ class MemoryToolTests(unittest.IsolatedAsyncioTestCase):
             msg = Message.create(
                 content="你知道我是谁不",
                 role=RoleType.USER,
-                sender_id="ou_d988df0a30ef9202a01bd962d8c07c21",
+                sender_id="user_d988df0a30ef9202a01bd962d8c07c21",
             )
-            msg.channel = "feishu"
+            msg.channel = "weixin"
             msg.metadata = {"sender_name": "Telos"}
             await msg_storage.add_messages(msg)
 

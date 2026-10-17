@@ -3,7 +3,7 @@ import { cancelChannelQr, pollChannelQr, startChannelQr } from "../lib/api";
 import type { ChannelId, QrSessionResponse } from "../types";
 
 interface QrAuthPanelProps {
-  channel: Extract<ChannelId, "feishu" | "weixin">;
+  channel: Extract<ChannelId, "weixin">;
   onConfirmed: (result: Record<string, unknown>) => void;
   onError?: (message: string) => void;
 }

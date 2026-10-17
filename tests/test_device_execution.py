@@ -430,7 +430,7 @@ class DeviceToolTests(unittest.IsolatedAsyncioTestCase):
             tool_manager=ToolManager([create_device_tool(service)]), message_storage=InMemoryMessageStorage(), client=None,
             guards=[AttributionGuard()],
         )
-        for user_id, channel, room_name in (("alice", "cli", None), ("new-user", "api", None), ("other", "feishu", "group"), ("", None, None)):
+        for user_id, channel, room_name in (("alice", "cli", None), ("new-user", "api", None), ("other", "weixin", "group"), ("", None, None)):
             messages = []
             attribution = {"user_id": user_id, "channel": channel, "room_name": room_name}
             await executor.handle_tool_calls([FakeToolCall("device", '{"action":"list"}')], messages, **attribution)

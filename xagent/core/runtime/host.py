@@ -91,7 +91,7 @@ class RuntimeHost:
         self._startup_fingerprint = None
         self.channel_drain_timeout = 10.0
         self.channel_cleanup_timeout = 5.0
-        self._channel_locks = {name: asyncio.Lock() for name in ("api", "feishu", "weixin", "voice")}
+        self._channel_locks = {name: asyncio.Lock() for name in ("api", "weixin", "voice")}
         self._channel_generation = {name: 0 for name in self._channel_locks}
         self._channel_activity: dict[str, ChannelActivity] = {}
         self._channel_operations: dict[str, asyncio.Task] = {}
@@ -157,7 +157,7 @@ class RuntimeHost:
             from ...integrations.api import ApiChannelAdapter
             from . import AsyncTaskScheduler, create_runtime_heartbeat, resolve_contacts_path
 
-            legacy = [channel for channel in ("api", "feishu", "weixin", "voice")
+            legacy = [channel for channel in ("api", "weixin", "voice")
                       if running_pid(managed_paths(self.config_dir, channel).pid_path) is not None]
             if legacy:
                 raise RuntimeError("Close the legacy channel processes before starting the Agent: " + ", ".join(legacy))
@@ -165,6 +165,8 @@ class RuntimeHost:
             self._startup_fingerprint = self._configuration_fingerprint()
             self.agent = self.runner.agent
             self.device_service = getattr(self.runner, "device_service", None)
+            if self.device_service is not None:
+                self.device_service.on_voice_sessions_changed = self._sync_delivery_channels
             self.admin = AdminService(config_dir=str(self.config_dir), agent=self.agent,
                 device_service=self.device_service)
             self.admin.is_runtime_owner = True
@@ -172,15 +174,15 @@ class RuntimeHost:
             if callable(recovery):
                 await recovery()
             self.recovered_turns = await self.agent.turn_store.recover()
-            await self.agent.attention.reset_to_present(self.agent.message_storage)
+            from ...interfaces.cli.channels import voice_config
             self.api = ApiChannelAdapter(self.agent,
                 contacts_file=resolve_contacts_path(self.config_dir), tasks_dir=self.runner.tasks_dir,
-                device_service=self.device_service)
+                device_service=self.device_service, voice_config=voice_config(self.runner.config))
             self.adapters["api"] = self.api
             channels = self.requested_channels if self.requested_channels is not None else default_runtime_channels(self.runner.config)
             self.channel_status = {name: {"state": "disconnected"} for name in self._channel_locks}
             for channel in channels:
-                if channel not in {"api", "feishu", "weixin", "voice"}:
+                if channel not in {"api", "weixin", "voice"}:
                     raise ValueError(f"Unknown channel: {channel}")
                 self.channel_status[channel] = {"state": "starting"}
 
@@ -201,6 +203,7 @@ class RuntimeHost:
                 self.agent, self.runner.config.get("runtime"),
                 subconscious_delivery_sink=self._deliver_subconscious,
                 subconscious_deliverable_channels=self._deliverable_channels(),
+                subconscious_contact_deliverable=self._is_subconscious_contact_deliverable,
             )
             if self.heartbeat is not None:
                 await self.heartbeat.start()
@@ -274,7 +277,36 @@ class RuntimeHost:
 
     def _deliverable_channels(self) -> set[str]:
         # The internal API delivery sink remains available without a public listener.
-        return {"api"} | {name for name, row in self.channel_status.items() if row["state"] == "connected"}
+        channels = {"api"} | {name for name, row in self.channel_status.items() if row["state"] == "connected"}
+        if self.device_service is not None and self.device_service.voice_sessions:
+            channels.add("voice")
+        return channels
+
+    def _is_subconscious_contact_deliverable(self, contact: Any) -> bool:
+        channel = str(getattr(contact, "channel", "") or "").strip().lower()
+        user_id = str(getattr(contact, "user_id", "") or "").strip()
+        target = getattr(contact, "target", None) or {}
+        if channel not in self._deliverable_channels():
+            return False
+        if channel == "weixin":
+            adapter = self.adapters.get("weixin")
+            if adapter is None or self.channel_status.get("weixin", {}).get("state") != "connected":
+                return False
+            uid = str(target.get("user_id") or user_id).strip()
+            tokens = getattr(adapter, "_context_tokens", None)
+            if isinstance(tokens, dict):
+                return bool(tokens.get(uid))
+            getter = getattr(getattr(adapter, "client", None), "get_context_token", None)
+            if callable(getter):
+                return bool(getter(uid))
+            return True
+        if channel == "voice":
+            adapter = self._resolve_voice_adapter(target, user_id=user_id)
+            if adapter is None:
+                return False
+            allowed = getattr(adapter, "_proactive_speech_allowed", None)
+            return bool(allowed()) if callable(allowed) else True
+        return True
 
     def _sync_delivery_channels(self) -> None:
         loop = getattr(self.heartbeat, "subconscious_loop", None)
@@ -382,9 +414,6 @@ class RuntimeHost:
             activity = self._channel_activity.get(channel)
             if activity is not None:
                 activity.quiesce()
-            attention = getattr(self.agent, "attention", None)
-            if channel != "api" and attention is not None:
-                attention.pause_channel(channel)
             adapter = self.adapters.get(channel) if channel != "api" else None
             if adapter is not None:
                 adapter.quiesce()
@@ -467,9 +496,6 @@ class RuntimeHost:
             if task is not None and not task.cancelled():
                 task.exception()
         if channel != "api":
-            attention = getattr(self.agent, "attention", None)
-            if attention is not None:
-                await attention.detach_channel(channel)
             self.adapters.pop(channel, None)
         for key in (channel, f"{channel}-readiness", f"{channel}-stop"):
             self._tasks.pop(key, None)
@@ -519,13 +545,6 @@ class RuntimeHost:
                 lifespan="off", access_log=False, timeout_graceful_shutdown=10))
             self._servers["api"] = server
             run = server.serve()
-        elif channel == "feishu":
-            from ...integrations.feishu import FeishuAdapter, FeishuAdapterConfig
-            from ...interfaces.cli.channels import feishu_config
-
-            adapter = FeishuAdapter(agent=self.agent, config=FeishuAdapterConfig.from_dict(feishu_config(config)))
-            self.adapters[channel] = adapter
-            run = adapter.run()
         elif channel == "weixin":
             from ...integrations.weixin import WeixinAdapter, WeixinAdapterConfig
             from ...interfaces.cli.channels import weixin_config
@@ -546,7 +565,6 @@ class RuntimeHost:
             run = adapter.run_forever()
         if channel != "api":
             adapter.runtime_activity = activity
-            self.agent.attention.attach_channel(channel, activity)
             loop = asyncio.get_running_loop()
             adapter.runtime_status = lambda state: loop.call_soon_threadsafe(self._channel_connection, channel, state, generation)
         self._tasks[channel] = asyncio.create_task(self._watch_channel(channel, run, generation), name=f"xagent-channel-{channel}")
@@ -563,18 +581,38 @@ class RuntimeHost:
                     self.device_service.start()
             self._tasks["api-readiness"] = asyncio.create_task(ready())
 
+    def _resolve_voice_adapter(self, target: Any, *, user_id: str = ""):
+        target_dict = target if isinstance(target, dict) else {}
+        if self.device_service is not None and self.device_service.voice_sessions:
+            if target_dict.get("device_id") or target_dict.get("room_name") or str(user_id or "").startswith("device:"):
+                session = self.device_service.resolve_voice_session(target_dict, user_id=user_id)
+                if session is not None and getattr(session, "runtime", None) is not None:
+                    return session.runtime
+        local_voice = self.adapters.get("voice")
+        if local_voice is not None and self.channel_status.get("voice", {}).get("state") == "connected":
+            return local_voice
+        if self.device_service is not None and self.device_service.voice_sessions:
+            session = self.device_service.resolve_voice_session(target_dict, user_id=user_id)
+            if session is not None and getattr(session, "runtime", None) is not None:
+                return session.runtime
+        return local_voice
+
     def _task_adapter(self, task):
         channel = task.delivery_channel
         if channel in {"", "local", "cli", "api"}:
             return self.api
+        if channel == "voice":
+            target = task.delivery.get("target") if isinstance(getattr(task, "delivery", None), dict) else {}
+            return self._resolve_voice_adapter(target, user_id=getattr(task, "delivery_user_id", "") or "")
         return self.adapters.get(channel)
 
     def _can_handle_task(self, task) -> bool:
-        if task.delivery_channel not in {"", "local", "cli", "api"} and self.channel_status.get(task.delivery_channel, {}).get("state") != "connected":
-            return False
         adapter = self._task_adapter(task)
         if adapter is None:
             return False
+        if task.delivery_channel not in {"", "local", "cli", "api"}:
+            if adapter is self.adapters.get(task.delivery_channel) and self.channel_status.get(task.delivery_channel, {}).get("state") != "connected":
+                return False
         check = getattr(adapter, "_can_handle_scheduled_task", None)
         if adapter is self.api:
             return self.api.tasks.can_handle(task)
@@ -597,11 +635,20 @@ class RuntimeHost:
         return await adapter.deliver_scheduled_task(task, result, run_id)
 
     async def _deliver_subconscious(self, delivery):
-        adapter = self.adapters.get(delivery.recipient.channel)
+        channel = delivery.recipient.channel
+        if channel == "voice":
+            adapter = self._resolve_voice_adapter(
+                delivery.recipient.target,
+                user_id=delivery.recipient.user_id,
+            )
+        else:
+            adapter = self.adapters.get(channel)
         if adapter is None:
             raise RuntimeError("Subconscious delivery channel is unavailable")
-        channel = delivery.recipient.channel
         if channel == "api":
+            await adapter.deliver_subconscious_message(delivery)
+            return
+        if adapter is not self.adapters.get(channel):
             await adapter.deliver_subconscious_message(delivery)
             return
         if self.channel_status.get(channel, {}).get("state") != "connected":
@@ -811,9 +858,6 @@ class RuntimeHost:
         self._publish_status()
         if self.agent is not None:
             self.agent.inbox.stop_accepting()
-            pause_attention = getattr(self.agent.attention, "pause_all", None)
-            if callable(pause_attention):
-                pause_attention()
         for activity in self._channel_activity.values():
             activity.quiesce()
         for name, adapter in list(self.adapters.items()):
@@ -837,8 +881,6 @@ class RuntimeHost:
             if self.agent.inbox.busy or self.agent.inbox.pending_count:
                 self.agent.abort()
                 self.agent.inbox.cancel_pending()
-        if self.agent is not None:
-            await self.agent.attention.stop()
         self._stop_devices()
         for name, adapter in list(self.adapters.items()):
             stop = getattr(adapter, "stop", None)

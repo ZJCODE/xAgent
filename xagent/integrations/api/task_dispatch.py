@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 from dataclasses import dataclass, field
@@ -10,12 +9,16 @@ from typing import Any, Dict, List, Optional
 
 from ...core.agent import Agent
 from ...core.config import AgentConfig
-from ...core.runtime import ScheduledDeliveryContext, current_delivery_context, scheduled_delivery_context
-from ...interfaces.server.serializers import response_payload
+from ...core.runtime import (
+    ScheduledDeliveryContext,
+    collect_scheduled_turn_events,
+    current_delivery_context,
+    scheduled_delivery_context,
+)
 from ...schemas.attachment import dedupe_attachments
 from ...schemas.attachment import ATTACHMENT_METADATA_KEY
 from ...schemas import Message, RoleType
-from ...core.runtime.task_receipts import DeliveryUncertainError, occurrence_run_id
+from ...core.runtime.task_receipts import occurrence_run_id
 from .chat_service import ChatService
 from .constants import CHANNEL_API
 from .delivery import DeliveryBus
@@ -161,40 +164,21 @@ class TaskDispatchService:
         channel: str,
         deadline: float,
     ) -> ScheduledTaskResult:
-        final_content = ""
-        final_attachments: List[Dict[str, Any]] = []
-        last_error = ""
-        async for event in self.chat._iterate_before_deadline(
-            chat_events(
-                user_message=prompt,
-                user_id=user_id,
-                stream=False,
-                channel=channel,
-                inbox_kind="scheduled_turn",
-            ),
-            deadline,
-        ):
-            event_type = event.get("type")
-            if event_type in {"error", "aborted"} and event.get("needs_review"):
-                raise DeliveryUncertainError(str(event.get("error") or "scheduled tool outcome is unknown"))
-            if event_type == "message_done" and str(event.get("phase") or "final") == "final":
-                final_content = str(event.get("content") or "").strip() or final_content
-                raw_attachments = event.get("attachments")
-                final_attachments = dedupe_attachments([
-                    *final_attachments,
-                    *(raw_attachments if isinstance(raw_attachments, list) else []),
-                ])
-            elif event_type == "error":
-                last_error = str(event.get("error") or "").strip()
+        final_content, raw_attachments, last_error = await collect_scheduled_turn_events(
+            self.chat._iterate_before_deadline(
+                chat_events(
+                    user_message=prompt,
+                    user_id=user_id,
+                    stream=False,
+                    channel=channel,
+                    inbox_kind="scheduled_turn",
+                ),
+                deadline,
+            )
+        )
+        final_attachments = dedupe_attachments(raw_attachments)
         if final_content or final_attachments:
             return ScheduledTaskResult(final_content, final_attachments)
         if last_error:
             raise RuntimeError(last_error)
         raise ValueError("scheduled task produced no final result")
-
-    @staticmethod
-    def _scheduled_response_result(response: Any) -> ScheduledTaskResult:
-        result = response_payload(response)
-        if isinstance(result, str):
-            return ScheduledTaskResult(result.strip())
-        return ScheduledTaskResult(json.dumps(result, ensure_ascii=False).strip())

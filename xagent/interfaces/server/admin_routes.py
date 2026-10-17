@@ -283,7 +283,7 @@ def register_admin_routes(
         if channel != "api":
             raise HTTPException(
                 status_code=400,
-                detail="HTTP create currently supports channel=api only; use chat to schedule feishu/weixin/voice tasks",
+                detail="HTTP create currently supports channel=api only; use chat to schedule weixin/voice tasks",
             )
         user_id = str(input_data.user_id or "web_user").strip() or "web_user"
         target = dict(input_data.target or {})

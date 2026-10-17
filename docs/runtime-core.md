@@ -1,6 +1,6 @@
 # One persistent core per Agent
 
-Each canonical Agent data directory has one operating-system lock and one runtime. The lock is acquired before constructing the Agent or recovering any work. API, Feishu, Weixin and local voice share its Agent, attention loop, task scheduler and memory maintenance. A channel failure appears in status and does not stop the other channels.
+Each canonical Agent data directory has one operating-system lock and one runtime. The lock is acquired before constructing the Agent or recovering any work. API, Weixin and local voice share its Agent, attention loop, task scheduler and memory maintenance. A channel failure appears in status and does not stop the other channels.
 
 ## Commands
 
@@ -11,19 +11,19 @@ xagent stop --agent atlas
 xagent restart --agent atlas
 xagent status --agent atlas
 xagent logs --agent atlas --follow
-xagent channel feishu connect --agent atlas
-xagent channel feishu disconnect --agent atlas
+xagent channel weixin connect --agent atlas
+xagent channel weixin disconnect --agent atlas
 ```
 
-`run` is foreground; `start` is background. Ordinary startup, including Stop then Start, opens only the public API, unless `channels.api.enabled: false`. Feishu, Weixin and Voice stay disconnected even when their configuration has `enabled: true`; default startup does not construct those adapters or inspect audio devices. Explicit restart restores channels that were connected, connecting or reconnecting, including Voice. Disconnected, disconnecting and failed channels remain offline, including a manually disconnected API. New configuration with `enabled: false` skips automatic restoration. `run/start/restart --channels api,feishu` explicitly overrides the default or restored selection for one launch, retaining the existing override of `enabled: false`. Restarting an already stopped Agent uses ordinary startup. Different Agents can run independently. Stop legacy channel processes before launching the core.
+`run` is foreground; `start` is background. Ordinary startup, including Stop then Start, opens only the public API, unless `channels.api.enabled: false`. Weixin and Voice stay disconnected even when their configuration has `enabled: true`; default startup does not construct those adapters or inspect audio devices. Explicit restart restores channels that were connected, connecting or reconnecting, including Voice. Disconnected, disconnecting and failed channels remain offline, including a manually disconnected API. New configuration with `enabled: false` skips automatic restoration. `run/start/restart --channels api,weixin` explicitly overrides the default or restored selection for one launch, retaining the existing override of `enabled: false`. Restarting an already stopped Agent uses ordinary startup. Different Agents can run independently. Stop legacy channel processes before launching the core.
 
-The Web Channels page lists every channel as configured/available, connecting, connected, reconnecting, disconnecting or failed. Configuration readiness is not proof of a successful remote handshake. Use Connect / Disconnect or `xagent channel <api|feishu|weixin|voice> connect|disconnect --agent atlas`. Start the Agent before using these controls. Disconnecting preserves configuration, credentials and history. Restart requests new connections using the previous intent; channels report connected only after successful transport readiness. Handshake/transport failures appear in channel status and runtime logs without stopping the other channels.
+The Web Channels page lists every channel as configured/available, connecting, connected, reconnecting, disconnecting or failed. Configuration readiness is not proof of a successful remote handshake. Use Connect / Disconnect or `xagent channel <api|weixin|voice> connect|disconnect --agent atlas`. Start the Agent before using these controls. Disconnecting preserves configuration, credentials and history. Restart requests new connections using the previous intent; channels report connected only after successful transport readiness. Handshake/transport failures appear in channel status and runtime logs without stopping the other channels.
 
-The terminal launcher exposes the same controls under **Channel → API / Feishu / Weixin / Voice**. Its list and submenus display the owner's published channel state and capabilities. Connect/Disconnect are disabled while the Agent is stopped or unavailable; configuration remains accessible. **Refresh** reloads state after a handshake or cleanup completes. Failed cleanup exposes Disconnect again instead of allowing a second connection. Actions target the Agent directory shown in that menu, even if another client changes the active Agent. Configuration changes require restarting the Agent before connecting with the new settings.
+The terminal launcher exposes the same controls under **Channel → API / Weixin / Voice**. Its list and submenus display the owner's published channel state and capabilities. Connect/Disconnect are disabled while the Agent is stopped or unavailable; configuration remains accessible. **Refresh** reloads state after a handshake or cleanup completes. Failed cleanup exposes Disconnect again instead of allowing a second connection. Actions target the Agent directory shown in that menu, even if another client changes the active Agent. Configuration changes require restarting the Agent before connecting with the new settings.
 
-The channel list uses a fixed order: Chat, API, Feishu, Weixin, Voice. A status badge beside each channel name keeps Connected visible in green, transitions in yellow, failures in red and disconnected channels in gray. Status includes text and a symbol so it is readable without color.
+The channel list uses a fixed order: Chat, API, Weixin, Voice. A status badge beside each channel name keeps Connected visible in green, transitions in yellow, failures in red and disconnected channels in gray. Status includes text and a symbol so it is readable without color.
 
-The launcher overview shows Runtime and Web first, followed by API, Feishu, Weixin and Voice, then Model, Search, Image and Tasks. Unconfigured entries remain summarized at the bottom.
+The launcher overview shows Runtime and Web first, followed by API, Weixin and Voice, then Model, Search, Image and Tasks. Unconfigured entries remain summarized at the bottom.
 
 Menu goal check: control one shared Agent identity, retaining user distinction and private/group coverage. The menu reuses runtime operations, preserving first-person journal perspective, unified memory and diary authority, Agent-governed sharing, source attribution and cross-channel continuity. Presentation changes only ordering and status emphasis. It creates no separate Agent or memory store.
 
@@ -63,7 +63,7 @@ Task files and atomic claims remain in use. Operational receipts are under `.run
 | Legacy `.running` without sufficient evidence | Mark `needs_review` |
 | `failed` / `needs_review` | Wait for explicit review and retry |
 
-Unresolved recurring occurrences block subsequent execution. Retry creates a new attempt and preserves the previous receipt. Model errors are failures; success requires a final response or a valid attachment. API delivery succeeds only after session history is persisted. WebSocket events notify subscribers. Feishu and Weixin retain their send acknowledgements; uncertain external sending requires review and is not promised to execute exactly once.
+Unresolved recurring occurrences block subsequent execution. Retry creates a new attempt and preserves the previous receipt. Model errors are failures; success requires a final response or a valid attachment. API delivery succeeds only after session history is persisted. WebSocket events notify subscribers. Weixin retains its send acknowledgements; uncertain external sending requires review and is not promised to execute exactly once.
 
 ## Diary recovery
 
@@ -101,7 +101,7 @@ python scripts/runtime_soak.py --root /tmp/xagent-validation-fresh-directory
 cd frontend && npm run build
 ```
 
-The simulation advances the scheduler through 24 virtual hours, dispatches an hourly recurring task, submits four-channel traffic and duplicates, forces diary maintenance, simulates reconnects, and restarts the core twice. It checks persisted message counts, unique diary inputs, prepared task acknowledgements, single-turn execution and bounded file-handle use. The default has a 115-second total budget. It contacts no external model or bot. Separate fault regressions cover execution/delivery/archive interruption, diary conflicts and cursor failures, queue cancellation and cross-process ownership.
+The simulation advances the scheduler through 24 virtual hours, dispatches an hourly recurring task, submits three-channel traffic and duplicates, forces diary maintenance, simulates reconnects, and restarts the core twice. It checks persisted message counts, unique diary inputs, prepared task acknowledgements, single-turn execution and bounded file-handle use. The default has a 115-second total budget. It contacts no external model or bot. Separate fault regressions cover execution/delivery/archive interruption, diary conflicts and cursor failures, queue cancellation and cross-process ownership.
 
 This is accelerated scenario validation; it does not measure actual 24-hour uptime or real device/network behaviour.
 

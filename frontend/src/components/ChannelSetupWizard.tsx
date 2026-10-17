@@ -5,7 +5,6 @@ import { VoiceSetupFields } from "./VoiceSetupFields";
 import { WizardField } from "./WizardField";
 import { getChannelSetupSchema, setupChannel } from "../lib/api";
 import type {
-  FeishuSetupSchema,
   SetupChannelId,
   ChannelSetupSchema,
   VoiceSelectionInput,
@@ -15,7 +14,6 @@ import type {
 
 const CHANNEL_TITLES: Record<SetupChannelId, string> = {
   voice: "Voice setup",
-  feishu: "Feishu setup",
   weixin: "Weixin setup",
 };
 
@@ -45,11 +43,6 @@ export function ChannelSetupWizard({ channel, open, onClose, onComplete }: Chann
   const [stepIndex, setStepIndex] = useState(0);
   const [force, setForce] = useState(false);
   const [voiceSelection, setVoiceSelection] = useState<VoiceSelectionInput | null>(null);
-  const [feishuSelection, setFeishuSelection] = useState({
-    credential_mode: "one_click",
-    app_id: "",
-    app_secret: "",
-  });
   const [weixinSelection, setWeixinSelection] = useState({
     owner_only: true,
     allow_users: "",
@@ -66,35 +59,17 @@ export function ChannelSetupWizard({ channel, open, onClose, onComplete }: Chann
     if (channel === "voice") {
       return [{ id: "voice", label: "Voice" }];
     }
-    if (channel === "feishu") {
-      // Credentials-only, matching CLI: behavior knobs use recommended silent defaults.
-      if (feishuSelection.credential_mode === "one_click") {
-        return [
-          { id: "access", label: "App access" },
-          { id: "qr", label: "Authorize" },
-        ];
-      }
-      return [{ id: "access", label: "App access" }];
-    }
     return [
       { id: "qr", label: "QR login" },
       { id: "access", label: "Access" },
     ];
-  }, [channel, feishuSelection.credential_mode]);
+  }, [channel]);
 
   const currentStepId = steps[stepIndex]?.id ?? steps[0]?.id ?? "voice";
   const isDirty = useMemo(() => {
     if (!schema || loadingSchema || force || qrReady) return Boolean(force || qrReady);
     if (channel === "voice") {
       return JSON.stringify(voiceSelection) !== JSON.stringify(defaultVoiceSelection(schema as VoiceSetupSchema));
-    }
-    if (channel === "feishu") {
-      const defaults = (schema as FeishuSetupSchema).defaults;
-      return (
-        feishuSelection.credential_mode !== defaults.credential_mode ||
-        feishuSelection.app_id !== "" ||
-        feishuSelection.app_secret !== ""
-      );
     }
     const defaults = (schema as WeixinSetupSchema).defaults;
     return (
@@ -109,7 +84,6 @@ export function ChannelSetupWizard({ channel, open, onClose, onComplete }: Chann
     );
   }, [
     channel,
-    feishuSelection,
     force,
     loadingSchema,
     qrReady,
@@ -130,13 +104,6 @@ export function ChannelSetupWizard({ channel, open, onClose, onComplete }: Chann
         setSchema(data);
         if (channel === "voice") {
           setVoiceSelection(defaultVoiceSelection(data as VoiceSetupSchema));
-        } else if (channel === "feishu") {
-          const feishuSchema = data as FeishuSetupSchema;
-          setFeishuSelection({
-            credential_mode: feishuSchema.defaults.credential_mode,
-            app_id: "",
-            app_secret: "",
-          });
         } else {
           const weixinSchema = data as WeixinSetupSchema;
           setWeixinSelection({
@@ -173,15 +140,6 @@ export function ChannelSetupWizard({ channel, open, onClose, onComplete }: Chann
         return "Soniox API key is required.";
       }
     }
-    if (channel === "feishu") {
-      if (currentStepId === "access" && feishuSelection.credential_mode === "manual") {
-        if (!feishuSelection.app_id.trim()) return "Feishu App ID is required.";
-        if (!feishuSelection.app_secret.trim()) return "Feishu App Secret is required.";
-      }
-      if (currentStepId === "qr" && !qrReady) {
-        return "Complete Feishu authorization before saving.";
-      }
-    }
     if (channel === "weixin") {
       if (currentStepId === "qr" && !qrReady) {
         return "Complete Weixin QR login before continuing.";
@@ -211,18 +169,6 @@ export function ChannelSetupWizard({ channel, open, onClose, onComplete }: Chann
   const buildSelection = (): Record<string, unknown> => {
     if (channel === "voice" && voiceSelection) {
       return { ...voiceSelection, voice_api_key: voiceSelection.voice_api_key.trim() };
-    }
-    if (channel === "feishu") {
-      const defaults = (schema as FeishuSetupSchema | null)?.defaults;
-      return {
-        credential_mode: feishuSelection.credential_mode,
-        app_id: feishuSelection.app_id.trim(),
-        app_secret: feishuSelection.app_secret.trim(),
-        // Silent recommended defaults (same as CLI interactive setup).
-        stream: defaults?.stream ?? false,
-        group_fetch_limit: defaults?.group_fetch_limit ?? 10,
-        group_reply_only_when_mentioned: defaults?.group_reply_only_when_mentioned ?? false,
-      };
     }
     return {
       account_id: weixinSelection.account_id,
@@ -258,17 +204,6 @@ export function ChannelSetupWizard({ channel, open, onClose, onComplete }: Chann
       setError(err instanceof Error ? err.message : String(err));
       setSubmitting(false);
     }
-  };
-
-  const handleFeishuQrConfirmed = (result: Record<string, unknown>) => {
-    setFeishuSelection((current) => ({
-      ...current,
-      credential_mode: String(result.credential_mode || "one_click"),
-      app_id: String(result.app_id || ""),
-      app_secret: String(result.app_secret || ""),
-    }));
-    setQrReady(true);
-    setError("");
   };
 
   const handleWeixinQrConfirmed = (result: Record<string, unknown>) => {
@@ -307,60 +242,6 @@ export function ChannelSetupWizard({ channel, open, onClose, onComplete }: Chann
           selection={voiceSelection}
           onChange={(patch) => setVoiceSelection((current) => (current ? { ...current, ...patch } : current))}
         />
-      ) : null}
-
-      {channel === "feishu" && currentStepId === "access" && schema ? (
-        <div className="wizard-grid">
-          <WizardField label="App access">
-            <select
-              value={feishuSelection.credential_mode}
-              onChange={(event) => {
-                setQrReady(false);
-                setFeishuSelection((current) => ({
-                  ...current,
-                  credential_mode: event.target.value,
-                }));
-              }}
-            >
-              {(schema as FeishuSetupSchema).credential_modes.map((mode) => (
-                <option key={mode.id} value={mode.id}>
-                  {mode.label || mode.id}
-                </option>
-              ))}
-            </select>
-          </WizardField>
-          {feishuSelection.credential_mode === "manual" ? (
-            <>
-              <WizardField label="Feishu App ID">
-                <input
-                  value={feishuSelection.app_id}
-                  onChange={(event) =>
-                    setFeishuSelection((current) => ({ ...current, app_id: event.target.value }))
-                  }
-                />
-              </WizardField>
-              <WizardField label="Feishu App Secret">
-                <input
-                  type="password"
-                  value={feishuSelection.app_secret}
-                  autoComplete="off"
-                  onChange={(event) =>
-                    setFeishuSelection((current) => ({ ...current, app_secret: event.target.value }))
-                  }
-                />
-              </WizardField>
-            </>
-          ) : (
-            <p className="wizard-hint">
-              On the next step, authorize a new Feishu app via QR or browser link. Recommended
-              delivery defaults are applied automatically after save.
-            </p>
-          )}
-        </div>
-      ) : null}
-
-      {channel === "feishu" && currentStepId === "qr" ? (
-        <QrAuthPanel channel="feishu" onConfirmed={handleFeishuQrConfirmed} onError={setError} />
       ) : null}
 
       {channel === "weixin" && currentStepId === "qr" ? (

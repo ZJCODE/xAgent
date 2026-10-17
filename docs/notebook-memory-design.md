@@ -1,7 +1,7 @@
 # Notebook Memory Design (`notes`)
 
-Status: implemented. A note is a reusable conclusion. Weekly distillation ships;
-mechanical gardening, taxonomies, and sharing enums do not.
+Status: implemented. A note is a reusable conclusion. Notes are written in-chat
+or by hand; mechanical gardening, taxonomies, and sharing enums do not ship.
 
 A third memory section alongside the existing time axis (diary) and person axis
 (relationship cards), covering the four load-bearing concerns: **write, organize,
@@ -60,9 +60,8 @@ Taken:
    stays attached to them by name. This is the constraint that stops notes from
    degrading into a copy of the chat log, or swallowing a speaker's first person.
 5. **Write later than capture** — the diary is the fleeting inbox. Permanent notes
-   are written in a processing session (in-chat tools for standing facts, weekly
-   background distillation), not in the same diary maintenance batch that just
-   recorded the day.
+   are written in a processing session (in-chat tools for standing facts, or by
+   hand), not in the same diary maintenance batch that just recorded the day.
 
 Dropped, because they fight the load-bearing shape:
 
@@ -103,11 +102,9 @@ mtimes, sizes from a single `scandir`, no file reads). A changed, added, or
 removed note invalidates the cache, including edits made outside the process.
 Nothing that changes on read is written back into a note file.
 
-There is deliberately **no note cursor**. Automatic distillation runs after a
-weekly summary is written (the closed-week latch). Feedstock is that week's diary
-range, not the summary body. Diary anchoring is therefore structural: no weekly
-file, no background-distilled notes for that week. An empty notebook until the
-first completed week is a legal cold start.
+There is deliberately **no note cursor**. Notes are created only when the agent
+calls `write_note` or a human edits the Memory tree. Diary anchoring is recorded
+in `source.diary` on each note; an empty notebook is a legal cold start.
 
 ### 4.2 File format
 
@@ -170,41 +167,16 @@ characters are rejected with an instruction to split.
 for near neighbours and scores each with `NoteStore.identity_score` (3× title,
 2× keys, body deliberately excluded). If the top score clears
 `NOTES_DUPLICATE_SCORE_THRESHOLD`, the tool does *not* create; it returns
-`{"status": "similar_exists", "candidates": [...]}`. Weekly background
-distillation applies the same threshold.
+`{"status": "similar_exists", "candidates": [...]}`.
 
 `source.diary` is set to the day the note was written.
 
-### 5.2 Background — weekly distillation
-
-Runs after `_generate_weekly` successfully writes the weekly summary file. Not
-inside diary maintenance and **not** via the `write_note` tool. Idempotency is
-free: if the weekly file already exists the generator does not re-enter.
-Distillation failure is best-effort and never rolls back the weekly summary.
-
-The weekly file is only the **processing-session latch**. The LLM feedstock is
-the **week's diary range**. The just-written weekly summary may be passed as a
-short **week arc for orientation only**.
-
-One additional LLM call (`JournalLLMService.distill_notes`) yields at most
-`NOTES_DISTILL_MAX_PER_WEEK` (6) drafts. Most weeks deserve zero notes. Existing
-notes are listed with `id`, title, keys, and a short snippet so the model can
-decline to restate them and can propose `links` by id.
-
-Each draft is duplicate-guarded, then written as `active` with:
-
-- `source.diary` = `[week_start, week_end]`
-- `links` = model-proposed ids, validated against known notes
-
-No mechanical neighbour linking. If the model did not name a neighbour, the note
-lands unlinked.
-
-### 5.3 By hand — the human edits
+### 5.2 By hand — the human edits
 
 The Web UI Memory tree includes the `notes` directory. The format tolerance in
 4.2 exists for this path.
 
-### 5.4 Provenance instead of a diary trace
+### 5.3 Provenance instead of a diary trace
 
 `source.diary` on the note carries accountability without filling the diary with
 bookkeeping about the agent's own memory. Principle 8 asks for provenance rather
@@ -212,11 +184,11 @@ than a diary trace.
 
 ## 6. Organize
 
-Structure is links the writer (agent, weekly distiller, or human) chose at write
-time. There is no monthly gardening job and no lifecycle status on a note. When a
-conclusion changes, rewrite the same note (id and links stay). When a note should
-not fire on a message, change its `keys`. Noise that should not exist at all is
-deleted by hand from the Memory tree.
+Structure is links the writer (agent or human) chose at write time. There is no
+background distillation job, monthly gardening job, or lifecycle status on a
+note. When a conclusion changes, rewrite the same note (id and links stay). When
+a note should not fire on a message, change its `keys`. Noise that should not
+exist at all is deleted by hand from the Memory tree.
 
 ## 7. Retrieve
 
@@ -282,14 +254,13 @@ Two user-facing keys under `agent:` in `config.yaml`:
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `notes_enabled` | `true` | master switch: store, tools, injection, and weekly background distillation |
+| `notes_enabled` | `true` | master switch: store, tools, and injection |
 
 With `notes_enabled: false` the store is never constructed, the four tools are
 not bound, and the prompt section renders empty.
 
 Internal constants in `AgentConfig`: `NOTEBOOK_CONTEXT_MAX_CHARS` (1500),
 `NOTEBOOK_RECALL_MAX` (4), `NOTEBOOK_SNIPPET_MAX_CHARS` (140),
-`NOTES_DISTILL_MAX_PER_WEEK` (6), `NOTES_DISTILL_CONTEXT_NOTES` (30),
 `NOTES_DUPLICATE_SCORE_THRESHOLD` (3), and the schema caps in `note_memory.py`
 (`MAX_BODY_CHARS` 2000, `MAX_TITLE_CHARS` 80, `MAX_KEYS` 5).
 
@@ -298,8 +269,7 @@ Internal constants in `AgentConfig`: `NOTEBOOK_CONTEXT_MAX_CHARS` (1500),
 | File | Change |
 | --- | --- |
 | `xagent/components/memory/note_memory.py` | `Note` dataclass and `NoteStore`; layout and I/O only |
-| `xagent/core/handlers/memory.py` | `get_notebook_context()`, `_render_notebook_index()`, `_distill_notes_from_weekly()` |
-| `xagent/core/journal.py` | `distill_notes()` over a week's diary |
+| `xagent/core/handlers/memory.py` | `get_notebook_context()`, `_render_notebook_index()` |
 | `xagent/core/config.py` | section names, budget constants, purpose copy |
 | `xagent/tools/note_tool.py` | the four note tools |
 | `xagent/core/agent.py` | construct `NoteStore`, bind tools |
@@ -313,11 +283,9 @@ tolerance, legacy-field ignore with tag-to-key fold, id collision, slug and CJK
 filenames, normalization clamps, inline `[[id]]` links, neighbours, cache
 invalidation), retrieval (Chinese and English recall, ranking, minimum key
 length, recency browse, similarity), the four tools (duplicate guard, body cap,
-partial updates, neighbours on read, disabled state), weekly distillation prompts
-and draft parsing, wiring (diary maintenance does not distil; weekly latch does;
-no mechanical links; per-week cap; duplicate skip; switch-off; failure isolation;
-monthly summary does not garden), and injection (key-recall only, empty without a
-message, cap, budget bound, layer placement).
+partial updates, neighbours on read, disabled state), wiring (diary maintenance
+and weekly/monthly summaries do not create or garden notes), and injection
+(key-recall only, empty without a message, cap, budget bound, layer placement).
 
 ## 12. Goal-check
 
@@ -326,14 +294,13 @@ message, cap, budget bound, layer placement).
 - **Multi-user** — one notebook, never sharded per user.
 - **1:1 and group coverage** — notes are independent of conversation shape;
   injected identically in both. Anything that must not travel is not a note.
-- **Memory/journal perspective** — first person is the agent; distillation reads
-  that week's diary, with the weekly summary only as orientation.
+- **Memory/journal perspective** — first person is the agent; notes are written
+  in-chat or by hand, not by a background summarizer.
 - **Unified memory** — a single notebook; no per-user memory silos.
 - **Agent-governed sharing** — the model decides what to say. The notebook does
   not carry a parallel sharing ontology.
-- **Diary-anchored carrier** — the notebook is a regenerable projection,
-  `source.diary` is recorded, and weekly distillation can only run for a week
-  that already has a summary file.
+- **Diary-anchored carrier** — the notebook is a regenerable projection and
+  `source.diary` is recorded when a note is written.
 - **Attribution and continuity** — immutable ids; rewrite in place keeps links;
   first-person in a note is the agent, not the source speaker. The projection is
   regenerable; noisy files can be deleted by hand.
@@ -349,14 +316,12 @@ message, cap, budget bound, layer placement).
 
 ## 14. Risks and trade-offs
 
-- **Note explosion** remains a risk. Defences: closed-week latch, diary feedstock,
-  pre-write neighbour check, per-week cap, inject-only-index. Without decay, a
-  noisy notebook still needs rewrite-in-place or a human deleting files.
-- **Cold start until the first completed week.** In-chat tools cover standing
-  facts; an empty notebook before the first weekly summary is intentional.
-- **Semantic overlap with the diary.** Held off by reusable-conclusion-only,
-  atomic body cap, and a prompt that forbids rewriting the week arc.
-- **Cost.** One LLM call per newly written weekly summary. Switchable.
+- **Note explosion** remains a risk. Defences: pre-write neighbour check,
+  inject-only-index, and deliberate tool prompts. Without decay, a noisy
+  notebook still needs rewrite-in-place or a human deleting files.
+- **Cold start.** Notes appear only when the agent or a human writes them.
+- **Semantic overlap with the diary.** Held off by reusable-conclusion-only
+  tool guidance and an atomic body cap.
 - **Recall depends on the agent declaring good keys.** A note with weak keys is
   nearly unreachable by L0 and only findable via `search_note`.
 - **No automatic cluster map.** Hubs are not generated. Walk the links instead.
@@ -368,8 +333,8 @@ message, cap, budget bound, layer placement).
    ontology without a job the rest of the system could use. When a conclusion
    changes, rewrite the same note in place.
 2. **L0 auto-recall is on by default**, reverse key matching, no tokenizer.
-3. **Weekly background distillation ships on the weekly summary cadence**,
-   default on and switchable. Writes go through `NoteStore.create`.
+3. **No background distillation.** Notes are written in-chat or by hand via
+   `NoteStore.create`.
 4. **No fleeting staging.** The diary is already the inbox.
 5. **Naming**: directory `notes/`, store `NoteStore`, prompt sections
    `notebook_context` and `subconscious_notebook`, tools `write_note` /

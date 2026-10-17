@@ -29,15 +29,12 @@ import yaml
 logger = logging.getLogger(__name__)
 
 _SLUG_UNSAFE = re.compile(r"[^a-zA-Z0-9._-]+")
-_PLATFORM_ID_PREFIXES = ("ou_", "on_", "cli_", "oc_")
 _GENERIC_DISPLAY_NAMES = frozenset({
-    "feishu user",
     "weixin user",
     "wechat user",
     "unknown",
 })
 _CHANNEL_CONTACT_LABELS = {
-    "feishu": "Feishu contact",
     "weixin": "Weixin contact",
     "wechat": "Weixin contact",
     "api": "API contact",
@@ -56,8 +53,6 @@ def human_display_name(value: Any, *, user_id: str = "", key: str = "") -> str:
     if key and name == str(key).strip():
         return ""
     if name.lower() in _GENERIC_DISPLAY_NAMES:
-        return ""
-    if name.startswith(_PLATFORM_ID_PREFIXES):
         return ""
     channel, separator, rest = name.partition(":")
     if separator and channel in _IDENTITY_CHANNELS and rest.strip():

@@ -373,7 +373,7 @@ def delete_managed_agent(
     stop_channels: bool = True,
 ) -> tuple[AgentRegistry, AgentEntry]:
     """Remove a managed agent from the registry and delete its data directory."""
-    from .channels import CHANNEL_API, CHANNEL_FEISHU, CHANNEL_VOICE, CHANNEL_WEIXIN
+    from .channels import CHANNEL_API, CHANNEL_VOICE, CHANNEL_WEIXIN
     from .processes import managed_paths, running_pid, stop_managed_process
 
     root_path = root or management_root()
@@ -384,7 +384,7 @@ def delete_managed_agent(
         raise AgentRegistryError(f"Unknown agent {normalized!r}. Run `xagent agents list` to see available agents.")
 
     if stop_channels:
-        for channel in ("runtime", CHANNEL_API, CHANNEL_VOICE, CHANNEL_FEISHU, CHANNEL_WEIXIN):
+        for channel in ("runtime", CHANNEL_API, CHANNEL_VOICE, CHANNEL_WEIXIN):
             pid_path = managed_paths(entry.path, channel).pid_path
             if running_pid(pid_path) is None:
                 continue

@@ -417,7 +417,7 @@ class DeviceRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 await device.send(json.dumps(device_test.manifest("new-id").model_dump()))
                 credential = json.loads(await device.recv())["credential"]
                 await self.wait_for(lambda: "new-id" in service.devices)
-                for user_id, channel, room in (("alice", "cli", None), ("new-user", "api", None), ("another", "feishu", "group"), ("", "api", None)):
+                for user_id, channel, room in (("alice", "cli", None), ("new-user", "api", None), ("another", "weixin", "group"), ("", "api", None)):
                     messages = []
                     attribution = {"user_id": user_id, "channel": channel, "room_name": room}
                     await host.agent.tool_executor.handle_tool_calls(

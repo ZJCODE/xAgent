@@ -7,7 +7,6 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from xagent.core.runtime import ContactEntry, SubconsciousDelivery, enqueue_scheduled_task, list_task_records
-from xagent.core.attention import AttentionLoop
 from xagent.integrations.weixin.adapter import WeixinAdapter
 from xagent.integrations.weixin.config import WeixinAdapterConfig
 from xagent.integrations.weixin.state import WeixinCredentials, WeixinStateStore
@@ -21,11 +20,6 @@ class _FakeAgent:
         self.chat_calls = []
         self.maintenance_count = 0
         self.workspace_dir = None
-        self.attention = AttentionLoop(
-            addressed_grace=0,
-            quiet_window=0,
-            max_wait=0,
-        )
 
     async def chat_events(self, **kwargs):
         self.chat_calls.append(kwargs)
@@ -96,13 +90,7 @@ class WeixinAdapterTests(unittest.TestCase):
 
 
 def _process_until_idle(adapter, message):
-    async def scenario():
-        await adapter._process_message(message)
-        attention = getattr(adapter.agent, "attention", None)
-        if attention is not None:
-            await attention.idle()
-
-    asyncio.run(scenario())
+    asyncio.run(adapter._process_message(message))
 
     def test_owner_direct_message_routes_to_agent_and_replies(self):
         with tempfile.TemporaryDirectory() as tmpdir:

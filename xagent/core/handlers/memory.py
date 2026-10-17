@@ -258,6 +258,31 @@ class MemoryHandler:
     # Journal maintenance
     # ------------------------------------------------------------------
 
+    async def append_daily_entry(
+        self,
+        content: str,
+        target_date: Optional[date] = None,
+    ) -> Optional[Path]:
+        """Append a direct diary entry (such as a subconscious thought) under the maintenance guard.
+
+        Serializing direct appends with ``_maintenance_guard`` ensures:
+        1. Any interrupted ``prepared`` commit receipt is recovered before appending.
+        2. Direct appends never interleave between ``run_maintenance`` reading
+           ``old_content`` (pre-LLM) and applying its CAS receipt (post-LLM),
+           preventing false ``needs_review`` deadlocks.
+        """
+        note = str(content or "").strip()
+        if not note:
+            return None
+        async with self._maintenance_guard(refresh_state=True):
+            healthy, _ = await self._recover_pending_commit_locked()
+            if not healthy:
+                logger.warning(
+                    "Skipping direct diary append because journal commit requires review"
+                )
+                return None
+            return await self.memory.append_daily(note, target_date=target_date)
+
     def schedule_experience_write(
         self,
         messages: List[Message],
@@ -620,125 +645,6 @@ class MemoryHandler:
     # Notebook (topic-addressed projection over the diary)
     # ------------------------------------------------------------------
 
-    async def _distill_notes_from_weekly(
-        self,
-        diary_source: str,
-        week_start: date,
-        week_end: date,
-        week_arc: str = "",
-        period_label: str = "",
-    ) -> None:
-        """Distil reusable conclusions after a weekly summary is written.
-
-        The weekly file is only the processing-session latch. Feedstock is the
-        week's diary range (already fetched for the summary); the summary body
-        is optional orientation, not the sole upstream. Best-effort: a failure
-        here must never roll back the weekly summary.
-        """
-        if self.note_store is None:
-            return
-        if not str(diary_source or "").strip():
-            return
-        try:
-            from ...components.memory import Note
-
-            existing = await self.note_store.list_notes()
-            snippet_cap = AgentConfig.NOTEBOOK_SNIPPET_MAX_CHARS
-            candidates = await self.llm_service.distill_notes(
-                diary_source=diary_source,
-                week_arc=week_arc,
-                period_label=period_label,
-                existing_notes=[
-                    {
-                        "id": note.id,
-                        "title": note.title,
-                        "keys": list(note.keys),
-                        "snippet": (note.snippet or "")[:snippet_cap],
-                    }
-                    for note in existing[: AgentConfig.NOTES_DISTILL_CONTEXT_NOTES]
-                ],
-                max_notes=AgentConfig.NOTES_DISTILL_MAX_PER_WEEK,
-                max_diary_chars=self.max_journal_source_chars,
-            )
-            if not candidates:
-                return
-
-            known_ids = {note.id for note in existing}
-            today_str = date.today().isoformat()
-            diary_range = [week_start.isoformat(), week_end.isoformat()]
-
-            written: list[str] = []
-            for candidate in candidates[: AgentConfig.NOTES_DISTILL_MAX_PER_WEEK]:
-                title = str(candidate.get("title") or "").strip()
-                body = str(candidate.get("body") or "").strip()
-                if not title or not body:
-                    continue
-                keys = candidate.get("keys")
-                duplicate = await self._existing_note_covering(title=title, keys=keys)
-                if duplicate is not None:
-                    logger.debug(
-                        "Skipped distilled note %r; note %s already covers it",
-                        title,
-                        duplicate.id,
-                    )
-                    continue
-
-                links = [
-                    link_id
-                    for link_id in (candidate.get("links") or [])
-                    if str(link_id).strip() in known_ids
-                ]
-
-                note = await self.note_store.create(
-                    Note(
-                        id="",
-                        title=title,
-                        body=body,
-                        keys=tuple(keys or ()),
-                        links=tuple(links),
-                        source={"diary": list(diary_range)},
-                        created=today_str,
-                        updated=today_str,
-                    )
-                )
-                known_ids.add(note.id)
-                written.append(f"{note.id} ({len(note.body)} chars)")
-            if written:
-                logger.info(
-                    "Distilled %d note(s) from weekly %s: %s",
-                    len(written),
-                    period_label or f"{week_start}..{week_end}",
-                    ", ".join(written),
-                )
-        except Exception as exc:
-            logger.warning("Note distillation failed: %s", exc, exc_info=True)
-
-    async def _existing_note_covering(
-        self,
-        title: str,
-        keys=None,
-    ) -> Optional["Note"]:
-        """Return an existing note that already covers this idea, if any.
-
-        Uses the same threshold the write tool applies, so a draft the agent
-        would have been told to fold into an existing note is not quietly
-        written by the background path instead.
-        """
-        if self.note_store is None:
-            return None
-        from ...components.memory import NoteStore
-
-        candidates = await self.note_store.find_similar(
-            title=title,
-            keys=keys,
-            limit=3,
-        )
-        for candidate in candidates:
-            score = NoteStore.identity_score(candidate, title, keys)
-            if score >= AgentConfig.NOTES_DUPLICATE_SCORE_THRESHOLD:
-                return candidate
-        return None
-
     async def get_notebook_context(self, current_text: str = "") -> str:
         """Render the notebook index for prompt injection.
 
@@ -841,12 +747,6 @@ class MemoryHandler:
             self._last_maintenance["error"] = str(exc)
             logger.error("Diary slice generation failed: %s", exc)
         return None
-
-    async def _read_existing_today(self, target_date: date) -> str:
-        """Return today's daily prose, newest-first trimmed for the diary writer."""
-        path = self.memory.daily_path(target_date)
-        text = await self.memory.read_file(path)
-        return self._existing_diary_context(text)
 
     def _existing_diary_context(self, text: str) -> str:
         """Trim original and staged slices with the same prompt budget."""
@@ -982,13 +882,6 @@ class MemoryHandler:
         if summary:
             await self.memory.write_summary(self.memory.weekly_path(week_start, week_end), summary)
             logger.info("Generated weekly summary: %s", label)
-            await self._distill_notes_from_weekly(
-                diary_source=source,
-                week_arc=summary,
-                week_start=week_start,
-                week_end=week_end,
-                period_label=label,
-            )
             return True
         return False
 

@@ -11,12 +11,12 @@ from unittest.mock import AsyncMock, Mock, patch
 import httpx
 from fastapi import HTTPException
 
-from xagent.core.attention import AttentionLoop
 from xagent.core.inbox import AgentInbox
 from xagent.core.runtime.host import RuntimeHost
 from xagent.core.runtime.channel_activity import ChannelActivity
 from xagent.core.runtime.subconscious import SubconsciousLoop
 from xagent.core.runtime.tasks import AsyncTaskScheduler, enqueue_scheduled_task, list_task_records
+from xagent.integrations.weixin.state import WeixinCredentials, WeixinStateStore
 from xagent.interfaces.cli.channels import channel_readiness, default_runtime_channels
 from xagent.interfaces.cli.parser import build_parser
 
@@ -61,22 +61,25 @@ class ChannelLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
+        WeixinStateStore(self.root).save_credentials(
+            WeixinCredentials("test", "https://example.test", "test", "owner")
+        )
         self.host = RuntimeHost(self.root)
         self.host.runner = SimpleNamespace(config={"channels": {
-            "api": {"enabled": False}, "feishu": {"app_id": "test", "app_secret": "test"},
-            "voice": {"api_key": "test"},
+            "api": {"enabled": False}, "weixin": {"account_id": "test"},
+            "voice": {},
         }}, tasks_dir=self.root / "tasks")
-        self.host.agent = SimpleNamespace(inbox=AgentInbox(), attention=AttentionLoop(addressed_grace=0))
+        self.host.agent = SimpleNamespace(inbox=AgentInbox())
         self.host.api = SimpleNamespace(tasks=SimpleNamespace(can_handle=lambda task: True))
         self.host.adapters["api"] = self.host.api
-        self.host.channel_status = {name: {"state": "disconnected"} for name in ("api", "feishu", "weixin", "voice")}
+        self.host.channel_status = {name: {"state": "disconnected"} for name in ("api", "weixin", "voice")}
         self.host.runtime_ready = True
         self.host.state = "running"
         self.host.channel_drain_timeout = 0.04
         self.host.channel_cleanup_timeout = 0.04
         self.host._publish_status = Mock()
         FakeAdapter.instances = []
-        self.patch = patch("xagent.integrations.feishu.FeishuAdapter", FakeAdapter)
+        self.patch = patch("xagent.integrations.weixin.WeixinAdapter", FakeAdapter)
         self.patch.start()
         self.addCleanup(self.patch.stop)
 
@@ -92,33 +95,32 @@ class ChannelLifecycleTests(unittest.IsolatedAsyncioTestCase):
             if not task.done():
                 task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
-        await self.host.agent.attention.stop()
 
     async def connect(self):
-        await self.host.connect_channel("feishu")
+        await self.host.connect_channel("weixin")
         await asyncio.sleep(0)
 
     async def test_concurrent_connect_is_one_instance_and_disconnect_is_idempotent(self):
-        await asyncio.gather(*(self.host.connect_channel("feishu") for _ in range(3)))
+        await asyncio.gather(*(self.host.connect_channel("weixin") for _ in range(3)))
         await asyncio.sleep(0)
         self.assertEqual(len(FakeAdapter.instances), 1)
-        self.assertEqual(self.host.channel_status["feishu"]["state"], "connected")
-        await asyncio.gather(*(self.host.disconnect_channel("feishu") for _ in range(3)))
+        self.assertEqual(self.host.channel_status["weixin"]["state"], "connected")
+        await asyncio.gather(*(self.host.disconnect_channel("weixin") for _ in range(3)))
         self.assertEqual(FakeAdapter.instances[0].stop_calls, 1)
-        self.assertEqual(self.host.channel_status["feishu"]["state"], "disconnected")
+        self.assertEqual(self.host.channel_status["weixin"]["state"], "disconnected")
         self.assertEqual(self.host.state, "running")
-        self.assertTrue(self.host._channel_view("feishu")["can_connect"])
+        self.assertTrue(self.host._channel_view("weixin")["can_connect"])
         self.assertIs(self.host.adapters["api"], self.host.api)
 
     async def test_reconnect_ignores_old_callbacks_and_does_not_change_config(self):
         before = repr(self.host.runner.config)
         await self.connect()
         old_callback = FakeAdapter.instances[-1].runtime_status
-        await self.host.disconnect_channel("feishu")
+        await self.host.disconnect_channel("weixin")
         await self.connect()
         old_callback("failed")
         await asyncio.sleep(0)
-        self.assertEqual(self.host.channel_status["feishu"]["state"], "connected")
+        self.assertEqual(self.host.channel_status["weixin"]["state"], "connected")
         self.assertEqual(repr(self.host.runner.config), before)
         self.assertEqual(len(FakeAdapter.instances), 2)
 
@@ -128,19 +130,19 @@ class ChannelLifecycleTests(unittest.IsolatedAsyncioTestCase):
         async def accepted():
             await asyncio.sleep(0.01)
             finished.append(not FakeAdapter.instances[0].closed)
-        self.host._channel_activity["feishu"].create_task(accepted())
-        await self.host.disconnect_channel("feishu")
+        self.host._channel_activity["weixin"].create_task(accepted())
+        await self.host.disconnect_channel("weixin")
         self.assertEqual(finished, [True])
 
     async def test_timeout_cancels_only_owned_work_and_queue(self):
         await self.connect()
         inbox = self.host.agent.inbox
-        own = inbox.reserve_turn(channel="feishu")
+        own = inbox.reserve_turn(channel="weixin")
         other = inbox.reserve_turn(channel="api")
-        work = self.host._channel_activity["feishu"].create_task(asyncio.Event().wait())
+        work = self.host._channel_activity["weixin"].create_task(asyncio.Event().wait())
         unrelated = asyncio.create_task(asyncio.Event().wait())
         try:
-            await self.host.disconnect_channel("feishu")
+            await self.host.disconnect_channel("weixin")
             self.assertTrue(work.cancelled())
             self.assertTrue(own.cancelled.is_set())
             self.assertFalse(other.cancelled.is_set())
@@ -159,76 +161,76 @@ class ChannelLifecycleTests(unittest.IsolatedAsyncioTestCase):
             adapter.stopped.set()
         adapter.stop = slow_stop
         with self.assertRaises(HTTPException) as error:
-            await self.host.disconnect_channel("feishu")
+            await self.host.disconnect_channel("weixin")
         self.assertEqual(error.exception.status_code, 503)
-        self.assertFalse(self.host._channel_view("feishu")["can_connect"])
-        self.assertTrue(self.host._channel_view("feishu")["can_disconnect"])
+        self.assertFalse(self.host._channel_view("weixin")["can_connect"])
+        self.assertTrue(self.host._channel_view("weixin")["can_disconnect"])
         with self.assertRaises(HTTPException) as conflict:
-            await self.host.connect_channel("feishu")
+            await self.host.connect_channel("weixin")
         self.assertEqual(conflict.exception.status_code, 409)
         release.set()
-        await self.host.disconnect_channel("feishu")
-        self.assertNotIn("feishu", self.host.adapters)
+        await self.host.disconnect_channel("weixin")
+        self.assertNotIn("weixin", self.host.adapters)
 
     async def test_disconnect_survives_caller_cancellation(self):
         await self.connect()
-        self.host._channel_activity["feishu"].create_task(asyncio.sleep(0.02))
-        caller = asyncio.create_task(self.host.disconnect_channel("feishu"))
+        self.host._channel_activity["weixin"].create_task(asyncio.sleep(0.02))
+        caller = asyncio.create_task(self.host.disconnect_channel("weixin"))
         await asyncio.sleep(0)
         caller.cancel()
         await asyncio.gather(caller, return_exceptions=True)
-        await self.host._channel_operations["feishu"]
-        self.assertEqual(self.host.channel_status["feishu"]["state"], "disconnected")
+        await self.host._channel_operations["weixin"]
+        self.assertEqual(self.host.channel_status["weixin"]["state"], "disconnected")
 
     async def test_connecting_and_reconnecting_can_be_disconnected(self):
         for state in ("connecting", "reconnecting"):
             await self.connect()
-            self.host._update_channel_state("feishu", state)
-            self.assertTrue(self.host._channel_view("feishu")["can_disconnect"])
-            await self.host.disconnect_channel("feishu")
+            self.host._update_channel_state("weixin", state)
+            self.assertTrue(self.host._channel_view("weixin")["can_disconnect"])
+            await self.host.disconnect_channel("weixin")
             self.assertEqual(self.host.state, "running")
 
     async def test_failed_transport_is_cleaned_and_can_retry(self):
         class RejectedAdapter(FakeAdapter):
             fail = True
-        with patch("xagent.integrations.feishu.FeishuAdapter", RejectedAdapter):
-            await self.host.connect_channel("feishu")
+        with patch("xagent.integrations.weixin.WeixinAdapter", RejectedAdapter):
+            await self.host.connect_channel("weixin")
             await asyncio.sleep(0)
-            operation = self.host._channel_operations["feishu"]
+            operation = self.host._channel_operations["weixin"]
             await operation
-        self.assertEqual(self.host.channel_status["feishu"]["state"], "failed")
-        self.assertTrue(self.host._channel_view("feishu")["can_connect"])
+        self.assertEqual(self.host.channel_status["weixin"]["state"], "failed")
+        self.assertTrue(self.host._channel_view("weixin")["can_connect"])
         await self.connect()
         self.assertEqual(self.host.state, "running")
 
     async def test_control_validation_and_shutdown_admission(self):
-        for name, code in (("unknown", 404), ("weixin", 422)):
+        for name, code in (("unknown", 404), ("voice", 422)):
             with self.assertRaises(HTTPException) as error:
                 await self.host.connect_channel(name)
             self.assertEqual(error.exception.status_code, code)
         self.host._stop_event.set()
         with self.assertRaises(HTTPException) as error:
-            await self.host.connect_channel("feishu")
+            await self.host.connect_channel("weixin")
         self.assertEqual(error.exception.status_code, 409)
 
     async def test_restart_stop_captures_intent_atomically_and_reuses_first_snapshot(self):
         self.host.channel_status = {
             "api": {"state": "connected"}, "weixin": {"state": "connecting"},
-            "voice": {"state": "reconnecting"}, "feishu": {"state": "disconnecting"},
+            "voice": {"state": "disconnecting"},
         }
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=self.host._create_control_app()), base_url="http://test") as client:
             first = await client.post("/runtime/stop", json={"restart": True})
-            self.assertEqual(first.json()["restart_channels"], ["api", "weixin", "voice"])
+            self.assertEqual(first.json()["restart_channels"], ["api", "weixin"])
             self.assertTrue(self.host._stop_event.is_set())
-            self.host.channel_status["voice"] = {"state": "failed"}
+            self.host.channel_status["weixin"] = {"state": "failed"}
             second = await client.post("/runtime/stop")
             self.assertEqual(second.json(), first.json())
             self.assertTrue(self.host._restarting)
 
     async def test_restart_snapshot_excludes_queued_disconnect(self):
-        self.host.channel_status["feishu"] = {"state": "connected"}
+        self.host.channel_status["weixin"] = {"state": "connected"}
         pending = asyncio.create_task(asyncio.Event().wait())
-        self.host._channel_operations["feishu"] = pending
+        self.host._channel_operations["weixin"] = pending
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=self.host._create_control_app()), base_url="http://test") as client:
             response = await client.post("/runtime/stop", json={"restart": True})
         self.assertEqual(response.json()["restart_channels"], [])
@@ -246,17 +248,17 @@ class ChannelLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.host.detailed_status = AsyncMock(return_value={})
         app = self.host._create_control_app()
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
-            result = await client.post("/runtime/channels/feishu/connect")
+            result = await client.post("/runtime/channels/weixin/connect")
             self.assertEqual(result.status_code, 200)
-            self.assertEqual(result.json()["channel"]["id"], "feishu")
-            result = await client.post("/runtime/channels/feishu/disconnect")
+            self.assertEqual(result.json()["channel"]["id"], "weixin")
+            result = await client.post("/runtime/channels/weixin/disconnect")
             self.assertEqual(result.json()["channel"]["state"], "disconnected")
             self.assertEqual((await client.post("/runtime/channels/other/connect")).status_code, 404)
 
     async def test_scheduler_defers_disconnected_channel_and_wakes_on_connect(self):
         task = enqueue_scheduled_task(task_type="message", content="test",
             run_at=datetime.now() - timedelta(seconds=1), tasks_dir=self.host.runner.tasks_dir,
-            channel="feishu", target={"chat_id": "test"})
+            channel="weixin", target={"user_id": "test"})
         delivered = []
         async def dispatch(record):
             delivered.append(record.task_id)
@@ -269,34 +271,10 @@ class ChannelLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(scheduler._wake_event.is_set())
         await scheduler.tick()
         self.assertEqual(delivered, [task.task_id])
-        await self.host.disconnect_channel("feishu")
+        await self.host.disconnect_channel("weixin")
         await self.connect()
         await scheduler.tick()
         self.assertEqual(delivered, [task.task_id])
-
-    async def test_attention_cancel_does_not_stop_other_channels_or_replay(self):
-        await self.connect()
-        attention = self.host.agent.attention
-        started = asyncio.Event()
-        replies = []
-        async def slow_speak(*args, **kwargs):
-            started.set()
-            await asyncio.Event().wait()
-        async def other_speak(*args, **kwargs):
-            replies.append("api")
-        attention.register_speaker("feishu", slow_speak)
-        attention.register_speaker("api", other_speak)
-        await attention.notice("feishu:room", addressed=True, content="old")
-        await started.wait()
-        await attention.notice("api:room", addressed=True, content="keep working")
-        await self.host.disconnect_channel("feishu")
-        await attention.idle()
-        self.assertEqual(replies, ["api"])
-        self.assertFalse(attention._task.done())
-        self.assertEqual(attention.cursors("feishu:room").events, [])
-        await self.connect()
-        await attention.idle()
-        self.assertEqual(replies, ["api"])
 
     async def test_active_scheduled_task_is_reviewed_after_disconnect_timeout(self):
         await self.connect()
@@ -308,10 +286,10 @@ class ChannelLifecycleTests(unittest.IsolatedAsyncioTestCase):
             can_handle=self.host._can_handle_task, execute=execute, deliver=AsyncMock())
         self.host.scheduler = scheduler
         enqueue_scheduled_task(task_type="agent", content="test", run_at=datetime.now() - timedelta(seconds=1),
-            tasks_dir=self.host.runner.tasks_dir, channel="feishu", target={"chat_id": "test"})
+            tasks_dir=self.host.runner.tasks_dir, channel="weixin", target={"user_id": "test"})
         await scheduler.tick(wait_for_dispatches=False)
         await started.wait()
-        await self.host.disconnect_channel("feishu")
+        await self.host.disconnect_channel("weixin")
         records = list_task_records(self.host.runner.tasks_dir, include_running=True)
         self.assertEqual(records[0].status, "needs_review")
         await self.connect()
@@ -322,13 +300,13 @@ class ChannelLifecycleTests(unittest.IsolatedAsyncioTestCase):
         loop = SubconsciousLoop(self.host.agent, workspace=self.root, deliverable_channels={"api"})
         self.host.heartbeat = SimpleNamespace(subconscious_loop=loop)
         await self.connect()
-        self.assertIn("feishu", loop._deliverable_channels)
+        self.assertIn("weixin", loop._deliverable_channels)
         adapter = FakeAdapter.instances[0]
         adapter.deliver_subconscious_message = AsyncMock()
-        delivery = SimpleNamespace(recipient=SimpleNamespace(channel="feishu"))
+        delivery = SimpleNamespace(recipient=SimpleNamespace(channel="weixin"))
         await self.host._deliver_subconscious(delivery)
-        await self.host.disconnect_channel("feishu")
-        self.assertNotIn("feishu", loop._deliverable_channels)
+        await self.host.disconnect_channel("weixin")
+        self.assertNotIn("weixin", loop._deliverable_channels)
         self.assertIn("api", loop._deliverable_channels)
         with self.assertRaises(RuntimeError):
             await self.host._deliver_subconscious(delivery)
@@ -337,7 +315,7 @@ class ChannelLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
 class ChannelDefaultsTests(unittest.TestCase):
     def test_external_enabled_never_changes_default(self):
-        config = {"channels": {name: {"enabled": True} for name in ("api", "voice", "weixin", "feishu")}}
+        config = {"channels": {name: {"enabled": True} for name in ("api", "voice", "weixin")}}
         self.assertEqual(default_runtime_channels(config), ["api"])
         config["channels"]["api"]["enabled"] = False
         self.assertEqual(default_runtime_channels(config), [])
@@ -355,42 +333,10 @@ class ChannelDefaultsTests(unittest.TestCase):
         args = parser.parse_args(["channel", "voice", "connect", "--agent", "atlas"])
         self.assertEqual((args.channel, args.channel_action, args.agent), ("voice", "connect", "atlas"))
         self.assertIsNone(parser.parse_args(["start"]).channels)
-        self.assertEqual(parser.parse_args(["restart", "--channels", "api,feishu"]).channels, ["api,feishu"])
+        self.assertEqual(parser.parse_args(["restart", "--channels", "api,weixin"]).channels, ["api,weixin"])
 
 
 class AdapterResourceTests(unittest.IsolatedAsyncioTestCase):
-    async def test_feishu_stop_waits_for_real_thread_exit(self):
-        from xagent.integrations.feishu.adapter import FeishuAdapter
-        from xagent.integrations.feishu.config import FeishuAdapterConfig
-        started, stopping, release = threading.Event(), threading.Event(), threading.Event()
-        class Channel:
-            is_ready = False
-            def on(self, *args):
-                pass
-            def start(self):
-                started.set()
-                stopping.wait()
-                release.wait()
-            def stop(self):
-                stopping.set()
-        with tempfile.TemporaryDirectory() as tmp:
-            attention = AttentionLoop()
-            adapter = FeishuAdapter(SimpleNamespace(workspace=tmp, attention=attention),
-                FeishuAdapterConfig(app_id="test", app_secret="test"))
-            with patch.object(adapter, "_build_channel", return_value=Channel()):
-                running = asyncio.create_task(adapter.run())
-                self.assertTrue(await asyncio.to_thread(started.wait, 1))
-                stop = asyncio.create_task(adapter.stop())
-                try:
-                    self.assertTrue(await asyncio.to_thread(stopping.wait, 1))
-                    self.assertFalse(adapter.resources_closed)
-                    self.assertFalse(stop.done())
-                finally:
-                    release.set()
-                    await asyncio.wait_for(asyncio.gather(stop, running), timeout=2)
-                    await attention.stop()
-                self.assertTrue(adapter.resources_closed)
-
     def voice(self, recognizer):
         from tests.test_voice_runtime import FakeMicrophone, FakePlayer, FakeSynthesizer, FakeAgent, voice_config
         from xagent.interfaces.voice.runtime import VoiceRuntime

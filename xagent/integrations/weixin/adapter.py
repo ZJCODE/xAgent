@@ -13,19 +13,19 @@ from typing import Any, Optional
 from urllib.parse import parse_qs, unquote, urlparse
 
 from ...core.agent import Agent
-from ...core.attention import make_room_key, message_storage_cursor
 from ...core.config import AgentConfig
 from ...core.runtime.task_receipts import DeliveryUncertainError, is_strict_task_delivery
 from ...core.runtime import (
     AsyncTaskScheduler,
     ScheduledDeliveryContext,
+    collect_scheduled_turn_events,
     current_delivery_context,
     SubconsciousDelivery,
+    persist_subconscious_delivery,
     resolve_contacts_path,
     scheduled_delivery_context,
     upsert_contact,
 )
-from ...interfaces.channel import ChatTurnRequest
 from ...schemas.attachment import (
     ATTACHMENT_KIND_IMAGE,
     attachment_kind,
@@ -151,7 +151,6 @@ class WeixinAdapter:
         self._tasks_dir = self.runtime_dir / AgentConfig.TASKS_DIRNAME
         self._task_scheduler: Optional[AsyncTaskScheduler] = None
         self._contacts_file = resolve_contacts_path(self.runtime_dir)
-        self._attention_bound = False
         self._accepting = True
         self._client_closed = False
         self._poll_task: asyncio.Task | None = None
@@ -172,8 +171,6 @@ class WeixinAdapter:
             )
         else:
             self.client.with_credentials(credentials)
-
-        attention = self._attention_loop()
 
         try:
             self._poll_task = asyncio.create_task(self._poll_loop())
@@ -400,124 +397,14 @@ class WeixinAdapter:
         except Exception:
             self.logger.debug("Failed to record contact for subconscious", exc_info=True)
 
-        extras = {
-            "source": "weixin",
-            "event_type": "direct_message",
-            "user_id": user_id,
-            "account_id": self._credentials.account_id,
-            "context_token": context_token,
-            "message_id": str(message.get("message_id") or ""),
-            "text": text,
-            "inbound": inbound,
-        }
-        room_key = make_room_key("weixin", user_id)
-        cursor = None
-        perceiver = getattr(self.agent, "perceive", None)
-        if callable(perceiver):
-            persisted = await perceiver(
-                text,
-                user_id=user_id,
-                room_key=room_key,
-                addressed=True,
-                channel="weixin",
-                sender_name="",
-                metadata={
-                    "source": "weixin",
-                    "message_id": extras["message_id"],
-                },
-                image_source=inbound.image_sources or None,
-                attachments=inbound.attachments or None,
-            )
-            cursor = message_storage_cursor(persisted) or None
-        attention = self._attention_loop()
-        if attention is None:
-            await self._deliver_weixin_dm(extras)
-            return
-        await attention.notice(
-            room_key,
-            addressed=True,
-            content=text,
-            cursor=cursor,
-            sender_id=user_id,
-            extras=extras,
-        )
-
-    def _attention_loop(self):
-        attention = getattr(self.agent, "attention", None)
-        if attention is None:
-            return None
-        if not self._attention_bound:
-            register = getattr(attention, "register_speaker", None)
-            if callable(register):
-                register("weixin", self._speak_attention)
-            self._attention_bound = True
-        return attention
-
-    async def _speak_attention(
-        self,
-        room_key: str,
-        through_cursor: int,
-        *,
-        events: list,
-        extras: dict,
-        decision=None,
-    ) -> None:
-        respond = getattr(self.agent, "respond", None)
-        storage = getattr(self.agent, "message_storage", None)
-        user_id = str(extras.get("user_id") or "")
-        context_token = str(extras.get("context_token") or "")
-        source_message_id = str(extras.get("message_id") or "")
-        inbound = extras.get("inbound")
-        text = str(extras.get("text") or (events[-1].content if events else ""))
-        if callable(respond) and storage is not None:
-            context = ScheduledDeliveryContext(
-                channel="weixin",
-                user_id=user_id,
-                target={
-                    "user_id": user_id,
-                    "account_id": extras.get("account_id"),
-                },
-                metadata={
-                    "source": "weixin",
-                    "message_id": source_message_id,
-                },
-            )
-            typing_task: Optional[asyncio.Task[None]] = None
-            try:
-                if self.config.send_typing:
-                    typing_task = asyncio.create_task(self._typing_keepalive(user_id, context_token))
-                with scheduled_delivery_context(context):
-                    await self._send_event_replies(
-                        user_id=user_id,
-                        context_token=context_token,
-                        source_message_id=source_message_id,
-                        event_source=respond(room_key, through_cursor, stream=False),
-                    )
-            finally:
-                if typing_task is not None:
-                    typing_task.cancel()
-                    await asyncio.gather(typing_task, return_exceptions=True)
-                if self.config.send_typing:
-                    await self._stop_typing(user_id, context_token)
-            return
-        extras = dict(extras)
-        extras["text"] = text
-        extras["inbound"] = inbound
-        await self._deliver_weixin_dm(extras)
-
-    async def _deliver_weixin_dm(self, extras: dict[str, Any]) -> None:
-        user_id = str(extras.get("user_id") or "")
-        inbound = extras.get("inbound")
-        text = str(extras.get("text") or "")
-        context_token = str(extras.get("context_token") or "")
-        source_message_id = str(extras.get("message_id") or "")
-        chat_kwargs = self._chat_kwargs(user_id=user_id, text=text, inbound=inbound).to_chat_kwargs()
+        source_message_id = str(message.get("message_id") or "")
+        chat_kwargs = self._chat_kwargs(user_id=user_id, text=text, inbound=inbound)
         context = ScheduledDeliveryContext(
             channel="weixin",
             user_id=user_id,
             target={
                 "user_id": user_id,
-                "account_id": extras.get("account_id"),
+                "account_id": self._credentials.account_id,
             },
             metadata={
                 "source": "weixin",
@@ -636,18 +523,20 @@ class WeixinAdapter:
         )
         return attachment, "", attachment_markdown(attachment)
 
-    def _chat_kwargs(self, *, user_id: str, text: str, inbound: _WeixinInboundPayload) -> ChatTurnRequest:
-        image_source = None
+    def _chat_kwargs(self, *, user_id: str, text: str, inbound: _WeixinInboundPayload) -> dict[str, Any]:
+        kwargs: dict[str, Any] = {
+            "user_message": text,
+            "user_id": user_id,
+            "channel": "weixin",
+            "inbox_kind": "user_turn",
+        }
         if inbound.image_sources and bool(getattr(self.agent, "supports_vision", True)):
-            image_source = inbound.image_sources[0] if len(inbound.image_sources) == 1 else inbound.image_sources
-        return ChatTurnRequest(
-            user_message=text,
-            user_id=user_id,
-            channel="weixin",
-            inbox_kind="user_turn",
-            image_source=image_source,
-            attachments=inbound.attachments or None,
-        )
+            kwargs["image_source"] = (
+                inbound.image_sources[0] if len(inbound.image_sources) == 1 else inbound.image_sources
+            )
+        if inbound.attachments:
+            kwargs["attachments"] = inbound.attachments
+        return kwargs
 
     async def _send_event_replies(
         self,
@@ -656,13 +545,11 @@ class WeixinAdapter:
         context_token: str,
         source_message_id: str,
         chat_kwargs: Optional[dict[str, Any]] = None,
-        event_source=None,
     ) -> None:
-        if event_source is None:
-            chat_events = getattr(self.agent, "chat_events", None)
-            if not callable(chat_events):
-                raise RuntimeError("Agent does not support chat_events().")
-            event_source = chat_events(**(chat_kwargs or {}), stream=False)
+        chat_events = getattr(self.agent, "chat_events", None)
+        if not callable(chat_events):
+            raise RuntimeError("Agent does not support chat_events().")
+        event_source = chat_events(**(chat_kwargs or {}), stream=False)
         sent_count = 0
         try:
             async with asyncio.timeout(_WECHAT_CHAT_TIMEOUT):
@@ -872,29 +759,15 @@ class WeixinAdapter:
             attachments=[],
             stable_key=f"subconscious:{delivery.created_at.isoformat(sep=' ')}:{user_id}",
         )
-        message_handler = getattr(self.agent, "message_handler", None)
-        store_model_reply = getattr(message_handler, "store_model_reply", None)
-        if callable(store_model_reply):
-            try:
-                await store_model_reply(
-                    delivery.content,
-                    getattr(self.agent, "_assistant_sender_id", "agent"),
-                    metadata={
-                        "subconscious": {
-                            "source": "subconscious",
-                            "created_at": delivery.created_at.isoformat(sep=" "),
-                            "recipient": {
-                                "channel": delivery.recipient.channel,
-                                "user_id": delivery.recipient.user_id,
-                                "target": delivery.recipient.target,
-                            },
-                        }
-                    },
-                    channel="weixin",
-                    recipient_id=user_id,
-                )
-            except Exception:
-                self.logger.debug("Failed to persist Weixin subconscious delivery", exc_info=True)
+        try:
+            await persist_subconscious_delivery(
+                self.agent,
+                delivery,
+                channel="weixin",
+                recipient_id=user_id,
+            )
+        except Exception:
+            self.logger.debug("Failed to persist Weixin subconscious delivery", exc_info=True)
 
     async def _scheduled_task_result(self, task, *, user_id: str) -> _WeixinScheduledTaskResult:
         if task.task_type == "message":
@@ -912,26 +785,19 @@ class WeixinAdapter:
             metadata={**(current_delivery_context().metadata if current_delivery_context() else {}),
                       "source": "scheduled_task", "task_id": task.task_id},
         )
-        content = ""
-        last_error = ""
-        attachments: list[_WeixinOutboundAttachment] = []
         with scheduled_delivery_context(context):
-            async for event in chat_events(
-                user_message=prompt,
-                user_id=user_id,
-                stream=False,
-                channel="weixin",
-                inbox_kind="scheduled_turn",
-            ):
-                if event.get("type") in {"error", "aborted"} and event.get("needs_review"):
-                    raise DeliveryUncertainError(str(event.get("error") or "scheduled tool outcome is unknown"))
-                if event.get("type") == "message_done" and str(event.get("phase") or "final") == "final":
-                    content = str(event.get("content") or "").strip() or content
-                    attachments = self._dedupe_outbound_attachments([
-                        *attachments, *self._outbound_attachments_from_event(event),
-                    ])
-                elif event.get("type") == "error" and not content:
-                    last_error = str(event.get("error") or "").strip()
+            content, raw_attachments, last_error = await collect_scheduled_turn_events(
+                chat_events(
+                    user_message=prompt,
+                    user_id=user_id,
+                    stream=False,
+                    channel="weixin",
+                    inbox_kind="scheduled_turn",
+                )
+            )
+        attachments = self._dedupe_outbound_attachments(
+            self._outbound_attachments_from_event({"attachments": raw_attachments})
+        )
         if not content and not attachments:
             if last_error:
                 raise RuntimeError(last_error)

@@ -1,4 +1,4 @@
-"""Tests for notebook memory: store, tools, distillation, injection."""
+"""Tests for notebook memory: store, tools, and injection."""
 
 import asyncio
 import tempfile
@@ -14,7 +14,6 @@ from xagent.components.memory import (
 from xagent.core.config import AgentConfig
 from xagent.core.handlers.memory import MemoryHandler
 from xagent.core.handlers.message import MessageHandler
-from xagent.core.journal import JournalLLMService
 from xagent.schemas import Message, RoleType
 from xagent.tools.note_tool import (
     create_read_note_tool,
@@ -144,7 +143,7 @@ class NoteStoreTests(unittest.IsolatedAsyncioTestCase):
             "source:\n"
             "  diary:\n"
             "  - '2026-08-19'\n"
-            "  person: feishu:ou_a\n"
+            "  person: weixin:wx_a\n"
             "created: '2026-08-19'\n"
             "updated: '2026-08-19'\n"
             "---\n\n"
@@ -421,148 +420,15 @@ class NoteToolTests(unittest.IsolatedAsyncioTestCase):
 
 
 # ----------------------------------------------------------------------
-# JournalLLMService: distillation prompt + parsing
-# ----------------------------------------------------------------------
-
-
-class NoteDistillationPromptTests(unittest.IsolatedAsyncioTestCase):
-    def test_system_prompt_defends_the_diary_boundary(self):
-        prompt = JournalLLMService.build_note_distill_system_prompt(max_notes=6)
-        self.assertIn("notebook", prompt)
-        self.assertIn("diary already records what happened", prompt)
-        self.assertIn("week's diary", prompt)
-        self.assertIn("week arc", prompt)
-        self.assertIn("orientation only", prompt)
-        self.assertIn("relationship card", prompt)
-        self.assertIn("unfinished threads", prompt)
-        self.assertIn("zero notes", prompt)
-        self.assertIn("Most weeks", prompt)
-        self.assertIn("At most 6", prompt)
-        self.assertIn("first person", prompt)
-        self.assertIn("Preserve attribution", prompt)
-        self.assertIn("First-person words in the diary belong to that speaker", prompt)
-        self.assertIn("If the fact belongs to a person, name them", prompt)
-        self.assertIn("links", prompt)
-        self.assertNotIn("`tags`", prompt)
-        self.assertIn("Return JSON only", prompt)
-
-    def test_user_prompt_lists_existing_notes_with_ids(self):
-        prompt = JournalLLMService.build_note_distill_user_prompt(
-            existing_notes=[{
-                "id": "202608190930",
-                "title": "Espresso ratio",
-                "keys": ["espresso"],
-                "snippet": "He said thinner has no spine.",
-            }],
-            diary_source="Monday: Jun asked for 1:2.5 again.",
-            period_label="2026-08-11 to 2026-08-17",
-            week_arc="A coffee-heavy week with Jun.",
-        )
-        self.assertIn("(202608190930) Espresso ratio", prompt)
-        self.assertNotIn("tags:", prompt)
-        self.assertIn("keys: espresso", prompt)
-        self.assertIn("He said thinner has no spine.", prompt)
-        self.assertIn("Week arc (orientation only, not a source of new notes):", prompt)
-        self.assertIn("A coffee-heavy week with Jun.", prompt)
-        self.assertIn("Week diary (2026-08-11 to 2026-08-17):", prompt)
-        self.assertIn("Monday: Jun asked for 1:2.5 again.", prompt)
-
-    def test_user_prompt_handles_an_empty_notebook(self):
-        prompt = JournalLLMService.build_note_distill_user_prompt(
-            existing_notes=[], diary_source="x"
-        )
-        self.assertIn("(none yet)", prompt)
-        self.assertIn("Week diary:", prompt)
-
-    def test_truncate_diary_source_keeps_the_tail(self):
-        diary, truncated = JournalLLMService._truncate_diary_source("abcdefghij", max_chars=4)
-        self.assertTrue(truncated)
-        self.assertTrue(diary.endswith("ghij"))
-        self.assertIn("omitted", diary)
-
-    def test_parse_note_drafts_accepts_a_list_with_links(self):
-        drafts = JournalLLMService._parse_note_drafts(
-            '[{"title": "A", "body": "b", "keys": ["k"], "tags": ["t"], "links": ["202608190930"]}]'
-        )
-        self.assertEqual(
-            drafts,
-            [{
-                "title": "A",
-                "body": "b",
-                "keys": ["k"],
-                "links": ["202608190930"],
-            }],
-        )
-
-    def test_parse_note_drafts_strips_code_fences(self):
-        drafts = JournalLLMService._parse_note_drafts(
-            '```json\n[{"title": "A", "body": "b"}]\n```'
-        )
-        self.assertEqual(len(drafts), 1)
-        self.assertEqual(drafts[0]["links"], [])
-
-    def test_parse_note_drafts_accepts_a_wrapped_object(self):
-        drafts = JournalLLMService._parse_note_drafts('{"notes": [{"title": "A", "body": "b"}]}')
-        self.assertEqual(len(drafts), 1)
-
-    def test_parse_note_drafts_enforces_the_week_cap(self):
-        payload = '[{"title": "A", "body": "a"}, {"title": "B", "body": "b"}, {"title": "C", "body": "c"}]'
-        self.assertEqual(len(JournalLLMService._parse_note_drafts(payload, max_notes=2)), 2)
-
-    def test_parse_note_drafts_skips_incomplete_and_bad_input(self):
-        self.assertEqual(JournalLLMService._parse_note_drafts("not json"), [])
-        self.assertEqual(JournalLLMService._parse_note_drafts("[]"), [])
-        self.assertEqual(
-            JournalLLMService._parse_note_drafts('[{"title": "A"}, {"body": "b"}]'), []
-        )
-
-    async def test_distill_notes_calls_the_model_and_returns_drafts(self):
-        service = JournalLLMService(client=object())
-        captured = {}
-
-        async def fake_call_text(system_prompt, user_prompt):
-            captured["user"] = user_prompt
-            return (
-                '[{"title": "Jun likes 1:2.5", "body": "He said thinner has no spine.", '
-                '"keys": ["espresso"], "links": ["202608190930"]}]'
-            )
-
-        service._call_text = fake_call_text  # type: ignore[assignment]
-
-        drafts = await service.distill_notes(
-            diary_source="Monday: Jun asked for espresso at 1:2.5.",
-            week_arc="Espresso week.",
-            period_label="2026-08-11 to 2026-08-17",
-            existing_notes=[],
-        )
-        self.assertEqual(drafts[0]["title"], "Jun likes 1:2.5")
-        self.assertEqual(drafts[0]["links"], ["202608190930"])
-        self.assertNotIn("tags", drafts[0])
-        self.assertIn("Monday: Jun asked for espresso at 1:2.5.", captured["user"])
-        self.assertIn("Week arc (orientation only, not a source of new notes):", captured["user"])
-        self.assertIn("Espresso week.", captured["user"])
-
-    async def test_distill_notes_noops_without_diary_source(self):
-        service = JournalLLMService(client=object())
-        self.assertEqual(
-            await service.distill_notes(diary_source="", week_arc="arc", existing_notes=[]),
-            [],
-        )
-
-
-# ----------------------------------------------------------------------
-# MemoryHandler: distillation wiring + injection budget
+# MemoryHandler: notebook injection (no background distillation)
 # ----------------------------------------------------------------------
 
 
 class _FakeDiaryLLMService:
-    """Stub journal service that records note-distillation calls."""
+    """Stub journal service for notebook injection tests."""
 
-    def __init__(self, drafts=None, distill_error=None, summary_text="Weekly recap"):
-        self.drafts = list(drafts or [])
-        self.distill_error = distill_error
+    def __init__(self, summary_text="Weekly recap"):
         self.summary_text = summary_text
-        self.distill_calls = []
         self.summary_calls = []
 
     async def format_diary_entry(self, messages, journal_date, existing_today=""):
@@ -576,29 +442,6 @@ class _FakeDiaryLLMService:
 
     async def update_relationship_cards(self, participants, messages, existing_cards):
         return {}
-
-    async def distill_notes(
-        self,
-        diary_source,
-        existing_notes,
-        period_label="",
-        week_arc="",
-        max_notes=6,
-        max_diary_chars=24000,
-    ):
-        self.distill_calls.append(
-            {
-                "diary_source": diary_source,
-                "week_arc": week_arc,
-                "existing_notes": existing_notes,
-                "period_label": period_label,
-                "max_notes": max_notes,
-                "max_diary_chars": max_diary_chars,
-            }
-        )
-        if self.distill_error is not None:
-            raise self.distill_error
-        return list(self.drafts)
 
 
 class _FakeMessageStorage:
@@ -640,7 +483,7 @@ class MemoryHandlerNotebookTests(unittest.IsolatedAsyncioTestCase):
             note_store=self.notes if notes_enabled else None,
         )
 
-    def _batch(self, count=20, sender="jun", channel="feishu"):
+    def _batch(self, count=20, sender="jun", channel="weixin"):
         messages = [
             Message.create(content=f"message {index}", role=RoleType.USER, sender_id=sender)
             for index in range(count)
@@ -649,180 +492,20 @@ class MemoryHandlerNotebookTests(unittest.IsolatedAsyncioTestCase):
             message.channel = channel
         return messages
 
-    async def test_diary_maintenance_does_not_distil_notes(self):
+
+    async def test_diary_maintenance_does_not_create_notes(self):
         storage = _FakeMessageStorage(self._batch())
-        llm = _FakeDiaryLLMService(
-            drafts=[
-                {
-                    "title": "Jun takes espresso at 1:2.5",
-                    "body": "He said thinner has no spine.",
-                    "keys": ["espresso"],
-                }
-            ]
-        )
+        llm = _FakeDiaryLLMService()
         handler = self._make_handler(storage, llm)
 
         self.assertTrue(await handler.run_maintenance(force=True))
-        self.assertEqual(llm.distill_calls, [])
         self.assertEqual(await self.notes.count(), 0)
         recent = await handler.get_recent_context()
         self.assertIn("message 0", recent)
 
-    async def test_weekly_summary_distils_notes_with_links_and_provenance(self):
-        related = _note(
-            self.notes,
-            "The early train to Hangzhou is the only connection",
-            "Anything later misses the transfer.",
-            keys=("train", "Hangzhou"),
-        )
-        await self.notes.write(related)
 
-        llm = _FakeDiaryLLMService(
-            drafts=[
-                {
-                    "title": "Jun takes espresso at 1:2.5",
-                    "body": "He said thinner has no spine.",
-                    "keys": ["espresso", "Jun"],
-                    "links": [related.id],
-                }
-            ]
-        )
-        handler = self._make_handler(_FakeMessageStorage(), llm)
-        week_start = date(2026, 8, 11)
-        week_end = date(2026, 8, 17)
-        await self.memory.append_daily("Espresso week", target_date=week_start)
-
-        self.assertTrue(await handler._generate_weekly(week_start, week_end))
-        self.assertEqual(len(llm.distill_calls), 1)
-        self.assertIn("Espresso week", llm.distill_calls[0]["diary_source"])
-        self.assertEqual(llm.distill_calls[0]["week_arc"], "Weekly recap")
-        self.assertEqual(
-            llm.distill_calls[0]["max_notes"], AgentConfig.NOTES_DISTILL_MAX_PER_WEEK
-        )
-        self.assertNotIn("tags", llm.distill_calls[0]["existing_notes"][0])
-
-        notes = [note for note in await self.notes.list_notes() if note.id != related.id]
-        self.assertEqual(len(notes), 1)
-        note = notes[0]
-        self.assertEqual(note.title, "Jun takes espresso at 1:2.5")
-        self.assertEqual(note.source.get("diary"), ["2026-08-11", "2026-08-17"])
-        self.assertNotIn("cursor", note.source)
-        self.assertNotIn("person", note.source)
-        self.assertIn(related.id, note.links)
-
-    async def test_weekly_distillation_does_not_invent_mechanical_links(self):
-        neighbour = _note(
-            self.notes,
-            "Keep the grind two clicks coarser",
-            "Finer than that chokes the shot.",
-            keys=("grind", "clicks"),
-        )
-        await self.notes.write(neighbour)
-
-        llm = _FakeDiaryLLMService(
-            drafts=[
-                {
-                    "title": "Jun wants the kettle hotter than the recipe",
-                    "body": "He asks for 94C when I brew for him.",
-                    "keys": ["kettle", "temperature"],
-                    "links": [],
-                }
-            ]
-        )
-        handler = self._make_handler(_FakeMessageStorage(), llm)
-        week_start = date(2026, 8, 11)
-        week_end = date(2026, 8, 17)
-        await self.memory.append_daily("Coffee week", target_date=week_start)
-
-        self.assertTrue(await handler._generate_weekly(week_start, week_end))
-        created = [note for note in await self.notes.list_notes() if note.id != neighbour.id]
-        self.assertEqual(len(created), 1)
-        self.assertEqual(created[0].links, ())
-
-    async def test_weekly_distillation_respects_the_per_week_cap(self):
-        llm = _FakeDiaryLLMService(
-            drafts=[
-                {"title": f"Note {index}", "body": f"body {index}", "keys": [f"k{index}"]}
-                for index in range(10)
-            ]
-        )
-        handler = self._make_handler(_FakeMessageStorage(), llm)
-        week_start = date(2026, 8, 11)
-        week_end = date(2026, 8, 17)
-        await self.memory.append_daily("Busy week", target_date=week_start)
-
-        self.assertTrue(await handler._generate_weekly(week_start, week_end))
-        self.assertEqual(await self.notes.count(), AgentConfig.NOTES_DISTILL_MAX_PER_WEEK)
-
-    async def test_weekly_distillation_skips_a_draft_an_existing_note_already_covers(self):
-        existing = _note(
-            self.notes,
-            "Jun takes espresso at 1:2.5",
-            "He said thinner has no spine.",
-            keys=("espresso", "Jun"),
-        )
-        await self.notes.write(existing)
-
-        llm = _FakeDiaryLLMService(
-            drafts=[
-                {
-                    "title": "Jun espresso 1:2.5",
-                    "body": "restating what I already know",
-                    "keys": ["espresso", "Jun"],
-                }
-            ]
-        )
-        handler = self._make_handler(_FakeMessageStorage(), llm)
-        week_start = date(2026, 8, 11)
-        week_end = date(2026, 8, 17)
-        await self.memory.append_daily("Espresso week", target_date=week_start)
-
-        self.assertTrue(await handler._generate_weekly(week_start, week_end))
-        self.assertEqual(await self.notes.count(), 1)
-
-    async def test_weekly_distillation_keeps_a_draft_on_a_different_idea(self):
-        existing = _note(
-            self.notes,
-            "Jun takes espresso at 1:2.5",
-            "He said thinner has no spine.",
-            keys=("espresso", "Jun"),
-        )
-        await self.notes.write(existing)
-
-        llm = _FakeDiaryLLMService(
-            drafts=[
-                {
-                    "title": "The early train to Hangzhou is the only connection",
-                    "body": "Anything later misses the transfer.",
-                    "keys": ["train", "Hangzhou"],
-                }
-            ]
-        )
-        handler = self._make_handler(_FakeMessageStorage(), llm)
-        week_start = date(2026, 8, 11)
-        week_end = date(2026, 8, 17)
-        await self.memory.append_daily("Travel week", target_date=week_start)
-
-        self.assertTrue(await handler._generate_weekly(week_start, week_end))
-        self.assertEqual(await self.notes.count(), 2)
-
-    async def test_disabling_notebook_also_disables_weekly_distillation(self):
-        llm = _FakeDiaryLLMService(drafts=[{"title": "A", "body": "b"}])
-        handler = self._make_handler(
-            _FakeMessageStorage(), llm, notes_enabled=False
-        )
-        week_start = date(2026, 8, 11)
-        week_end = date(2026, 8, 17)
-        await self.memory.append_daily("Quiet week", target_date=week_start)
-
-        self.assertTrue(await handler._generate_weekly(week_start, week_end))
-        self.assertEqual(llm.distill_calls, [])
-        self.assertEqual(await self.notes.count(), 0)
-        summary = await self.memory.read_file(self.memory.weekly_path(week_start, week_end))
-        self.assertEqual(summary, "Weekly recap")
-
-    async def test_weekly_distillation_failure_does_not_roll_back_the_summary(self):
-        llm = _FakeDiaryLLMService(distill_error=RuntimeError("model exploded"))
+    async def test_weekly_summary_does_not_distil_notes(self):
+        llm = _FakeDiaryLLMService()
         handler = self._make_handler(_FakeMessageStorage(), llm)
         week_start = date(2026, 8, 11)
         week_end = date(2026, 8, 17)

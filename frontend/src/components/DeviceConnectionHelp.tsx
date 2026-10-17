@@ -40,13 +40,14 @@ Write runnable device-side code for my hardware (ESP32, Raspberry Pi, or any Web
 
 - Selected Agent: ${JSON.stringify(agent || "Selected Agent")}
 - Agent API base: \`${base}\`
-- Device WebSocket: \`${base}/ws/devices/{device_id}\`
-- The device initiates one outbound connection to the Agent's API, on the same port as chat. This socket carries commands, results, and environmental events; it does not use \`/ws/chat\`.
+- Control & sensor WebSocket: \`${base}/ws/devices/{device_id}\`
+- Real-time voice WebSocket (optional): \`${base}/ws/devices/{device_id}/voice\`
+- The device initiates outbound connections to the Agent's API, on the same port as chat. \`/ws/devices/{device_id}\` carries commands, results, and environmental events; \`/ws/devices/{device_id}/voice\` streams real-time duplex PCM16 audio and voice control frames.
 - Use an address reachable from the device. \`127.0.0.1\`/\`localhost\` only work on the Agent's own machine; use its reachable LAN IP or domain for external hardware. Public connections use WSS with certificate verification. Network access to the Agent API must be available.
 
 ### 2. Pair once, register on every connection
 
-Choose a stable unique \`device_id\` (1–128 ASCII letters/digits or \`_ . : -\`, starting with a letter/digit). Start the Agent and connect its API in Channels, then open Agent → Devices → Add device for a pairing code (valid for 5 minutes, one use).
+Choose a stable unique \`device_id\` (1–128 ASCII letters/digits or \`_ . : -\`, starting with a letter/digit). Start the Agent and connect its API, then open **Devices → Add device** for a pairing code (valid for 5 minutes, one use).
 
 Set the WebSocket request header to \`Authorization: Bearer <PAIRING_CODE>\` on the first connection. Within 5 seconds of connecting, send this JSON registration, using the same ID as the URL:
 
@@ -54,7 +55,7 @@ Set the WebSocket request header to \`Authorization: Bearer <PAIRING_CODE>\` on 
 ${registration}
 \`\`\`
 
-Declare the actual device capabilities with descriptions and object-parameter JSON Schema; replace \`example.echo\` with matching handlers as needed. Capability names are arbitrary and need no framework changes.
+Declare the actual device capabilities with descriptions and object-parameter JSON Schema; replace \`example.echo\` with matching handlers as needed (or pass \`"capabilities": []\` for sensor-only devices). Capability names are arbitrary and need no framework changes.
 
 On first pairing, receive:
 \`\`\`json
@@ -103,7 +104,15 @@ Defaults: PNG/JPEG/WebP images up to 10 MiB, other files up to 50 MiB; at most 8
 
 The Agent receives stored attachment metadata and can choose to inspect images with \`see_image\` or deliver files with \`attach_artifact\`. Uploading and reporting an environmental event do not start a chat turn or automatically send anything to users. Ask the Agent to use \`timeout_seconds=90\` when calling a capture capability so its deadline covers capture, upload, and the final result.
 
-### 6. Transport and reconnect
+### 6. Stream real-time voice (optional)
+
+Devices with a microphone and speaker (smart speakers, voice satellites, companions) can open \`${base}/ws/devices/{device_id}/voice\` with \`Authorization: Bearer <DEVICE_CREDENTIAL>\` (or a one-time \`<PAIRING_CODE>\` for voice-only devices). Send a \`hello\` JSON frame first:
+\`\`\`json
+{"type":"hello","name":"Living Room Speaker","location":"living_room","input_sample_rate":16000,"input_channels":1,"output_sample_rate":24000,"output_channels":1,"profile":"room","echo_managed":false}
+\`\`\`
+Wait for \`{"type":"ready","device_id":"...","room_name":"..."}\` (which also includes \`"credential":"dvc_..."\` when completing a one-time pairing), then stream binary PCM16LE microphone frames and play incoming binary PCM16LE TTS frames between \`playback_start\` and \`playback_done\` JSON control events. Send \`{"type":"playback_progress","played_bytes":N}\` during playback for accurate barge-in tracking.
+
+### 7. Transport and reconnect
 
 Validate parameters on the device; serialize its command handlers and preserve the exact \`command_id\`. Use UTF-8 JSON text messages of at most 64 KiB and WebSocket ping/pong. Reconnect with backoff after disconnection (including normal closure or temporary-unavailability code 1013), then register again. An authentication rejection needs a fresh valid credential/pairing code.
 

@@ -37,9 +37,9 @@ class ContactManagementTests(unittest.TestCase):
             contacts_file = Path(tmpdir) / "contacts.json"
             contacts = [
                 ContactEntry(
-                    channel="feishu",
-                    user_id="ou_123",
-                    target={"chat_id": "oc_xxx", "sender_name": "张三"},
+                    channel="weixin",
+                    user_id="wx_123",
+                    target={"user_id": "wx_123", "sender_name": "张三"},
                     last_seen="2026-06-22 15:30:00",
                     interaction_count=5,
                 ),
@@ -47,9 +47,9 @@ class ContactManagementTests(unittest.TestCase):
             save_contacts(contacts_file, contacts)
             loaded = load_contacts(contacts_file)
             self.assertEqual(len(loaded), 1)
-            self.assertEqual(loaded[0].channel, "feishu")
-            self.assertEqual(loaded[0].user_id, "ou_123")
-            self.assertEqual(loaded[0].target["chat_id"], "oc_xxx")
+            self.assertEqual(loaded[0].channel, "weixin")
+            self.assertEqual(loaded[0].user_id, "wx_123")
+            self.assertEqual(loaded[0].target["user_id"], "wx_123")
             self.assertEqual(loaded[0].interaction_count, 5)
 
     def test_upsert_contact_new(self):
@@ -89,7 +89,7 @@ class ContactManagementTests(unittest.TestCase):
     def test_upsert_contact_different_channels_independent(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             contacts_file = Path(tmpdir) / "contacts.json"
-            upsert_contact(contacts_file, "feishu", "user_1", {"chat_id": "oc_1"})
+            upsert_contact(contacts_file, "api", "user_1", {"user_id": "user_1"})
             upsert_contact(contacts_file, "weixin", "user_1", {"user_id": "user_1"})
             loaded = load_contacts(contacts_file)
             self.assertEqual(len(loaded), 2)
@@ -345,8 +345,8 @@ class SubconsciousLoopTests(unittest.TestCase):
     def test_pick_recipient_does_not_let_short_hint_match_longer_name(self):
         contacts = [
             ContactEntry(
-                channel="feishu",
-                user_id="ou_liming",
+                channel="weixin",
+                user_id="wx_liming",
                 target={"sender_name": "李明"},
                 last_seen="2026-08-16 00:00:00",
             ),
@@ -354,25 +354,25 @@ class SubconsciousLoopTests(unittest.TestCase):
         self.assertIsNone(SubconsciousLoop._pick_recipient(contacts, "李"))
         self.assertEqual(
             SubconsciousLoop._pick_recipient(contacts, "李明").user_id,
-            "ou_liming",
+            "wx_liming",
         )
         self.assertEqual(
-            SubconsciousLoop._pick_recipient(contacts, "李明 (feishu)").user_id,
-            "ou_liming",
+            SubconsciousLoop._pick_recipient(contacts, "李明 (weixin)").user_id,
+            "wx_liming",
         )
 
     def test_record_interaction(self):
         agent = self._make_agent_mock()
         with tempfile.TemporaryDirectory() as tmpdir:
-            loop = SubconsciousLoop(agent, workspace=Path(tmpdir), deliverable_channels={"feishu"})
+            loop = SubconsciousLoop(agent, workspace=Path(tmpdir), deliverable_channels={"weixin"})
             loop.record_interaction(
-                channel="feishu",
-                user_id="ou_123",
-                target={"chat_id": "oc_xxx", "sender_name": "张三"},
+                channel="weixin",
+                user_id="wx_123",
+                target={"user_id": "wx_123", "sender_name": "张三"},
             )
             contacts = load_contacts(loop.contacts_file)
             self.assertEqual(len(contacts), 1)
-            self.assertEqual(contacts[0].channel, "feishu")
+            self.assertEqual(contacts[0].channel, "weixin")
 
     def test_recent_messages_injected_into_prompt(self):
         """Verify recent conversation messages are included in the LLM prompt."""
@@ -506,26 +506,26 @@ class SubconsciousLoopTests(unittest.TestCase):
     def test_collect_relationship_context_reads_store_cards_without_contacts(self):
         agent = self._make_agent_mock()
         memory_handler = MagicMock()
-        memory_handler.relationship_store.list_keys = AsyncMock(return_value=["feishu:alice"])
+        memory_handler.relationship_store.list_keys = AsyncMock(return_value=["weixin:alice"])
         memory_handler.get_relationship_context = AsyncMock(return_value="## Alice\nAn older open thread.")
         agent.memory_handler = memory_handler
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            loop = SubconsciousLoop(agent, workspace=Path(tmpdir), deliverable_channels={"feishu"})
+            loop = SubconsciousLoop(agent, workspace=Path(tmpdir), deliverable_channels={"weixin"})
             context = asyncio.run(loop._collect_relationship_context())
 
         self.assertIn("older open thread", context)
         memory_handler.get_relationship_context.assert_awaited_once()
         kwargs = memory_handler.get_relationship_context.await_args.kwargs
-        self.assertEqual(kwargs["speaker_keys"], ["feishu:alice"])
+        self.assertEqual(kwargs["speaker_keys"], ["weixin:alice"])
         self.assertTrue(kwargs["include_routing_id"])
 
     def test_collect_relationship_context_omits_other_channel_cards(self):
-        """This runtime only sees people it can send to; Feishu ids stay off the API loop."""
+        """This runtime only sees people it can send to; Weixin ids stay off the API loop."""
         agent = self._make_agent_mock()
         memory_handler = MagicMock()
         memory_handler.relationship_store.list_keys = AsyncMock(
-            return_value=["feishu:alice", "api:web_user"]
+            return_value=["weixin:alice", "api:web_user"]
         )
         memory_handler.get_relationship_context = AsyncMock(
             return_value="## Web user [user_id: web_user]\nReachable here."
@@ -550,9 +550,9 @@ class SubconsciousLoopTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             loop = SubconsciousLoop(agent, workspace=Path(tmpdir), deliverable_channels={"api"})
             loop.record_interaction(
-                channel="feishu",
-                user_id="ou_telos",
-                target={"chat_id": "oc_xxx", "sender_name": "Telos"},
+                channel="weixin",
+                user_id="wx_telos",
+                target={"user_id": "wx_telos", "sender_name": "Telos"},
             )
             loop.record_interaction(
                 channel="api",
@@ -569,7 +569,7 @@ class SubconsciousLoopTests(unittest.TestCase):
         agent = self._make_agent_mock()
         memory_handler = MagicMock()
         memory_handler.relationship_store.list_keys = AsyncMock(
-            return_value=["feishu:alice", "api:web_user"]
+            return_value=["weixin:alice", "api:web_user"]
         )
         memory_handler.get_relationship_context = AsyncMock(return_value="should not be used")
         agent.memory_handler = memory_handler
@@ -586,9 +586,9 @@ class SubconsciousLoopTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             loop = SubconsciousLoop(agent, workspace=Path(tmpdir), deliverable_channels={"api"})
             loop.record_interaction(
-                channel="feishu",
-                user_id="ou_123",
-                target={"chat_id": "oc_xxx", "sender_name": "张三"},
+                channel="weixin",
+                user_id="wx_123",
+                target={"user_id": "wx_123", "sender_name": "张三"},
             )
             loop.record_interaction(
                 channel="api",
@@ -602,16 +602,16 @@ class SubconsciousLoopTests(unittest.TestCase):
             self.assertEqual(channels, {"api"})
             user_ids = {contact.user_id for contact in deliverable}
             self.assertIn("api_user", user_ids)
-            self.assertNotIn("ou_123", user_ids)
+            self.assertNotIn("wx_123", user_ids)
 
     def test_deliverable_filter_without_declared_channels_exposes_no_contacts(self):
         agent = self._make_agent_mock()
         with tempfile.TemporaryDirectory() as tmpdir:
             loop = SubconsciousLoop(agent, workspace=Path(tmpdir))
             loop.record_interaction(
-                channel="feishu",
-                user_id="ou_123",
-                target={"chat_id": "oc_xxx", "sender_name": "张三"},
+                channel="weixin",
+                user_id="wx_123",
+                target={"user_id": "wx_123", "sender_name": "张三"},
             )
 
             deliverable = loop._filter_deliverable_contacts(load_contacts(loop.contacts_file))
@@ -726,9 +726,9 @@ class SubconsciousLoopTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             loop = SubconsciousLoop(agent, workspace=Path(tmpdir))
             loop.record_interaction(
-                channel="feishu",
-                user_id="ou_123",
-                target={"chat_id": "oc_xxx", "sender_name": "张三"},
+                channel="weixin",
+                user_id="wx_123",
+                target={"user_id": "wx_123", "sender_name": "张三"},
             )
             loop._probability = 1.0
 
@@ -795,7 +795,7 @@ class SubconsciousLoopTests(unittest.TestCase):
                 agent,
                 workspace=Path(tmpdir),
                 delivery_sink=delivery_sink,
-                deliverable_channels={"feishu"},
+                deliverable_channels={"weixin"},
             )
             loop._probability = 1.0
 
@@ -821,12 +821,12 @@ class SubconsciousLoopTests(unittest.TestCase):
                 agent,
                 workspace=Path(tmpdir),
                 delivery_sink=delivery_sink,
-                deliverable_channels={"feishu"},
+                deliverable_channels={"weixin"},
             )
             loop.record_interaction(
-                channel="feishu",
-                user_id="ou_123",
-                target={"chat_id": "oc_xxx", "sender_name": "张三"},
+                channel="weixin",
+                user_id="wx_123",
+                target={"user_id": "wx_123", "sender_name": "张三"},
             )
             loop._probability = 1.0
 
@@ -856,12 +856,12 @@ class SubconsciousLoopTests(unittest.TestCase):
                 agent,
                 workspace=Path(tmpdir),
                 delivery_sink=delivery_sink,
-                deliverable_channels={"feishu"},
+                deliverable_channels={"weixin"},
             )
             loop.record_interaction(
-                channel="feishu",
-                user_id="ou_123",
-                target={"chat_id": "oc_xxx", "sender_name": "张三"},
+                channel="weixin",
+                user_id="wx_123",
+                target={"user_id": "wx_123", "sender_name": "张三"},
             )
             loop._probability = 1.0
 
@@ -876,17 +876,17 @@ class SubconsciousLoopTests(unittest.TestCase):
             delivery = delivery_sink.await_args.args[0]
             self.assertEqual(delivery.content, "A daytime insight!")
             self.assertEqual(delivery.internal_content, "This insight might help 张三 move the thread forward.")
-            self.assertEqual(delivery.recipient.channel, "feishu")
-            self.assertEqual(delivery.recipient.user_id, "ou_123")
+            self.assertEqual(delivery.recipient.channel, "weixin")
+            self.assertEqual(delivery.recipient.user_id, "wx_123")
             agent.message_handler.store_context_event.assert_not_called()
 
     def test_undeliverable_channel_worthy_writes_subconscious_thought(self):
         agent = self._make_agent_mock()
         self._set_model_json(agent, {
-            "internal_content": "This should not pretend to reach Feishu.",
+            "internal_content": "This should not pretend to reach Weixin.",
             "worthy": True,
             "recipient_hint": "张三",
-            "external_content": "A Feishu-only note.",
+            "external_content": "A Weixin-only note.",
         })
         delivery_sink = AsyncMock()
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -897,9 +897,9 @@ class SubconsciousLoopTests(unittest.TestCase):
                 deliverable_channels={"api"},
             )
             loop.record_interaction(
-                channel="feishu",
-                user_id="ou_123",
-                target={"chat_id": "oc_xxx", "sender_name": "张三"},
+                channel="weixin",
+                user_id="wx_123",
+                target={"user_id": "wx_123", "sender_name": "张三"},
             )
             loop._probability = 1.0
 
@@ -909,7 +909,7 @@ class SubconsciousLoopTests(unittest.TestCase):
             agent.record_subconscious_thought.assert_called_once()
             self.assertEqual(
                 agent.record_subconscious_thought.call_args[0][0],
-                "This should not pretend to reach Feishu.\nI didn't send this.",
+                "This should not pretend to reach Weixin.\nI didn't send this.",
             )
             agent.message_handler.store_context_event.assert_not_called()
 
@@ -931,9 +931,9 @@ class SubconsciousLoopTests(unittest.TestCase):
             )
             save_contacts(loop.contacts_file, [
                 ContactEntry(
-                    channel="feishu",
-                    user_id="ou_123",
-                    target={"chat_id": "oc_xxx", "sender_name": "张三"},
+                    channel="weixin",
+                    user_id="wx_123",
+                    target={"user_id": "wx_123", "sender_name": "张三"},
                     last_seen="2026-06-25 09:00:00",
                 ),
                 ContactEntry(
@@ -1022,7 +1022,7 @@ class SubconsciousLoopTests(unittest.TestCase):
         """An unnamed worthy thought must not be dumped on whoever this channel can reach."""
         agent = self._make_agent_mock()
         self._set_model_json(agent, {
-            "internal_content": "This was about Telos on Feishu, not the web user.",
+            "internal_content": "This was about Telos on Weixin, not the web user.",
             "worthy": True,
             "recipient_hint": None,
             "external_content": "A reachable note.",
@@ -1043,9 +1043,9 @@ class SubconsciousLoopTests(unittest.TestCase):
                     last_seen="2026-06-25 08:00:00",
                 ),
                 ContactEntry(
-                    channel="feishu",
-                    user_id="ou_123",
-                    target={"chat_id": "oc_xxx", "sender_name": "Telos"},
+                    channel="weixin",
+                    user_id="wx_123",
+                    target={"user_id": "wx_123", "sender_name": "Telos"},
                     last_seen="2026-06-25 11:00:00",
                 ),
                 ContactEntry(
@@ -1063,7 +1063,7 @@ class SubconsciousLoopTests(unittest.TestCase):
             agent.record_subconscious_thought.assert_called_once()
             self.assertEqual(
                 agent.record_subconscious_thought.call_args[0][0],
-                "This was about Telos on Feishu, not the web user.\nI didn't send this.",
+                "This was about Telos on Weixin, not the web user.\nI didn't send this.",
             )
 
     def test_delivery_sink_failure_keeps_subconscious_thought(self):
@@ -1081,13 +1081,13 @@ class SubconsciousLoopTests(unittest.TestCase):
                 agent,
                 workspace=Path(tmpdir),
                 delivery_sink=delivery_sink,
-                deliverable_channels={"feishu"},
+                deliverable_channels={"weixin"},
             )
             loop._delivery_retry_delay_seconds = 0
             loop.record_interaction(
-                channel="feishu",
-                user_id="ou_123",
-                target={"chat_id": "oc_xxx", "sender_name": "张三"},
+                channel="weixin",
+                user_id="wx_123",
+                target={"user_id": "wx_123", "sender_name": "张三"},
             )
             loop._probability = 1.0
 
@@ -1115,13 +1115,13 @@ class SubconsciousLoopTests(unittest.TestCase):
                 agent,
                 workspace=Path(tmpdir),
                 delivery_sink=delivery_sink,
-                deliverable_channels={"feishu"},
+                deliverable_channels={"weixin"},
             )
             loop._delivery_retry_delay_seconds = 0
             loop.record_interaction(
-                channel="feishu",
-                user_id="ou_123",
-                target={"chat_id": "oc_xxx", "sender_name": "张三"},
+                channel="weixin",
+                user_id="wx_123",
+                target={"user_id": "wx_123", "sender_name": "张三"},
             )
             loop._probability = 1.0
 
@@ -1168,9 +1168,9 @@ class SubconsciousLoopTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             loop = SubconsciousLoop(agent, workspace=Path(tmpdir))
             loop.record_interaction(
-                channel="feishu",
-                user_id="ou_123",
-                target={"chat_id": "oc_xxx", "sender_name": "张三"},
+                channel="weixin",
+                user_id="wx_123",
+                target={"user_id": "wx_123", "sender_name": "张三"},
             )
             loop._probability = 1.0
 
@@ -1299,12 +1299,12 @@ class SubconsciousLoopTests(unittest.TestCase):
                 agent,
                 workspace=Path(tmpdir),
                 delivery_sink=delivery_sink,
-                deliverable_channels={"feishu"},
+                deliverable_channels={"weixin"},
             )
             loop.record_interaction(
-                channel="feishu",
-                user_id="ou_123",
-                target={"chat_id": "oc_xxx", "sender_name": "张三"},
+                channel="weixin",
+                user_id="wx_123",
+                target={"user_id": "wx_123", "sender_name": "张三"},
             )
             loop._probability = 1.0
             loop._last_experience_cursor = 3
@@ -1317,6 +1317,338 @@ class SubconsciousLoopTests(unittest.TestCase):
             delivery_sink.assert_awaited_once()
             self.assertEqual(loop._stale_streak, 0)
             self.assertEqual(loop._effective_probability(), 1.0)
+
+    def test_working_context_injected_into_subconscious_prompt(self):
+        from xagent.core.working_context import WorkingContextView
+
+        agent = self._make_agent_mock()
+        agent._working_context_for_turn = AsyncMock(
+            return_value=WorkingContextView(
+                summary="Earlier we discussed Redis cluster failover.",
+                covers_through_cursor=18,
+            )
+        )
+        self._set_model_json(agent, {
+            "internal_content": "Still thinking about the failover edge case.",
+            "worthy": False,
+            "recipient_hint": None,
+            "external_content": None,
+        })
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop = SubconsciousLoop(agent, workspace=Path(tmpdir))
+            loop._probability = 1.0
+            asyncio.run(loop.maybe_think())
+
+            messages = agent.model_client.calls[0]["messages"]
+            recent_experience = next(
+                msg for msg in messages if msg.get("name") == AgentConfig.RECENT_EXPERIENCE_NAME
+            )
+            self.assertIn("[Earlier working context]", recent_experience["content"])
+            self.assertIn("Earlier we discussed Redis cluster failover.", recent_experience["content"])
+
+    def test_notebook_recall_query_excludes_long_term_summaries(self):
+        from xagent.schemas import Message, RoleType
+
+        agent = self._make_agent_mock()
+        agent.memory_handler.get_subconscious_context = AsyncMock(
+            return_value=(
+                "Longer-range diary summaries:\n"
+                "[yearly: 2025]\nYearly macro keywords alpha beta\n\n"
+                "[monthly: 2026-04]\nMonthly recap gamma delta\n\n"
+                "[weekly: 2026-05-01_2026-05-07]\nWeekly digest epsilon\n\n"
+                "Recent daily diary:\n"
+                "## 2026-05-18\nToday we debugged the Raft consensus election timeout."
+            )
+        )
+        agent.message_handler.get_recent_messages = AsyncMock(return_value=[
+            Message(role=RoleType.USER, sender_id="alice", content="Check the leader lease.", timestamp=1716000000.0),
+        ])
+        agent.memory_handler.get_notebook_context = AsyncMock(return_value="")
+        self._set_model_json(agent, {
+            "internal_content": "",
+            "worthy": False,
+            "recipient_hint": None,
+            "external_content": None,
+        })
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop = SubconsciousLoop(agent, workspace=Path(tmpdir))
+            loop._probability = 1.0
+            asyncio.run(loop.maybe_think())
+
+            agent.memory_handler.get_notebook_context.assert_awaited_once()
+            query = agent.memory_handler.get_notebook_context.call_args.kwargs["current_text"]
+            self.assertIn("Raft consensus election timeout", query)
+            self.assertIn("Check the leader lease", query)
+            self.assertNotIn("Yearly macro keywords", query)
+            self.assertNotIn("Monthly recap", query)
+            self.assertNotIn("Weekly digest", query)
+
+    def test_maybe_think_skips_when_inbox_busy_or_pending(self):
+        agent = self._make_agent_mock()
+        agent.inbox = MagicMock()
+        agent.inbox.busy = True
+        agent.inbox.pending_count = 0
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop = SubconsciousLoop(agent, workspace=Path(tmpdir))
+            loop._probability = 1.0
+            result = asyncio.run(loop.maybe_think())
+            self.assertIsNone(result)
+            self.assertEqual(len(agent.model_client.calls), 0)
+
+            agent.inbox.busy = False
+            agent.inbox.pending_count = 2
+            result = asyncio.run(loop.maybe_think())
+            self.assertIsNone(result)
+            self.assertEqual(len(agent.model_client.calls), 0)
+
+    def test_maybe_think_skips_during_refractory_period(self):
+        agent = self._make_agent_mock()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mem_dir = Path(tmpdir) / AgentConfig.MEMORY_DIRNAME
+            mem_dir.mkdir(parents=True, exist_ok=True)
+            (mem_dir / ".last_interaction").write_text(str(time.time() - 10.0), encoding="utf-8")
+
+            loop = SubconsciousLoop(agent, workspace=Path(tmpdir), refractory_seconds=60.0)
+            loop._probability = 1.0
+            result = asyncio.run(loop.maybe_think())
+            self.assertIsNone(result)
+            self.assertEqual(len(agent.model_client.calls), 0)
+
+    def test_habituation_state_persisted_and_restored_across_restarts(self):
+        agent = self._make_agent_mock()
+        self._set_model_json(agent, {
+            "internal_content": "Still quiet.",
+            "worthy": False,
+            "recipient_hint": None,
+            "external_content": None,
+        })
+        agent.message_storage = MagicMock()
+        agent.message_storage.get_latest_message_cursor = AsyncMock(return_value=55)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop1 = SubconsciousLoop(agent, workspace=Path(tmpdir))
+            loop1._probability = 1.0
+            loop1._last_experience_cursor = 55
+            loop1._stale_streak = 0
+            asyncio.run(loop1.maybe_think())
+            self.assertEqual(loop1._stale_streak, 1)
+
+            loop2 = SubconsciousLoop(agent, workspace=Path(tmpdir))
+            self.assertEqual(loop2._stale_streak, 1)
+            self.assertEqual(loop2._last_experience_cursor, 55)
+
+    def test_worthy_delivery_advances_cursor_to_prevent_self_excitation(self):
+        agent = self._make_agent_mock()
+        self._set_model_json(agent, {
+            "internal_content": "Send a quick follow-up to 张三.",
+            "worthy": True,
+            "recipient_hint": "张三",
+            "external_content": "Hey 张三!",
+        })
+        cursor_box = [3]
+
+        async def get_cursor():
+            return cursor_box[0]
+
+        async def fake_delivery(_delivery):
+            cursor_box[0] = 4
+
+        agent.message_storage = MagicMock()
+        agent.message_storage.get_latest_message_cursor = AsyncMock(side_effect=get_cursor)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop = SubconsciousLoop(
+                agent,
+                workspace=Path(tmpdir),
+                delivery_sink=fake_delivery,
+                deliverable_channels={"weixin"},
+            )
+            loop.record_interaction(
+                channel="weixin",
+                user_id="wx_123",
+                target={"user_id": "wx_123", "sender_name": "张三"},
+            )
+            loop._probability = 1.0
+            loop._last_experience_cursor = 3
+
+            asyncio.run(loop.maybe_think())
+            self.assertEqual(loop._last_experience_cursor, 4)
+
+    def test_unanswered_outbound_blocks_double_texting_until_user_replies(self):
+        agent = self._make_agent_mock()
+        self._set_model_json(agent, {
+            "internal_content": "Reach out to 张三.",
+            "worthy": True,
+            "recipient_hint": "wx_123",
+            "external_content": "First proactive ping!",
+        })
+        delivery_sink = AsyncMock()
+        agent.message_storage = MagicMock()
+        agent.message_storage.get_latest_message_cursor = AsyncMock(return_value=10)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop = SubconsciousLoop(
+                agent,
+                workspace=Path(tmpdir),
+                delivery_sink=delivery_sink,
+                deliverable_channels={"weixin"},
+                max_unanswered_outbound=1,
+            )
+            loop.record_interaction(
+                channel="weixin",
+                user_id="wx_123",
+                target={"user_id": "wx_123", "sender_name": "张三"},
+            )
+            loop._probability = 1.0
+            loop._last_experience_cursor = 10
+
+            # First thought delivers and records 1 unanswered outbound
+            asyncio.run(loop.maybe_think())
+            self.assertEqual(delivery_sink.await_count, 1)
+            self.assertTrue(loop._has_unanswered_outbound("weixin", "wx_123"))
+
+            # Second worthy thought for same user is held back because of unanswered limit
+            self._set_model_json(agent, {
+                "internal_content": "Reach out to 张三 again.",
+                "worthy": True,
+                "recipient_hint": "wx_123",
+                "external_content": "Second proactive ping!",
+            })
+            asyncio.run(loop.maybe_think())
+            self.assertEqual(delivery_sink.await_count, 1)
+
+            # Once user interacts again, unanswered count clears and delivery is allowed
+            loop.record_interaction(
+                channel="weixin",
+                user_id="wx_123",
+                target={"user_id": "wx_123", "sender_name": "张三"},
+            )
+            self.assertFalse(loop._has_unanswered_outbound("weixin", "wx_123"))
+
+    def test_contact_deliverable_callback_filters_unroutable_contacts(self):
+        agent = self._make_agent_mock()
+        delivery_sink = AsyncMock()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop = SubconsciousLoop(
+                agent,
+                workspace=Path(tmpdir),
+                delivery_sink=delivery_sink,
+                deliverable_channels={"weixin"},
+                contact_deliverable=lambda c: c.user_id == "wx_routable",
+            )
+            loop.record_interaction(
+                channel="weixin",
+                user_id="wx_routable",
+                target={"user_id": "wx_routable", "sender_name": "可投递"},
+            )
+            loop.record_interaction(
+                channel="weixin",
+                user_id="wx_missing_token",
+                target={"user_id": "wx_missing_token", "sender_name": "缺令牌"},
+            )
+            deliverable = loop._filter_deliverable_contacts(load_contacts(loop.contacts_file))
+            self.assertEqual([c.user_id for c in deliverable], ["wx_routable"])
+
+    def test_duplicate_subconscious_thought_is_not_written_twice(self):
+        agent = self._make_agent_mock()
+        self._set_model_events(agent, [
+            [self._json_event({
+                "internal_content": "The rain has not stopped all afternoon.",
+                "worthy": False,
+                "recipient_hint": None,
+                "external_content": None,
+            })],
+            [self._json_event({
+                "internal_content": "The   rain has not stopped all afternoon.",
+                "worthy": False,
+                "recipient_hint": None,
+                "external_content": None,
+            })],
+        ])
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop = SubconsciousLoop(agent, workspace=Path(tmpdir))
+            loop._probability = 1.0
+            asyncio.run(loop.maybe_think())
+            asyncio.run(loop.maybe_think())
+
+            agent.record_subconscious_thought.assert_called_once_with(
+                "The rain has not stopped all afternoon."
+            )
+
+    def test_deliver_with_retries_fails_fast_on_value_error(self):
+        agent = self._make_agent_mock()
+        calls = 0
+
+        async def bad_sink(_delivery):
+            nonlocal calls
+            calls += 1
+            raise ValueError("no cached context_token")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop = SubconsciousLoop(
+                agent,
+                workspace=Path(tmpdir),
+                delivery_sink=bad_sink,
+                deliverable_channels={"weixin"},
+            )
+            loop.record_interaction("weixin", "wx_123", {"user_id": "wx_123"})
+            self._set_model_json(agent, {
+                "internal_content": "Try sending.",
+                "worthy": True,
+                "recipient_hint": "wx_123",
+                "external_content": "Ping!",
+            })
+            loop._probability = 1.0
+            asyncio.run(loop.maybe_think())
+            self.assertEqual(calls, 1)
+
+    def test_subconscious_message_shows_recipient_in_recent_experience(self):
+        from xagent.schemas import Message, RoleType
+
+        agent = self._make_agent_mock()
+        agent.message_handler.get_recent_messages = AsyncMock(return_value=[
+            Message(
+                role=RoleType.ASSISTANT,
+                sender_id="agent",
+                recipient_id="wx_123",
+                channel="weixin",
+                content="Just remembered that book you asked about.",
+                timestamp=1716000000.0,
+                metadata={
+                    "subconscious": {
+                        "source": "subconscious",
+                        "recipient": {
+                            "channel": "weixin",
+                            "user_id": "wx_123",
+                            "target": {"user_id": "wx_123", "sender_name": "张三"},
+                        },
+                    }
+                },
+            ),
+        ])
+        self._set_model_json(agent, {
+            "internal_content": "",
+            "worthy": False,
+            "recipient_hint": None,
+            "external_content": None,
+        })
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop = SubconsciousLoop(agent, workspace=Path(tmpdir))
+            loop._probability = 1.0
+            asyncio.run(loop.maybe_think())
+
+            messages = agent.model_client.calls[0]["messages"]
+            recent_experience = next(
+                msg for msg in messages if msg.get("name") == AgentConfig.RECENT_EXPERIENCE_NAME
+            )
+            self.assertIn("[to=张三(wx_123)]", recent_experience["content"])
 
 
 if __name__ == "__main__":

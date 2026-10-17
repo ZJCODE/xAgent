@@ -54,7 +54,6 @@ from .inbox import (
     InboxQueueTimeout,
     InboxCancelledError,
 )
-from .attention import AttentionLoop, ADDRESSED_METADATA_KEY, ROOM_KEY_METADATA_KEY
 from .handlers import MemoryHandler, MessageHandler, ModelClient
 from .journal import JournalLLMService
 from .providers import (
@@ -233,10 +232,6 @@ class Agent:
             workspace_dir=self.workspace_dir,
         )
         self._inbox = AgentInbox()
-        self._attention = AttentionLoop(
-            agent=self,
-            store_path=self._message_storage_path(runtime_root).parent / AgentConfig.ATTENTION_FILENAME,
-        )
 
     @property
     def identity(self) -> str:
@@ -261,14 +256,6 @@ class Agent:
         if current is None:
             current = AgentInbox()
             self._inbox = current
-        return current
-
-    @property
-    def attention(self) -> AttentionLoop:
-        current = getattr(self, "_attention", None)
-        if current is None:
-            current = AttentionLoop(agent=self)
-            self._attention = current
         return current
 
     def abort(self, turn_id: Optional[str] = None, *, channel: Optional[str] = None) -> bool:
@@ -650,60 +637,6 @@ class Agent:
         ):
             yield event
 
-    async def respond(
-        self,
-        room_key: str,
-        through_cursor: int,
-        *,
-        stream: bool = False,
-        channel_instructions: str = "",
-    ) -> AsyncGenerator[dict, None]:
-        """Run one turn whose input is the unattended interval in *room_key*.
-
-        Inbound messages must already be in the message table. This does not
-        store a new user message.
-        """
-        from .attention import events_from_messages, format_interval_context
-
-        self._record_last_interaction()
-        storage = self.message_storage
-        get_for_room = getattr(storage, "get_messages_for_room", None)
-        if not callable(get_for_room):
-            return
-        state = self.attention.cursors(room_key)
-        interval = await get_for_room(
-            room_key,
-            start_exclusive=state.attended_through,
-            end_inclusive=through_cursor,
-        )
-        if not interval:
-            return
-        last_user = next(
-            (msg for msg in reversed(interval) if msg.role == RoleType.USER),
-            interval[-1],
-        )
-        content = format_interval_context(
-            room_key,
-            events_from_messages(interval, room_key),
-            room_name=next((msg.room_name for msg in interval if msg.room_name), None),
-        )
-        user_msg = last_user.model_copy(update={"content": content})
-        inbox_item = InboxItem(
-            kind=InboxKind.USER_TURN,
-            content=content,
-            user_id=str(last_user.sender_id or AgentConfig.DEFAULT_USER_ID),
-            channel=last_user.channel,
-            room_name=last_user.room_name,
-            channel_instructions=channel_instructions,
-            metadata=dict(last_user.metadata or {}),
-            stream=stream,
-        )
-        async for event in self._run_inbox_turn(
-            inbox_item, stream=stream, existing_user_msg=user_msg,
-            event_id=f"respond:{room_key}:{through_cursor}",
-        ):
-            yield event
-
     async def _run_inbox_turn(
         self, item: InboxItem, *, stream: bool, max_agent_loops: Optional[int] = None,
         existing_user_msg: Optional[Message] = None, event_id: Optional[str] = None,
@@ -752,12 +685,10 @@ class Agent:
                     item.content, item.user_id, item.image_source, attachments=item.attachments,
                     room_name=item.room_name, channel=item.channel, metadata=metadata,
                 )
-            await self.turn_store.update(ticket.turn_id, state="accepted", input_cursor=(existing_user_msg.metadata or {}).get("storage_cursor"))
             logger.info("Input accepted request_id=%s turn_id=%s channel=%s user_id=%s", request_id, ticket.turn_id, item.channel, item.user_id)
             yield {"type": "accepted", "turn_id": ticket.turn_id, "event_id": event_id, "request_id": request_id}
             await self.inbox.acquire_turn(ticket)
             claimed = True
-            await self.turn_store.update(ticket.turn_id, state="running")
             deadline = time.monotonic() + self.inbox.run_timeout
             iterator = self._drive_claimed_turn(
                 inbox_item=item, user_metadata=metadata, stream=stream,
@@ -769,7 +700,7 @@ class Agent:
                 except StopAsyncIteration:
                     break
                 event = {**event, "turn_id": ticket.turn_id, "event_id": event_id, "request_id": request_id}
-                if event.get("type") == "tool_call":
+                if event.get("type") == "tool_call" and not side_effect_started:
                     side_effect_started = True
                     await self.turn_store.update(ticket.turn_id, side_effect_started=True)
                 if event.get("type") == "error":
@@ -782,12 +713,14 @@ class Agent:
                     final_events.append(event)
                 if event.get("type") == "done":
                     await self.turn_store.update(ticket.turn_id, state=terminal, events=final_events,
+                        input_cursor=(existing_user_msg.metadata or {}).get("storage_cursor"),
                         needs_review=side_effect_started and terminal != "completed")
                     finished = True
                     logger.info("Turn finished request_id=%s turn_id=%s state=%s", request_id, ticket.turn_id, terminal)
                 yield event
             if not finished:
-                await self.turn_store.update(ticket.turn_id, state=terminal, events=final_events)
+                await self.turn_store.update(ticket.turn_id, state=terminal, events=final_events,
+                    input_cursor=(existing_user_msg.metadata or {}).get("storage_cursor"))
                 finished = True
         except (InboxQueueTimeout, asyncio.TimeoutError) as exc:
             event = {**build_public_error(code="timeout", cause=exc), "turn_id": ticket.turn_id,
@@ -1165,35 +1098,6 @@ class Agent:
             stream=stream,
         )
 
-    async def submit(self, item: InboxItem):
-        """Submit a classified inbox item.
-
-        Observations persist without waking a model turn. Waking items are
-        driven through ``chat_events``.
-        """
-        if item.kind is InboxKind.OBSERVATION:
-            return await self.observe(
-                context=item.content,
-                source=str((item.metadata or {}).get("source") or "environment"),
-                event_type=str((item.metadata or {}).get("event_type") or "observation"),
-                metadata=item.metadata,
-                room_name=item.room_name,
-                channel=item.channel,
-                user_id=item.user_id,
-            )
-        return self.chat_events(
-            user_message=item.content,
-            user_id=item.user_id,
-            image_source=item.image_source,
-            attachments=item.attachments,
-            stream=item.stream,
-            channel_instructions=item.channel_instructions,
-            room_name=item.room_name,
-            channel=item.channel,
-            inbox_kind=item.kind,
-            sender_name=str((item.metadata or {}).get("sender_name") or ""),
-        )
-
     async def observe(
         self,
         context: str,
@@ -1246,40 +1150,6 @@ class Agent:
             source=event_metadata.get("source"),
         )
 
-    async def perceive(
-        self,
-        content: str,
-        *,
-        user_id: str,
-        room_key: str,
-        addressed: bool = False,
-        channel: Optional[str] = None,
-        room_name: Optional[str] = None,
-        sender_name: str = "",
-        metadata: Optional[Dict[str, Any]] = None,
-        image_source: Optional[Union[str, List[str]]] = None,
-        attachments: Optional[List[Dict[str, Any]]] = None,
-        event_id: Optional[str] = None,
-    ) -> Message:
-        """Persist an inbound utterance without starting a turn."""
-        payload = dict(metadata or {})
-        payload[ROOM_KEY_METADATA_KEY] = room_key
-        payload[ADDRESSED_METADATA_KEY] = bool(addressed)
-        if sender_name:
-            payload.setdefault("sender_name", sender_name)
-        channel_name = str(channel or payload.get("source") or "").strip() or None
-        payload = self._attributed_event_metadata(payload, channel=channel_name,
-            user_id=user_id, room=room_key, event_id=event_id)
-        return await self.message_handler.store_user_message(
-            content,
-            user_id,
-            image_source=image_source,
-            attachments=attachments,
-            room_name=room_name,
-            channel=channel_name,
-            metadata=payload,
-        )
-
     @staticmethod
     def _attributed_event_metadata(metadata, *, channel=None, user_id=None, room=None, event_id=None, source=None):
         payload = dict(metadata or {})
@@ -1301,7 +1171,12 @@ class Agent:
             logger.warning("Refusing to write subconscious JSON payload to diary")
             note = ""
         if note:
-            await self.markdown_memory.append_daily(note)
+            memory_handler = getattr(self, "memory_handler", None)
+            append_entry = getattr(memory_handler, "append_daily_entry", None)
+            if callable(append_entry):
+                await append_entry(note)
+            else:
+                await self.markdown_memory.append_daily(note)
         return AgentTurnResult(
             kind="subconscious_thought",
             replied=False,
@@ -1435,28 +1310,6 @@ class Agent:
             path.write_text(str(time.time()), encoding="utf-8")
         except OSError:
             pass
-
-    async def _store_reply_and_schedule_experience(
-        self,
-        msg_handler: MessageHandler,
-        triggering_messages: List[Message],
-        reply_text: str,
-    ) -> None:
-        room_name = next((m.room_name for m in triggering_messages if m.room_name), None)
-        channel = next((m.channel for m in triggering_messages if m.channel), None)
-        recipient_id = room_name or next(
-            (m.sender_id for m in triggering_messages if m.sender_id and m.role == RoleType.USER), None
-        )
-        assistant_msg = await msg_handler.store_model_reply(
-            reply_text,
-            self._assistant_sender_id,
-            room_name=room_name,
-            channel=channel,
-            recipient_id=recipient_id,
-        )
-        self._schedule_experience_write(
-            messages=[*triggering_messages, assistant_msg],
-        )
 
     def _schedule_experience_write(
         self,

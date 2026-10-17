@@ -54,9 +54,6 @@ class Journal:
     async def update_relationship_cards(self, **kwargs):
         return []
 
-    async def distill_notes(self, **kwargs):
-        return []
-
     async def generate_summary(self, source_content, period_type, period_label):
         return f"I reviewed my {period_type} experiences for {period_label}."
 
@@ -124,7 +121,7 @@ async def soak(args):
         runner.agent.memory_handler.llm_service = Journal()
         runner.agent.memory_handler.relationship_store = None
         return runner
-    host = Host(root, channels=["api", "feishu", "weixin", "voice"])
+    host = Host(root, channels=["api", "weixin", "voice"])
     clock = datetime(2026, 10, 10)
     def scheduler(*positional, **kwargs):
         return AsyncTaskScheduler(*positional, **kwargs, now_provider=lambda: clock)
@@ -163,15 +160,15 @@ async def soak(args):
                     cycle = report["cycles"]
                     calls_before = model.calls
                     await asyncio.gather(*(chat(channel, f"{channel}-{hour}-{burst}") for channel in host.channel_status))
-                    assert model.calls == calls_before + 4
+                    assert model.calls == calls_before + 3
                     await chat("api", f"api-{hour}-{burst}")
-                    assert model.calls == calls_before + 4, "duplicate input executed again"
+                    assert model.calls == calls_before + 3, "duplicate input executed again"
                     await client.observe(context=f"observation-{cycle}", source="soak", event_id=f"observation-{cycle}")
                     await client.observe(context=f"observation-{cycle}", source="soak", event_id=f"observation-{cycle}")
-                    host._channel_connection("feishu", "reconnecting")
+                    host._channel_connection("weixin", "reconnecting")
                     status = await client.status()
                     assert status["state"] == "degraded"
-                    host._channel_connection("feishu", "connected")
+                    host._channel_connection("weixin", "connected")
                     assert model.max_active == 1, "formal turns overlapped"
                     assert all(adapter.agent is host.agent for adapter in host.adapters.values())
                     assert host.scheduler.is_running
@@ -189,7 +186,7 @@ async def soak(args):
                     calls_before_restart = model.calls
                     await host.stop()
                     await asyncio.wait_for(running, 30)
-                    host = Host(root, channels=["api", "feishu", "weixin", "voice"])
+                    host = Host(root, channels=["api", "weixin", "voice"])
                     running = asyncio.create_task(host.run())
                     while not host.runtime_ready:
                         if running.done():
@@ -210,13 +207,13 @@ async def soak(args):
             assert report["recurring_deliveries"] == args.simulated_hours, report
             assert all(receipt["stage"] == "succeeded" for receipt in receipts), receipts
             report["stored_messages"] = await host.agent.message_storage.get_message_count()
-            assert report["stored_messages"] == report["cycles"] * 9 + args.simulated_hours, report
+            assert report["stored_messages"] == report["cycles"] * 7 + args.simulated_hours, report
             report["final_fd_count"] = len(list(Path("/dev/fd").iterdir()))
             assert report["final_fd_count"] <= report["initial_fd_count"] + 8, "file handles accumulated"
             diary = "\n".join(path.read_text() for path in (root / "memory" / "daily").rglob("*.md"))
             import re
-            markers = re.findall(r"(?:api|voice|weixin|feishu)-\d+-\d+|observation-\d+", diary)
-            assert len(markers) == len(set(markers)) == report["cycles"] * 5, "diary duplicated or skipped input"
+            markers = re.findall(r"(?:api|voice|weixin)-\d+-\d+|observation-\d+", diary)
+            assert len(markers) == len(set(markers)) == report["cycles"] * 4, "diary duplicated or skipped input"
             report["diary_unique_inputs"] = len(markers)
             report["checks"] += 4
             report["state"] = "passed"

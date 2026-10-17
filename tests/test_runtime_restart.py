@@ -39,9 +39,9 @@ class RuntimeRestartTests(unittest.IsolatedAsyncioTestCase):
     async def test_restores_connection_intent_for_every_channel(self):
         for state in ("connected", "connecting", "reconnecting", "running"):
             with self.subTest(state=state):
-                before = {name: {"state": state} for name in ("api", "feishu", "weixin", "voice")}
+                before = {name: {"state": state} for name in ("api", "weixin", "voice")}
                 result, start, _ = await self.restart(before)
-                start.assert_called_once_with(self.root, ["api", "feishu", "weixin", "voice"])
+                start.assert_called_once_with(self.root, ["api", "weixin", "voice"])
                 self.assertNotIn("restart_warnings", result)
 
     async def test_closed_failed_and_disconnecting_channels_stay_offline(self):

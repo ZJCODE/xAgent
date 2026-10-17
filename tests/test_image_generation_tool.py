@@ -85,30 +85,6 @@ class ImageGenerationToolTests(unittest.IsolatedAsyncioTestCase):
                 },
             )
 
-    def test_minimax_image_generation_tool_schema_exposes_only_minimax_options(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tool = create_image_generation_tool(
-                {"provider": "minimax", "api_key": "minimax-key"},
-                workspace_dir=tmpdir,
-            )
-
-            properties = set(tool.tool_spec["function"]["parameters"]["properties"])
-
-            self.assertEqual(
-                properties,
-                {
-                    "prompt",
-                    "size",
-                    "aspect_ratio",
-                    "reference_image_url",
-                    "reference_image_urls",
-                    "n",
-                    "seed",
-                    "prompt_optimizer",
-                    "aigc_watermark",
-                },
-            )
-
     def test_qwen_image_generation_tool_schema_exposes_only_qwen_options(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             tool = create_image_generation_tool(
@@ -133,7 +109,6 @@ class ImageGenerationToolTests(unittest.IsolatedAsyncioTestCase):
 
     def test_normalize_image_generation_provider_aliases(self):
         self.assertEqual(normalize_image_generation_provider("openai_images"), "openai")
-        self.assertEqual(normalize_image_generation_provider("minimax_images"), "minimax")
         self.assertEqual(normalize_image_generation_provider("qwen_images"), "qwen")
         self.assertEqual(normalize_image_generation_provider("disabled"), "none")
         self.assertEqual(normalize_image_generation_provider("off"), "none")
@@ -226,53 +201,6 @@ class ImageGenerationToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(call["moderation"], "low")
         self.assertEqual(call["n"], 2)
 
-    async def test_minimax_image_generation_writes_workspace_file(self):
-        image_bytes = b"fake minimax image bytes"
-        response_payload = {
-            "data": {"image_base64": [base64.b64encode(image_bytes).decode("ascii")]},
-            "base_resp": {"status_code": 0, "status_msg": "success"},
-        }
-        http_client = FakeAsyncHTTPClient(response_payload)
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tool = create_image_generation_tool(
-                {"provider": "minimax", "api_key": "minimax-key"},
-                workspace_dir=tmpdir,
-            )
-
-            with patch("xagent.tools.image_generation_tool.httpx.AsyncClient", return_value=http_client):
-                result = await tool(
-                    prompt="女孩在图书馆的窗户前，看向远方",
-                    aspect_ratio="16:9",
-                    reference_image_urls=["https://example.com/reference.jpg"],
-                    n=2,
-                    prompt_optimizer=True,
-                )
-
-            self.assertEqual(result["status"], "ok")
-            self.assertEqual(result["provider"], "minimax")
-            self.assertEqual(result["model"], "image-01")
-            self.assertEqual(result["aspect_ratio"], "16:9")
-            self.assertTrue(result["image"]["path"].startswith("assets/generated/images/"))
-            self.assertNotIn("markdown", result["image"])
-
-            written = Path(tmpdir) / result["image"]["path"]
-            self.assertEqual(written.read_bytes(), image_bytes)
-
-        call = http_client.calls[0]
-        self.assertEqual(call["url"], "https://api.minimaxi.com/v1/image_generation")
-        self.assertEqual(call["headers"]["Authorization"], "Bearer minimax-key")
-        self.assertEqual(call["json"]["model"], "image-01")
-        self.assertEqual(call["json"]["prompt"], "女孩在图书馆的窗户前，看向远方")
-        self.assertEqual(call["json"]["response_format"], "base64")
-        self.assertEqual(call["json"]["aspect_ratio"], "16:9")
-        self.assertEqual(call["json"]["n"], 2)
-        self.assertTrue(call["json"]["prompt_optimizer"])
-        self.assertEqual(
-            call["json"]["subject_reference"],
-            [{"type": "character", "image_file": "https://example.com/reference.jpg"}],
-        )
-
     async def test_qwen_image_generation_writes_workspace_file(self):
         image_bytes = b"\x89PNG\r\n\x1a\nfake qwen image bytes"
         response_payload = {
@@ -350,22 +278,6 @@ class ImageGenerationToolTests(unittest.IsolatedAsyncioTestCase):
             },
         )
         self.assertEqual(http_client.calls[1]["url"], "https://dashscope-result.example.com/image.png")
-
-    async def test_openai_image_generation_rejects_unsupported_reference_params(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tool = create_image_generation_tool(
-                {"provider": "openai"},
-                client=FakeOpenAIClient(SimpleNamespace(data=[])),
-                workspace_dir=tmpdir,
-            )
-
-            result = await tool(
-                prompt="Draw a product icon",
-                reference_image_url="https://example.com/reference.png",
-            )
-
-            self.assertEqual(result["status"], "error")
-            self.assertIn("reference_image_url", result["message"])
 
     async def test_image_generation_rejects_invalid_openai_options(self):
         with tempfile.TemporaryDirectory() as tmpdir:

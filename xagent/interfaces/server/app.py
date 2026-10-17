@@ -3,13 +3,12 @@ from contextlib import asynccontextmanager
 from typing import Optional
 
 import uvicorn
-from fastapi import FastAPI, WebSocket
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from ..base import BaseAgentConfig
 from .admin_service import AdminService
 from .admin_routes import register_admin_routes
-from .models import ChatInput
 from ...core.agent import Agent
 from ...core.config import AgentConfig
 from ...core.runtime import (
@@ -17,7 +16,7 @@ from ...core.runtime import (
     create_runtime_heartbeat,
     resolve_contacts_path,
 )
-from ...integrations.api import ApiChannelAdapter, ChatLimits, input_attachments, input_image_sources
+from ...integrations.api import ApiChannelAdapter, ChatLimits
 
 
 class AgentHTTPServer(AdminService):
@@ -40,6 +39,10 @@ class AgentHTTPServer(AdminService):
 
         self.logger = logging.getLogger(f"{self.__class__.__name__}")
         contacts_file = resolve_contacts_path(self.workspace)
+        channels_cfg = self.config.get("channels") if isinstance(self.config, dict) else None
+        raw_voice_cfg = channels_cfg.get("voice") if isinstance(channels_cfg, dict) else None
+        if api_adapter is not None and not api_adapter.voice_config and isinstance(raw_voice_cfg, dict):
+            api_adapter.voice_config = dict(raw_voice_cfg)
         self.api = api_adapter or ApiChannelAdapter(
             self.agent,
             contacts_file=contacts_file,
@@ -50,6 +53,8 @@ class AgentHTTPServer(AdminService):
                 chat_timeout=chat_timeout,
             ),
             logger=self.logger,
+            device_service=self.device_service,
+            voice_config=raw_voice_cfg if isinstance(raw_voice_cfg, dict) else None,
         )
         self.app = self._create_app()
         self.app.add_middleware(
@@ -62,38 +67,6 @@ class AgentHTTPServer(AdminService):
 
     async def deliver_subconscious_message(self, delivery: SubconsciousDelivery) -> None:
         await self.api.deliver_subconscious_message(delivery)
-
-    async def _register_task_subscriber(self, user_id: str, websocket: WebSocket) -> None:
-        await self.api.delivery.register_subscriber(user_id, websocket)
-
-    async def _unregister_task_subscriber(self, user_id: str, websocket: WebSocket) -> None:
-        await self.api.delivery.unregister_subscriber(user_id, websocket)
-
-    async def _dispatch_scheduled_task(self, task) -> None:
-        await self.api.tasks.dispatch(task)
-
-    async def _broadcast_scheduled_message(
-        self,
-        task,
-        content: str,
-        *,
-        stored_message=None,
-        attachments=None,
-    ) -> None:
-        await self.api.delivery.broadcast_scheduled_message(
-            task,
-            content,
-            stored_message=stored_message,
-            attachments=attachments,
-        )
-
-    @staticmethod
-    def _input_image_sources(input_data: ChatInput, *, attachments=None):
-        return input_image_sources(input_data, attachments=attachments)
-
-    @staticmethod
-    def _input_attachments(input_data: ChatInput):
-        return input_attachments(input_data)
 
     def _create_app(self) -> FastAPI:
         app = FastAPI(

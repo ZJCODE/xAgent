@@ -10,7 +10,6 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Sequence, Tuple
-from urllib.parse import parse_qs, urlparse
 
 import yaml
 from rich.text import Text  # type: ignore[import-not-found]
@@ -70,18 +69,6 @@ class InitSelection:
     model_api: str = ""
     supports_vision: bool = False
     reasoning: Optional[ReasoningConfig] = None
-
-
-@dataclass(frozen=True)
-class FeishuInitSelection:
-    """Interactive choices used to configure the Feishu channel."""
-
-    app_id: str
-    app_secret: str
-    stream: bool = False
-    group_fetch_limit: int = 10
-    group_reply_only_when_mentioned: bool = False
-    credential_mode: str = "one_click"
 
 
 @dataclass(frozen=True)
@@ -168,13 +155,11 @@ SEARCH_PROVIDERS = (
     "none",
     "openai",
     "qwen",
-    "minimax",
 )
 IMAGE_GENERATION_PROVIDERS = (
     "none",
     "openai",
     "qwen",
-    "minimax",
 )
 
 _PROVIDER_DESCRIPTIONS = {
@@ -293,7 +278,7 @@ def build_setup_schema() -> dict[str, Any]:
     }
 
 
-SETUP_CHANNELS = frozenset({"voice", "feishu", "weixin"})
+SETUP_CHANNELS = frozenset({"voice", "weixin"})
 
 
 class ChannelSetupError(ValueError):
@@ -309,8 +294,6 @@ def _channel_configured(config: dict[str, Any], channel: str) -> bool:
         return False
     if channel == "voice":
         return bool(data)
-    if channel == "feishu":
-        return bool(data.get("app_id") and data.get("app_secret"))
     if channel == "weixin":
         return bool(data.get("account_id"))
     return False
@@ -370,37 +353,6 @@ def build_voice_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def build_feishu_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
-    """Return wizard metadata for the web Feishu channel setup client.
-
-    Interactive setup is credentials-only. Behavior knobs
-    (``stream``, ``group_fetch_limit``, ``group_reply_only_when_mentioned``)
-    ship as recommended silent defaults — matching CLI Feishu setup.
-    """
-    return {
-        "credential_modes": [
-            {
-                "id": "one_click",
-                "label": "Create new Feishu app",
-                "description": "Recommended. Create a new Feishu app and authorize it.",
-            },
-            {
-                "id": "manual",
-                "label": "Use existing App ID / App Secret",
-                "description": "Paste credentials from an app you already created in the Feishu developer console.",
-            },
-        ],
-        "defaults": {
-            "credential_mode": "one_click",
-            "stream": False,
-            "group_fetch_limit": 10,
-            "group_reply_only_when_mentioned": False,
-        },
-        "configured": _channel_configured(config, "feishu"),
-        "can_force": True,
-    }
-
-
 def build_weixin_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
     """Return wizard metadata for the web Weixin channel setup client."""
     from ...integrations.weixin.config import ILINK_BASE_URL, WEIXIN_CDN_BASE_URL
@@ -423,8 +375,6 @@ def build_channel_setup_schema(channel: str, config: dict[str, Any]) -> dict[str
     normalized = str(channel or "").strip().lower()
     if normalized == "voice":
         return build_voice_setup_schema(config)
-    if normalized == "feishu":
-        return build_feishu_setup_schema(config)
     if normalized == "weixin":
         return build_weixin_setup_schema(config)
     raise ChannelSetupError(f"Unknown channel: {channel}")
@@ -446,31 +396,6 @@ def voice_init_selection_from_mapping(
         interruptions=interruption_value,
         audio_input=data.get("audio_input", schema_defaults.get("audio_input", "auto")),
         audio_output=data.get("audio_output", schema_defaults.get("audio_output", "auto")),
-    )
-
-
-def feishu_init_selection_from_mapping(data: Mapping[str, Any]) -> FeishuInitSelection:
-    """Build a ``FeishuInitSelection`` from API/JSON input."""
-    credential_mode = str(data.get("credential_mode") or "manual").strip() or "manual"
-    if credential_mode not in {"one_click", "manual"}:
-        raise ChannelSetupError("credential_mode must be one of: one_click, manual")
-
-    app_id = str(data.get("app_id") or "").strip()
-    app_secret = str(data.get("app_secret") or "").strip()
-    if not app_id or not app_secret:
-        raise ChannelSetupError("app_id and app_secret are required")
-
-    group_fetch_limit = int(data.get("group_fetch_limit", 10))
-    if group_fetch_limit < 0:
-        raise ChannelSetupError("group_fetch_limit must be >= 0")
-
-    return FeishuInitSelection(
-        app_id=app_id,
-        app_secret=app_secret,
-        stream=bool(data.get("stream", False)),
-        group_fetch_limit=group_fetch_limit,
-        group_reply_only_when_mentioned=bool(data.get("group_reply_only_when_mentioned", False)),
-        credential_mode=credential_mode,
     )
 
 
@@ -562,10 +487,6 @@ def _apply_channel_setup(
             selection,
             existing=existing_voice if isinstance(existing_voice, dict) else None,
         )
-    elif normalized == "feishu":
-        selection = feishu_init_selection_from_mapping(selection_data)
-        _ensure_api_port(channels_cfg)
-        channels_cfg["feishu"] = _feishu_channel_config(selection)
     else:
         selection = weixin_init_selection_from_mapping(selection_data)
         credentials_data = selection_data.get("credentials")
@@ -1307,8 +1228,6 @@ def _print_init_next_steps(*, config_dir: Path, agent_name: str | None = None) -
 
     voice_init = _format_init_command("xagent voice setup", config_dir=config_dir, agent_name=agent_name)
     voice_start = _format_init_command("xagent channel voice connect", config_dir=config_dir, agent_name=agent_name)
-    feishu_init = _format_init_command("xagent feishu setup", config_dir=config_dir, agent_name=agent_name)
-    feishu_start = _format_init_command("xagent channel feishu connect", config_dir=config_dir, agent_name=agent_name)
     weixin_init = _format_init_command("xagent weixin setup", config_dir=config_dir, agent_name=agent_name)
     weixin_start = _format_init_command("xagent channel weixin connect", config_dir=config_dir, agent_name=agent_name)
 
@@ -1324,12 +1243,6 @@ def _print_init_next_steps(*, config_dir: Path, agent_name: str | None = None) -
     content.append(voice_init, style="cyan")
     content.append("\n        Configure the microphone/speaker channel, then connect it with ")
     content.append(voice_start, style="cyan")
-    content.append(".")
-    content.append("\n")
-    content.append("feishu  ", style="")
-    content.append(feishu_init, style="cyan")
-    content.append("\n        Create a Feishu bot config, then connect it with ")
-    content.append(feishu_start, style="cyan")
     content.append(".")
     content.append("\n")
     content.append("weixin  ", style="")
@@ -1551,352 +1464,6 @@ def handle_init_voice(args: argparse.Namespace) -> int:
     return 0
 
 
-def _feishu_channel_config(selection: FeishuInitSelection) -> dict[str, Any]:
-    config: dict[str, Any] = {
-        "app_id": selection.app_id,
-        "app_secret": selection.app_secret,
-        "stream": selection.stream,
-        "group_fetch_limit": selection.group_fetch_limit,
-        "group_reply_only_when_mentioned": selection.group_reply_only_when_mentioned,
-    }
-    return config
-
-
-def collect_feishu_init_selection_terminal_ui(
-    *,
-    args: argparse.Namespace,
-    ui: Optional[TerminalUI] = None,
-    input_func: Optional[Callable[[str], str]] = None,
-    secret_input_func: Optional[Callable[[str], str]] = None,
-) -> Optional[FeishuInitSelection]:
-    wizard_ui = ui or TerminalUI()
-    interactive = wizard_ui.interactive
-    input_func = input_func or input
-    secret_input_func = secret_input_func or getpass.getpass
-
-    app_id_arg = str(getattr(args, "app_id", "") or "").strip()
-    app_secret_arg = str(getattr(args, "app_secret", "") or "").strip()
-    manual_requested = bool(getattr(args, "manual", False) or app_id_arg or app_secret_arg)
-
-    if manual_requested:
-        credential_mode = "manual"
-        if interactive:
-            wizard_ui.record("App Access", "Use existing App ID / App Secret")
-    elif interactive:
-        choice = wizard_ui.select(
-            label="App Access",
-            subtitle="Choose how xAgent should get the Feishu credentials.",
-            options=[
-                MenuOption(
-                    "one_click",
-                    "Create new Feishu app",
-                    "Recommended. Create a new Feishu app and authorize it.",
-                ),
-                MenuOption(
-                    "manual",
-                    "Use existing App ID / App Secret",
-                    "Paste credentials from an app you already created in the Feishu developer console.",
-                ),
-                MenuOption(
-                    "back",
-                    "Back",
-                    "Cancel Feishu setup and return.",
-                ),
-            ],
-            default_index=0,
-        )
-        if choice is None or choice.key == "back":
-            raise SetupCancelled()
-        credential_mode = choice.key
-    else:
-        credential_mode = "one_click"
-
-    if credential_mode == "one_click":
-        credentials = _register_feishu_app_via_qr()
-        if credentials is None:
-            return None
-        app_id, app_secret = credentials
-        if interactive:
-            wizard_ui.record("App ID", app_id)
-    else:
-        app_id = app_id_arg
-        while not app_id:
-            if interactive:
-                app_id = wizard_ui.ask_text(
-                    "Feishu App ID",
-                    subtitle="Create or open the app in https://open.feishu.cn/app, then copy the App ID.",
-                ).strip()
-                if app_id:
-                    break
-                wizard_ui.print_panel("Feishu App ID is required.", title="Input Required")
-                continue
-            app_id = _prompt_text("Feishu App ID", input_func=input_func).strip()
-            if not app_id:
-                print("App ID is required.")
-                return None
-        if interactive and app_id_arg:
-            wizard_ui.record("App ID", app_id)
-
-        app_secret = app_secret_arg
-        while not app_secret:
-            if interactive:
-                app_secret = wizard_ui.ask_secret("Feishu App Secret").strip()
-                if app_secret:
-                    break
-                wizard_ui.print_panel("Feishu App Secret is required.", title="Input Required")
-                continue
-            app_secret = secret_input_func("Feishu App Secret: ").strip()
-            if not app_secret:
-                print("App Secret is required.")
-                return None
-        if interactive and app_secret_arg:
-            wizard_ui.record("App Secret", "Provided via command line")
-
-    group_reply_only_when_mentioned = bool(getattr(args, "group_reply_only_when_mentioned", False))
-
-    stream_arg = getattr(args, "stream", None)
-    stream = bool(stream_arg) if stream_arg is not None else False
-
-    group_fetch_arg = getattr(args, "group_fetch_limit", None)
-    if group_fetch_arg is not None and group_fetch_arg < 0:
-        if interactive:
-            wizard_ui.print_panel("--group-fetch-limit must be >= 0", title="Feishu Setup Stopped")
-        else:
-            print("--group-fetch-limit must be >= 0")
-        return None
-    group_fetch_limit = int(group_fetch_arg) if group_fetch_arg is not None else 10
-
-    selection = FeishuInitSelection(
-        app_id=app_id,
-        app_secret=app_secret,
-        stream=stream,
-        group_fetch_limit=group_fetch_limit,
-        group_reply_only_when_mentioned=group_reply_only_when_mentioned,
-        credential_mode=credential_mode,
-    )
-
-    return selection
-
-
-def _normalize_feishu_qr_payload(payload: Any) -> tuple[Optional[str], Optional[int], Optional[str]]:
-    url: Optional[str] = None
-    expire_in: Optional[int] = None
-    if isinstance(payload, str):
-        url = payload.strip() or None
-    elif isinstance(payload, dict):
-        raw_url = payload.get("url") or payload.get("verification_uri_complete")
-        if raw_url is not None:
-            url = str(raw_url).strip() or None
-        raw_expire = payload.get("expire_in") or payload.get("expires_in")
-        if raw_expire is not None:
-            try:
-                expire_in = int(raw_expire)
-            except (TypeError, ValueError):
-                expire_in = None
-    elif payload is not None:
-        url = str(payload).strip() or None
-
-    user_code: Optional[str] = None
-    if url:
-        user_code = parse_qs(urlparse(url).query).get("user_code", [None])[0]
-    return url, expire_in, user_code
-
-
-def _format_feishu_expiry(expire_in: Optional[int]) -> Optional[str]:
-    if expire_in is None or expire_in <= 0:
-        return None
-    minutes, seconds = divmod(expire_in, 60)
-    if seconds == 0:
-        unit = "minute" if minutes == 1 else "minutes"
-        return f"{minutes} {unit}"
-    if minutes:
-        return f"{minutes}m {seconds}s"
-    unit = "second" if seconds == 1 else "seconds"
-    return f"{seconds} {unit}"
-
-
-def _try_print_qr_ascii(url: str) -> bool:
-    try:
-        import qrcode
-    except ImportError:
-        return False
-
-    try:
-        qr = qrcode.QRCode()
-        qr.add_data(url)
-        qr.make()
-        print("\n📱 Scan this QR code with your Feishu app:\n")
-        qr.print_ascii(invert=True)
-        return True
-    except Exception:
-        return False
-
-
-def _print_feishu_post_setup(
-    config_path: Path,
-    selection: FeishuInitSelection,
-    *,
-    agent_name: str | None = None,
-    show_next_steps: bool = True,
-) -> None:
-    config_dir = config_path.parent
-    ui = TerminalUI()
-
-    summary = Text()
-    summary.append("Config:\n")
-    summary.append(f"- App ID: {selection.app_id}\n")
-    summary.append(f"- File: {config_path}\n")
-    summary.append("- Manage app: https://open.feishu.cn/app/\n")
-    summary.append("\n────────────────────────────────────────\n")
-    summary.append("Optional: Enable group chat support\n\n")
-    summary.append("Add permissions:\n")
-    summary.append("- im:message.group_msg\n")
-    summary.append("- im:message.group_at_msg.include_bot:readonly\n")
-    summary.append("- contact:user.base:readonly\n")
-    summary.append("- admin:app.info:readonly\n")
-    summary.append("\nFor member names in groups, also set a Contact Scope for\n")
-    summary.append("contact:user.base:readonly.\n")
-    summary.append("────────────────────────────────────────")
-    ui.print_panel(summary, title="Feishu Ready", leading_blank_line=True)
-
-    if show_next_steps:
-        start = _format_init_command("xagent start", config_dir=config_dir, agent_name=agent_name)
-        feishu_connect = _format_init_command("xagent channel feishu connect", config_dir=config_dir, agent_name=agent_name)
-        status = _format_init_command("xagent status", config_dir=config_dir, agent_name=agent_name)
-        logs = _format_init_command("xagent logs -f", config_dir=config_dir, agent_name=agent_name)
-
-        next_steps = Text()
-        next_steps.append("Run next:\n")
-        next_steps.append("start   ")
-        next_steps.append(start, style="cyan")
-        next_steps.append("\n        Start the Agent with API.\n")
-        next_steps.append("connect ")
-        next_steps.append(feishu_connect, style="cyan")
-        next_steps.append("\n        Connect Feishu for this session.\n")
-        next_steps.append("status  ")
-        next_steps.append(status, style="cyan")
-        next_steps.append("\n        Check Agent readiness and channel health.\n")
-        next_steps.append("logs    ")
-        next_steps.append(logs, style="cyan")
-        next_steps.append("\n        Follow the Agent runtime log.\n")
-
-        ui.print_panel(next_steps, title="Next Steps")
-
-
-def _register_feishu_app_via_qr(
-    *,
-    on_qr_update: Optional[Callable[[str, Optional[int]], None]] = None,
-    on_status: Optional[Callable[[str], None]] = None,
-    cancel_event: Optional[Any] = None,
-    source: str = "xagent-cli",
-) -> Optional[Tuple[str, str]]:
-    try:
-        from lark_oapi import register_app
-        from lark_oapi.scene.registration import (
-            AppAccessDeniedError,
-            AppExpiredError,
-            RegisterAppError,
-        )
-    except ImportError:
-        message = "One-click registration requires lark-oapi>=1.5.5."
-        if on_status is None:
-            print(message)
-            print("Upgrade with: pip install -U 'lark-oapi>=1.5.5'")
-            print("Or rerun with --manual to enter the App ID/Secret yourself.")
-        else:
-            on_status("error")
-        return None
-
-    import threading
-
-    local_cancel = cancel_event or threading.Event()
-
-    def on_qr_code(qr_payload: Any) -> None:
-        url, expire_in, user_code = _normalize_feishu_qr_payload(qr_payload)
-        expiry_label = _format_feishu_expiry(expire_in)
-        del user_code, expiry_label
-
-        if on_qr_update is not None:
-            if url:
-                on_qr_update(url, expire_in)
-            return
-
-        if not url:
-            print("\nFeishu returned an authorization step, but no browser link was included.")
-            print("Please retry `xagent feishu setup`, or use `--manual` if the problem persists.")
-            print("\nWaiting for authorization... (press Ctrl+C to cancel)\n")
-            return
-
-        print("\n🔗 Click this link to authorize (or paste into your browser):\n")
-        print(f"{url}\n")
-
-        if _try_print_qr_ascii(url):
-            print("\n✓ Choose your preferred auth method above.")
-        else:
-            print("\n💡 Tip: Install qrcode for ASCII QR display: pip install qrcode[pil]")
-
-        print("\nWaiting for authorization... (press Ctrl+C to cancel)\n")
-
-    def on_status_change(info: dict) -> None:
-        status = info.get("status")
-        if status == "domain_switched":
-            if on_status is not None:
-                on_status("domain_switched")
-            else:
-                print("Switched to Lark Suite domain, continuing...")
-
-    try:
-        result = register_app(
-            on_qr_code=on_qr_code,
-            on_status_change=on_status_change,
-            source=source,
-            cancel_event=local_cancel,
-        )
-    except KeyboardInterrupt:
-        local_cancel.set()
-        if on_status is not None:
-            on_status("cancelled")
-        else:
-            print("\nRegistration cancelled.")
-        return None
-    except AppAccessDeniedError:
-        if on_status is not None:
-            on_status("denied")
-        else:
-            print("\nAuthorization was denied. Ask a Feishu admin to approve the app, then retry.")
-        return None
-    except AppExpiredError:
-        if on_status is not None:
-            on_status("expired")
-        else:
-            print("\nThe authorization request expired. Rerun `xagent feishu setup` to try again.")
-        return None
-    except RegisterAppError as exc:
-        error, description = (exc.args + ("", ""))[:2]
-        if on_status is not None:
-            on_status(f"error:{error} {description}".strip())
-        else:
-            print(f"\nRegistration failed: {error} {description}".rstrip())
-        return None
-
-    app_id = str(result.get("client_id") or "").strip()
-    app_secret = str(result.get("client_secret") or "").strip()
-    if not app_id or not app_secret:
-        if on_status is not None:
-            on_status("error:no_credentials")
-        else:
-            print("\nRegistration did not return credentials. Rerun with --manual to enter them yourself.")
-        return None
-
-    user_info = result.get("user_info") or {}
-    user_name = user_info.get("name") or user_info.get("en_name")
-    if on_status is None:
-        if user_name:
-            print(f"\nAuthorized by {user_name}.")
-        print(f"Created Feishu app: {app_id}")
-    return app_id, app_secret
-
-
 def _ensure_api_port(channels_cfg: dict) -> None:
     """Set ``api.host`` / ``api.port`` in *channels_cfg* if they are missing.
 
@@ -1909,85 +1476,6 @@ def _ensure_api_port(channels_cfg: dict) -> None:
     api_cfg.setdefault("host", BaseAgentConfig.DEFAULT_HOST)
     if "port" not in api_cfg:
         api_cfg["port"] = allocate_api_port()
-
-
-def handle_init_feishu(args: argparse.Namespace) -> int:
-    ui = TerminalUI()
-    config_file = _config_path(args)
-    agent_name = getattr(args, "agent", None)
-    init_command = _format_init_command("xagent setup", config_dir=config_file.parent, agent_name=agent_name)
-    if not config_file.is_file():
-        ui.print_panel(
-            f"Config not found: {config_file}\nRun {init_command} first, then return to Feishu setup.",
-            title="Feishu Setup Stopped",
-        )
-        return 1
-
-    try:
-        with config_file.open("r", encoding="utf-8") as handle:
-            config = yaml.safe_load(handle) or {}
-    except yaml.YAMLError as exc:
-        ui.print_panel(f"Invalid YAML in {config_file}: {exc}", title="Feishu Setup Stopped", border_style="red")
-        return 1
-    if not isinstance(config, dict):
-        ui.print_panel(f"Configuration must be a mapping: {config_file}", title="Feishu Setup Stopped", border_style="red")
-        return 1
-
-    channels_cfg = config.setdefault("channels", {})
-    if not isinstance(channels_cfg, dict):
-        ui.print_panel("channels must be a dictionary", title="Feishu Setup Stopped", border_style="red")
-        return 1
-    if "feishu" in channels_cfg and not args.force:
-        force_command = _format_init_command(
-            "xagent feishu setup --force",
-            config_dir=config_file.parent,
-            agent_name=agent_name,
-        )
-        ui.print_panel(
-            f"channels.feishu already exists in {config_file}.\nRun {force_command} to overwrite the Feishu channel settings.",
-            title="Feishu Setup Stopped",
-        )
-        return 1
-
-    if getattr(args, "show_intro", True):
-        _print_channel_setup_intro(
-            ui,
-            channel="feishu",
-            config_file=config_file,
-            replacing="feishu" in channels_cfg,
-        )
-
-    try:
-        selection = collect_feishu_init_selection_terminal_ui(args=args, ui=ui)
-    except SetupCancelled:
-        return _setup_exit_on_cancel(ui, args, channel="feishu")
-    except ReturnToLauncherHome:
-        raise
-    except KeyboardInterrupt:
-        return _setup_exit_on_cancel(ui, args, channel="feishu")
-    if selection is None:
-        return 1
-
-    from dataclasses import asdict
-
-    try:
-        apply_channel_setup(
-            channel="feishu",
-            config_dir=config_file.parent,
-            selection_data=asdict(selection),
-            force=bool(args.force),
-        )
-    except ChannelSetupError as exc:
-        ui.print_panel(str(exc), title="Feishu Setup Stopped", border_style="red")
-        return 1
-
-    _print_feishu_post_setup(
-        config_file,
-        selection,
-        agent_name=agent_name,
-        show_next_steps=getattr(args, "show_next_steps", True),
-    )
-    return 0
 
 
 def _normalize_repeated_values(values: Optional[Sequence[str]]) -> tuple[str, ...]:

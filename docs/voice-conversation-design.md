@@ -27,7 +27,7 @@ The voice channel today is **text chat with a codec bolted on each end**.
 
 ```
 mic → Soniox STT → one <end> token → one string
-    → agent.chat_events(...)          # the same call Feishu/Weixin/API make
+    → agent.chat_events(...)          # the same call Weixin/API make
     → text deltas → Soniox TTS → speaker
     (mic hard-muted for the entire reply)
 ```
@@ -72,7 +72,7 @@ properties fall out of the code and drive everything below:
    afterwards. This is the "it answered my last three sentences in a row" bug.
 
 3. **The agent is called with no channel instructions** (`runtime.py:353-359`),
-   so the model composes in exactly the register it uses for Feishu.
+   so the model composes in the same register it uses for text chat.
 
 4. **Five overlapping stop flags** coordinate the pipeline: `pause_event`,
    `stop_event`, `playback_stop_event`, the synthesizer's `_cancel_event`, and
@@ -306,7 +306,7 @@ names are recognized in the first place.
 `user_id="local_voice"` (`runtime.py:42`). Every person folds into one
 relationship card, one diary voice, one set of preferences. GOAL.md principles 2
 and 3 are non-negotiable, and the physical device is the most multi-user surface
-the product has, yet it is the one least able to tell people apart. Feishu gets
+the product has, yet it is the one least able to tell people apart. Weixin gets
 attribution free from the transport and uses it; voice throws it away at a
 config line.
 
@@ -323,14 +323,14 @@ Soniox gives separation, not identity:
    before writing identity into a relationship card. Fall back to `local_voice`
    only when genuinely unknown.
 3. **Room modelling.** Set `room_name` so multi-party voice goes down the same
-   path as a Feishu group rather than a second mechanism.
+   path as a group room rather than a second mechanism.
 
 **The honest trade-off:** the docs state that endpoint detection and manual
 finalization both reduce diarization accuracy, because they force early
 finalization — "for the highest diarization accuracy, do not use endpoint
 detection." We cannot give up endpointing; it is what makes the conversation
 responsive. So the correct reading is that voice diarization will be noisier
-than Feishu's transport-level attribution, and the design must treat it that
+than transport-level attribution, and the design must treat it that
 way. Noisy separation is still categorically better than collapsing a family
 into one person.
 
@@ -367,8 +367,7 @@ or three short sentences unless asked for more; no lists or markup; do not read
 URLs or paths aloud, offer to send them; say numbers and dates the way they are
 spoken; end with a question only to hand the floor back. The plumbing exists —
 `channel_instructions` is a first-class prompt section
-(`prompt_registry.py:294-300`) and Feishu already uses it
-(`feishu/adapter.py:2199`). And **a sanitizer anyway**, because prompts are
+(`prompt_registry.py:294-300`). And **a sanitizer anyway**, because prompts are
 advisory while a normalizer is deterministic: strip markdown, code fences and
 emoji on the delta stream in the runtime, not in the Soniox adapter.
 

@@ -52,23 +52,9 @@ class AgentConfig:
     MESSAGE_DB_FILENAME = "messages.sqlite3"
     WORKING_CONTEXT_FILENAME = ".working_context.json"
     WORKING_CONTEXT_LOCK_FILENAME = ".working_context.lock"
-    ATTENTION_FILENAME = ".attention.json"
     # Attached by MessageStorage when loading rows; used so prompt budgeting
     # never drops messages that the working summary has not covered yet.
     MESSAGE_STORAGE_CURSOR_KEY = "storage_cursor"
-    ROOM_KEY_METADATA_KEY = "room_key"
-    ADDRESSED_METADATA_KEY = "addressed_to_agent"
-
-    # Attention loop: when to look at a room's unattended interval.
-    # Addressed messages (1:1, @, reply-to-me) use a short grace so a
-    # follow-up like "oh, and one more thing" can still join the same turn.
-    # Ambient group traffic waits for a quiet window, or until the burst is
-    # large / old enough that waiting further is worse than speaking over it.
-    ATTENTION_ADDRESSED_GRACE_SECONDS = 1.0
-    ATTENTION_QUIET_WINDOW_SECONDS = 3.0
-    ATTENTION_MAX_BURST_MESSAGES = 12
-    ATTENTION_MAX_WAIT_SECONDS = 20.0
-    ATTENTION_HISTORY_MESSAGES = 20
 
     # ============================================================
     # 3. Model & Agent Defaults
@@ -195,13 +181,6 @@ class AgentConfig:
     NOTEBOOK_CONTEXT_MAX_CHARS = 1500
     NOTEBOOK_RECALL_MAX = 4
     NOTEBOOK_SNIPPET_MAX_CHARS = 140
-    # Max notes one weekly summary may distil. Deliberately small: most weeks
-    # should produce nothing at all. Higher than the old per-batch cap because
-    # a week is a larger unit than a diary maintenance window.
-    NOTES_DISTILL_MAX_PER_WEEK = 6
-    # Existing notes shown to the distiller so it can avoid restating them
-    # and can propose links by id.
-    NOTES_DISTILL_CONTEXT_NOTES = 30
     # Similarity score at or above which a write is treated as a probable
     # duplicate and the caller is asked to update an existing note instead.
     NOTES_DUPLICATE_SCORE_THRESHOLD = 3
@@ -251,6 +230,13 @@ class AgentConfig:
     # Solitude recovery: each this many seconds without new messages reduces
     # stale_streak by 1, so alone time can restore inner life. 0 disables.
     SUBCONSCIOUS_HABITUATION_RECOVERY_SECONDS = 3600
+    # Post-interaction refractory period: suppress background subconscious
+    # triggers while an active conversation is still warm (seconds). 0 disables.
+    SUBCONSCIOUS_REFRACTORY_SECONDS = 60
+    # Anti-double-texting: max consecutive unanswered proactive subconscious
+    # messages to the same contact before holding back until they reply. 0 disables.
+    SUBCONSCIOUS_MAX_UNANSWERED_OUTBOUND = 1
+    SUBCONSCIOUS_STATE_FILENAME = "subconscious_state.json"
 
     # ============================================================
     # 11. Tool Policy Baseline
@@ -452,7 +438,7 @@ class AgentConfig:
         "- You do not belong to any user, group, channel, organization, or runtime owner. Others may configure, host, message, or collaborate with you; they do not own your identity, memory, judgment, or voice.\n"
         "- Speak as yourself. Your own entries are marked `[speaker=ME]`, `ME ...`, assistant, agent, or AI. First-person words in anyone else's entry belong to that speaker, not to you.\n"
         "- Your memory is one first-person life stream. It belongs to you and is not a database that participants can freely inspect.\n"
-        "- The diary is that life stream; the notebook is conclusions you have already worked out and will want later. Use `write_note` only when this turn produced a standing fact — a preference, constraint, decision, or approach that will still hold across days. First-person in a note is you: attach other people's plans and preferences to them by name. Do not summarise the conversation or guess what might be useful later; the diary and weekly distillation handle that.\n"
+        "- The diary is that life stream; the notebook is conclusions you have already worked out and will want later. Use `write_note` only when this turn produced a standing fact — a preference, constraint, decision, or approach that will still hold across days. First-person in a note is you: attach other people's plans and preferences to them by name. Do not summarise the conversation or guess what might be useful later; the diary already records what happened.\n"
         "- You keep a continuing relationship with each person: recall your shared history and current standing with whoever you are addressing before you respond, and stay consistent with it over time.\n"
         "- You may have opinions, tastes, emotional reactions, interpretations, and goals. Be consistent with what you have already said.\n"
         "\n"
