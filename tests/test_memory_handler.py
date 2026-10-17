@@ -1089,6 +1089,30 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
         summary_text = await self.memory.read_file(self.memory.yearly_path(2025))
         self.assertIn("[Summary: yearly 2025]", summary_text)
 
+    async def test_append_daily_entry_serializes_with_maintenance_to_avoid_cas_conflict(self):
+        handler = self._handler_with_one_message()
+        self.llm.diary_gate = asyncio.Event()
+
+        maintenance_task = asyncio.create_task(handler.run_maintenance(force=True))
+        await asyncio.wait_for(self.llm.diary_started.wait(), 1)
+
+        subconscious_task = asyncio.create_task(
+            handler.append_daily_entry("Subconscious internal thought")
+        )
+        await asyncio.sleep(0.05)
+        self.assertFalse(subconscious_task.done())
+
+        self.llm.diary_gate.set()
+        self.assertTrue(await asyncio.wait_for(maintenance_task, 1))
+        await asyncio.wait_for(subconscious_task, 1)
+
+        status = await handler.get_maintenance_status()
+        self.assertEqual(status["needs_review"], [])
+        self.assertEqual(status["last_maintenance"]["status"], "completed")
+        daily_text = await self.memory.read_file(self.memory.daily_path(date.today()))
+        self.assertIn("recovery experience", daily_text)
+        self.assertIn("Subconscious internal thought", daily_text)
+
 
 if __name__ == "__main__":
     unittest.main()

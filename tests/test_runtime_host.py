@@ -429,3 +429,32 @@ class RuntimeTransportTests(unittest.IsolatedAsyncioTestCase):
                     bootstrap.assert_not_called()
             finally:
                 owner.release()
+
+    async def test_subconscious_contact_deliverable_validates_weixin_context_token(self):
+        from xagent.core.runtime.subconscious import ContactEntry
+
+        with tempfile.TemporaryDirectory() as tmp:
+            host = RuntimeHost(tmp)
+            fake_wx_adapter = type(
+                "FakeWxAdapter",
+                (),
+                {"_context_tokens": {"wx_ok": "tok_123"}},
+            )()
+            host.adapters["weixin"] = fake_wx_adapter
+            host.channel_status["weixin"] = {"state": "connected", "ready": True, "error": None}
+
+            ok_contact = ContactEntry(
+                channel="weixin",
+                user_id="wx_ok",
+                target={"user_id": "wx_ok"},
+                last_seen="2026-08-16 00:00:00",
+            )
+            missing_token_contact = ContactEntry(
+                channel="weixin",
+                user_id="wx_no_tok",
+                target={"user_id": "wx_no_tok"},
+                last_seen="2026-08-16 00:00:00",
+            )
+            self.assertTrue(host._is_subconscious_contact_deliverable(ok_contact))
+            self.assertFalse(host._is_subconscious_contact_deliverable(missing_token_contact))
+

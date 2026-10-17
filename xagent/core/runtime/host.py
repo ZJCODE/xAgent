@@ -203,6 +203,7 @@ class RuntimeHost:
                 self.agent, self.runner.config.get("runtime"),
                 subconscious_delivery_sink=self._deliver_subconscious,
                 subconscious_deliverable_channels=self._deliverable_channels(),
+                subconscious_contact_deliverable=self._is_subconscious_contact_deliverable,
             )
             if self.heartbeat is not None:
                 await self.heartbeat.start()
@@ -280,6 +281,29 @@ class RuntimeHost:
         if self.device_service is not None and self.device_service.voice_sessions:
             channels.add("voice")
         return channels
+
+    def _is_subconscious_contact_deliverable(self, contact: Any) -> bool:
+        channel = str(getattr(contact, "channel", "") or "").strip().lower()
+        user_id = str(getattr(contact, "user_id", "") or "").strip()
+        target = getattr(contact, "target", None) or {}
+        if channel not in self._deliverable_channels():
+            return False
+        if channel == "weixin":
+            adapter = self.adapters.get("weixin")
+            if adapter is None or self.channel_status.get("weixin", {}).get("state") != "connected":
+                return False
+            uid = str(target.get("user_id") or user_id).strip()
+            tokens = getattr(adapter, "_context_tokens", None)
+            if isinstance(tokens, dict):
+                return bool(tokens.get(uid))
+            getter = getattr(getattr(adapter, "client", None), "get_context_token", None)
+            if callable(getter):
+                return bool(getter(uid))
+            return True
+        if channel == "voice":
+            adapter = self._resolve_voice_adapter(target, user_id=user_id)
+            return adapter is not None
+        return True
 
     def _sync_delivery_channels(self) -> None:
         loop = getattr(self.heartbeat, "subconscious_loop", None)

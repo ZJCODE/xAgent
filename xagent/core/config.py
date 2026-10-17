@@ -230,6 +230,13 @@ class AgentConfig:
     # Solitude recovery: each this many seconds without new messages reduces
     # stale_streak by 1, so alone time can restore inner life. 0 disables.
     SUBCONSCIOUS_HABITUATION_RECOVERY_SECONDS = 3600
+    # Post-interaction refractory period: suppress background subconscious
+    # triggers while an active conversation is still warm (seconds). 0 disables.
+    SUBCONSCIOUS_REFRACTORY_SECONDS = 60
+    # Anti-double-texting: max consecutive unanswered proactive subconscious
+    # messages to the same contact before holding back until they reply. 0 disables.
+    SUBCONSCIOUS_MAX_UNANSWERED_OUTBOUND = 1
+    SUBCONSCIOUS_STATE_FILENAME = "subconscious_state.json"
 
     # ============================================================
     # 11. Tool Policy Baseline

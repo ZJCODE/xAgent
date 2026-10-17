@@ -258,6 +258,31 @@ class MemoryHandler:
     # Journal maintenance
     # ------------------------------------------------------------------
 
+    async def append_daily_entry(
+        self,
+        content: str,
+        target_date: Optional[date] = None,
+    ) -> Optional[Path]:
+        """Append a direct diary entry (such as a subconscious thought) under the maintenance guard.
+
+        Serializing direct appends with ``_maintenance_guard`` ensures:
+        1. Any interrupted ``prepared`` commit receipt is recovered before appending.
+        2. Direct appends never interleave between ``run_maintenance`` reading
+           ``old_content`` (pre-LLM) and applying its CAS receipt (post-LLM),
+           preventing false ``needs_review`` deadlocks.
+        """
+        note = str(content or "").strip()
+        if not note:
+            return None
+        async with self._maintenance_guard(refresh_state=True):
+            healthy, _ = await self._recover_pending_commit_locked()
+            if not healthy:
+                logger.warning(
+                    "Skipping direct diary append because journal commit requires review"
+                )
+                return None
+            return await self.memory.append_daily(note, target_date=target_date)
+
     def schedule_experience_write(
         self,
         messages: List[Message],

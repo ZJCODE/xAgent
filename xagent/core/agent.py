@@ -1171,7 +1171,12 @@ class Agent:
             logger.warning("Refusing to write subconscious JSON payload to diary")
             note = ""
         if note:
-            await self.markdown_memory.append_daily(note)
+            memory_handler = getattr(self, "memory_handler", None)
+            append_entry = getattr(memory_handler, "append_daily_entry", None)
+            if callable(append_entry):
+                await append_entry(note)
+            else:
+                await self.markdown_memory.append_daily(note)
         return AgentTurnResult(
             kind="subconscious_thought",
             replied=False,
