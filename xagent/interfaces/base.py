@@ -19,6 +19,7 @@ from ..core.providers import (
     provider_model_api,
     provider_supports_vision,
     resolved_provider_name,
+    PROVIDER_DEEPSEEK,
     PROVIDER_QWEN,
 )
 from ..components import MessageStorage
@@ -44,9 +45,11 @@ from ..tools.image_generation_tool import (
 )
 from ..tools.search_tool import (
     DEFAULT_QWEN_SEARCH_MODEL,
+    SEARCH_PROVIDER_DEEPSEEK,
     SEARCH_PROVIDER_NONE,
     SEARCH_PROVIDER_OPENAI,
     SEARCH_PROVIDER_QWEN,
+    _get_deepseek_api_key,
     is_placeholder_api_key,
     normalize_search_provider,
 )
@@ -422,6 +425,12 @@ class BaseAgentRunner:
                 raise ValueError(
                     "search.provider 'openai' requires search.api_key when provider is not OpenAI"
                 )
+        if search_provider == SEARCH_PROVIDER_DEEPSEEK and not self._is_deepseek_provider(provider_cfg):
+            api_key = str(search_cfg.get("api_key") or "").strip()
+            if is_placeholder_api_key(api_key):
+                raise ValueError(
+                    "search.provider 'deepseek' requires search.api_key when provider is not DeepSeek"
+                )
         if search_provider == SEARCH_PROVIDER_QWEN and not self._is_qwen_provider(provider_cfg):
             api_key = str(search_cfg.get("api_key") or "").strip()
             if is_placeholder_api_key(api_key):
@@ -532,6 +541,10 @@ class BaseAgentRunner:
     @staticmethod
     def _is_openai_provider(provider_cfg: Dict[str, Any]) -> bool:
         return provider_is_official_openai(provider_cfg)
+
+    @staticmethod
+    def _is_deepseek_provider(provider_cfg: Dict[str, Any]) -> bool:
+        return normalize_provider_name(provider_cfg.get("name")) == PROVIDER_DEEPSEEK
 
     @staticmethod
     def _is_qwen_provider(provider_cfg: Dict[str, Any]) -> bool:
@@ -666,6 +679,8 @@ class BaseAgentRunner:
             return self._initialize_openai_feature_client(search_cfg, provider_cfg, model_client=model_client)
         if search_provider == SEARCH_PROVIDER_QWEN:
             return self._initialize_qwen_search_client(search_cfg, provider_cfg, model_client=model_client)
+        if search_provider == SEARCH_PROVIDER_DEEPSEEK:
+            return None
         return model_client
 
     def _initialize_qwen_search_client(
@@ -730,6 +745,8 @@ class BaseAgentRunner:
         if search_provider == SEARCH_PROVIDER_QWEN:
             if not isinstance(provider_cfg, dict) or not self._is_qwen_provider(provider_cfg):
                 return DEFAULT_QWEN_SEARCH_MODEL
+        if search_provider == SEARCH_PROVIDER_DEEPSEEK:
+            return None
         return self._get_agent_model(agent_cfg)
     
     @classmethod
@@ -782,7 +799,7 @@ class BaseAgentRunner:
             create_attach_artifact_tool(
                 workspace_dir=str(self.workspace_dir),
             ),
-            create_web_fetch_tool(),
+            create_web_fetch_tool(self._fetch_config_for_tools(agent_cfg)),
         ]
         search_client = self._initialize_search_client(agent_cfg, model_client=client)
         search_tool = create_web_search_tool(
@@ -834,13 +851,18 @@ class BaseAgentRunner:
             return search_cfg
 
         search_provider = normalize_search_provider(search_cfg.get("provider"))
-        if search_provider != SEARCH_PROVIDER_QWEN:
+        provider_cfg = agent_cfg.get("provider") or {}
+        if search_provider == SEARCH_PROVIDER_QWEN:
+            provider_matches_search = (
+                isinstance(provider_cfg, dict) and self._is_qwen_provider(provider_cfg)
+            )
+        elif search_provider == SEARCH_PROVIDER_DEEPSEEK:
+            provider_matches_search = (
+                isinstance(provider_cfg, dict) and self._is_deepseek_provider(provider_cfg)
+            )
+        else:
             return search_cfg
 
-        provider_cfg = agent_cfg.get("provider") or {}
-        provider_matches_search = (
-            isinstance(provider_cfg, dict) and self._is_qwen_provider(provider_cfg)
-        )
         if not provider_matches_search:
             return search_cfg
 
@@ -856,6 +878,38 @@ class BaseAgentRunner:
             merged_config["base_url"] = provider_base_url_value
 
         return merged_config
+
+    def _fetch_config_for_tools(self, agent_cfg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Resolve optional DeepSeek credentials for web_fetch L2 fallback."""
+        search_cfg = agent_cfg.get("search")
+        if isinstance(search_cfg, dict):
+            try:
+                search_provider = normalize_search_provider(search_cfg.get("provider"))
+            except ValueError:
+                search_provider = SEARCH_PROVIDER_NONE
+            if search_provider == SEARCH_PROVIDER_DEEPSEEK:
+                search_key = str(search_cfg.get("api_key") or "").strip()
+                if search_key and not is_placeholder_api_key(search_key):
+                    fetch_cfg: Dict[str, Any] = {"api_key": search_key}
+                    base_url = str(search_cfg.get("base_url") or "").strip()
+                    if base_url:
+                        fetch_cfg["base_url"] = base_url
+                    return fetch_cfg
+
+        provider_cfg = agent_cfg.get("provider")
+        if isinstance(provider_cfg, dict) and self._is_deepseek_provider(provider_cfg):
+            provider_key = str(provider_cfg.get("api_key") or "").strip()
+            if provider_key and not is_placeholder_api_key(provider_key):
+                fetch_cfg = {"api_key": provider_key}
+                base_url = str(provider_cfg.get("base_url") or "").strip()
+                if base_url:
+                    fetch_cfg["base_url"] = base_url
+                return fetch_cfg
+
+        env_key = _get_deepseek_api_key({})
+        if env_key:
+            return {"api_key": env_key}
+        return None
 
     def _image_generation_config_for_tools(self, agent_cfg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         image_generation_cfg = agent_cfg.get("image_generation")

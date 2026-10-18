@@ -17,6 +17,7 @@ from typing import Optional
 import httpx
 import trafilatura
 
+from xagent.tools.search_tool import DEEPSEEK_SEARCH_BASE_URL, is_placeholder_api_key
 from xagent.utils.tool_decorator import function_tool
 
 logger = logging.getLogger(__name__)
@@ -96,6 +97,8 @@ async def _validate_url(url: str) -> str:
         )
     if not parsed.hostname:
         raise ValueError("URL must include a valid hostname")
+    if parsed.username or parsed.password:
+        raise ValueError("URL must not include credentials (username or password)")
 
     # SSRF check — reject URLs that resolve to private/reserved IPs
     private_ip = await _resolve_to_private(parsed.hostname)
@@ -113,12 +116,85 @@ def _error_response(url: str, message: str) -> dict:
     return {"status": "error", "url": url, "message": message}
 
 
-def create_web_fetch_tool():
+def _format_success_response(url: str, title: str, content: str) -> dict:
+    """Build a standardized success response dict with content truncation."""
+    extracted = content.strip()
+    truncated = len(extracted) > _MAX_CONTENT_LENGTH
+    if truncated:
+        extracted = extracted[:_MAX_CONTENT_LENGTH]
+
+    return {
+        "status": "ok",
+        "url": url,
+        "title": title,
+        "content": extracted,
+        "content_length": len(extracted),
+        "truncated": truncated,
+    }
+
+
+def _normalize_deepseek_base_url(base_url: Optional[str]) -> str:
+    raw = str(base_url or DEEPSEEK_SEARCH_BASE_URL).strip().rstrip("/")
+    if raw.endswith("/v1"):
+        raw = raw[:-3].rstrip("/")
+    return raw or DEEPSEEK_SEARCH_BASE_URL
+
+
+async def _fetch_via_deepseek(
+    url: str,
+    *,
+    api_key: str,
+    base_url: str = DEEPSEEK_SEARCH_BASE_URL,
+) -> Optional[tuple[str, str]]:
+    """Fetch clean Markdown content via DeepSeek's /v1/tools/fetch endpoint."""
+    endpoint = f"{_normalize_deepseek_base_url(base_url)}/v1/tools/fetch"
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(_REQUEST_TIMEOUT),
+        ) as client:
+            response = await client.post(
+                endpoint,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={"url": url},
+            )
+            if response.status_code >= 400:
+                return None
+            data = response.json()
+    except Exception as exc:
+        logger.warning("DeepSeek web fetch fallback failed for %s: %s", url, exc)
+        return None
+
+    if not isinstance(data, dict):
+        return None
+    content = str(data.get("content") or "").strip()
+    if not content:
+        return None
+    title = str(data.get("title") or "").strip()
+    return title, content
+
+
+def create_web_fetch_tool(fetch_config: Optional[dict] = None):
     """Create the built-in web_fetch tool (always enabled, no config needed).
+
+    When ``fetch_config`` provides a valid DeepSeek ``api_key``, local HTTP +
+    Trafilatura extraction runs first (L1) and transparently falls back to
+    DeepSeek's ``POST /v1/tools/fetch`` endpoint (L2) if the local request
+    fails or extracts no readable content.
 
     Returns an async callable decorated with ``@function_tool`` that has a
     ``.tool_spec`` attribute for registration with the agent's ToolManager.
     """
+    cfg = fetch_config if isinstance(fetch_config, dict) else {}
+    raw_api_key = str(cfg.get("api_key") or "").strip()
+    deepseek_api_key = (
+        raw_api_key
+        if raw_api_key and not is_placeholder_api_key(raw_api_key)
+        else ""
+    )
+    deepseek_base_url = _normalize_deepseek_base_url(cfg.get("base_url"))
 
     @function_tool(
         name="web_fetch",
@@ -134,13 +210,26 @@ def create_web_fetch_tool():
         },
     )
     async def web_fetch(url: str) -> dict:
-        # 1. Validate URL (scheme, length, SSRF)
+        # 1. Validate URL (scheme, length, credentials, SSRF)
         try:
             url = await _validate_url(url)
         except ValueError as e:
             return _error_response(url, str(e))
 
-        # 2. Fetch page content via httpx
+        async def _try_deepseek_fallback() -> Optional[dict]:
+            if not deepseek_api_key:
+                return None
+            fallback = await _fetch_via_deepseek(
+                url,
+                api_key=deepseek_api_key,
+                base_url=deepseek_base_url,
+            )
+            if fallback is None:
+                return None
+            fallback_title, fallback_content = fallback
+            return _format_success_response(url, fallback_title, fallback_content)
+
+        # 2. Fetch page content via local httpx (L1)
         try:
             async with httpx.AsyncClient(
                 timeout=httpx.Timeout(_REQUEST_TIMEOUT),
@@ -160,24 +249,35 @@ def create_web_fetch_tool():
                     )
                 html = response.text
         except httpx.TimeoutException:
+            fallback_response = await _try_deepseek_fallback()
+            if fallback_response is not None:
+                return fallback_response
             return _error_response(
                 url,
                 f"Request timed out after {_REQUEST_TIMEOUT} seconds.",
             )
         except httpx.HTTPStatusError as e:
+            fallback_response = await _try_deepseek_fallback()
+            if fallback_response is not None:
+                return fallback_response
             return _error_response(
                 url,
                 f"HTTP {e.response.status_code}: {e.response.reason_phrase}",
             )
         except httpx.RequestError as e:
+            fallback_response = await _try_deepseek_fallback()
+            if fallback_response is not None:
+                return fallback_response
             return _error_response(url, f"Request failed: {e}")
 
-        # 3. Extract content with Trafilatura (CPU-bound → run in thread)
+        # 3. Extract content with Trafilatura as Markdown (CPU-bound → run in thread)
         try:
             extracted = await asyncio.to_thread(
                 trafilatura.extract,
                 html,
-                output_format="txt",
+                output_format="markdown",
+                include_tables=True,
+                include_links=True,
                 no_fallback=False,
             )
             metadata = await asyncio.to_thread(
@@ -186,28 +286,21 @@ def create_web_fetch_tool():
             title = metadata.title.strip() if metadata and metadata.title else ""
         except Exception as e:
             logger.warning("Trafilatura extraction failed for %s: %s", url, e)
+            fallback_response = await _try_deepseek_fallback()
+            if fallback_response is not None:
+                return fallback_response
             return _error_response(
                 url, "Failed to extract readable content from the page."
             )
 
         if not extracted or not extracted.strip():
+            fallback_response = await _try_deepseek_fallback()
+            if fallback_response is not None:
+                return fallback_response
             return _error_response(
                 url, "The page appears to have no readable content."
             )
 
-        # 4. Truncate if needed
-        extracted = extracted.strip()
-        truncated = len(extracted) > _MAX_CONTENT_LENGTH
-        if truncated:
-            extracted = extracted[:_MAX_CONTENT_LENGTH]
-
-        return {
-            "status": "ok",
-            "url": url,
-            "title": title,
-            "content": extracted,
-            "content_length": len(extracted),
-            "truncated": truncated,
-        }
+        return _format_success_response(url, title, extracted)
 
     return web_fetch

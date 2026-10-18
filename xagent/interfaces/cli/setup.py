@@ -154,6 +154,7 @@ QWEN_MODELS = (
 SEARCH_PROVIDERS = (
     "none",
     "openai",
+    "deepseek",
     "qwen",
 )
 IMAGE_GENERATION_PROVIDERS = (

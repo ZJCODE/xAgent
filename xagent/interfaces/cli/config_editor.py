@@ -14,6 +14,7 @@ from ...core.providers import (
     MODEL_API_OPENAI_CHAT_COMPLETIONS,
     MODEL_API_OPENAI_RESPONSES,
     PROVIDER_CUSTOM,
+    PROVIDER_DEEPSEEK,
     PROVIDER_OPENAI,
     PROVIDER_QWEN,
     ReasoningConfig,
@@ -43,7 +44,7 @@ from ..voice.config import (
 )
 
 SEARCH_PROVIDER_NONE = "none"
-SEARCH_PROVIDERS = (SEARCH_PROVIDER_NONE, PROVIDER_OPENAI, PROVIDER_QWEN)
+SEARCH_PROVIDERS = (SEARCH_PROVIDER_NONE, PROVIDER_OPENAI, PROVIDER_DEEPSEEK, PROVIDER_QWEN)
 IMAGE_GENERATION_PROVIDERS = (
     IMAGE_GENERATION_PROVIDER_NONE,
     IMAGE_GENERATION_PROVIDER_OPENAI,
@@ -587,6 +588,7 @@ AGENT_SETUP_FEATURES = ("model", "search", "image_generation", "observability", 
 _SEARCH_PROVIDER_DESCRIPTIONS = {
     "none": "Do not enable a provider-native web search tool.",
     "openai": "Use OpenAI web search.",
+    "deepseek": "Use DeepSeek native web search.",
     "qwen": "Use Qwen web search via DashScope.",
 }
 _IMAGE_GENERATION_DESCRIPTIONS = {

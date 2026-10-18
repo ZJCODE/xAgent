@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from html import unescape
 from typing import Any, Literal, Optional
 
+import httpx
 from openai import AsyncOpenAI
 
 from xagent.core.config import AgentConfig
@@ -18,21 +19,29 @@ logger = logging.getLogger(__name__)
 
 SEARCH_PROVIDER_OPENAI = "openai"
 SEARCH_PROVIDER_QWEN = "qwen"
+SEARCH_PROVIDER_DEEPSEEK = "deepseek"
 SEARCH_PROVIDER_NONE = "none"
 SUPPORTED_SEARCH_PROVIDERS = {
     SEARCH_PROVIDER_OPENAI,
     SEARCH_PROVIDER_QWEN,
+    SEARCH_PROVIDER_DEEPSEEK,
     SEARCH_PROVIDER_NONE,
 }
 
 DEFAULT_QWEN_SEARCH_MODEL = "qwen3-max-2026-01-23"
 QWEN_COMPATIBLE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 QWEN_API_KEY_ENV_VARS = ("DASHSCOPE_API_KEY", "DASHSCOPE_API_TOKEN", "QWEN_API_KEY", "QWEN_API_TOKEN")
+DEEPSEEK_SEARCH_BASE_URL = "https://api.deepseek.com"
+DEEPSEEK_API_KEY_ENV_VARS = ("DEEPSEEK_API_KEY", "DEEPSEEK_API_TOKEN")
+DEEPSEEK_SEARCH_TIMEOUT = 30.0
+DEEPSEEK_MAX_QUERY_LENGTH = 128
 PLACEHOLDER_API_KEYS = {
     "your_api_key",
     "your_api_key_here",
     "your_openai_api_key",
     "your_openai_api_key_here",
+    "your_deepseek_api_key",
+    "your_deepseek_api_key_here",
     "your_qwen_api_key",
     "your_qwen_api_key_here",
     "your_dashscope_api_key",
@@ -62,6 +71,10 @@ SEARCH_TOOL_PARAMETERS = {
         "enable_thinking",
         "web_extractor",
         "code_interpreter",
+    },
+    SEARCH_PROVIDER_DEEPSEEK: {
+        "query",
+        "max_results",
     },
 }
 
@@ -163,6 +176,11 @@ class ConfiguredSearchProvider:
                 enable_thinking=enable_thinking,
                 web_extractor=web_extractor,
                 code_interpreter=code_interpreter,
+            )
+        if self.provider == SEARCH_PROVIDER_DEEPSEEK:
+            return await self._search_deepseek(
+                query=query,
+                result_limit=result_limit,
             )
         return _error_response(self.provider, query, "search is disabled")
 
@@ -315,6 +333,101 @@ class ConfiguredSearchProvider:
             result["tool_usage"] = tool_usage
         return result
 
+    async def _search_deepseek(
+        self,
+        *,
+        query: str,
+        result_limit: int,
+    ) -> dict:
+        api_key = _get_deepseek_api_key(self.config)
+        if not api_key:
+            return _error_response(
+                self.provider,
+                query,
+                "DeepSeek search requires search.api_key, provider.api_key, or DEEPSEEK_API_KEY.",
+            )
+
+        try:
+            normalized_need_content = _normalize_optional_bool(
+                self.config.get("need_content"),
+                default=False,
+            )
+        except ValueError as exception:
+            return _error_response(self.provider, query, str(exception))
+
+        payload: dict[str, Any] = {
+            "query": query[:DEEPSEEK_MAX_QUERY_LENGTH],
+            "count": result_limit,
+            "need_content": bool(normalized_need_content),
+        }
+        ori_question = _clean_optional(self.config.get("ori_question"))
+        if ori_question:
+            payload["ori_question"] = ori_question[:DEEPSEEK_MAX_QUERY_LENGTH]
+        localization = _clean_optional(self.config.get("localization"))
+        if localization:
+            payload["localization"] = localization
+
+        endpoint = f"{_deepseek_search_base_url(self.config)}/v1/tools/search"
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(DEEPSEEK_SEARCH_TIMEOUT)) as http_client:
+                response = await http_client.post(
+                    endpoint,
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json=payload,
+                )
+                if response.status_code >= 400:
+                    return _error_response(
+                        self.provider,
+                        query,
+                        _extract_deepseek_error_message(response),
+                    )
+                data = response.json()
+        except Exception as exception:
+            logger.warning("DeepSeek web search failed: %s", exception)
+            return _error_response(self.provider, query, str(exception))
+
+        raw_results = data.get("results") if isinstance(data, dict) else []
+        results: list[dict[str, Any]] = []
+        seen_urls: set[str] = set()
+        for item in raw_results or []:
+            if not isinstance(item, dict):
+                continue
+            url = str(item.get("url") or "").strip()
+            if not url or url in seen_urls:
+                continue
+            seen_urls.add(url)
+            title = _clean_text(_first_text_field(item, "title", "site_name") or url)
+            snippet = _clean_text(_first_text_field(item, "summary", "snippet") or "")
+            entry: dict[str, Any] = {
+                "title": title,
+                "url": url,
+                "snippet": snippet,
+            }
+            if item.get("date"):
+                entry["date"] = str(item["date"]).strip()
+            if item.get("site_name"):
+                entry["site_name"] = _clean_text(str(item["site_name"]))
+            if item.get("rerank_score") is not None:
+                entry["rerank_score"] = item["rerank_score"]
+            if item.get("authority") is not None:
+                entry["authority"] = item["authority"]
+            if normalized_need_content and item.get("content"):
+                entry["content"] = str(item["content"]).strip()
+            results.append(entry)
+            if len(results) >= result_limit:
+                break
+
+        return {
+            "status": "ok" if results else "empty",
+            "provider": self.provider,
+            "query": query,
+            "answer": "",
+            "results": results,
+        }
+
 
 def create_web_search_tool(
     search_config: Optional[dict],
@@ -342,7 +455,10 @@ def create_web_search_tool(
             "Cite only returned URLs. If results are weak or empty, say so and answer only from reliable context."
         ),
         param_descriptions={
-            "query": "Search query with key entities, dates, and constraints.",
+            "query": (
+                "Search query with key entities, dates, and constraints. "
+                "Supports operators such as site:, -site:, \"exact phrase\", lang:zh,en, after:YYYY-MM-DD, before:YYYY-MM-DD."
+            ),
             "max_results": "Number of normalized source results, 1-20.",
             "search_context_size": "OpenAI only. Web search context size: low, medium, or high.",
             "country": "OpenAI only. Approximate two-letter country code such as US, CN, GB, or DE.",
@@ -429,6 +545,10 @@ def normalize_search_provider(provider: Any) -> str:
         "openai_builtin": SEARCH_PROVIDER_OPENAI,
         "openai_web_search": SEARCH_PROVIDER_OPENAI,
         "openai": SEARCH_PROVIDER_OPENAI,
+        "deepseek_search": SEARCH_PROVIDER_DEEPSEEK,
+        "deepseek_web_search": SEARCH_PROVIDER_DEEPSEEK,
+        "deepseek_search_api": SEARCH_PROVIDER_DEEPSEEK,
+        "deepseek": SEARCH_PROVIDER_DEEPSEEK,
         "dashscope": SEARCH_PROVIDER_QWEN,
         "qwen_search": SEARCH_PROVIDER_QWEN,
         "qwen_web_search": SEARCH_PROVIDER_QWEN,
@@ -760,6 +880,42 @@ def _create_qwen_search_client(config: dict) -> Optional[AsyncOpenAI]:
     if not api_key:
         return None
     return AsyncOpenAI(api_key=api_key, base_url=_qwen_search_base_url(config))
+
+
+def _get_deepseek_api_key(config: dict) -> str:
+    configured_key = str(config.get("api_key") or "").strip()
+    if configured_key and not is_placeholder_api_key(configured_key):
+        return configured_key
+    for env_name in DEEPSEEK_API_KEY_ENV_VARS:
+        env_value = os.getenv(env_name, "").strip()
+        if env_value and not is_placeholder_api_key(env_value):
+            return env_value
+    return ""
+
+
+def _deepseek_search_base_url(config: dict) -> str:
+    raw = str(config.get("base_url") or DEEPSEEK_SEARCH_BASE_URL).strip().rstrip("/")
+    if raw.endswith("/v1"):
+        raw = raw[:-3].rstrip("/")
+    return raw or DEEPSEEK_SEARCH_BASE_URL
+
+
+def _extract_deepseek_error_message(response: httpx.Response) -> str:
+    try:
+        payload = response.json()
+    except Exception:
+        payload = None
+    if isinstance(payload, dict):
+        error_obj = payload.get("error")
+        if isinstance(error_obj, dict):
+            message = str(error_obj.get("message") or "").strip()
+            if message:
+                return f"HTTP {response.status_code}: {message}"
+        message = str(payload.get("message") or "").strip()
+        if message:
+            return f"HTTP {response.status_code}: {message}"
+    reason = getattr(response, "reason_phrase", "") or "Request failed"
+    return f"HTTP {response.status_code}: {reason}"
 
 
 def is_placeholder_api_key(api_key: str) -> bool:

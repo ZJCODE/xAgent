@@ -71,6 +71,10 @@ class URLValidationTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             await _validate_url("https:///path")
 
+    async def test_rejects_embedded_credentials(self):
+        with self.assertRaisesRegex(ValueError, "credentials"):
+            await _validate_url("https://user:password@example.com/private")
+
     async def test_rejects_loopback_ip(self):
         with self.assertRaises(ValueError) as ctx:
             await _validate_url("http://127.0.0.1:8080/admin")
@@ -308,6 +312,101 @@ class WebFetchToolExecutionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["status"], "error")
         self.assertIn("Request failed", result["message"])
+
+    async def test_deepseek_fallback_when_local_http_403_fails(self):
+        tool = create_web_fetch_tool({"api_key": "ds-fetch-key", "base_url": "https://api.deepseek.com/v1"})
+
+        mock_get_response = MagicMock()
+        mock_get_response.status_code = 403
+        mock_get_response.reason_phrase = "Forbidden"
+        mock_get_response.raise_for_status = MagicMock(
+            side_effect=httpx.HTTPStatusError(
+                "Forbidden", request=MagicMock(), response=mock_get_response
+            )
+        )
+
+        mock_post_response = MagicMock()
+        mock_post_response.status_code = 200
+        mock_post_response.json.return_value = {
+            "title": "Cloudflare Protected Article",
+            "content": "# Protected Heading\n\nFetched via DeepSeek /v1/tools/fetch.",
+        }
+
+        mock_client = AsyncMock()
+        mock_client.__aenter__.return_value = mock_client
+        mock_client.get.return_value = mock_get_response
+        mock_client.post.return_value = mock_post_response
+
+        class FakeAsyncClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return mock_client
+
+            async def __aexit__(self, *args):
+                pass
+
+        with patch("xagent.tools.web_fetch_tool.httpx.AsyncClient", new=FakeAsyncClient):
+            result = await tool(url="https://example.com/protected")
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["url"], "https://example.com/protected")
+        self.assertEqual(result["title"], "Cloudflare Protected Article")
+        self.assertIn("# Protected Heading", result["content"])
+        mock_client.post.assert_called_once_with(
+            "https://api.deepseek.com/v1/tools/fetch",
+            headers={
+                "Authorization": "Bearer ds-fetch-key",
+                "Content-Type": "application/json",
+            },
+            json={"url": "https://example.com/protected"},
+        )
+
+    async def test_deepseek_fallback_when_local_extraction_is_empty(self):
+        tool = create_web_fetch_tool({"api_key": "ds-fetch-key"})
+
+        mock_get_response = MagicMock()
+        mock_get_response.status_code = 200
+        mock_get_response.reason_phrase = "OK"
+        mock_get_response.text = "<html><body><div id='app'></div></body></html>"
+        mock_get_response.headers = {}
+        mock_get_response.raise_for_status = MagicMock()
+
+        mock_post_response = MagicMock()
+        mock_post_response.status_code = 200
+        mock_post_response.json.return_value = {
+            "title": "SPA Rendered Page",
+            "content": "Rendered dynamic content from DeepSeek Fetch API.",
+        }
+
+        mock_client = AsyncMock()
+        mock_client.__aenter__.return_value = mock_client
+        mock_client.get.return_value = mock_get_response
+        mock_client.post.return_value = mock_post_response
+
+        class FakeAsyncClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return mock_client
+
+            async def __aexit__(self, *args):
+                pass
+
+        with patch("xagent.tools.web_fetch_tool.httpx.AsyncClient", new=FakeAsyncClient):
+            result = await tool(url="https://example.com/spa")
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["title"], "SPA Rendered Page")
+        self.assertIn("Rendered dynamic content", result["content"])
+
+    async def test_deepseek_fallback_never_bypasses_ssrf_validation(self):
+        tool = create_web_fetch_tool({"api_key": "ds-fetch-key"})
+        result = await tool(url="http://127.0.0.1:8080/admin")
+        self.assertEqual(result["status"], "error")
+        self.assertIn("private/reserved IP", result["message"])
 
 
 if __name__ == "__main__":

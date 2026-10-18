@@ -1247,6 +1247,61 @@ search:
             self.assertEqual(search_provider.config["api_key"], "qwen-key")
             self.assertEqual(search_provider.config["base_url"], "https://dashscope.aliyuncs.com/compatible-mode/v1")
 
+    def test_config_rejects_deepseek_search_for_non_deepseek_provider_without_search_key(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+    name: "openai"
+    model: "gpt-5.4-mini"
+    api_key: "openai-key"
+search:
+    provider: "deepseek"
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            with self.assertRaisesRegex(ValueError, "requires search.api_key"):
+                BaseAgentRunner(config_dir=tmpdir)
+
+    def test_config_loads_deepseek_search_tool_with_main_key_and_wires_fetch_fallback(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+provider:
+    name: "deepseek"
+    base_url: "https://api.deepseek.com"
+    model: "deepseek-v4-pro"
+    api_key: "deepseek-main-key"
+search:
+    provider: "deepseek"
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            runner = BaseAgentRunner(config_dir=tmpdir)
+            web_search_tool = runner.agent.tools["web_search"]
+            search_provider = next(
+                cell.cell_contents
+                for cell in web_search_tool.__closure__
+                if cell.cell_contents.__class__.__name__ == "ConfiguredSearchProvider"
+            )
+
+            self.assertIn("web_search", runner.agent.tools)
+            self.assertEqual(search_provider.provider, "deepseek")
+            self.assertIsNone(search_provider.client)
+            self.assertIsNone(search_provider.model)
+            self.assertEqual(search_provider.config["api_key"], "deepseek-main-key")
+            self.assertEqual(search_provider.config["base_url"], "https://api.deepseek.com")
+            self.assertEqual(
+                runner._fetch_config_for_tools(runner.config),
+                {"api_key": "deepseek-main-key", "base_url": "https://api.deepseek.com"},
+            )
+
     def test_config_accepts_image_generation_none_and_skips_tool(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "config.yaml"
