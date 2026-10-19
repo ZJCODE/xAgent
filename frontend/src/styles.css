@@ -1144,17 +1144,80 @@ input::placeholder {
   flex: 1;
 }
 
-.chat-channel-empty {
+.chat-message-list.is-empty {
+  display: flex;
+  flex-direction: column;
+}
+
+.chat-message-list.is-empty > .empty-state {
   flex: 1;
+}
+
+.chat-channel-empty {
   min-height: 240px;
+  gap: 0;
+  padding: 32px 16px;
+}
+
+.chat-channel-state-icon {
+  width: 56px;
+  height: 56px;
+  margin-bottom: 22px;
+  border-radius: 16px;
+}
+
+.chat-channel-copy {
+  min-width: 0;
+}
+
+.chat-channel-empty .chat-channel-copy {
+  width: 100%;
+  max-width: 380px;
+}
+
+.chat-channel-title {
+  margin: 0;
+  color: var(--text);
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.35;
+  letter-spacing: -0.025em;
+}
+
+.chat-channel-description {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.chat-channel-empty .chat-channel-description {
+  margin-top: 10px;
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.chat-channel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
 }
 
 .chat-channel-empty .chat-channel-actions {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  margin-top: 10px;
+  margin-top: 24px;
+}
+
+.chat-channel-empty .chat-channel-actions .ui-button {
+  min-height: 40px;
+  padding-inline: 16px;
+}
+
+.chat-channel-actions .ui-button {
+  white-space: nowrap;
+}
+
+.chat-channel-actions svg {
+  flex-shrink: 0;
 }
 
 .chat-channel-error {
@@ -1173,33 +1236,29 @@ input::placeholder {
   padding: 12px 14px;
 }
 
-.chat-channel-banner-copy {
-  min-width: 0;
-  flex: 1;
+.chat-channel-banner .chat-channel-copy {
+  flex: 1 1 260px;
 }
 
-.chat-channel-banner-copy p {
-  margin: 0;
+.chat-channel-banner .chat-channel-title {
   font-size: 13px;
   font-weight: 640;
+  letter-spacing: 0;
 }
 
-.chat-channel-banner-copy span {
-  display: block;
+.chat-channel-banner .chat-channel-description {
   margin-top: 2px;
   color: var(--text-muted);
   font-size: 12px;
   line-height: 1.45;
 }
 
-.chat-channel-banner-copy .chat-channel-error {
+.chat-channel-banner .chat-channel-error {
   margin-top: 6px;
 }
 
-.chat-channel-banner-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+.chat-channel-banner .chat-channel-actions {
+  justify-content: flex-start;
 }
 
 .chat-channel-link {

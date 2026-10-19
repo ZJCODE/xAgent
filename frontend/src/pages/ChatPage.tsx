@@ -1,4 +1,4 @@
-import { Activity, Eye, FileIcon, Paperclip, Play, RadioTower, Send, Square, UserRound, Wifi, WifiOff, X } from "lucide-react";
+import { Activity, Eye, FileIcon, Paperclip, Play, RadioTower, RefreshCw, Send, Square, UserRound, Wifi, WifiOff, X } from "lucide-react";
 import { FormEvent, useEffect, useRef, useState, type ReactNode } from "react";
 import { Markdown } from "../components/Markdown";
 import { Button, EmptyState, IconButton, StatusBadge } from "../components/ui";
@@ -141,16 +141,21 @@ function ChatChannelBlocked({ runtime, starting, loading, error, onStart, onRetr
 }) {
   const preparing = starting || runtime?.status === "starting";
   const title = loading ? "Checking Agent status" : error && !runtime ? "Cannot reach the Agent" : preparing ? "Agent is starting" : runtime?.runtime_running ? "Agent is not ready" : "Agent is stopped";
-  const description = error || runtime?.error || (preparing ? "Preparing your Agent. Chat will be available shortly." : "Start the Agent to chat. API starts by default; other channels connect on demand.");
+  const description = error || runtime?.error || (preparing
+    ? "Preparing your Agent. Chat will be available shortly."
+    : runtime?.runtime_running
+      ? "Your Agent is running, but chat is not ready yet. Check its status or try again."
+      : "Start your Agent to begin a conversation.");
   return (
-    <div className={variant === "banner" ? "chat-channel-banner" : "empty-state chat-channel-empty"} role="status">
-      <div className={variant === "banner" ? "chat-channel-banner-copy" : undefined}>
-        {variant === "empty" ? <div className="empty-state-icon" aria-hidden="true"><RadioTower size={24} /></div> : null}
-        <p>{title}</p><span>{description}</span>
+    <div className={variant === "banner" ? "chat-channel-banner" : "empty-state chat-channel-empty"} role="status" aria-busy={preparing || loading}>
+      {variant === "empty" ? <div className="empty-state-icon chat-channel-state-icon" aria-hidden="true"><RadioTower size={24} strokeWidth={1.6} /></div> : null}
+      <div className="chat-channel-copy">
+        <h2 className="chat-channel-title">{title}</h2>
+        <span className="chat-channel-description">{description}</span>
       </div>
       <div className="chat-channel-actions">
-        {runtime && !runtime.runtime_running ? <Button type="button" variant="primary" disabled={starting || loading} onClick={onStart}><Play size={14} />{starting ? "Starting…" : "Start Agent"}</Button> : null}
-        {!preparing ? <Button type="button" onClick={onRetry}>Refresh status</Button> : null}
+        {runtime && !runtime.runtime_running ? <Button type="button" variant="primary" disabled={starting || loading} onClick={onStart}><Play size={15} aria-hidden="true" />{starting ? "Starting…" : "Start Agent"}</Button> : null}
+        {!preparing ? <Button type="button" disabled={loading} onClick={onRetry}><RefreshCw size={14} aria-hidden="true" />Refresh status</Button> : null}
         {runtime?.runtime_running && !preparing ? <a className="chat-channel-link" href="/channels">View Agent status</a> : null}
       </div>
     </div>
@@ -237,7 +242,7 @@ function ChatPanel({
         </div>
       </div>
 
-      <div ref={scrollRef} className="fade-mask flex-1 min-h-0 overflow-y-auto px-3 sm:px-6 py-4 sm:py-6 space-y-4">
+      <div ref={scrollRef} className={classNames("chat-message-list fade-mask flex-1 min-h-0 overflow-y-auto px-3 sm:px-6 py-4 sm:py-6 space-y-4", !panel.messages.length && "is-empty")}>
         {panel.messages.length ? (
           panel.messages.map((message) => <ChatMessageView key={message.id} message={message} />)
         ) : !statusReady ? (
