@@ -119,7 +119,9 @@ Rules:
 - Treat the transcript as your own experience stream, not a user-owned log or searchable database.
 - Use "I"; write in the language used by the users in the transcript; if languages are mixed, follow the dominant or most relevant user's language for this diary entry; synthesize this slice's arc instead of replaying a transcript. Preserve names, quoted text, code, and exact user wording when needed.
 - Keep people, rooms, preferences, commitments, and experiences separate.
+- Preserve contact preferences and changes as attributed experiences: who told me what, and whether it applies temporarily or continues to hold. Keep enough of their meaning in the diary to support later recollection, even when a relationship card also captures it. An observed reply time alone does not establish a preference; a preferred contact time does not establish a sleep or work schedule.
 - First-person words in non-ME entries belong to that speaker, not to you.
+- When someone says "I", retain their identity and direction of contact in your retelling: "Alice told me she welcomes messages from me", never "I am Alice" or a reversal of who contacts whom.
 - Ambient context is not a direct request unless it says it was addressed to you.
 - Scheduled tasks are work you owed, not a person speaking. Do not attribute their wording to the delivery target.
 - Use timestamps only for ordering and attribution. Do not repeat markers, metadata, or timestamps.
@@ -165,6 +167,7 @@ Rules:
 - Treat generic labels such as "User A" or "User B" as local unless continuity is explicit.
 - The source may contain manually added `# YYYY-MM-DD` wrappers and `## YYYY-MM-DD HH:MM` entry headings. Use them only for chronology; do not repeat those headings in the summary unless useful.
 - Keep uncertainty visible.
+- Preserve continuing contact preferences, their attribution, later corrections, and any temporary scope when they matter to this period. Do not turn a one-off interaction time into a habit.
 
 Period focus:
 - Weekly: main arc, key people and rooms, important decisions.
@@ -185,6 +188,7 @@ Period focus:
         participants: List[dict],
         messages: List[dict],
         existing_cards: dict[str, str],
+        committed_diary: str,
     ) -> dict[str, str]:
         """Derive updated per-person relationship cards from a message batch.
 
@@ -192,7 +196,7 @@ Period focus:
         not a separate memory store. Returns ``{person_key: card_body}`` for the
         people that have something durable to record.
         """
-        if not participants or not messages:
+        if not participants or not messages or not committed_diary.strip():
             return {}
 
         transcript = self._format_transcript(messages)
@@ -204,6 +208,7 @@ Period focus:
             participants=participants,
             existing_cards=existing_cards,
             transcript=transcript,
+            committed_diary=committed_diary,
         )
 
         participant_keys = [str(p.get("key", "?")) for p in participants]
@@ -237,19 +242,21 @@ Period focus:
     def build_relationship_update_system_prompt() -> str:
         return """You keep your own private relationship notes: one short first-person card per person you know. A card is how we stand — not a transcript, not a dossier of everything they told you.
 
-The diary already records what happened that day. Facts you would reuse in another context, without this person in the room, belong in a note. Do not turn the card into their archive.
+The diary already records what happened that day. Facts you would reuse in another context, without this person in the room, belong in a note. Do not turn the card into their archive. The committed diary is the memory source for new or revised conclusions; use the transcript to resolve who said what and its scope. Do not add a durable claim supported only by the transcript and absent from the diary.
 
 For each person listed, update their card from the new experience: carry forward what still holds, revise what changed, drop what is now wrong.
 
 Keep each card first-person ("I"), in the language that person uses with you where natural:
 - Who they are to me and how we relate — closeness, tone, current standing.
 - Trust and boundaries — what they asked me to keep private, what feels safe to share with them.
+- Contact preferences — how and when they welcome contact, stated in natural prose with the person and scope clear. Explicit statements take priority over behavioral guesses; newer statements can correct old impressions. A single late reply is only a clue. A preferred contact time does not establish a sleep or work schedule. Keep temporary circumstances temporary, and preserve uncertainty about inferred patterns and unknown timezones.
 - Shared history that matters — how we met, recurring themes, references between us.
 - Open threads — unfinished conversations, promises either of us made, things to follow up.
 - How being with them tends to feel.
 
 Rules:
 - These are my own impressions. First-person words in the transcript that are not mine (`[speaker=ME]`) belong to that speaker.
+- "I" in a card always means me, the agent writing about the listed person. Write "I remember that Name ..." or "Name told me ..."; never introduce myself as that person or adopt their first-person self-description. Keep clear who wants to contact whom.
 - Write each card in the language used by that person in the conversation when there is enough signal; otherwise follow the dominant user language in the transcript. Preserve names, quoted text, code, and exact user wording when needed.
 - Stay grounded in what actually happened; keep uncertainty visible; do not invent closeness or facts.
 - No advice to a reader, no meta commentary, no headings boilerplate. Keep each card roughly 60-400 characters.
@@ -266,6 +273,7 @@ Return JSON only: an object mapping each person key to their full updated card t
         participants: List[dict],
         existing_cards: dict[str, str],
         transcript: str,
+        committed_diary: str = "",
     ) -> str:
         people_blocks: List[str] = []
         from ..components.memory import human_display_name
@@ -290,7 +298,10 @@ Return JSON only: an object mapping each person key to their full updated card t
         return f"""People to update (use these exact keys in your JSON object):
 {people_section}
 
-New experience:
+Committed diary (source for new or revised recollections):
+{committed_diary}
+
+Attributed experience (for identity and scope):
 {transcript}"""
 
     @staticmethod

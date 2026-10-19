@@ -253,8 +253,6 @@ class SubconsciousLoop:
         delivery_sink: Optional[Callable[[SubconsciousDelivery], Awaitable[None] | None]] = None,
         deliverable_channels: Optional[Iterable[str]] = None,
         contact_deliverable: Optional[Callable[[ContactEntry], bool]] = None,
-        refractory_seconds: Optional[float] = None,
-        max_unanswered_outbound: Optional[int] = None,
         logger_: Optional[logging.Logger] = None,
     ) -> None:
         self._agent = agent
@@ -279,22 +277,7 @@ class SubconsciousLoop:
         self._recovery_seconds = max(
             0.0, float(AgentConfig.SUBCONSCIOUS_HABITUATION_RECOVERY_SECONDS)
         )
-        self._refractory_seconds = max(
-            0.0,
-            float(
-                AgentConfig.SUBCONSCIOUS_REFRACTORY_SECONDS
-                if refractory_seconds is None
-                else refractory_seconds
-            ),
-        )
-        self._max_unanswered_outbound = max(
-            0,
-            int(
-                AgentConfig.SUBCONSCIOUS_MAX_UNANSWERED_OUTBOUND
-                if max_unanswered_outbound is None
-                else max_unanswered_outbound
-            ),
-        )
+        # Delivery observations inform the model; they never block a recipient.
         self._unanswered_outbound: dict[str, int] = {}
         self._last_diary_note: str = ""
         self._load_state()
@@ -372,11 +355,8 @@ class SubconsciousLoop:
         if self._is_agent_busy():
             self._logger.debug("Skipping subconscious tick: foreground turn is active or queued")
             return
-        if self._in_refractory_period():
-            self._logger.debug("Skipping subconscious tick: within post-interaction refractory period")
-            return
-
-        experience_cursor, experience_moved = await self._experience_state()
+        reflection_cursor = await self._current_experience_cursor()
+        experience_cursor, experience_moved = self._experience_state(reflection_cursor)
         if experience_moved:
             self._clear_habituation()
         else:
@@ -415,6 +395,7 @@ class SubconsciousLoop:
                 external_content,
                 internal_content,
                 recipient_hint,
+                expected_cursor=reflection_cursor,
             )
             if not delivered:
                 diary_note = self._held_back_diary_note(internal_content)
@@ -474,32 +455,6 @@ class SubconsciousLoop:
             return True
         return False
 
-    def _in_refractory_period(self) -> bool:
-        """Return True if a live user interaction happened within refractory_seconds."""
-        if self._refractory_seconds <= 0:
-            return False
-        last_ts = self._read_last_interaction_timestamp()
-        if last_ts is None:
-            return False
-        elapsed = time.time() - last_ts
-        return 0.0 <= elapsed < self._refractory_seconds
-
-    def _read_last_interaction_timestamp(self) -> Optional[float]:
-        candidates: list[Path] = [
-            self._workspace / AgentConfig.MEMORY_DIRNAME / ".last_interaction",
-        ]
-        memory = getattr(self._agent, "markdown_memory", None)
-        memory_root = getattr(memory, "root", None)
-        if isinstance(memory_root, Path):
-            candidates.insert(0, memory_root / ".last_interaction")
-        for path in candidates:
-            try:
-                if path.is_file():
-                    return float(path.read_text(encoding="utf-8").strip())
-            except (OSError, ValueError):
-                continue
-        return None
-
     def _load_state(self) -> None:
         """Restore persisted habituation and unanswered-outbound state if present."""
         if not self._state_file.is_file():
@@ -525,7 +480,9 @@ class SubconsciousLoop:
             cleaned: dict[str, int] = {}
             for key, count in unanswered.items():
                 if isinstance(key, str) and isinstance(count, int) and not isinstance(count, bool) and count > 0:
-                    cleaned[key.strip().lower()] = count
+                    channel, separator, user_id = key.partition(":")
+                    if separator and channel.strip() and user_id.strip():
+                        cleaned[self._contact_key(channel, user_id)] = count
             self._unanswered_outbound = cleaned
 
     def _save_state(self) -> None:
@@ -541,13 +498,12 @@ class SubconsciousLoop:
         except Exception:
             self._logger.debug("Failed to persist subconscious state", exc_info=True)
 
-    async def _experience_state(self) -> tuple[int, bool]:
+    def _experience_state(self, raw_cursor: Optional[int]) -> tuple[int, bool]:
         """Return ``(cursor, moved)`` for whether external experience changed.
 
         Without a message cursor, the first in-process cycle counts as movement
         so later idle ticks can accumulate habituation.
         """
-        raw_cursor = await self._current_experience_cursor()
         if raw_cursor is None:
             moved = self._last_experience_cursor is None
             cursor = 0 if self._last_experience_cursor is None else int(self._last_experience_cursor)
@@ -661,6 +617,7 @@ class SubconsciousLoop:
             include_images=False,
             workspace_dir=getattr(self._agent, "workspace_dir", None),
             task_mode="subconscious_json",
+            current_time=datetime.now().astimezone().isoformat(timespec="minutes"),
             working_summary=working_context.summary,
             covers_through_cursor=working_context.covers_through_cursor,
             prompt_registry=getattr(message_handler, "prompt_registry", None),
@@ -893,6 +850,7 @@ class SubconsciousLoop:
                 speaker_keys=keys,
                 max_cards=AgentConfig.RELATIONSHIP_SUBCONSCIOUS_MAX_CARDS,
                 include_routing_id=True,
+                unanswered_outbound=dict(self._unanswered_outbound),
             )
         except Exception:
             self._logger.warning("Failed to collect relationship context", exc_info=True)
@@ -905,8 +863,6 @@ class SubconsciousLoop:
         norm_channel = str(channel or "").strip().lower()
         norm_user = str(user_id or "").strip()
         if norm_channel not in self._deliverable_channels:
-            return False
-        if self._has_unanswered_outbound(norm_channel, norm_user):
             return False
         if self._contact_deliverable is not None:
             try:
@@ -960,6 +916,8 @@ class SubconsciousLoop:
         external_content: str,
         internal_content: str,
         recipient_hint: Any,
+        *,
+        expected_cursor: Optional[int],
     ) -> bool:
         """Deliver a worthy thought. Return True only when the sink accepted it."""
         contacts = self._filter_deliverable_contacts(load_contacts(self._contacts_file))
@@ -970,16 +928,20 @@ class SubconsciousLoop:
             self._logger.info("No suitable recipient for subconscious thought")
             return False
 
-        if self._has_unanswered_outbound(recipient):
-            self._logger.info(
-                "Holding back subconscious thought for %s:%s (unanswered outbound limit reached)",
-                recipient.channel,
-                recipient.user_id,
-            )
-            return False
-
         if self._delivery_sink is None:
             self._logger.info("No subconscious delivery sink configured")
+            return False
+
+        # Recheck after recipient lookup, which can itself yield to a live turn.
+        current_cursor = (
+            await self._current_experience_cursor() if expected_cursor is not None else None
+        )
+        if self._is_agent_busy() or (
+            expected_cursor is not None
+            and current_cursor is not None
+            and current_cursor != expected_cursor
+        ):
+            self._logger.info("Holding back subconscious thought: conversation changed during reflection")
             return False
 
         now = datetime.now()
@@ -1017,24 +979,12 @@ class SubconsciousLoop:
         key = self._contact_key(channel, user_id)
         return self._unanswered_outbound.pop(key, None) is not None
 
-    def _has_unanswered_outbound(
-        self,
-        contact_or_channel: ContactEntry | str,
-        user_id: Optional[str] = None,
-    ) -> bool:
-        if self._max_unanswered_outbound <= 0:
-            return False
-        if isinstance(contact_or_channel, ContactEntry):
-            key = self._contact_key(contact_or_channel.channel, contact_or_channel.user_id)
-        else:
-            key = self._contact_key(contact_or_channel, str(user_id or ""))
-        return self._unanswered_outbound.get(key, 0) >= self._max_unanswered_outbound
-
     def _sync_unanswered_from_recent_messages(self, recent_messages: Optional[List[Any]]) -> None:
-        """Clear unanswered-outbound locks for contacts whose latest message is from the user."""
+        """Refresh delivery observations when a later human message is visible."""
         if not self._unanswered_outbound or not isinstance(recent_messages, list) or not recent_messages:
             return
         from ...schemas import MessageType, RoleType
+        from ..inbox import is_scheduled_work
 
         replied_keys: set[str] = set()
         for msg in recent_messages:
@@ -1042,6 +992,8 @@ class SubconsciousLoop:
                 continue
             role = getattr(msg, "role", None)
             if role == RoleType.USER:
+                if is_scheduled_work(getattr(msg, "metadata", None)):
+                    continue
                 ch = str(getattr(msg, "channel", "") or "").strip().lower()
                 uid = str(getattr(msg, "sender_id", "") or "").strip()
                 if ch and uid:
@@ -1201,8 +1153,6 @@ class SubconsciousLoop:
         filtered: List[ContactEntry] = []
         for contact in contacts:
             if str(contact.channel or "").strip().lower() not in self._deliverable_channels:
-                continue
-            if self._has_unanswered_outbound(contact):
                 continue
             if self._contact_deliverable is not None:
                 try:

@@ -5,6 +5,7 @@ import json
 import tempfile
 import time
 import unittest
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -12,7 +13,8 @@ from xagent.core.config import AgentConfig
 from xagent.core.agent import Agent
 from xagent.core.handlers.message import MessageHandler
 from xagent.core.handlers.model import ChatToolCall, ModelStreamEvent
-from xagent.schemas import RoleType
+from xagent.schemas import Message, RoleType
+from xagent.components.memory import RelationshipCard
 from xagent.core.runtime.subconscious import (
     ContactEntry,
     SubconsciousLoop,
@@ -20,6 +22,7 @@ from xagent.core.runtime.subconscious import (
     save_contacts,
     upsert_contact,
     resolve_contacts_path,
+    persist_subconscious_delivery,
 )
 
 
@@ -101,6 +104,46 @@ class ContactManagementTests(unittest.TestCase):
 
 
 class AgentSubconsciousThoughtTests(unittest.IsolatedAsyncioTestCase):
+    async def test_persisted_followups_remain_visible_after_restart_without_merging_ids(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            agent = Agent(client=object(), workspace=tmpdir, notes_enabled=False)
+            await agent.message_storage.add_messages(Message(
+                role=RoleType.USER, sender_id="Alice", channel="api", content="Let me know what you find.",
+            ))
+            await agent.relationship_store.write_card(RelationshipCard(
+                key="api:Alice", display_name="Alice", body="Alice welcomes updates on our project.",
+            ))
+            agent.model_client = SubconsciousLoopTests._ModelClientStub([
+                [SubconsciousLoopTests._json_event({
+                    "internal_content": f"I have update {index} for Alice.", "worthy": True,
+                    "recipient_hint": "Alice", "external_content": f"Here is update {index}.",
+                })] for index in (1, 2)
+            ])
+
+            async def sink(delivery):
+                await persist_subconscious_delivery(agent, delivery, channel="api", recipient_id="Alice")
+
+            loop = SubconsciousLoop(
+                agent, workspace=Path(tmpdir), probability=1, delivery_sink=sink, deliverable_channels={"api"},
+            )
+            loop.record_interaction("api", "Alice", {"user_id": "Alice"})
+            await loop.maybe_think()
+            loop = SubconsciousLoop(
+                agent, workspace=Path(tmpdir), probability=1, delivery_sink=sink, deliverable_channels={"api"},
+            )
+            self.assertEqual(loop._unanswered_outbound, {"api:Alice": 1})
+            await loop.maybe_think()
+            self.assertEqual(loop._unanswered_outbound, {"api:Alice": 2})
+            relationship_context = next(
+                m["content"] for m in agent.model_client.calls[-1]["messages"]
+                if m.get("name") == AgentConfig.SUBCONSCIOUS_RELATIONSHIPS_NAME
+            )
+            self.assertIn("1 proactive message(s)", relationship_context)
+            history = await agent.message_storage.get_messages()
+            self.assertEqual([m.content for m in history if m.role == RoleType.ASSISTANT], ["Here is update 1.", "Here is update 2."])
+            loop.record_interaction("api", "alice", {"user_id": "alice"})
+            self.assertEqual(loop._unanswered_outbound, {"api:Alice": 2})
+
     async def test_record_subconscious_thought_appends_diary_without_message(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             agent = Agent(client=object(), workspace=tmpdir)
@@ -166,6 +209,7 @@ class SubconsciousLoopTests(unittest.TestCase):
         memory_handler = MagicMock()
         memory_handler.get_subconscious_context.return_value = "Recent memory content."
         memory_handler.get_notebook_context.return_value = ""
+        memory_handler.get_relationship_context = AsyncMock(return_value="")
         agent.memory_handler = memory_handler
         message_handler = MessageHandler(MagicMock(), system_prompt=agent.system_prompt)
         message_handler.get_recent_messages = AsyncMock(return_value=[])
@@ -412,8 +456,11 @@ class SubconsciousLoopTests(unittest.TestCase):
             self.assertIn("exact user_id", current_task["content"])
             self.assertIn("diary is only yours", current_task["content"])
             self.assertIn("did not send it", current_task["content"])
-            self.assertIn("avoid unsolicited messages", current_task["content"])
-            self.assertIn("already talking with you", current_task["content"])
+            self.assertIn("their expressed preferences", current_task["content"])
+            self.assertIn("not sending restrictions", current_task["content"])
+            self.assertNotIn("At night", current_task["content"])
+            current_time = current_task["content"].split("Current time: ", 1)[1].splitlines()[0]
+            self.assertIsNotNone(datetime.fromisoformat(current_time).utcoffset())
             self.assertIn("would speak now", current_task["content"])
             self.assertIn("will be sent", current_task["content"])
             self.assertIn("their thread to someone else", current_task["content"])
@@ -643,9 +690,8 @@ class SubconsciousLoopTests(unittest.TestCase):
             contents = [i["content"] for i in instructions]
             self.assertTrue(any("Context and Attribution" in c for c in contents))
             self.assertTrue(any("already know what to call them" in c for c in contents))
-            self.assertTrue(any("avoid unsolicited messages" in c for c in contents))
-            self.assertTrue(any("would speak now" in c for c in contents))
-            self.assertTrue(any("must not be spoken to another" in c for c in contents))
+            self.assertFalse(any("avoid unsolicited messages" in c for c in contents))
+            self.assertFalse(any("worthy=true" in c for c in contents))
             self.assertFalse(any("quiet hours" in c.lower() for c in contents))
             self.assertFalse(any("All available tools are defined" in c for c in contents))
             self.assertEqual(agent.model_client.calls[0]["tool_specs"], [])
@@ -1404,7 +1450,7 @@ class SubconsciousLoopTests(unittest.TestCase):
             self.assertIsNone(result)
             self.assertEqual(len(agent.model_client.calls), 0)
 
-    def test_maybe_think_skips_during_refractory_period(self):
+    def test_recent_interaction_does_not_suppress_reflection(self):
         agent = self._make_agent_mock()
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1412,11 +1458,12 @@ class SubconsciousLoopTests(unittest.TestCase):
             mem_dir.mkdir(parents=True, exist_ok=True)
             (mem_dir / ".last_interaction").write_text(str(time.time() - 10.0), encoding="utf-8")
 
-            loop = SubconsciousLoop(agent, workspace=Path(tmpdir), refractory_seconds=60.0)
+            loop = SubconsciousLoop(agent, workspace=Path(tmpdir))
             loop._probability = 1.0
             result = asyncio.run(loop.maybe_think())
             self.assertIsNone(result)
-            self.assertEqual(len(agent.model_client.calls), 0)
+            self.assertEqual(len(agent.model_client.calls), 1)
+            self.assertTrue((mem_dir / ".last_interaction").is_file())
 
     def test_habituation_state_persisted_and_restored_across_restarts(self):
         agent = self._make_agent_mock()
@@ -1478,7 +1525,7 @@ class SubconsciousLoopTests(unittest.TestCase):
             asyncio.run(loop.maybe_think())
             self.assertEqual(loop._last_experience_cursor, 4)
 
-    def test_unanswered_outbound_blocks_double_texting_until_user_replies(self):
+    def test_unanswered_outbound_informs_without_blocking_followup(self):
         agent = self._make_agent_mock()
         self._set_model_json(agent, {
             "internal_content": "Reach out to 张三.",
@@ -1496,7 +1543,6 @@ class SubconsciousLoopTests(unittest.TestCase):
                 workspace=Path(tmpdir),
                 delivery_sink=delivery_sink,
                 deliverable_channels={"weixin"},
-                max_unanswered_outbound=1,
             )
             loop.record_interaction(
                 channel="weixin",
@@ -1509,9 +1555,11 @@ class SubconsciousLoopTests(unittest.TestCase):
             # First thought delivers and records 1 unanswered outbound
             asyncio.run(loop.maybe_think())
             self.assertEqual(delivery_sink.await_count, 1)
-            self.assertTrue(loop._has_unanswered_outbound("weixin", "wx_123"))
+            self.assertEqual(loop._unanswered_outbound["weixin:wx_123"], 1)
+            self.assertEqual(len(loop._filter_deliverable_contacts(load_contacts(loop.contacts_file))), 1)
+            self.assertTrue(loop._is_deliverable_relationship_key("weixin:wx_123"))
 
-            # Second worthy thought for same user is held back because of unanswered limit
+            # A different, model-selected follow-up is allowed without a reply.
             self._set_model_json(agent, {
                 "internal_content": "Reach out to 张三 again.",
                 "worthy": True,
@@ -1519,15 +1567,99 @@ class SubconsciousLoopTests(unittest.TestCase):
                 "external_content": "Second proactive ping!",
             })
             asyncio.run(loop.maybe_think())
-            self.assertEqual(delivery_sink.await_count, 1)
+            self.assertEqual(delivery_sink.await_count, 2)
+            self.assertEqual(loop._unanswered_outbound["weixin:wx_123"], 2)
+            self.assertEqual(
+                agent.memory_handler.get_relationship_context.call_args.kwargs["unanswered_outbound"],
+                {"weixin:wx_123": 1},
+            )
+            restored = SubconsciousLoop(agent, workspace=Path(tmpdir), deliverable_channels={"weixin"})
+            self.assertEqual(restored._unanswered_outbound["weixin:wx_123"], 2)
+            self.assertEqual(len(restored._filter_deliverable_contacts(load_contacts(restored.contacts_file))), 1)
 
-            # Once user interacts again, unanswered count clears and delivery is allowed
+            # A new human interaction clears only the delivery observation.
             loop.record_interaction(
                 channel="weixin",
                 user_id="wx_123",
                 target={"user_id": "wx_123", "sender_name": "张三"},
             )
-            self.assertFalse(loop._has_unanswered_outbound("weixin", "wx_123"))
+            self.assertNotIn("weixin:wx_123", loop._unanswered_outbound)
+
+    def test_changed_conversation_holds_back_generated_message(self):
+        for change in ("cursor", "busy", "pending", "routing"):
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as tmpdir:
+                agent = self._make_agent_mock()
+                agent.inbox.busy = False
+                agent.inbox.pending_count = 0
+                cursor = [10]
+                agent.message_storage.get_latest_message_cursor = AsyncMock(side_effect=lambda: cursor[0])
+                sink = AsyncMock()
+                loop = SubconsciousLoop(
+                    agent, workspace=Path(tmpdir), probability=1,
+                    delivery_sink=sink, deliverable_channels={"api"},
+                )
+                loop.record_interaction("api", "alice", {"user_id": "alice"})
+
+                async def reflect():
+                    if change == "cursor":
+                        cursor[0] += 1  # A complete new turn can end before reflection returns.
+                    elif change == "busy":
+                        agent.inbox.busy = True
+                    elif change == "pending":
+                        agent.inbox.pending_count = 1
+                    return {
+                        "internal_content": "A useful thought.", "worthy": True,
+                        "external_content": "An outdated follow-up.", "recipient_hint": "alice",
+                    }
+
+                loop._generate_subconscious_thought = reflect
+                if change == "routing":
+                    async def lookup(contacts):
+                        cursor[0] += 1
+                        return contacts
+                    loop._alias_contacts_for_routing = lookup
+                asyncio.run(loop.maybe_think())
+                sink.assert_not_awaited()
+                agent.record_subconscious_thought.assert_awaited_once_with(
+                    "A useful thought.\nI didn't send this."
+                )
+                self.assertEqual(loop._unanswered_outbound, {})
+                self.assertEqual(loop._last_experience_cursor, 10)
+
+    def test_missing_cursor_uses_busy_check_without_disabling_delivery(self):
+        for busy in (False, True):
+            with self.subTest(busy=busy), tempfile.TemporaryDirectory() as tmpdir:
+                agent = self._make_agent_mock()
+                agent.inbox.busy = False
+                agent.inbox.pending_count = 0
+                sink = AsyncMock()
+                loop = SubconsciousLoop(
+                    agent, workspace=Path(tmpdir), probability=1,
+                    delivery_sink=sink, deliverable_channels={"api"},
+                )
+                loop._current_experience_cursor = AsyncMock(return_value=None)
+                loop.record_interaction("api", "alice", {"user_id": "alice"})
+
+                async def reflect():
+                    agent.inbox.busy = busy
+                    return {
+                        "internal_content": "Still useful.", "worthy": True,
+                        "external_content": "A fresh follow-up.", "recipient_hint": "alice",
+                    }
+
+                loop._generate_subconscious_thought = reflect
+                asyncio.run(loop.maybe_think())
+                self.assertEqual(sink.await_count, 0 if busy else 1)
+
+    def test_scheduled_work_does_not_count_as_a_human_reply(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop = SubconsciousLoop(self._make_agent_mock(), workspace=Path(tmpdir))
+            loop._record_unanswered_outbound("api", "Alice")
+            loop._sync_unanswered_from_recent_messages([Message(
+                role=RoleType.USER, sender_id="Alice", channel="api", content="Run this reminder.",
+                metadata={"source": "scheduled_task"},
+            )])
+            self.assertEqual(loop._unanswered_outbound, {"api:Alice": 1})
 
     def test_contact_deliverable_callback_filters_unroutable_contacts(self):
         agent = self._make_agent_mock()

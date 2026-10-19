@@ -426,7 +426,10 @@ class MemoryHandler:
 
         # Derived projections follow the durable diary/cursor commit, so
         # failures or shutdown while projecting cannot replay diary prose.
-        await self._update_relationship_cards(recent_messages, new_records)
+        await self._update_relationship_cards(
+            recent_messages, new_records,
+            committed_diary=staged_content, journal_date=today,
+        )
         logger.info(
             "Diary commit [trigger=%s] cursor %d→%d, %d msgs, %d slices → %d chars, idle=%.0fs",
             trigger, start_exclusive, end_inclusive, len(new_records), len(batches),
@@ -468,13 +471,16 @@ class MemoryHandler:
         self,
         recent_messages: List[Message],
         new_records: List[dict],
+        *,
+        committed_diary: str,
+        journal_date: date,
     ) -> None:
         """Derive/update per-person relationship cards from this batch.
 
         A best-effort projection over the diary stream: failures here must
         never break diary maintenance, so everything is wrapped defensively.
         """
-        if self.relationship_store is None:
+        if self.relationship_store is None or not committed_diary.strip():
             return
         try:
             participants = self._extract_participants(recent_messages)
@@ -496,6 +502,7 @@ class MemoryHandler:
                 participants=participants,
                 messages=new_records,
                 existing_cards=existing_cards,
+                committed_diary=committed_diary,
             )
             if not new_cards:
                 logger.info(
@@ -507,7 +514,7 @@ class MemoryHandler:
 
             from ...components.memory import RelationshipCard, human_display_name
 
-            today_str = date.today().isoformat()
+            today_str = journal_date.isoformat()
             participant_by_key = {p["key"]: p for p in participants}
             for key, body in new_cards.items():
                 participant = participant_by_key.get(key, {})
@@ -532,6 +539,10 @@ class MemoryHandler:
                         channel=str(participant.get("channel") or ""),
                         user_id=user_id,
                         updated=today_str,
+                        source_diary_dates=sorted({
+                            *(existing.source_diary_dates if existing is not None else []),
+                            today_str,
+                        }),
                     )
                 )
             logger.info(
@@ -589,6 +600,7 @@ class MemoryHandler:
         participant_keys: Optional[List[str]] = None,
         max_cards: Optional[int] = None,
         include_routing_id: bool = False,
+        unanswered_outbound: Optional[dict[str, int]] = None,
     ) -> str:
         """Return rendered relationship cards for the given people.
 
@@ -597,6 +609,8 @@ class MemoryHandler:
         ``include_routing_id`` appends each person's ``user_id`` to the header
         so the subconscious can emit a deterministic ``recipient_hint``; reply
         turns leave it off so the identifier is never exposed to users.
+        ``unanswered_outbound`` adds transient delivery observations to that
+        view only; these are not persisted relationship claims or send limits.
         """
         if self.relationship_store is None:
             return ""
@@ -638,6 +652,14 @@ class MemoryHandler:
                 header = f"## {name} [user_id: {card.user_id}]"
             else:
                 header = f"## {name}"
+            if include_routing_id and unanswered_outbound:
+                observation_key = f"{card.channel.strip().lower()}:{card.user_id.strip()}"
+                count = unanswered_outbound.get(observation_key)
+                if count is not None:
+                    body += (
+                        f"\nDelivery observation: {count} proactive message(s) sent since "
+                        "their last message. This is not a sending restriction."
+                    )
             blocks.append(f"{header}\n{body}")
         return "\n\n".join(blocks)
 

@@ -440,7 +440,7 @@ class _FakeDiaryLLMService:
         self.summary_calls.append((source_content, period_type, period_label))
         return self.summary_text
 
-    async def update_relationship_cards(self, participants, messages, existing_cards):
+    async def update_relationship_cards(self, participants, messages, existing_cards, committed_diary):
         return {}
 
 

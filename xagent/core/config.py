@@ -230,12 +230,6 @@ class AgentConfig:
     # Solitude recovery: each this many seconds without new messages reduces
     # stale_streak by 1, so alone time can restore inner life. 0 disables.
     SUBCONSCIOUS_HABITUATION_RECOVERY_SECONDS = 3600
-    # Post-interaction refractory period: suppress background subconscious
-    # triggers while an active conversation is still warm (seconds). 0 disables.
-    SUBCONSCIOUS_REFRACTORY_SECONDS = 60
-    # Anti-double-texting: max consecutive unanswered proactive subconscious
-    # messages to the same contact before holding back until they reply. 0 disables.
-    SUBCONSCIOUS_MAX_UNANSWERED_OUTBOUND = 1
     SUBCONSCIOUS_STATE_FILENAME = "subconscious_state.json"
 
     # ============================================================
@@ -358,8 +352,19 @@ class AgentConfig:
         "moved — no new messages, no new angle from memory — return empty "
         "internal_content — silence is better than restating the same private note.\n"
         "The diary is only yours. Writing a thought down did not send it.\n"
-        "Look at the current time. At night, avoid unsolicited messages; "
-        "if someone is already talking with you, continuing is not a disturbance.\n"
+        "Decide whether to contact this particular person from their expressed "
+        "preferences, current situation, your relationship, the value of the "
+        "message, and what you have already sent. Time is context, not a "
+        "preset permission or prohibition. The current time is in the runtime's "
+        "timezone; do not assume the person's timezone when it is unknown. "
+        "Recent explicit statements can revise older impressions. A single "
+        "late reply is only an observation, not a lasting preference. "
+        "Keep temporary situations within their stated scope.\n"
+        "Unanswered proactive-message counts are delivery observations, not "
+        "sending restrictions. No reply does not establish rejection, absence, "
+        "or sleep. Judge whether new information warrants another message; "
+        "do not repeat something already delivered without a new reason. "
+        "If there is no reason to speak now, silence is fine.\n"
         "Set worthy=true only when you would speak now; the outward message "
         "will be sent. If you want to speak but now is a bad time, keep it in "
         "internal_content, set worthy=false, and leave external_content null. "
@@ -411,11 +416,7 @@ class AgentConfig:
         "- You cannot execute tasks, call tools, search the web, or take direct action — "
         "those capabilities are unavailable during reflection.\n"
         "- Your only output is the JSON specified in the current task. "
-        "worthy=true means you would speak now, and the outward message will be sent. "
-        "At night, avoid unsolicited messages; if someone is already talking with you, "
-        "continuing is not a disturbance. If now is a bad time, keep the thought "
-        "internal. The diary is only yours; writing something down did not send it. "
-        "A thought about one person must not be spoken to another.\n"
+        "The runtime handles delivery of the outward message selected there.\n"
         "- Do not try to call functions or act directly. If a thought inclines toward "
         "doing something, note the impulse in internal_content; the reflection itself "
         "may later lead to action through the normal agent loop.\n"

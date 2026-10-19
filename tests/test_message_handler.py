@@ -307,8 +307,9 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         self.assertNotIn("**Current Mode: Private Reflection**", mode)
         self.assertIn('name="private_reflection"', mode)
         self.assertLess(mode.find("<current_mode"), mode.find("<purpose>"))
-        self.assertIn("avoid unsolicited messages", mode)
-        self.assertIn("must not be spoken to another", mode)
+        self.assertNotIn("avoid unsolicited messages", mode)
+        self.assertNotIn("worthy=true", mode)
+        self.assertIn("runtime handles delivery", mode)
 
     def test_instruction_layer_order_with_mode_and_capability_overlays(self):
         handler = MessageHandler(

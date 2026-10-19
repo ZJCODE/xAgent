@@ -434,13 +434,13 @@ audio tags, not client-side chunking.
   builds its context the same way. Nothing improves perceived intelligence on a
   device more than getting a person's name right, and `language_hints_strict` is
   available for households that only ever use one or two languages.
-- **Proactive speech has no time or presence guard.** Scheduled tasks and
-  subconscious deliveries speak out of a physical speaker in a room
-  (`runtime.py:407-427`). The only protection is prose in the subconscious
-  prompt (`core/config.py:360`). A prompt is not an adequate guard for a 3 a.m.
-  utterance in a bedroom. Voice needs a real quiet-hours window, a presence
-  precondition (no speech heard for *N* hours → do not start talking), and
-  coordination with the floor so a delivery never begins mid-utterance.
+- **Proactive speech retains channel-level guards.** The shared subconscious
+  now judges contact timing from each person's preferences and the situation,
+  without a blanket nighttime rule. Voice output still checks recent speech,
+  the proactive rate cap, and the floor; scheduled delivery bypasses only the
+  recent-speech requirement. These channel guards and playback coordination
+  remain in place when the shared timing and unanswered-message limits are
+  removed. See `subconscious-design.md` for the current decision contract.
 
 ## 9. Failure — silence is the worst error message
 

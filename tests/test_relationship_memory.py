@@ -2,6 +2,8 @@
 
 import tempfile
 import unittest
+from datetime import date
+from unittest.mock import AsyncMock, patch
 from pathlib import Path
 
 from xagent.components.memory import (
@@ -83,6 +85,7 @@ class RelationshipStoreTests(unittest.IsolatedAsyncioTestCase):
             channel="weixin",
             user_id="wx_1",
             updated="2026-06-27",
+            source_diary_dates=["2026-06-26", "2026-06-27"],
         )
         await self.store.write_card(card)
 
@@ -93,6 +96,7 @@ class RelationshipStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(loaded.channel, "weixin")
         self.assertEqual(loaded.user_id, "wx_1")
         self.assertEqual(loaded.updated, "2026-06-27")
+        self.assertEqual(loaded.source_diary_dates, ["2026-06-26", "2026-06-27"])
         self.assertIn("we trust each other", loaded.body)
         rendered = (self.store.root / "weixin" / "wx_1.md").read_text(encoding="utf-8")
         self.assertTrue(rendered.startswith("---\n"))
@@ -102,6 +106,18 @@ class RelationshipStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("channel:", rendered.split("---", 2)[1])
         self.assertNotIn("user_id:", rendered.split("---", 2)[1])
         self.assertNotIn("<!-- rel", rendered)
+
+    async def test_legacy_card_has_no_invented_sources(self):
+        await self.store.write_card(RelationshipCard(key="api:alice", body="An older impression."))
+        self.assertEqual((await self.store.read_card("api:alice")).source_diary_dates, [])
+        self.assertNotIn("source_diary_dates", self.store.card_path("api:alice").read_text())
+
+    def test_source_dates_accept_yaml_dates_and_ignore_malformed_values(self):
+        card = self.store._parse(
+            "api:alice",
+            "---\nsource_diary_dates: [2026-06-27, '2026-06-26', 'invalid', false, '2026-06-27']\n---\nA card.",
+        )
+        self.assertEqual(card.source_diary_dates, ["2026-06-26", "2026-06-27"])
 
     async def test_header_omits_name_when_only_platform_id_is_known(self):
         await self.store.write_card(
@@ -218,6 +234,7 @@ class RelationshipDerivationPromptTests(unittest.IsolatedAsyncioTestCase):
                 },
             ],
             existing_cards={},
+            committed_diary="I met Alice and we greeted each other.",
             transcript="[speaker=wx_new]: 早啊",
         )
         self.assertIn('key="weixin:wx_new" name="(unnamed)"', prompt)
@@ -258,9 +275,11 @@ class RelationshipDerivationPromptTests(unittest.IsolatedAsyncioTestCase):
             participants=[{"key": "weixin:a", "display_name": "Alice"}],
             messages=[{"role": "user", "sender_id": "a", "content": "hello"}],
             existing_cards={},
+            committed_diary="I met Alice and we greeted each other.",
         )
         self.assertEqual(result, {"weixin:a": "Alice and I are close."})
         self.assertIn("Alice", captured["user"])
+        self.assertIn("I met Alice and we greeted each other.", captured["user"])
 
     async def test_update_relationship_cards_noops_without_participants(self):
         service = JournalLLMService(client=object())
@@ -268,8 +287,20 @@ class RelationshipDerivationPromptTests(unittest.IsolatedAsyncioTestCase):
             participants=[],
             messages=[{"content": "hi"}],
             existing_cards={},
+            committed_diary="I heard a greeting.",
         )
         self.assertEqual(result, {})
+
+    async def test_no_projection_from_transcript_without_committed_diary(self):
+        service = JournalLLMService(client=object())
+        service._call_text = AsyncMock()
+        result = await service.update_relationship_cards(
+            participants=[{"key": "api:alice"}],
+            messages=[{"role": "user", "sender_id": "alice", "content": "Contact me after midnight."}],
+            existing_cards={}, committed_diary="",
+        )
+        self.assertEqual(result, {})
+        service._call_text.assert_not_awaited()
 
 
 # ----------------------------------------------------------------------
@@ -292,12 +323,13 @@ class _FakeDiaryLLMService:
     async def generate_summary(self, source_content, period_type, period_label):
         return ""
 
-    async def update_relationship_cards(self, participants, messages, existing_cards):
+    async def update_relationship_cards(self, participants, messages, existing_cards, committed_diary):
         self.relationship_calls.append(
             {
                 "participants": participants,
                 "messages": messages,
                 "existing_cards": existing_cards,
+                "committed_diary": committed_diary,
             }
         )
         return dict(self.cards)
@@ -503,6 +535,78 @@ class MemoryHandlerRelationshipTests(unittest.IsolatedAsyncioTestCase):
         card = await self.store.read_card("weixin:alice")
         self.assertIsNotNone(card)
         self.assertIn("Alice and I talk often.", card.body)
+        self.assertEqual(card.source_diary_dates, [date.today().isoformat()])
+        committed = llm.relationship_calls[0]["committed_diary"]
+        self.assertIn(committed, self.memory.daily_path(date.today()).read_text())
+
+    async def test_preferences_remain_attributed_and_correctable_across_restarts(self):
+        first_date, next_date = date(2026, 10, 18), date(2026, 10, 19)
+        alice = Message(
+            content="Alice: Please contact me only in the daytime.", role=RoleType.USER,
+            sender_id="Alice", channel="api", room_name="Friends",
+        )
+        bob = Message(
+            content="Bob: I work nights; late messages are welcome.", role=RoleType.USER,
+            sender_id="Bob", channel="api", room_name="Friends",
+        )
+        storage = _FakeMessageStorage([alice, bob])
+        llm = _FakeDiaryLLMService(cards={
+            "api:Alice": "Alice asked me to contact her in the daytime.",
+            "api:Bob": "Bob works nights and welcomes late contact.",
+        })
+        handler = self._make_handler(storage, llm)
+        with patch("xagent.core.handlers.memory.date") as clock:
+            clock.today.return_value = first_date
+            self.assertTrue(await handler.run_maintenance(force=True))
+
+        correction = Message(
+            content="Alice: I have changed to night shifts; midnight is fine now.",
+            role=RoleType.USER, sender_id="Alice", channel="api",
+        )
+        storage.messages.append(correction)
+        llm.cards = {"api:Alice": "Alice now works nights and welcomes midnight contact; her old daytime preference changed."}
+        # A fresh handler and store read both the diary checkpoint and the old card.
+        self.store = RelationshipStore(str(self.store.root))
+        handler = self._make_handler(storage, llm)
+        with patch("xagent.core.handlers.memory.date") as clock:
+            clock.today.return_value = next_date
+            self.assertTrue(await handler.run_maintenance(force=True))
+
+        self.assertIn("in the daytime", llm.relationship_calls[-1]["existing_cards"]["api:Alice"])
+        self.assertIn("changed to night shifts", llm.relationship_calls[-1]["committed_diary"])
+        alice_card = await self.store.read_card("api:Alice")
+        bob_card = await self.store.read_card("api:Bob")
+        self.assertIn("old daytime preference changed", alice_card.body)
+        self.assertEqual(alice_card.source_diary_dates, [first_date.isoformat(), next_date.isoformat()])
+        self.assertEqual(bob_card.source_diary_dates, [first_date.isoformat()])
+        context = await handler.get_relationship_context(
+            speaker_keys=["api:Alice", "api:Bob"], include_routing_id=True,
+            unanswered_outbound={"api:Alice": 2},
+        )
+        alice_context, bob_context = context.split("## API contact", 2)[1:]
+        self.assertIn("2 proactive message(s)", alice_context)
+        self.assertNotIn("Delivery observation", bob_context)
+
+    async def test_empty_diary_slice_does_not_update_cards(self):
+        message = Message(content="Nothing new.", role=RoleType.USER, sender_id="alice", channel="api")
+        llm = _FakeDiaryLLMService()
+        llm.format_diary_entry = AsyncMock(return_value="")
+        handler = self._make_handler(_FakeMessageStorage([message]), llm)
+        await handler.run_maintenance(force=True)
+        self.assertEqual(llm.relationship_calls, [])
+        self.assertIsNone(await self.store.read_card("api:alice"))
+
+    async def test_projection_failure_keeps_committed_preference(self):
+        message = Message(
+            content="Alice asked me to contact her after midnight.",
+            role=RoleType.USER, sender_id="alice", channel="api",
+        )
+        llm = _FakeDiaryLLMService()
+        llm.update_relationship_cards = AsyncMock(side_effect=RuntimeError("projection unavailable"))
+        handler = self._make_handler(_FakeMessageStorage([message]), llm)
+        self.assertTrue(await handler.run_maintenance(force=True))
+        self.assertIn("after midnight", self.memory.daily_path(date.today()).read_text())
+        self.assertFalse(await handler.run_maintenance(force=True))
 
 
 # ----------------------------------------------------------------------

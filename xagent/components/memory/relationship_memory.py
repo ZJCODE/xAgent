@@ -19,7 +19,7 @@ import asyncio
 import logging
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -91,6 +91,8 @@ class RelationshipCard:
 
     ``key`` is the stable identity (``channel:user_id``). ``body`` is the
     first-person card prose produced by the journal LLM service.
+    ``source_diary_dates`` traces the committed diary behind the projection;
+    an empty list preserves unknown provenance on legacy cards.
     """
 
     key: str
@@ -99,6 +101,7 @@ class RelationshipCard:
     channel: str = ""
     user_id: str = ""
     updated: str = ""
+    source_diary_dates: List[str] = field(default_factory=list)
 
     @property
     def is_empty(self) -> bool:
@@ -202,6 +205,9 @@ class RelationshipStore:
         if name:
             frontmatter["name"] = name
         frontmatter["updated"] = updated
+        source_dates = self.normalize_source_diary_dates(card.source_diary_dates)
+        if source_dates:
+            frontmatter["source_diary_dates"] = source_dates
         header = yaml.safe_dump(
             frontmatter,
             sort_keys=False,
@@ -225,7 +231,23 @@ class RelationshipStore:
             channel=channel,
             user_id=user_id,
             updated=str(meta.get("updated") or "").strip(),
+            source_diary_dates=self.normalize_source_diary_dates(meta.get("source_diary_dates")),
         )
+
+    @staticmethod
+    def normalize_source_diary_dates(values: Any) -> List[str]:
+        """Keep valid diary dates, including YAML's native date values."""
+        if not isinstance(values, list):
+            return []
+        dates: set[str] = set()
+        for value in values:
+            if not isinstance(value, (str, date)):
+                continue
+            try:
+                dates.add(date.fromisoformat(str(value)).isoformat())
+            except ValueError:
+                continue
+        return sorted(dates)
 
     @staticmethod
     def _split_frontmatter(text: str) -> Tuple[Dict[str, Any], str]:
