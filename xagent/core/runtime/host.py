@@ -330,18 +330,46 @@ class RuntimeHost:
         self._update_channel_state(channel, state)
 
     async def _watch_channel(self, channel, awaitable, generation: int | None = None) -> None:
+        activity = self._channel_activity.get(channel)
         try:
             await awaitable
-            if not self._stop_event.is_set() and self.channel_status[channel]["state"] != "disconnecting":
+            if (not self._stop_event.is_set()
+                    and self.channel_status[channel]["state"] != "disconnecting"
+                    and (activity is None or activity.accepting)):
                 raise RuntimeError("Channel stopped unexpectedly")
         except asyncio.CancelledError:
             raise
         except (Exception, SystemExit) as exc:
-            if generation is None or generation == self._channel_generation[channel]:
+            if ((generation is None or generation == self._channel_generation[channel])
+                    and not self._stop_event.is_set()
+                    and self.channel_status[channel]["state"] != "disconnecting"
+                    and (activity is None or activity.accepting)):
                 self._channel_failed(channel, exc)
-                operation = self._channel_operations.get(channel)
-                if operation is None or operation.done():
-                    self._channel_operations[channel] = asyncio.create_task(self._disconnect_locked(channel, failed=True))
+                self._schedule_channel_disconnect(channel, failed=True)
+        finally:
+            # A cleanup deadline changes state to failed, but the disconnect
+            # intent remains in the activity. A late exit is still expected;
+            # finish releasing it once the timed-out operation has returned.
+            if (not self._stop_event.is_set()
+                    and (generation is None or generation == self._channel_generation[channel])
+                    and activity is not None and not activity.accepting
+                    and self.channel_status[channel]["state"] != "disconnecting"):
+                self._schedule_channel_disconnect(channel)
+
+    def _schedule_channel_disconnect(self, channel: str, *, failed: bool = False) -> asyncio.Task:
+        operation = self._channel_operations.get(channel)
+        if operation is None or operation.done():
+            operation = asyncio.create_task(self._disconnect_locked(channel, failed=failed))
+            self._channel_operations[channel] = operation
+
+            def finished(task):
+                if not task.cancelled():
+                    task.exception()
+                if self.runtime_ready and not self._stop_event.is_set():
+                    self._publish_status()
+
+            operation.add_done_callback(finished)
+        return operation
 
     def _require_channel_control(self, channel: str) -> None:
         if channel not in self._channel_locks:
@@ -374,12 +402,8 @@ class RuntimeHost:
 
     async def disconnect_channel(self, channel: str) -> dict:
         self._require_channel_control(channel)
-        operation = self._channel_operations.get(channel)
-        if operation is None or operation.done():
-            operation = asyncio.create_task(self._disconnect_locked(channel))
-            self._channel_operations[channel] = operation
-            # A disconnected HTTP caller must not leave half-cleaned resources.
-            operation.add_done_callback(lambda task: task.exception() if not task.cancelled() else None)
+        # A disconnected HTTP caller must not leave half-cleaned resources.
+        operation = self._schedule_channel_disconnect(channel)
         await asyncio.shield(operation)
         return self._channel_response(channel)
 
@@ -494,6 +518,9 @@ class RuntimeHost:
         if channel == "api" and self.device_service is not None:
             clean = clean and self.device_service.resources_closed
         if not clean:
+            logger.warning("%s channel cleanup is waiting: tasks=%s adapter_resources_closed=%s",
+                channel, sorted(task.get_name() for task in pending),
+                adapter.resources_closed if adapter is not None else None)
             return False
         for task in (transport, readiness, stop_task):
             if task is not None and not task.cancelled():

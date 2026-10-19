@@ -182,6 +182,33 @@ class ChannelLifecycleTests(unittest.IsolatedAsyncioTestCase):
         await self.host._channel_operations["weixin"]
         self.assertEqual(self.host.channel_status["weixin"]["state"], "disconnected")
 
+    async def test_late_disconnect_completion_is_not_reported_as_transport_failure(self):
+        await self.connect()
+        adapter = FakeAdapter.instances[0]
+        release = asyncio.Event()
+        published = []
+        self.host._publish_status.side_effect = lambda: published.append(self.host._channel_view("weixin"))
+
+        async def slow_stop():
+            await release.wait()
+            adapter.stopped.set()
+
+        adapter.stop = slow_stop
+        with self.assertRaises(HTTPException):
+            await self.host.disconnect_channel("weixin")
+        transport = self.host._tasks["weixin"]
+        with patch.object(self.host, "_channel_failed", wraps=self.host._channel_failed) as failed:
+            release.set()
+            await transport
+            operation = self.host._channel_operations["weixin"]
+            await operation
+            failed.assert_not_called()
+        self.assertEqual(self.host.channel_status["weixin"]["state"], "disconnected")
+        self.assertTrue(self.host._channel_view("weixin")["can_connect"])
+        self.assertTrue(published[-1]["can_connect"])
+        await self.connect()
+        self.assertEqual(self.host.channel_status["weixin"]["state"], "connected")
+
     async def test_connecting_and_reconnecting_can_be_disconnected(self):
         for state in ("connecting", "reconnecting"):
             await self.connect()

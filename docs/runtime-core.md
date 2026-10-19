@@ -21,6 +21,8 @@ The Web Channels page lists every channel as configured/available, connecting, c
 
 The terminal launcher exposes the same controls under **Channel → API / Weixin / Voice**. Its list and submenus display the owner's published channel state and capabilities. Connect/Disconnect are disabled while the Agent is stopped or unavailable; configuration remains accessible. **Refresh** reloads state after a handshake or cleanup completes. Failed cleanup exposes Disconnect again instead of allowing a second connection. Actions target the Agent directory shown in that menu, even if another client changes the active Agent. Configuration changes require restarting the Agent before connecting with the new settings.
 
+Voice disconnect releases the local STT/TTS WebSocket transports before joining their workers, without waiting for the remote closing handshake. If resource cleanup exceeds its deadline, the disconnect intent remains recorded. A late transport exit completes cleanup and refreshes connection controls instead of reporting a second, unexpected channel failure.
+
 The channel list uses a fixed order: Chat, API, Weixin, Voice. A status badge beside each channel name keeps Connected visible in green, transitions in yellow, failures in red and disconnected channels in gray. Status includes text and a symbol so it is readable without color.
 
 The launcher overview shows Runtime and Web first, followed by API, Weixin and Voice, then Model, Search, Image and Tasks. Unconfigured entries remain summarized at the bottom.

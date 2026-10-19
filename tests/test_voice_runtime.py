@@ -381,6 +381,114 @@ def event(*tokens, finished=False, error_code=None, error_type=None):
 
 
 class SonioxSDKAdapterTests(unittest.TestCase):
+    def test_stt_close_releases_sdk_socket_and_blocked_audio_sender(self):
+        from soniox.realtime.stt import RealtimeSTTSession
+
+        released = threading.Event()
+        sending = threading.Event()
+        receiving = threading.Event()
+        stopped = threading.Event()
+        failures = []
+
+        class Socket:
+            def send(self, data):
+                if isinstance(data, bytes):
+                    sending.set()
+                    released.wait(2)
+
+            def recv(self):
+                receiving.set()
+                released.wait(2)
+                return ""
+
+            def close_socket(self):
+                released.set()
+
+        socket = Socket()
+        client = SimpleNamespace(realtime=SimpleNamespace(stt=SimpleNamespace(
+            connect=lambda config: RealtimeSTTSession("wss://stt.test", config),
+        )))
+        stt = SonioxRealtimeSTT(api_key="key", config=voice_config(), client=client)
+
+        def recognize():
+            try:
+                list(stt.iter_utterances(iter([b"audio"]), pause_event=threading.Event(), stop_event=stopped))
+            except Exception as exc:
+                failures.append(exc)
+
+        worker = threading.Thread(target=recognize, daemon=True)
+        with patch("soniox.realtime.stt.sync_ws_connect", return_value=socket):
+            worker.start()
+            try:
+                self.assertTrue(sending.wait(1))
+                self.assertTrue(receiving.wait(1))
+                stopped.set()
+                stt.close()
+                worker.join(timeout=0.3)
+                self.assertFalse(worker.is_alive(), "SDK close left the recognizer waiting for the server")
+                self.assertTrue(released.is_set())
+                self.assertTrue(stt.resources_closed)
+                self.assertEqual(failures, [])
+            finally:
+                stopped.set()
+                released.set()
+                worker.join(timeout=2)
+
+    def test_tts_close_does_not_wait_for_remote_closing_handshake(self):
+        from soniox.realtime.tts import RealtimeTTSMultiplexedConnection
+
+        closed = threading.Event()
+
+        class Socket:
+            def close_socket(self):
+                closed.set()
+
+            def close(self):
+                if not closed.is_set():
+                    raise TimeoutError("peer does not acknowledge the closing handshake")
+
+        mux = RealtimeTTSMultiplexedConnection("wss://tts.test", "key")
+        mux._ws = Socket()
+        tts = SonioxRealtimeTTS(api_key="key", config=voice_config(), client=FakeClient())
+        tts._mux = mux
+
+        tts.close()
+
+        self.assertTrue(closed.is_set())
+        self.assertIsNone(mux._ws)
+        self.assertIsNone(tts._mux)
+
+    def test_stt_shutdown_during_handshake_does_not_start_capture(self):
+        entering = threading.Event()
+        release = threading.Event()
+        connected = Mock()
+
+        class ConnectingSession(FakeSTTSession):
+            def __enter__(self):
+                entering.set()
+                release.wait(2)
+                return self
+
+        session = ConnectingSession([])
+        stt = SonioxRealtimeSTT(api_key="key", config=voice_config(),
+            client=FakeClient(stt_session=session), callbacks=SonioxSTTCallbacks(on_connected=connected))
+        worker = threading.Thread(target=lambda: list(stt.iter_utterances(
+            iter([b"audio"]), pause_event=threading.Event(), stop_event=threading.Event())), daemon=True)
+        worker.start()
+        try:
+            self.assertTrue(entering.wait(1))
+            stt.close()
+            release.set()
+            worker.join(timeout=1)
+            self.assertFalse(worker.is_alive())
+            self.assertTrue(session.closed)
+            self.assertTrue(stt.resources_closed)
+            connected.assert_not_called()
+            self.assertEqual(session.sent, [])
+        finally:
+            release.set()
+            worker.join(timeout=2)
+
     def test_stt_uses_fixed_sdk_configuration(self):
         session = FakeSTTSession([])
         client = FakeClient(stt_session=session)

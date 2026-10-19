@@ -101,6 +101,21 @@ class _FinalToken:
     confidence: float = 0.0
 
 
+def _close_realtime_session(session: Any) -> None:
+    """Release the local transport before joining SDK receive/keepalive workers."""
+    # Soniox 2.x STT close() only sends end-of-audio and drops its _ws reference.
+    # Its receiver can otherwise remain blocked, while TTS close() waits for a
+    # remote closing handshake. These sessions are already being discarded, so
+    # abort their websockets transport before invoking the SDK cleanup.
+    transport = getattr(session, "_ws", None)
+    close_socket = getattr(transport, "close_socket", None)
+    try:
+        if callable(close_socket):
+            close_socket()
+    finally:
+        session.close()
+
+
 class SonioxRealtimeSTT:
     """Keep one Soniox STT session open and emit finalized endpoint turns."""
 
@@ -121,6 +136,7 @@ class SonioxRealtimeSTT:
         self.lifecycle = lifecycle
         self._extra_context_terms: list[str] = []
         self._session_lock = threading.Lock()
+        self._session_close_lock = threading.Lock()
         self._active_session = None
         self._senders: set[threading.Thread] = set()
         self._closed = threading.Event()
@@ -136,10 +152,16 @@ class SonioxRealtimeSTT:
             session = self._active_session
             senders = list(self._senders)
         if session is not None:
-            session.close()
+            self._close_session(session)
         for sender in senders:
             if sender is not threading.current_thread():
                 sender.join(timeout=1.0)
+
+    def _close_session(self, session: Any) -> None:
+        # The sender, receiver and runtime can request closure together. The
+        # SDK mutates _ws / keepalive state and doesn't serialize those calls.
+        with self._session_close_lock:
+            _close_realtime_session(session)
 
     def set_extra_context_terms(self, terms: list[str]) -> None:
         self._extra_context_terms = [term.strip() for term in terms if term and term.strip()]
@@ -155,7 +177,7 @@ class SonioxRealtimeSTT:
         audio_iterator = iter(audio_chunks)
         backoff = STT_RECONNECT_BASE_SECONDS
         awaiting_recovery_notice = False
-        while not stop_event.is_set():
+        while not stop_event.is_set() and not self._closed.is_set():
             if self.lifecycle is not None and self.lifecycle.is_sleeping():
                 _logger.info("Soniox STT sleeping; monitoring microphone locally")
                 wake_chunk = self._wait_for_local_wake(
@@ -262,12 +284,15 @@ class SonioxRealtimeSTT:
         with self._session_lock:
             self._active_session = session
         if self._closed.is_set():
-            session.close()
+            self._close_session(session)
             with self._session_lock:
                 self._active_session = None
             return
         try:
             with session:
+                if self._closed.is_set() or stop_event.is_set():
+                    self._close_session(session)
+                    return
                 if self._callbacks.on_connected is not None:
                     self._callbacks.on_connected()
                 sender = threading.Thread(
@@ -280,6 +305,7 @@ class SonioxRealtimeSTT:
                         session_stop,
                         send_errors,
                         self.lifecycle,
+                        self._close_session,
                     ),
                     daemon=True,
                     name="xagent-soniox-stt-send",
@@ -330,7 +356,7 @@ class SonioxRealtimeSTT:
                 finally:
                     session_stop.set()
                     try:
-                        session.close()
+                        self._close_session(session)
                     except Exception:
                         pass
                     sender.join(timeout=1.0)
@@ -365,6 +391,7 @@ class SonioxRealtimeSTT:
         session_stop: threading.Event,
         send_errors: queue.Queue[BaseException],
         lifecycle: SttLifecycleController | None,
+        close_session: Callable[[Any], None] = _close_realtime_session,
     ) -> None:
         paused = False
         try:
@@ -380,7 +407,7 @@ class SonioxRealtimeSTT:
                             # Wake the blocking receive loop and finish the
                             # remote stream. Local audio remains available to
                             # the outer wake monitor.
-                            session.close()
+                            close_session(session)
                         except Exception:
                             pass
                         return
@@ -398,7 +425,7 @@ class SonioxRealtimeSTT:
                 send_errors.put(exc)
             session_stop.set()
             try:
-                session.close()
+                close_session(session)
             except Exception:
                 pass
 
@@ -448,7 +475,7 @@ class SonioxRealtimeTTS:
             self._active_stream = None
         if mux is not None:
             try:
-                mux.close()
+                _close_realtime_session(mux)
             except Exception:
                 pass
 
