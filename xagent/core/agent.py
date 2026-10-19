@@ -107,9 +107,9 @@ class Agent:
         self.model = model or AgentConfig.DEFAULT_MODEL
         self.provider_name = normalize_provider_name(provider_name) or PROVIDER_OPENAI
         self.model_api = normalize_model_api(model_api)
-        self.model_max_tokens = model_max_tokens
+        self.model_max_tokens = AgentConfig.DEFAULT_MAX_TOKENS if model_max_tokens is None else model_max_tokens
         self.reasoning = reasoning
-        self.maintenance_reasoning = maintenance_reasoning_config(reasoning)
+        self.maintenance_reasoning = maintenance_reasoning_config(reasoning, provider_name=self.provider_name)
         self.supports_vision = bool(supports_vision)
         self.recent_messages = recent_messages
         self.max_agent_loops = max_agent_loops
@@ -175,7 +175,7 @@ class Agent:
             model=self.model,
             provider_name=self.provider_name,
             model_api=self.model_api,
-            max_tokens=self.model_max_tokens,
+            max_tokens=min(self.model_max_tokens, AgentConfig.JOURNAL_MAX_TOKENS),
             reasoning=self.maintenance_reasoning,
         )
         self.memory_handler = MemoryHandler(
@@ -327,6 +327,7 @@ class Agent:
             provider_name=self.provider_name,
             model_api=self.model_api,
             reasoning=self.maintenance_reasoning,
+            max_tokens=min(self.model_max_tokens, AgentConfig.WORKING_CONTEXT_SUMMARY_MAX_TOKENS),
         )
         return WorkingContextCompactor(
             store=store,

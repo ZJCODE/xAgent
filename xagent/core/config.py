@@ -63,6 +63,8 @@ class AgentConfig:
     # ============================================================
     DEFAULT_MODEL = "gpt-5.6-terra"
     DEFAULT_MAX_TOKENS = 8192
+    JOURNAL_MAX_TOKENS = 4096
+    SUBCONSCIOUS_MAX_TOKENS = 2048
     DEFAULT_USER_ID = "default_user"
     DEFAULT_MAX_CONCURRENT_TOOLS = 4  # Maximum concurrent tool calls
     TOOL_RESULT_PREVIEW_LENGTH = 20  # characters shown in tool-result summaries
@@ -143,6 +145,10 @@ class AgentConfig:
     RETRY_ATTEMPTS = 3
     RETRY_MIN_WAIT = 1  # seconds
     RETRY_MAX_WAIT = 60  # seconds
+    # ModelClient owns retries; provider SDK retries are disabled for model calls.
+    MODEL_REQUEST_TIMEOUT_SECONDS = 120.0  # wall-clock limit per attempt, including streaming
+    TRANSPORT_TIMEOUT_GRACE_SECONDS = 5.0  # let the core persist and emit its terminal result
+    WEIXIN_DELIVERY_TIMEOUT_SECONDS = 120.0
 
     # ============================================================
     # 7. Memory & History
@@ -193,13 +199,28 @@ class AgentConfig:
     MAX_SEARCH_RESULTS = 20
 
     # ============================================================
-    # 9. HTTP Server
-    # Only relevant when running in server mode. Concurrency and
-    # timeout controls for the HTTP API channel.
+    # 9. Shared Turn Limits & HTTP Server
+    # Queue/run limits apply to every core channel. HTTP concurrency and
+    # legacy callable-agent settings are kept alongside their shared defaults.
     # ============================================================
+    DEFAULT_MAX_PENDING_TURNS = 32
+    DEFAULT_TURN_QUEUE_TIMEOUT = 30.0
+    DEFAULT_TURN_RUN_TIMEOUT = 600.0  # 10 minutes, across all model/tool iterations
     DEFAULT_HTTP_MAX_CONCURRENT_CHATS = 4
-    DEFAULT_HTTP_QUEUE_TIMEOUT = 30.0  # seconds
-    DEFAULT_HTTP_CHAT_TIMEOUT = 600.0  # 10 minutes
+    DEFAULT_HTTP_QUEUE_TIMEOUT = DEFAULT_TURN_QUEUE_TIMEOUT
+    DEFAULT_HTTP_CHAT_TIMEOUT = DEFAULT_TURN_RUN_TIMEOUT
+
+    @staticmethod
+    def transport_timeout_seconds(
+        *, run_timeout: float, queue_timeout: float = 0.0, delivery_timeout: float = 0.0,
+    ) -> float:
+        """Keep a channel's deadline outside the core's queue and execution budget."""
+        return (
+            max(0.0, float(run_timeout))
+            + max(0.0, float(queue_timeout))
+            + max(0.0, float(delivery_timeout))
+            + AgentConfig.TRANSPORT_TIMEOUT_GRACE_SECONDS
+        )
 
     # ============================================================
     # 10. Runtime Heartbeat

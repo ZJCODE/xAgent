@@ -118,9 +118,10 @@ class ReasoningConfig:
 
 def maintenance_reasoning_config(
     reasoning: Optional[ReasoningConfig],
+    *, provider_name: Optional[str] = None,
 ) -> Optional[ReasoningConfig]:
-    """Disable configured reasoning for bounded maintenance generations."""
-    if reasoning is None:
+    """Disable configured reasoning and DeepSeek's default thinking for maintenance."""
+    if reasoning is None and normalize_provider_name(provider_name) != PROVIDER_DEEPSEEK:
         return None
     return ReasoningConfig(enabled=False)
 

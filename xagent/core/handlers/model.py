@@ -1,9 +1,16 @@
+import asyncio
+import copy
+import inspect
 import json
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Any, AsyncGenerator, Awaitable, Callable, Optional, Union
 
-from tenacity import retry, retry_if_exception, wait_exponential
+import httpx
+from anthropic import AsyncAnthropic
+from openai import AsyncOpenAI
+from tenacity import AsyncRetrying, retry_if_exception, wait_exponential
 
 from ..config import AgentConfig, ReplyType
 from ..errors import is_retryable_model_exception, model_error_code_from_exception
@@ -138,12 +145,27 @@ class ModelClient:
         max_tokens: Optional[int] = None,
         provider_name: str = PROVIDER_OPENAI,
         reasoning: Optional[ReasoningConfig] = None,
+        request_timeout: Optional[float] = None,
     ):
-        self.client = client
+        self.request_timeout = (
+            AgentConfig.MODEL_REQUEST_TIMEOUT_SECONDS if request_timeout is None else request_timeout
+        )
+        if self.request_timeout <= 0:
+            raise ValueError("Model request timeout must be positive")
+        # SDK copies share the transport and preserve tracing wrappers. Feature
+        # clients (search/images) retain their own independent request policies.
+        self.client = (
+            client.with_options(
+                max_retries=0,
+                timeout=httpx.Timeout(self.request_timeout, connect=min(5.0, self.request_timeout)),
+            )
+            if isinstance(client, (AsyncOpenAI, AsyncAnthropic))
+            else client
+        )
         self.model = model
         self.provider_name = normalize_provider_name(provider_name) or PROVIDER_OPENAI
         self.model_api = self._normalize_model_api(model_api)
-        self.max_tokens = max_tokens
+        self.max_tokens = AgentConfig.DEFAULT_MAX_TOKENS if max_tokens is None else max_tokens
         self.reasoning = reasoning
 
     async def call(
@@ -176,48 +198,81 @@ class ModelClient:
             logger.exception("Model call failed: %s", e)
             return ReplyType.ERROR, _model_error_event(e)
 
-    @retry(
-        stop=lambda retry_state: retry_state.attempt_number >= AgentConfig.RETRY_ATTEMPTS,
-        wait=lambda retry_state: wait_exponential(
-            multiplier=1,
-            min=AgentConfig.RETRY_MIN_WAIT,
-            max=AgentConfig.RETRY_MAX_WAIT,
-        )(retry_state),
-        retry=retry_if_exception(is_retryable_model_exception),
-        reraise=True,
-    )
-    async def _create_non_stream_response(
-        self,
-        messages: list,
-        tool_specs: Optional[list],
-        instructions: Optional[Union[str, list[dict]]] = None,
+    def _retries(self, can_retry: Callable[[], bool] = lambda: True) -> AsyncRetrying:
+        return AsyncRetrying(
+            stop=lambda state: state.attempt_number >= AgentConfig.RETRY_ATTEMPTS,
+            wait=wait_exponential(
+                multiplier=1, min=AgentConfig.RETRY_MIN_WAIT, max=AgentConfig.RETRY_MAX_WAIT,
+            ),
+            retry=retry_if_exception(lambda exc: can_retry() and is_retryable_model_exception(exc)),
+            reraise=True,
+        )
+
+    async def _create_response(
+        self, messages: list, tool_specs: Optional[list],
+        instructions: Optional[Union[str, list[dict]]], *, stream: bool,
     ):
         if self.model_api == MODEL_API_ANTHROPIC_MESSAGES:
             return await self.client.messages.create(
-                **self._build_anthropic_create_params(
-                    messages=messages,
-                    tool_specs=tool_specs,
-                    instructions=instructions,
-                    stream=False,
-                )
+                **self._build_anthropic_create_params(messages, tool_specs, instructions, stream)
             )
         if self.model_api == MODEL_API_OPENAI_RESPONSES:
             return await self.client.responses.create(
-                **self._build_responses_create_params(
-                    messages=messages,
-                    tool_specs=tool_specs,
-                    instructions=instructions,
-                    stream=False,
-                )
+                **self._build_responses_create_params(messages, tool_specs, instructions, stream)
             )
         return await self.client.chat.completions.create(
-            **self._build_create_params(
-                messages=messages,
-                tool_specs=tool_specs,
-                instructions=instructions,
-                stream=False,
-            )
+            **self._build_create_params(messages, tool_specs, instructions, stream)
         )
+
+    async def _create_non_stream_response(
+        self, messages: list, tool_specs: Optional[list],
+        instructions: Optional[Union[str, list[dict]]] = None,
+    ):
+        async for attempt in self._retries():
+            with attempt:
+                return await asyncio.wait_for(
+                    self._create_response(messages, tool_specs, instructions, stream=False),
+                    timeout=self.request_timeout,
+                )
+
+    async def _stream_response_once(
+        self, messages: list, tool_specs: Optional[list],
+        instructions: Optional[Union[str, list[dict]]],
+    ) -> AsyncGenerator[ModelStreamEvent, None]:
+        response = None
+        events = None
+        deadline = time.monotonic() + self.request_timeout
+        try:
+            response = await asyncio.wait_for(
+                self._create_response(messages, tool_specs, instructions, stream=True),
+                timeout=self.request_timeout,
+            )
+            if self.model_api == MODEL_API_ANTHROPIC_MESSAGES:
+                events = self._iter_anthropic_turn_events(response)
+            elif self.model_api == MODEL_API_OPENAI_RESPONSES:
+                events = self._iter_responses_turn_events(response)
+            else:
+                events = self._iter_chat_turn_events(response)
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise asyncio.TimeoutError("Model stream attempt timed out")
+                try:
+                    event = await asyncio.wait_for(events.__anext__(), timeout=remaining)
+                except StopAsyncIteration:
+                    return
+                yield event
+        finally:
+            if events is not None:
+                await events.aclose()
+            close = getattr(response, "close", None) or getattr(response, "aclose", None)
+            if callable(close):
+                try:
+                    result = close()
+                    if inspect.isawaitable(result):
+                        await result
+                except Exception:
+                    logger.debug("Could not close model stream", exc_info=True)
 
     async def _call_once(
         self,
@@ -242,13 +297,17 @@ class ModelClient:
         tool_specs: Optional[list],
         instructions: Optional[Union[str, list[dict]]] = None,
     ) -> AsyncGenerator[ModelStreamEvent, None]:
-        async for event in self.model_turn_events(
+        events = self.model_turn_events(
             messages=messages,
             tool_specs=tool_specs,
             instructions=instructions,
             stream=True,
-        ):
-            yield event
+        )
+        try:
+            async for event in events:
+                yield event
+        finally:
+            await events.aclose()
 
     async def model_turn_events(
         self,
@@ -256,54 +315,50 @@ class ModelClient:
         tool_specs: Optional[list],
         instructions: Optional[Union[str, list[dict]]] = None,
         stream: bool = False,
+        max_tokens: Optional[int] = None,
+        reasoning: Optional[ReasoningConfig] = None,
     ) -> AsyncGenerator[ModelStreamEvent, None]:
-        """Emit visible model text and finalized tool calls for one model turn."""
+        """Emit one model turn; retry streams only before any event is exposed.
+
+        Per-call budgets can reduce the configured ceiling without mutating the
+        shared foreground client. Maintenance calls may also disable reasoning.
+        """
+        if max_tokens is not None or reasoning is not None:
+            bounded = copy.copy(self)
+            if max_tokens is not None:
+                if max_tokens <= 0:
+                    raise ValueError("Model output budget must be positive")
+                bounded.max_tokens = min(self.max_tokens, max_tokens)
+            if reasoning is not None:
+                bounded.reasoning = reasoning
+            events = bounded.model_turn_events(
+                messages, tool_specs, instructions=instructions, stream=stream,
+            )
+            try:
+                async for event in events:
+                    yield event
+            finally:
+                await events.aclose()
+            return
+
+        emitted = False
         try:
             if not stream:
                 async for event in self._non_stream_turn_events(
-                    messages=messages,
-                    tool_specs=tool_specs,
-                    instructions=instructions,
+                    messages=messages, tool_specs=tool_specs, instructions=instructions,
                 ):
                     yield event
                 return
 
-            if self.model_api == MODEL_API_ANTHROPIC_MESSAGES:
-                response = await self.client.messages.create(
-                    **self._build_anthropic_create_params(
-                        messages=messages,
-                        tool_specs=tool_specs,
-                        instructions=instructions,
-                        stream=True,
-                    )
-                )
-                async for event in self._iter_anthropic_turn_events(response):
-                    yield event
-                return
-
-            if self.model_api == MODEL_API_OPENAI_RESPONSES:
-                response = await self.client.responses.create(
-                    **self._build_responses_create_params(
-                        messages=messages,
-                        tool_specs=tool_specs,
-                        instructions=instructions,
-                        stream=True,
-                    )
-                )
-                async for event in self._iter_responses_turn_events(response):
-                    yield event
-                return
-
-            response = await self.client.chat.completions.create(
-                **self._build_create_params(
-                    messages=messages,
-                    tool_specs=tool_specs,
-                    instructions=instructions,
-                    stream=True,
-                )
-            )
-            async for event in self._iter_chat_turn_events(response):
-                yield event
+            async for attempt in self._retries(lambda: not emitted):
+                with attempt:
+                    events = self._stream_response_once(messages, tool_specs, instructions)
+                    try:
+                        async for event in events:
+                            emitted = True
+                            yield event
+                    finally:
+                        await events.aclose()
         except Exception as exc:
             logger.exception("Model stream failed: %s", exc)
             yield ModelStreamEvent(

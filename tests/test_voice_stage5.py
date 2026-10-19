@@ -1,5 +1,6 @@
 import asyncio
 import threading
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -19,6 +20,10 @@ from tests.test_voice_runtime import (
     FakeSynthesizer,
     voice_config,
 )
+from tests.test_agent_chat_flow import CapturingModelClient
+from xagent.core.agent import Agent
+from xagent.core.config import ReplyType
+from xagent.schemas import RoleType
 
 
 class PreemptiveTests(unittest.TestCase):
@@ -55,6 +60,39 @@ class WarmPlayerTests(unittest.TestCase):
 
 
 class PreemptiveRuntimeTests(unittest.TestCase):
+    def test_default_partials_do_not_start_turns_and_final_speech_keeps_its_user(self):
+        async def run_case():
+            with tempfile.TemporaryDirectory() as root:
+                agent = Agent(client=object(), workspace=root, notes_enabled=False)
+                model = CapturingModelClient([(ReplyType.SIMPLE_REPLY, "Hello Alice.")])
+                agent.model_client = model
+                runtime = VoiceRuntime(
+                    agent=agent, config=voice_config(), microphone=FakeMicrophone(),
+                    recognizer=FakeRecognizer([]), synthesizer=FakeSynthesizer(), player=FakePlayer(),
+                    options=VoiceRuntimeOptions(user_id="alice"), output=lambda *a, **kw: None,
+                )
+                try:
+                    for partial in ("please do this", "please do this later", "please do this later today"):
+                        await runtime._preemptive.note_partial(partial)
+                    self.assertEqual(model.calls, [])
+                    self.assertEqual(await agent.message_storage.get_latest_message_cursor(), 0)
+                    with patch("xagent.interfaces.voice.runtime._PLAYBACK_MICROPHONE_COOLDOWN_SECONDS", 0):
+                        await runtime._reply_to_utterance(
+                            VoiceUtterance("please do this later today"), endpoint_at=0, user_id="alice",
+                        )
+                    users = [message for message in await agent.message_storage.get_messages(10)
+                             if message.role == RoleType.USER]
+                    self.assertEqual([(message.sender_id, message.content) for message in users],
+                                     [("alice", "please do this later today")])
+                    self.assertEqual(len(model.calls), 1)
+                finally:
+                    await agent.working_context_compactor.cancel_refresh()
+                    task = agent.memory_handler._maintenance_task
+                    if task is not None:
+                        await asyncio.gather(task, return_exceptions=True)
+
+        asyncio.run(run_case())
+
     def test_adopted_partial_skips_second_chat(self):
         class CountingAgent(FakeAgent):
             def __init__(self):

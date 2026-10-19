@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional, Union
 
+from .config import AgentConfig
+
 INBOX_KIND_METADATA_KEY = "inbox_kind"
 TASK_CONTENT_METADATA_KEY = "task_content"
 SCHEDULED_AGENT_PROMPT_PREFIX = (
@@ -104,7 +106,11 @@ class InboxItem:
 class AgentInbox:
     """Per-agent turn lock so one identity never interleaves two live turns."""
 
-    def __init__(self, *, max_pending: int = 32, queue_timeout: float = 30.0, run_timeout: float = 600.0) -> None:
+    def __init__(
+        self, *, max_pending: int = AgentConfig.DEFAULT_MAX_PENDING_TURNS,
+        queue_timeout: float = AgentConfig.DEFAULT_TURN_QUEUE_TIMEOUT,
+        run_timeout: float = AgentConfig.DEFAULT_TURN_RUN_TIMEOUT,
+    ) -> None:
         self._turn_lock = asyncio.Lock()
         self._abort = asyncio.Event()
         self.max_pending = max_pending

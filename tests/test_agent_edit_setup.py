@@ -145,8 +145,11 @@ class AgentEditSetupHelperTests(unittest.TestCase):
         self.assertTrue(result["changed"])
         self.assertEqual(config["provider"]["name"], "deepseek")
         self.assertEqual(config["provider"]["model"], "deepseek-v4-pro")
+        self.assertEqual(config["search"], {"provider": "none"})
         self.assertNotIn("supports_vision", config["provider"])
         self.assertFalse(schema["model"]["current"]["supports_vision"])
+        self.assertEqual(schema["model"]["default_models"]["deepseek"], "deepseek-flash")
+        self.assertEqual(schema["model"]["current"]["model"], "deepseek-v4-pro")
         self.assertEqual(
             schema["model"]["models"]["openai"],
             ["gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-6-luna", "gpt-6.1-sol", "gpt-6-astra"],
@@ -155,6 +158,27 @@ class AgentEditSetupHelperTests(unittest.TestCase):
             schema["model"]["models"]["deepseek"],
             ["deepseek-flash", "deepseek-v4-pro"],
         )
+
+    def test_model_update_preserves_selected_search_and_credentials(self):
+        for search_provider, expected_key in (("openai", "openai-key"), ("deepseek", "search-key")):
+            with self.subTest(search_provider=search_provider), tempfile.TemporaryDirectory() as tmpdir:
+                agent_dir = _write_agent(Path(tmpdir))
+                config = load_config(agent_dir)
+                config["search"] = {"provider": search_provider}
+                if search_provider == "deepseek":
+                    config["search"]["api_key"] = "search-key"
+                (agent_dir / "config.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
+
+                apply_agent_edit_setup(
+                    agent_dir,
+                    "model",
+                    {"provider": "deepseek", "model": "deepseek-flash", "api_key": "new-model-key"},
+                )
+
+                self.assertEqual(load_config(agent_dir)["search"], {
+                    "provider": search_provider,
+                    "api_key": expected_key,
+                })
 
 
 class AgentEditSetupRouteTests(unittest.TestCase):
@@ -172,7 +196,18 @@ class AgentEditSetupRouteTests(unittest.TestCase):
             client = TestClient(server.app)
 
             schema_response = client.get("/api/agent/setup-schema")
-            apply_response = client.post("/api/agent/setup/search", json={"provider": "qwen", "api_key": "qwen-key"})
+            original_config = load_config(agent_dir)
+            for provider in ("qwen", "dashscope", "qwen_search", "qwen_web_search"):
+                with self.subTest(provider=provider):
+                    rejected = client.post(
+                        "/api/agent/setup/search",
+                        json={"provider": provider, "api_key": "feature-key"},
+                    )
+                    self.assertEqual(rejected.status_code, 400)
+                    self.assertIn("Unsupported search provider", rejected.json()["detail"])
+                    self.assertEqual(load_config(agent_dir), original_config)
+
+            apply_response = client.post("/api/agent/setup/search", json={"provider": "deepseek", "api_key": "deepseek-key"})
             image_response = client.post(
                 "/api/agent/setup/image_generation",
                 json={"provider": "openai"},
@@ -187,6 +222,10 @@ class AgentEditSetupRouteTests(unittest.TestCase):
             )
 
             self.assertEqual(schema_response.status_code, 200)
+            schema = schema_response.json()
+            self.assertEqual([row["id"] for row in schema["search"]["providers"]], ["none", "openai", "deepseek"])
+            self.assertIn("qwen", [row["id"] for row in schema["model"]["providers"]])
+            self.assertIn("qwen", [row["id"] for row in schema["image_generation"]["providers"]])
             feature_ids = [row["id"] for row in schema_response.json()["features"]]
             self.assertEqual(feature_ids, ["model", "search", "image_generation", "observability"])
             self.assertEqual(apply_response.status_code, 200)

@@ -151,11 +151,17 @@ QWEN_MODELS = (
     "qwen3.6-flash",
     "qwen3.6-plus",
 )
+DEFAULT_MODELS = {
+    PROVIDER_OPENAI: AgentConfig.DEFAULT_MODEL,
+    PROVIDER_ANTHROPIC: "claude-sonnet-4-20250514",
+    PROVIDER_DEEPSEEK: "deepseek-flash",
+    PROVIDER_QWEN: "qwen3.6-flash",
+    PROVIDER_CUSTOM: MODEL_PLACEHOLDER,
+}
 SEARCH_PROVIDERS = (
     "none",
     "openai",
     "deepseek",
-    "qwen",
 )
 IMAGE_GENERATION_PROVIDERS = (
     "none",
@@ -241,6 +247,7 @@ def build_setup_schema() -> dict[str, Any]:
             PROVIDER_QWEN: list(QWEN_MODELS),
             PROVIDER_CUSTOM: [],
         },
+        "default_models": dict(DEFAULT_MODELS),
         "provider_base_urls": {
             PROVIDER_OPENAI: OPENAI_BASE_URL,
             PROVIDER_DEEPSEEK: DEEPSEEK_BASE_URL,
@@ -570,7 +577,13 @@ def _config_yaml(selection: InitSelection, port: int) -> str:
             "api_url": f"http://127.0.0.1:{port}",
         },
     }
-    config["search"] = {"provider": "none"}
+    config["search"] = {
+        "provider": (
+            selection.provider
+            if selection.provider in {PROVIDER_OPENAI, PROVIDER_DEEPSEEK}
+            else "none"
+        ),
+    }
     config["image_generation"] = {"provider": "none"}
     yaml_str = yaml.safe_dump(config, sort_keys=False, allow_unicode=False)
     yaml_str = yaml_str.replace(
@@ -937,14 +950,14 @@ def _collect_init_selection_core(surface: InitPromptSurface) -> InitSelection:
             "OpenAI Model",
             OPENAI_MODELS,
             descriptions=OPENAI_MODEL_DESCRIPTIONS,
-            default_index=0,
+            default_index=OPENAI_MODELS.index(DEFAULT_MODELS[provider]),
         )
         base_url = OPENAI_BASE_URL
     elif provider == PROVIDER_ANTHROPIC:
         selected_model = surface.select_model_option(
             "Anthropic Model",
             ANTHROPIC_MODELS,
-            default_index=0,
+            default_index=ANTHROPIC_MODELS.index(DEFAULT_MODELS[provider]),
         )
         base_url = ANTHROPIC_BASE_URL
     elif provider == PROVIDER_DEEPSEEK:
@@ -952,14 +965,14 @@ def _collect_init_selection_core(surface: InitPromptSurface) -> InitSelection:
             "DeepSeek Model",
             DEEPSEEK_MODELS,
             descriptions=DEEPSEEK_MODEL_DESCRIPTIONS,
-            default_index=0,
+            default_index=DEEPSEEK_MODELS.index(DEFAULT_MODELS[provider]),
         )
         base_url = DEEPSEEK_BASE_URL
     elif provider == PROVIDER_QWEN:
         selected_model = surface.select_model_option(
             "Qwen Model",
             QWEN_MODELS,
-            default_index=1,
+            default_index=QWEN_MODELS.index(DEFAULT_MODELS[provider]),
         )
         base_url = QWEN_BASE_URL
     else:

@@ -949,7 +949,7 @@ class CLICommandTests(unittest.TestCase):
             _write_runtime(tmpdir)
             config_path = Path(tmpdir) / "config.yaml"
             config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-            config["search"] = {"provider": "qwen"}
+            config["search"] = {"provider": "deepseek"}
             config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
 
             overview = build_runtime_overview(Path(tmpdir))
@@ -1079,12 +1079,12 @@ class CLICommandTests(unittest.TestCase):
             root = Path(tmpdir)
             config = yaml.safe_load((root / "config.yaml").read_text(encoding="utf-8"))
 
-            update = prepare_search_provider_update(config, provider="qwen", api_key="qwen-key")
+            update = prepare_search_provider_update(config, provider="deepseek", api_key="deepseek-key")
             write_config(root, update.data)
             saved = yaml.safe_load((root / "config.yaml").read_text(encoding="utf-8"))
 
-        self.assertEqual(saved["search"]["provider"], "qwen")
-        self.assertEqual(saved["search"]["api_key"], "qwen-key")
+        self.assertEqual(saved["search"]["provider"], "deepseek")
+        self.assertEqual(saved["search"]["api_key"], "deepseek-key")
         self.assertIn("search.provider", [change.path for change in update.changes])
 
     def test_write_config_forces_restrictive_permissions(self):

@@ -1460,15 +1460,20 @@ async def collect_scheduled_turn_events(
     final_content = ""
     raw_attachments: list[dict[str, Any]] = []
     last_error = ""
-    async for event in event_stream:
-        event_type = event.get("type")
-        if event_type in {"error", "aborted"} and event.get("needs_review"):
-            raise DeliveryUncertainError(str(event.get("error") or "scheduled tool outcome is unknown"))
-        if event_type == "message_done" and str(event.get("phase") or "final") == "final":
-            final_content = str(event.get("content") or "").strip() or final_content
-            attachments = event.get("attachments")
-            if isinstance(attachments, list):
-                raw_attachments.extend(item for item in attachments if isinstance(item, dict))
-        elif event_type == "error" and not final_content:
-            last_error = str(event.get("error") or "Agent processing error.").strip()
+    try:
+        async for event in event_stream:
+            event_type = event.get("type")
+            if event_type in {"error", "aborted"} and event.get("needs_review"):
+                raise DeliveryUncertainError(str(event.get("error") or "scheduled tool outcome is unknown"))
+            if event_type == "message_done" and str(event.get("phase") or "final") == "final":
+                final_content = str(event.get("content") or "").strip() or final_content
+                attachments = event.get("attachments")
+                if isinstance(attachments, list):
+                    raw_attachments.extend(item for item in attachments if isinstance(item, dict))
+            elif event_type == "error" and not final_content:
+                last_error = str(event.get("error") or "Agent processing error.").strip()
+    finally:
+        close = getattr(event_stream, "aclose", None)
+        if callable(close):
+            await close()
     return final_content, raw_attachments, last_error

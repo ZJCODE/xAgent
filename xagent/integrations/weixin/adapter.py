@@ -49,7 +49,6 @@ from .state import WeixinCredentials, WeixinStateStore
 WEIXIN_INBOUND_IMAGE_DIR = "assets/inbound/weixin/images"
 WEIXIN_OUTBOUND_IMAGE_DIR = "assets/derived/weixin/outbound/images"
 WEIXIN_ATTACHMENT_DIR = "assets/inbound/weixin/files"
-_WECHAT_CHAT_TIMEOUT = 300.0  # seconds — per-message agent call deadline
 _MARKDOWN_IMAGE_RE = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
 _MARKDOWN_LINK_RE = re.compile(r"(?<!!)\[[^\]]+\]\(([^)]+)\)")
 _SAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
@@ -550,9 +549,15 @@ class WeixinAdapter:
         if not callable(chat_events):
             raise RuntimeError("Agent does not support chat_events().")
         event_source = chat_events(**(chat_kwargs or {}), stream=False)
+        inbox = getattr(self.agent, "inbox", None)
+        timeout_seconds = AgentConfig.transport_timeout_seconds(
+            run_timeout=getattr(inbox, "run_timeout", AgentConfig.DEFAULT_TURN_RUN_TIMEOUT),
+            queue_timeout=getattr(inbox, "queue_timeout", AgentConfig.DEFAULT_TURN_QUEUE_TIMEOUT),
+            delivery_timeout=AgentConfig.WEIXIN_DELIVERY_TIMEOUT_SECONDS,
+        )
         sent_count = 0
         try:
-            async with asyncio.timeout(_WECHAT_CHAT_TIMEOUT):
+            async with asyncio.timeout(timeout_seconds):
                 async for event in event_source:
                     event_type = event.get("type")
                     if event_type == "message_done":
@@ -579,7 +584,7 @@ class WeixinAdapter:
         except asyncio.TimeoutError:
             self.logger.error(
                 "Agent call timed out after %ss for user=%s",
-                _WECHAT_CHAT_TIMEOUT,
+                timeout_seconds,
                 _safe_id(user_id),
             )
             if sent_count == 0:
@@ -589,6 +594,10 @@ class WeixinAdapter:
                     text="Agent processing timed out. Please try again.",
                     stable_key=f"{source_message_id or 'message'}:timeout",
                 )
+        finally:
+            close = getattr(event_source, "aclose", None)
+            if callable(close):
+                await close()
 
     async def _send_text_and_attachments(
         self,

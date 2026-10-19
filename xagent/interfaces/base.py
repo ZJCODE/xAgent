@@ -15,7 +15,6 @@ from ..core.providers import (
     normalize_provider_name,
     normalize_model_api,
     provider_is_official_openai,
-    provider_base_url,
     provider_model_api,
     provider_supports_vision,
     resolved_provider_name,
@@ -44,11 +43,9 @@ from ..tools.image_generation_tool import (
     normalize_image_generation_provider,
 )
 from ..tools.search_tool import (
-    DEFAULT_QWEN_SEARCH_MODEL,
     SEARCH_PROVIDER_DEEPSEEK,
     SEARCH_PROVIDER_NONE,
     SEARCH_PROVIDER_OPENAI,
-    SEARCH_PROVIDER_QWEN,
     _get_deepseek_api_key,
     is_placeholder_api_key,
     normalize_search_provider,
@@ -431,12 +428,6 @@ class BaseAgentRunner:
                 raise ValueError(
                     "search.provider 'deepseek' requires search.api_key when provider is not DeepSeek"
                 )
-        if search_provider == SEARCH_PROVIDER_QWEN and not self._is_qwen_provider(provider_cfg):
-            api_key = str(search_cfg.get("api_key") or "").strip()
-            if is_placeholder_api_key(api_key):
-                raise ValueError(
-                    "search.provider 'qwen' requires search.api_key when provider is not Qwen"
-                )
 
     def _validate_image_generation_config(
         self,
@@ -630,11 +621,11 @@ class BaseAgentRunner:
             return resolved_provider_name(provider_cfg)
         return ""
 
-    def _get_provider_max_tokens(self, agent_cfg: Dict[str, Any]) -> Optional[int]:
+    def _get_provider_max_tokens(self, agent_cfg: Dict[str, Any]) -> int:
         provider_cfg = agent_cfg.get("provider") or {}
         if isinstance(provider_cfg, dict) and provider_cfg.get("max_tokens"):
             return int(provider_cfg["max_tokens"])
-        return None
+        return AgentConfig.DEFAULT_MAX_TOKENS
 
     def _get_provider_reasoning(self, agent_cfg: Dict[str, Any]) -> Optional[ReasoningConfig]:
         provider_cfg = agent_cfg.get("provider") or {}
@@ -677,37 +668,9 @@ class BaseAgentRunner:
         provider_cfg = agent_cfg.get("provider") or {}
         if search_provider == SEARCH_PROVIDER_OPENAI:
             return self._initialize_openai_feature_client(search_cfg, provider_cfg, model_client=model_client)
-        if search_provider == SEARCH_PROVIDER_QWEN:
-            return self._initialize_qwen_search_client(search_cfg, provider_cfg, model_client=model_client)
         if search_provider == SEARCH_PROVIDER_DEEPSEEK:
             return None
         return model_client
-
-    def _initialize_qwen_search_client(
-        self,
-        search_cfg: Dict[str, Any],
-        provider_cfg: Any,
-        *,
-        model_client: Optional[Any],
-    ) -> Optional[Any]:
-        api_key = str(search_cfg.get("api_key") or "").strip()
-        if api_key and not is_placeholder_api_key(api_key):
-            base_url = str(search_cfg.get("base_url") or "").strip()
-            if not base_url and isinstance(provider_cfg, dict) and self._is_qwen_provider(provider_cfg):
-                base_url = str(provider_cfg.get("base_url") or "").strip()
-            if not base_url:
-                base_url = provider_base_url(PROVIDER_QWEN)
-
-            client_kwargs: Dict[str, Any] = {
-                "api_key": api_key,
-                "base_url": base_url,
-            }
-            return self.observability.create_client(client_kwargs)
-
-        if isinstance(provider_cfg, dict) and self._is_qwen_provider(provider_cfg):
-            return model_client
-
-        return None
 
     def _initialize_openai_feature_client(
         self,
@@ -742,9 +705,6 @@ class BaseAgentRunner:
         if search_provider == SEARCH_PROVIDER_OPENAI:
             if not isinstance(provider_cfg, dict) or not self._is_openai_provider(provider_cfg):
                 return AgentConfig.DEFAULT_MODEL
-        if search_provider == SEARCH_PROVIDER_QWEN:
-            if not isinstance(provider_cfg, dict) or not self._is_qwen_provider(provider_cfg):
-                return DEFAULT_QWEN_SEARCH_MODEL
         if search_provider == SEARCH_PROVIDER_DEEPSEEK:
             return None
         return self._get_agent_model(agent_cfg)
@@ -852,11 +812,7 @@ class BaseAgentRunner:
 
         search_provider = normalize_search_provider(search_cfg.get("provider"))
         provider_cfg = agent_cfg.get("provider") or {}
-        if search_provider == SEARCH_PROVIDER_QWEN:
-            provider_matches_search = (
-                isinstance(provider_cfg, dict) and self._is_qwen_provider(provider_cfg)
-            )
-        elif search_provider == SEARCH_PROVIDER_DEEPSEEK:
+        if search_provider == SEARCH_PROVIDER_DEEPSEEK:
             provider_matches_search = (
                 isinstance(provider_cfg, dict) and self._is_deepseek_provider(provider_cfg)
             )

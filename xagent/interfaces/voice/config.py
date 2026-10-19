@@ -147,7 +147,9 @@ class VoicePresenceConfigModel(BaseModel):
 class VoicePerformanceConfigModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    preemptive_generation: bool = True
+    # Partial transcripts must not enter the durable, tool-capable Agent turn.
+    # Keep speculative execution off until candidates can be committed after STT finalization.
+    preemptive_generation: bool = False
     preemptive_min_chars: int = Field(default=8, ge=3, le=500)
     warm_output_device: bool = True
     max_agent_loops: int = Field(default=12, ge=1, le=50)

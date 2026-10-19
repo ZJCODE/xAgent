@@ -19,6 +19,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict
 from ...interfaces.server.models import ChatInput, ObserveInput
 
+from ..config import AgentConfig
 from .channel_activity import ChannelActivity
 from .ownership import RuntimeOwnership, canonical_root, prepare_socket_directory, write_runtime_status
 
@@ -120,7 +121,9 @@ class RuntimeHost:
             "tools": list(getattr(self.agent, "tools", {})),
             "queue": {"pending": getattr(inbox, "pending_count", 0),
                 "active_turn_id": getattr(inbox, "current_turn_id", None),
-                "max_pending": 32, "queue_timeout_seconds": 30, "run_timeout_seconds": 600},
+                "max_pending": getattr(inbox, "max_pending", AgentConfig.DEFAULT_MAX_PENDING_TURNS),
+                "queue_timeout_seconds": getattr(inbox, "queue_timeout", AgentConfig.DEFAULT_TURN_QUEUE_TIMEOUT),
+                "run_timeout_seconds": getattr(inbox, "run_timeout", AgentConfig.DEFAULT_TURN_RUN_TIMEOUT)},
             "recovered_turns": self.recovered_turns,
             "lifecycle_timings": dict(self.lifecycle_timings),
             "needs_restart": self._startup_fingerprint is not None and self._startup_fingerprint != self._configuration_fingerprint(),

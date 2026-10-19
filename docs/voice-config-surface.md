@@ -130,6 +130,11 @@ person, and the agent has per-person memory. `--speed` remains for a session.
 
 ## 5. Constants, not configuration
 
+- **`performance.preemptive_generation`** — disabled by default. Partial STT
+  transcripts must not enter the full Agent turn, execute tools or become
+  durable messages before the final transcript and speaker are confirmed.
+  The existing speculative controller is experimental; enabling it again
+  requires a candidate-only generation path with deferred commit and tools.
 - **`idle_shutdown_minutes`** — the recognizer socket bills while open (roughly
   \$2.88/day per device, design doc §6a) and streams the room while it does, and
   local energy reopens it, so holding it through silence buys nothing. Closing

@@ -26,6 +26,7 @@ except ImportError:  # pragma: no cover - POSIX platforms
     msvcrt = None
 
 from ..config import AgentConfig
+from ..providers import maintenance_reasoning_config
 from .task_receipts import sync_task_directory as _fsync_directory
 
 logger = logging.getLogger(__name__)
@@ -560,6 +561,11 @@ class SubconsciousLoop:
             tool_specs=[],
             instructions=instructions,
             stream=False,
+            max_tokens=AgentConfig.SUBCONSCIOUS_MAX_TOKENS,
+            reasoning=maintenance_reasoning_config(
+                getattr(model_client, "reasoning", None),
+                provider_name=getattr(model_client, "provider_name", None),
+            ),
         ):
             if model_event.type in {"delta", "text"} and model_event.delta:
                 text_parts.append(model_event.delta)

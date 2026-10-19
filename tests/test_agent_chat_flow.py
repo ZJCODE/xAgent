@@ -448,7 +448,7 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(call["messages"][1], {"role": "user", "content": "hello"})
         self.assertEqual(call["tool_choice"], "auto")
         self.assertNotIn("reasoning_effort", call)
-        self.assertNotIn("max_completion_tokens", call)
+        self.assertEqual(call["max_completion_tokens"], AgentConfig.DEFAULT_MAX_TOKENS)
 
     async def test_call_retries_retryable_provider_errors(self):
         class StatusError(Exception):

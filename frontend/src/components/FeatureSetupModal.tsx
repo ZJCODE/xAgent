@@ -207,7 +207,7 @@ export function FeatureSetupModal({ open, feature, schema, onClose, onSaved }: F
     setProvider(next);
     if (feature !== "model") return;
     const nextModels = schema.model.models[next] || [];
-    setModelName(nextModels[0] || schema.model.placeholders.model || "");
+    setModelName(schema.model.default_models[next] || nextModels[0] || schema.model.placeholders.model || "");
     setBaseUrl(schema.model.provider_base_urls[next] || "");
     setModelApi(next === "custom" ? schema.model.custom_model_apis[0] || "" : "");
     setSupportsVision(false);

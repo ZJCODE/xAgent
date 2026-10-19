@@ -376,6 +376,7 @@ export interface ReasoningCapability {
 export interface AgentSetupSchema {
   providers: SetupOption[];
   models: Record<string, string[]>;
+  default_models: Record<string, string>;
   provider_base_urls: Record<string, string>;
   custom_model_apis: string[];
   reasoning: {
@@ -425,6 +426,7 @@ export interface AgentEditSetupSchema {
   model: {
     providers: SetupOption[];
     models: Record<string, string[]>;
+    default_models: Record<string, string>;
     provider_base_urls: Record<string, string>;
     custom_model_apis: string[];
     reasoning: {

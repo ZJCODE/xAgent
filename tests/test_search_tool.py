@@ -30,13 +30,15 @@ class SearchToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(normalize_search_provider("deepseek_search"), "deepseek")
         self.assertEqual(normalize_search_provider("deepseek_web_search"), "deepseek")
         self.assertEqual(normalize_search_provider("deepseek_search_api"), "deepseek")
-        self.assertEqual(normalize_search_provider("dashscope"), "qwen")
-        self.assertEqual(normalize_search_provider("qwen_search"), "qwen")
         self.assertEqual(normalize_search_provider("off"), "none")
 
-    def test_unknown_search_provider_is_unsupported(self):
-        with self.assertRaisesRegex(ValueError, "Unsupported search provider"):
-            normalize_search_provider("unsupported_search")
+    def test_removed_search_provider_and_aliases_are_rejected(self):
+        for provider in ("qwen", "dashscope", "qwen_search", "qwen_web_search", "qwen-search", "qwen-web-search", "unsupported_search"):
+            with self.subTest(provider=provider):
+                with self.assertRaisesRegex(ValueError, "Unsupported search provider.*deepseek, none, openai"):
+                    normalize_search_provider(provider)
+                with self.assertRaisesRegex(ValueError, "Unsupported search provider"):
+                    create_web_search_tool({"provider": provider, "api_key": "feature-key"})
 
     def test_create_web_search_tool_returns_none_when_disabled(self):
         self.assertIsNone(create_web_search_tool({"provider": "none"}))
@@ -55,47 +57,13 @@ class SearchToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("code_interpreter", properties)
         self.assertNotIn("freshness", properties)
 
-    def test_qwen_tool_schema_includes_only_qwen_parameters(self):
-        tool = create_web_search_tool({"provider": "qwen", "api_key": "qwen-key"})
-        properties = tool.tool_spec["function"]["parameters"]["properties"]
-
-        self.assertIn("query", properties)
-        self.assertIn("max_results", properties)
-        self.assertIn("enable_thinking", properties)
-        self.assertIn("web_extractor", properties)
-        self.assertIn("code_interpreter", properties)
-        self.assertNotIn("search_context_size", properties)
-        self.assertNotIn("allowed_domains", properties)
-        self.assertNotIn("country", properties)
-        self.assertNotIn("freshness", properties)
-
-    async def test_qwen_placeholder_key_returns_config_error(self):
-        tool = create_web_search_tool({"provider": "qwen", "api_key": "your_qwen_api_key_here"})
-
-        result = await tool(query="杭州天气", max_results=1)
-
-        self.assertEqual(result["status"], "error")
-        self.assertEqual(result["provider"], "qwen")
-        self.assertIn("Qwen search requires", result["message"])
-
-    async def test_openai_search_rejects_qwen_only_parameters(self):
+    async def test_openai_search_rejects_unsupported_parameters(self):
         tool = create_web_search_tool({"provider": "openai"}, client=FakeOpenAIClient(SimpleNamespace()))
 
-        result = await tool(query="python docs", enable_thinking=True)
+        result = await tool(query="python docs", freshness="day")
 
         self.assertEqual(result["status"], "error")
-        self.assertIn("enable_thinking", result["message"])
-
-    async def test_qwen_search_rejects_openai_only_parameters(self):
-        tool = create_web_search_tool(
-            {"provider": "qwen"},
-            client=FakeOpenAIClient(SimpleNamespace()),
-        )
-
-        result = await tool(query="杭州天气", country="CN")
-
-        self.assertEqual(result["status"], "error")
-        self.assertIn("country", result["message"])
+        self.assertIn("freshness", result["message"])
 
     async def test_openai_search_uses_responses_api(self):
         response = SimpleNamespace(
@@ -164,82 +132,6 @@ class SearchToolTests(unittest.IsolatedAsyncioTestCase):
             call["tools"][0]["user_location"],
             {"type": "approximate", "country": "US", "city": "Seattle"},
         )
-
-    async def test_qwen_search_uses_responses_api_with_qwen_tools(self):
-        response = SimpleNamespace(
-            output_text="杭州今天有雨。",
-            usage=SimpleNamespace(
-                x_tools={
-                    "web_search": {"count": 1},
-                    "web_extractor": {"count": 1},
-                    "code_interpreter": {"count": 1},
-                }
-            ),
-            output=[
-                {
-                    "type": "message",
-                    "content": [{
-                        "text": "杭州今天有雨。",
-                        "annotations": [{
-                            "type": "url_citation",
-                            "url": "https://weather.example.com/hangzhou",
-                            "title": "Hangzhou Weather",
-                        }],
-                    }],
-                },
-                {
-                    "type": "web_search_call",
-                    "action": {
-                        "sources": [{
-                            "url": "https://weather.example.com/source",
-                            "title": "Weather Source",
-                        }]
-                    },
-                },
-            ],
-        )
-        client = FakeOpenAIClient(response)
-        tool = create_web_search_tool(
-            {"provider": "qwen"},
-            client=client,
-            model="qwen3-max-2026-01-23",
-        )
-
-        result = await tool(query="杭州天气", max_results=2)
-
-        self.assertEqual(result["status"], "ok")
-        self.assertEqual(result["provider"], "qwen")
-        self.assertEqual(result["answer"], "杭州今天有雨。")
-        self.assertEqual(result["tool_usage"], {"web_search": 1, "web_extractor": 1, "code_interpreter": 1})
-        self.assertEqual(result["results"][0], {
-            "title": "Hangzhou Weather",
-            "url": "https://weather.example.com/hangzhou",
-            "snippet": "",
-        })
-        call = client.responses.calls[0]
-        self.assertEqual(call["model"], "qwen3-max-2026-01-23")
-        self.assertEqual(
-            [tool_config["type"] for tool_config in call["tools"]],
-            ["web_search", "web_extractor", "code_interpreter"],
-        )
-        self.assertEqual(call["extra_body"], {"enable_thinking": True})
-        self.assertNotIn("include", call)
-        self.assertNotIn("tool_choice", call)
-
-    async def test_qwen_search_can_disable_optional_tools(self):
-        response = SimpleNamespace(output_text="ok", output=[])
-        client = FakeOpenAIClient(response)
-        tool = create_web_search_tool(
-            {"provider": "qwen", "enable_thinking": False, "web_extractor": False, "code_interpreter": False},
-            client=client,
-        )
-
-        result = await tool(query="杭州天气")
-
-        self.assertEqual(result["status"], "ok")
-        call = client.responses.calls[0]
-        self.assertEqual(call["tools"], [{"type": "web_search"}])
-        self.assertNotIn("extra_body", call)
 
     def test_deepseek_tool_schema_includes_only_minimal_parameters(self):
         tool = create_web_search_tool({"provider": "deepseek", "api_key": "ds-key"})

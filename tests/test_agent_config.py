@@ -435,21 +435,6 @@ search:
             self.assertFalse(runner.agent.supports_vision)
             self.assertNotIn("see_image", runner.agent.tools)
 
-    def test_qwen_search_prefers_explicit_feature_key_even_for_qwen_provider(self):
-        runner = BaseAgentRunner.__new__(BaseAgentRunner)
-        runner.observability = SimpleNamespace(create_client=MagicMock(return_value="search-client"))
-
-        client = runner._initialize_qwen_search_client(
-            {"provider": "qwen", "api_key": "qwen-search-key"},
-            {"name": "qwen", "base_url": "https://proxy.example.com/v1"},
-            model_client="model-client",
-        )
-
-        self.assertEqual(client, "search-client")
-        runner.observability.create_client.assert_called_once_with(
-            {"api_key": "qwen-search-key", "base_url": "https://proxy.example.com/v1"}
-        )
-
     def test_provider_config_rejects_backend_key(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "config.yaml"
@@ -688,7 +673,7 @@ provider:
             self.assertNotIn("backend", config["provider"])
             self.assertNotIn("model_api", config["provider"])
             self.assertNotIn("sdk", config["provider"])
-            self.assertEqual(config["search"]["provider"], "none")
+            self.assertEqual(config["search"], {"provider": "openai"})
             self.assertEqual(config["image_generation"]["provider"], "none")
             self.assertNotIn("enabled", config["channels"]["api"])
             self.assertEqual(config["channels"]["api"]["host"], "127.0.0.1")
@@ -800,7 +785,7 @@ provider:
             self.assertNotIn("backend", config["provider"])
             self.assertNotIn("model_api", config["provider"])
             self.assertNotIn("sdk", config["provider"])
-            self.assertEqual(config["search"]["provider"], "none")
+            self.assertEqual(config["search"], {"provider": "deepseek"})
             self.assertEqual(config["image_generation"]["provider"], "none")
             self.assertEqual(result.identity_path.read_text(encoding="utf-8"), "# Identity\n\nYou report weather.\n")
 
@@ -875,7 +860,7 @@ provider:
 
         self.assertEqual(selection.reasoning, ReasoningConfig(enabled=True, effort="max"))
 
-    def test_init_writes_optional_features_disabled_by_default(self):
+    def test_init_enables_matching_search_and_keeps_other_features_disabled(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             selection = InitSelection(
                 provider="openai",
@@ -890,8 +875,38 @@ provider:
 
             self.assertNotIn("voice", config["channels"])
             self.assertNotIn("observability", config)
-            self.assertEqual(config["search"], {"provider": "none"})
+            self.assertEqual(config["search"], {"provider": "openai"})
             self.assertEqual(config["image_generation"], {"provider": "none"})
+
+    def test_init_search_defaults_load_with_main_provider_credentials(self):
+        schema = build_setup_schema()
+        for provider in ("openai", "deepseek", "qwen", "anthropic", "custom"):
+            with self.subTest(provider=provider), tempfile.TemporaryDirectory() as tmpdir:
+                selection = init_selection_from_mapping({
+                    "provider": provider,
+                    "model": "custom-model" if provider == "custom" else schema["default_models"][provider],
+                    "api_key": f"{provider}-main-key",
+                })
+                result = init_agent_directory(tmpdir, selection=selection, quiet=True)
+                config = yaml.safe_load(result.config_path.read_text(encoding="utf-8"))
+                expected_search = provider if provider in {"openai", "deepseek"} else "none"
+                self.assertEqual(config["search"], {"provider": expected_search})
+
+                runner = BaseAgentRunner(config_dir=tmpdir)
+                if expected_search == "none":
+                    self.assertNotIn("web_search", runner.agent.tools)
+                else:
+                    web_search = runner.agent.tools["web_search"]
+                    search_provider = next(
+                        cell.cell_contents
+                        for cell in web_search.__closure__
+                        if cell.cell_contents.__class__.__name__ == "ConfiguredSearchProvider"
+                    )
+                    self.assertEqual(search_provider.provider, provider)
+                    if provider == "deepseek":
+                        self.assertEqual(search_provider.config["api_key"], "deepseek-main-key")
+                    else:
+                        self.assertEqual(search_provider.client.api_key, "openai-main-key")
 
     def test_collect_init_selection_supports_custom_identity(self):
         answers = iter([
@@ -932,6 +947,28 @@ provider:
         self.assertEqual(selection.api_key, "your_api_key_here")
         self.assertEqual(selection.model, "your_model_here")
         self.assertIn("Describe this agent's role", selection.identity)
+
+    def test_setup_schema_and_cli_share_provider_model_defaults(self):
+        schema = build_setup_schema()
+        expected_defaults = {
+            "openai": "gpt-5.6-terra",
+            "deepseek": "deepseek-flash",
+            "qwen": "qwen3.6-flash",
+            "anthropic": "claude-sonnet-4-20250514",
+        }
+        for index, provider in enumerate(schema["providers"]):
+            name = provider["id"]
+            if name not in expected_defaults:
+                continue
+            with self.subTest(provider=name):
+                answers = iter([str(index + 1), "", "."])
+                with patch("sys.stdout", new_callable=io.StringIO):
+                    selection = collect_init_selection(
+                        input_func=lambda prompt: next(answers),
+                        secret_input_func=lambda prompt: "",
+                    )
+                self.assertEqual(selection.model, expected_defaults[name])
+                self.assertEqual(schema["default_models"][name], selection.model)
 
     def test_collect_init_selection_supports_custom_model_name(self):
         answers = iter([
@@ -1163,89 +1200,41 @@ search:
                 "https://api.openai.com/v1",
             )
 
-    def test_config_rejects_qwen_search_for_non_qwen_provider_without_search_key(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            config_path = Path(tmpdir) / "config.yaml"
-            config_path.write_text(
-                """
-provider:
-    name: "deepseek"
-    model: "deepseek-v4-pro"
-    api_key: "test-key"
-search:
-    provider: "qwen"
-""",
-                encoding="utf-8",
-            )
-            write_identity(tmpdir)
+    def test_config_rejects_removed_search_provider_with_any_model_or_key(self):
+        for model_provider in ("qwen", "deepseek"):
+            for search_key in (None, "feature-key"):
+                with self.subTest(model_provider=model_provider, search_key=search_key):
+                    config = {
+                        "provider": {"name": model_provider, "model": "test-model", "api_key": "model-key"},
+                        "search": {"provider": "qwen", "api_key": search_key},
+                    }
+                    runner = BaseAgentRunner.__new__(BaseAgentRunner)
+                    with self.assertRaisesRegex(ValueError, "Unsupported search provider: qwen"):
+                        runner._validate_config(config)
 
-            with self.assertRaisesRegex(ValueError, "requires search.api_key"):
-                BaseAgentRunner(config_dir=tmpdir)
-
-    def test_config_accepts_qwen_search_for_non_qwen_provider_with_search_key(self):
+    def test_qwen_model_and_images_remain_available_without_search(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            config_path = Path(tmpdir) / "config.yaml"
-            config_path.write_text(
-                """
-provider:
-    name: "deepseek"
-    model: "deepseek-v4-pro"
-    base_url: "https://api.deepseek.com"
-    api_key: "deepseek-key"
-search:
-    provider: "qwen"
-    api_key: "qwen-search-key"
-""",
-                encoding="utf-8",
-            )
+            config = {
+                "provider": {
+                    "name": "qwen",
+                    "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                    "model": "qwen3.6-flash",
+                    "api_key": "qwen-key",
+                },
+                "search": {"provider": "none"},
+                "image_generation": {"provider": "qwen"},
+            }
+            (Path(tmpdir) / "config.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
             write_identity(tmpdir)
 
             runner = BaseAgentRunner(config_dir=tmpdir)
-            web_search_tool = runner.agent.tools["web_search"]
-            search_provider = next(
-                cell.cell_contents
-                for cell in web_search_tool.__closure__
-                if cell.cell_contents.__class__.__name__ == "ConfiguredSearchProvider"
-            )
 
-            self.assertIn("web_search", runner.agent.tools)
-            self.assertEqual(search_provider.provider, "qwen")
-            self.assertEqual(search_provider.model, "qwen3-max-2026-01-23")
-            self.assertEqual(
-                str(search_provider.client.base_url).rstrip("/"),
-                "https://dashscope.aliyuncs.com/compatible-mode/v1",
-            )
-
-    def test_config_loads_qwen_search_tool_with_main_key(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            config_path = Path(tmpdir) / "config.yaml"
-            config_path.write_text(
-                """
-provider:
-    name: "qwen"
-    base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    model: "qwen3-max-2026-01-23"
-    api_key: "qwen-key"
-search:
-    provider: "qwen"
-""",
-                encoding="utf-8",
-            )
-            write_identity(tmpdir)
-
-            runner = BaseAgentRunner(config_dir=tmpdir)
-            web_search_tool = runner.agent.tools["web_search"]
-            search_provider = next(
-                cell.cell_contents
-                for cell in web_search_tool.__closure__
-                if cell.cell_contents.__class__.__name__ == "ConfiguredSearchProvider"
-            )
-
-            self.assertIn("web_search", runner.agent.tools)
-            self.assertEqual(search_provider.provider, "qwen")
-            self.assertEqual(search_provider.model, "qwen3-max-2026-01-23")
-            self.assertEqual(search_provider.config["api_key"], "qwen-key")
-            self.assertEqual(search_provider.config["base_url"], "https://dashscope.aliyuncs.com/compatible-mode/v1")
+            self.assertEqual(runner.agent.model, "qwen3.6-flash")
+            self.assertNotIn("web_search", runner.agent.tools)
+            self.assertIn("generate_image", runner.agent.tools)
+            image_config = runner._image_generation_config_for_tools(runner.config)
+            self.assertEqual(image_config["provider"], "qwen")
+            self.assertEqual(image_config["api_key"], "qwen-key")
 
     def test_config_rejects_deepseek_search_for_non_deepseek_provider_without_search_key(self):
         with tempfile.TemporaryDirectory() as tmpdir:

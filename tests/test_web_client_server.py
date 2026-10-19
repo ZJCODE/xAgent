@@ -200,6 +200,25 @@ class WebClientMultiAgentTests(unittest.IsolatedAsyncioTestCase):
         info = client.get("/api/agent/info")
         self.assertEqual(info.status_code, 200)
         self.assertEqual(info.json()["model"], "gpt-5.4-mini")
+        config = yaml.safe_load((self.root / "agents" / "agent_c" / "config.yaml").read_text(encoding="utf-8"))
+        self.assertEqual(config["search"], {"provider": "openai"})
+
+    async def test_create_deepseek_agent_enables_matching_search(self):
+        client = TestClient(self._server().app)
+        response = client.post("/api/agents", json={
+            "name": "deepseek_agent",
+            "selection": {
+                "provider": "deepseek",
+                "api_key": "deepseek-key",
+                "model": "deepseek-flash",
+            },
+        })
+
+        self.assertEqual(response.status_code, 200, response.text)
+        config = yaml.safe_load(
+            (self.root / "agents" / "deepseek_agent" / "config.yaml").read_text(encoding="utf-8")
+        )
+        self.assertEqual(config["search"], {"provider": "deepseek"})
 
     async def test_create_duplicate_agent_returns_400(self):
         client = TestClient(self._server().app)

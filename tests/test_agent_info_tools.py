@@ -61,7 +61,7 @@ class AgentInfoToolsTests(unittest.IsolatedAsyncioTestCase):
             ("none", "none", True, True),
             ("off", "disabled", False, False),
             ("openai", "openai", True, False),
-            ("qwen_search", "qwen_images", False, True),
+            ("deepseek_search", "qwen_images", False, True),
         ]
         for search, images, notes, vision in cases:
             with self.subTest(search=search, images=images, notes=notes, vision=vision):

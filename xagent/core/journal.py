@@ -9,8 +9,8 @@ from typing import Any, List, Optional
 
 from openai import AsyncOpenAI
 
+from .config import AgentConfig
 from .providers import (
-    PROVIDER_DEEPSEEK,
     PROVIDER_OPENAI,
     ReasoningConfig,
     maintenance_reasoning_config,
@@ -28,7 +28,7 @@ class JournalLLMService:
         client: Optional[Any] = None,
         model: str = "gpt-5.6-terra",
         model_api: str = DEFAULT_OPENAI_CHAT_MODEL_API,
-        max_tokens: Optional[int] = 4096,
+        max_tokens: Optional[int] = AgentConfig.JOURNAL_MAX_TOKENS,
         provider_name: str = PROVIDER_OPENAI,
         reasoning: Optional[ReasoningConfig] = None,
     ) -> None:
@@ -37,12 +37,8 @@ class JournalLLMService:
         self.model = model
         self.provider_name = provider_name
         self.model_api = model_api
-        self.max_tokens = max_tokens
-        self.reasoning = maintenance_reasoning_config(reasoning)
-        if self.reasoning is None and provider_name == PROVIDER_DEEPSEEK:
-            # DeepSeek enables thinking by default; bounded maintenance calls
-            # can otherwise spend their entire output limit without text.
-            self.reasoning = ReasoningConfig(enabled=False)
+        self.max_tokens = AgentConfig.JOURNAL_MAX_TOKENS if max_tokens is None else max_tokens
+        self.reasoning = maintenance_reasoning_config(reasoning, provider_name=provider_name)
         self._model_client: Optional[Any] = None
 
     async def format_diary_entry(

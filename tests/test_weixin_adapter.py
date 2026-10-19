@@ -4,8 +4,9 @@ import unittest
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
+from xagent.core.config import AgentConfig
 from xagent.core.runtime import ContactEntry, SubconsciousDelivery, enqueue_scheduled_task, list_task_records
 from xagent.integrations.weixin.adapter import WeixinAdapter
 from xagent.integrations.weixin.config import WeixinAdapterConfig
@@ -60,6 +61,32 @@ class _FakeWeixinClient:
 
 
 class WeixinAdapterTests(unittest.TestCase):
+    def test_timeout_uses_core_budget_and_closes_unfinished_event_source(self):
+        async def run_case():
+            with tempfile.TemporaryDirectory() as root:
+                adapter, agent, client, _ = self._adapter(root)
+                closed = asyncio.Event()
+                agent.inbox = SimpleNamespace(run_timeout=0.01, queue_timeout=0.01)
+
+                async def hanging(**kwargs):
+                    try:
+                        yield {"type": "accepted"}
+                        await asyncio.Event().wait()
+                    finally:
+                        closed.set()
+
+                agent.chat_events = hanging
+                with patch.object(AgentConfig, "WEIXIN_DELIVERY_TIMEOUT_SECONDS", 0.01), patch.object(
+                    AgentConfig, "TRANSPORT_TIMEOUT_GRACE_SECONDS", 0.01,
+                ):
+                    await asyncio.wait_for(adapter._send_event_replies(
+                        user_id="owner@im.wechat", context_token="ctx", source_message_id="timeout-test",
+                    ), timeout=1)
+                self.assertTrue(closed.is_set())
+                self.assertIn("timed out", client.sent_text[-1]["text"])
+
+        asyncio.run(run_case())
+
     def _adapter(self, tmpdir, *, owner_only=True, allow_users=(), reply="agent reply", text_max_chars=2000):
         state = WeixinStateStore(tmpdir)
         credentials = WeixinCredentials(

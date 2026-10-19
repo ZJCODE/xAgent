@@ -43,6 +43,16 @@ Inputs retain the channel, user, room, source event ID, request ID and turn ID. 
 
 One formal Agent turn runs at a time. Up to 32 turns may wait; queue and execution deadlines are 30 and 600 seconds. Observations are stored without immediately requesting a reply. Group messages already perceived through attention are not stored again when the Agent responds.
 
+Model output is bounded on Responses, Chat Completions and Anthropic Messages alike. Main turns default to 8192 tokens; `provider.max_tokens` overrides that ceiling. Diary generations use at most 4096 tokens, working summaries 2048, and subconscious generations 2048. These background budgets also respect a smaller configured main ceiling. Bounded subconscious calls use the existing maintenance reasoning policy without changing foreground reasoning or output settings.
+
+ModelClient owns retries and disables provider SDK retries on its model-only client copy. Retryable network/server failures get at most three attempts, with the existing exponential backoff. Each attempt has a 120-second wall-clock deadline, including all chunks of a streamed response. Streaming retries stop as soon as any model event has been exposed, so visible text and tool calls cannot be replayed. Cancellation propagates without retrying, and streams are closed after completion, failure or cancellation. The 600-second core deadline still bounds the whole sequence of model and tool iterations. Search and image generation keep their independent feature-client policies.
+
+HTTP/WebSocket and scheduled API turns follow the active core's queue/run deadlines, with five seconds for its terminal receipt. The legacy HTTP timeout setting remains the fallback for standalone callable agents. Weixin follows the same core deadlines and adds 120 seconds for outbound delivery, rather than cutting off at 300 seconds. Runtime status reads the active inbox limits instead of reporting hard-coded copies.
+
+Voice speculative generation is disabled by default. An unconfirmed STT partial must not start a durable, tool-capable Agent turn; the final attributed utterance starts the normal turn. Re-enabling speculation requires a candidate-only path with tools and durable writes deferred until transcript, speaker and participation are confirmed.
+
+Budget goal check: the independent Agent identity, multi-user distinctions, private/group attribution and Agent-governed sharing are retained. Memory remains one first-person, diary-authoritative stream; notes remain regenerable projections with provenance. Unconfirmed speech does not become formal experience, and timeout receipts preserve attribution and continuity without creating another memory store.
+
 Existing HTTP and WebSocket paths remain. Successful HTTP `/chat` responses and content events include `turn_id`, `event_id` and `request_id`. Cancel only your accepted turn:
 
 ```json

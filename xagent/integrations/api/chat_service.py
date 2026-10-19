@@ -5,12 +5,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from contextlib import aclosing
 from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import HTTPException, WebSocket
 
 from ...core.agent import Agent
+from ...core.config import AgentConfig
 from ...core.errors import (
     ERROR_CAPACITY,
     ERROR_INTERNAL,
@@ -59,20 +61,31 @@ class ChatService:
         self._chat_timeout = max(0.001, float(limits.chat_timeout))
         self._core_admission = isinstance(agent, Agent)
 
+    @property
+    def turn_timeout_seconds(self) -> float:
+        """The shared core owns queue/run limits; transports allow it to finish."""
+        if self._core_admission:
+            return AgentConfig.transport_timeout_seconds(
+                run_timeout=self.agent.inbox.run_timeout,
+                queue_timeout=self.agent.inbox.queue_timeout,
+            )
+        return self._chat_timeout
+
     async def run_chat_response(self, input_data: ChatInput, *, client: str = CLIENT_HTTP) -> dict:
         """Return the durable turn identifiers alongside a synchronous reply."""
         payload = {"reply": ""}
-        async for event in self.chat_event_stream(input_data, client=client):
-            payload.update({key: event[key] for key in ("turn_id", "event_id", "request_id") if event.get(key)})
-            if event.get("type") == "error":
-                raise PublicHTTPException(event)
-            if event.get("type") == "message_done" and event.get("phase") == "final":
-                payload["reply"] = str(event.get("content") or "") or payload["reply"]
-                attachments = event.get("attachments")
-                if isinstance(attachments, list) and attachments:
-                    payload["attachments"] = dedupe_attachments([
-                        *payload.get("attachments", []), *attachments,
-                    ])
+        async with aclosing(self.chat_event_stream(input_data, client=client)) as events:
+            async for event in events:
+                payload.update({key: event[key] for key in ("turn_id", "event_id", "request_id") if event.get(key)})
+                if event.get("type") == "error":
+                    raise PublicHTTPException(event)
+                if event.get("type") == "message_done" and event.get("phase") == "final":
+                    payload["reply"] = str(event.get("content") or "") or payload["reply"]
+                    attachments = event.get("attachments")
+                    if isinstance(attachments, list) and attachments:
+                        payload["attachments"] = dedupe_attachments([
+                            *payload.get("attachments", []), *attachments,
+                        ])
         return payload
 
     def abort_turn(self, turn_id: str | None = None) -> dict[str, bool]:
@@ -110,8 +123,9 @@ class ChatService:
         *,
         client: str = CLIENT_WS,
     ) -> None:
-        async for event in self.chat_event_stream(input_data, client=client):
-            await websocket.send_json(event)
+        async with aclosing(self.chat_event_stream(input_data, client=client)) as events:
+            async for event in events:
+                await websocket.send_json(event)
 
     async def send_websocket_observe_events(self, websocket: WebSocket, input_data: ObserveInput) -> None:
         try:
@@ -176,7 +190,7 @@ class ChatService:
         try:
             await self._acquire_slot()
             acquired = True
-            deadline = time.monotonic() + self._chat_timeout + (self.agent.inbox.queue_timeout if self._core_admission else 0)
+            deadline = time.monotonic() + self.turn_timeout_seconds
 
             chat_events = getattr(self.agent, "chat_events", None)
             attachments = input_attachments(input_data)
@@ -197,10 +211,11 @@ class ChatService:
                         **({"turn_id": input_data.turn_id} if input_data.turn_id else {}),
                         **({"request_id": input_data.request_id} if input_data.request_id else {}),
                     )
-                    async for event in self._iterate_before_deadline(response, deadline):
-                        if event.get("type") == "done":
-                            done_sent = True
-                        yield event
+                    async with aclosing(self._iterate_before_deadline(response, deadline)) as events:
+                        async for event in events:
+                            if event.get("type") == "done":
+                                done_sent = True
+                            yield event
                 elif callable(self.agent):
                     reply = await self._await_before_deadline(
                         self.agent(

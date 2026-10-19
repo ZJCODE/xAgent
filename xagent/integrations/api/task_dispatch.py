@@ -143,7 +143,7 @@ class TaskDispatchService:
             chat_events = getattr(self.agent, "chat_events", None)
             if not callable(chat_events):
                 raise RuntimeError("Agent does not support chat_events().")
-            deadline = time.monotonic() + self.chat._chat_timeout
+            deadline = time.monotonic() + self.chat.turn_timeout_seconds
             with scheduled_delivery_context(context):
                 return await self._scheduled_agent_event_result(
                     chat_events,

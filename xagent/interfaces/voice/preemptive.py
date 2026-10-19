@@ -23,7 +23,7 @@ ChatEventsFactory = Callable[..., AsyncIterator[dict[str, Any]]]
 
 @dataclass
 class PreemptiveGenerationConfig:
-    enabled: bool = True
+    enabled: bool = False
     min_chars: int = 8
 
 

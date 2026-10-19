@@ -18,19 +18,14 @@ from xagent.utils.tool_decorator import function_tool
 logger = logging.getLogger(__name__)
 
 SEARCH_PROVIDER_OPENAI = "openai"
-SEARCH_PROVIDER_QWEN = "qwen"
 SEARCH_PROVIDER_DEEPSEEK = "deepseek"
 SEARCH_PROVIDER_NONE = "none"
 SUPPORTED_SEARCH_PROVIDERS = {
     SEARCH_PROVIDER_OPENAI,
-    SEARCH_PROVIDER_QWEN,
     SEARCH_PROVIDER_DEEPSEEK,
     SEARCH_PROVIDER_NONE,
 }
 
-DEFAULT_QWEN_SEARCH_MODEL = "qwen3-max-2026-01-23"
-QWEN_COMPATIBLE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-QWEN_API_KEY_ENV_VARS = ("DASHSCOPE_API_KEY", "DASHSCOPE_API_TOKEN", "QWEN_API_KEY", "QWEN_API_TOKEN")
 DEEPSEEK_SEARCH_BASE_URL = "https://api.deepseek.com"
 DEEPSEEK_API_KEY_ENV_VARS = ("DEEPSEEK_API_KEY", "DEEPSEEK_API_TOKEN")
 DEEPSEEK_SEARCH_TIMEOUT = 30.0
@@ -64,13 +59,6 @@ SEARCH_TOOL_PARAMETERS = {
         "external_web_access",
         "return_token_budget",
         "force_search",
-    },
-    SEARCH_PROVIDER_QWEN: {
-        "query",
-        "max_results",
-        "enable_thinking",
-        "web_extractor",
-        "code_interpreter",
     },
     SEARCH_PROVIDER_DEEPSEEK: {
         "query",
@@ -118,9 +106,6 @@ class ConfiguredSearchProvider:
         external_web_access: Optional[bool] = None,
         return_token_budget: Optional[Literal["default", "unlimited"]] = None,
         force_search: Optional[bool] = None,
-        enable_thinking: Optional[bool] = None,
-        web_extractor: Optional[bool] = None,
-        code_interpreter: Optional[bool] = None,
         freshness: Optional[str] = None,
         search_lang: Optional[str] = None,
     ) -> dict:
@@ -140,9 +125,6 @@ class ConfiguredSearchProvider:
             "external_web_access": external_web_access,
             "return_token_budget": return_token_budget,
             "force_search": force_search,
-            "enable_thinking": enable_thinking,
-            "web_extractor": web_extractor,
-            "code_interpreter": code_interpreter,
             "freshness": freshness,
             "search_lang": search_lang,
         }
@@ -168,14 +150,6 @@ class ConfiguredSearchProvider:
                 external_web_access=external_web_access,
                 return_token_budget=return_token_budget,
                 force_search=force_search,
-            )
-        if self.provider == SEARCH_PROVIDER_QWEN:
-            return await self._search_qwen(
-                query=query,
-                result_limit=result_limit,
-                enable_thinking=enable_thinking,
-                web_extractor=web_extractor,
-                code_interpreter=code_interpreter,
             )
         if self.provider == SEARCH_PROVIDER_DEEPSEEK:
             return await self._search_deepseek(
@@ -253,85 +227,6 @@ class ConfiguredSearchProvider:
             "answer": answer,
             "results": [result.to_dict() for result in results],
         }
-
-    async def _search_qwen(
-        self,
-        *,
-        query: str,
-        result_limit: int,
-        enable_thinking: Optional[bool],
-        web_extractor: Optional[bool],
-        code_interpreter: Optional[bool],
-    ) -> dict:
-        search_client = self.client
-        if search_client is None:
-            try:
-                search_client = _create_qwen_search_client(self.config)
-            except Exception as exception:
-                return _error_response(
-                    self.provider,
-                    query,
-                    f"Qwen search client is not configured: {exception}",
-                )
-        if search_client is None:
-            return _error_response(
-                self.provider,
-                query,
-                "Qwen search requires search.api_key, provider.api_key, or DASHSCOPE_API_KEY.",
-            )
-
-        try:
-            normalized_enable_thinking = _normalize_optional_bool(
-                _option_value(enable_thinking, self.config, "enable_thinking"),
-                default=True,
-            )
-            normalized_web_extractor = _normalize_optional_bool(
-                _option_value(web_extractor, self.config, "web_extractor"),
-                default=True,
-            )
-            normalized_code_interpreter = _normalize_optional_bool(
-                _option_value(code_interpreter, self.config, "code_interpreter"),
-                default=True,
-            )
-        except ValueError as exception:
-            return _error_response(self.provider, query, str(exception))
-
-        tools: list[dict[str, Any]] = [{"type": "web_search"}]
-        if normalized_web_extractor:
-            tools.append({"type": "web_extractor"})
-        if normalized_code_interpreter:
-            tools.append({"type": "code_interpreter"})
-
-        request: dict[str, Any] = {
-            "model": self.model or self.config.get("model") or DEFAULT_QWEN_SEARCH_MODEL,
-            "input": _build_qwen_search_input(query, result_limit),
-            "tools": tools,
-        }
-        if normalized_enable_thinking:
-            request["extra_body"] = {"enable_thinking": True}
-
-        try:
-            response = await search_client.responses.create(**request)
-        except Exception as exception:
-            logger.warning("Qwen web search failed: %s", exception)
-            return _error_response(self.provider, query, str(exception))
-
-        answer = _extract_openai_output_text(response)
-        citation_results = _extract_openai_citation_results(response)
-        source_results = _extract_openai_source_results(response)
-        structured_results = _extract_structured_url_results(response)
-        results = _deduplicate_results(citation_results + source_results + structured_results)[:result_limit]
-        result = {
-            "status": "ok" if answer or results else "empty",
-            "provider": self.provider,
-            "query": query,
-            "answer": answer,
-            "results": [item.to_dict() for item in results],
-        }
-        tool_usage = _extract_tool_usage(response)
-        if tool_usage:
-            result["tool_usage"] = tool_usage
-        return result
 
     async def _search_deepseek(
         self,
@@ -470,9 +365,6 @@ def create_web_search_tool(
             "external_web_access": "OpenAI only. Set false to use cached/indexed web content without live access.",
             "return_token_budget": "OpenAI only. Returned-token budget for GPT-5+ reasoning search: default or unlimited.",
             "force_search": "OpenAI only. Require the web search tool instead of leaving it to auto tool choice.",
-            "enable_thinking": "Qwen only. Enable DashScope thinking mode. Defaults to true.",
-            "web_extractor": "Qwen only. Include DashScope web_extractor alongside web_search. Defaults to true.",
-            "code_interpreter": "Qwen only. Include DashScope code_interpreter alongside web_search. Defaults to true.",
         },
     )
     async def web_search(
@@ -488,9 +380,6 @@ def create_web_search_tool(
         external_web_access: Optional[bool] = None,
         return_token_budget: Optional[Literal["default", "unlimited"]] = None,
         force_search: Optional[bool] = None,
-        enable_thinking: Optional[bool] = None,
-        web_extractor: Optional[bool] = None,
-        code_interpreter: Optional[bool] = None,
         freshness: Optional[str] = None,
         search_lang: Optional[str] = None,
     ) -> dict:
@@ -507,9 +396,6 @@ def create_web_search_tool(
             external_web_access=external_web_access,
             return_token_budget=return_token_budget,
             force_search=force_search,
-            enable_thinking=enable_thinking,
-            web_extractor=web_extractor,
-            code_interpreter=code_interpreter,
             freshness=freshness,
             search_lang=search_lang,
         )
@@ -549,14 +435,11 @@ def normalize_search_provider(provider: Any) -> str:
         "deepseek_web_search": SEARCH_PROVIDER_DEEPSEEK,
         "deepseek_search_api": SEARCH_PROVIDER_DEEPSEEK,
         "deepseek": SEARCH_PROVIDER_DEEPSEEK,
-        "dashscope": SEARCH_PROVIDER_QWEN,
-        "qwen_search": SEARCH_PROVIDER_QWEN,
-        "qwen_web_search": SEARCH_PROVIDER_QWEN,
-        "qwen": SEARCH_PROVIDER_QWEN,
     }
     normalized = aliases.get(normalized, normalized)
     if normalized not in SUPPORTED_SEARCH_PROVIDERS:
-        raise ValueError(f"Unsupported search provider: {provider}")
+        allowed = ", ".join(sorted(SUPPORTED_SEARCH_PROVIDERS))
+        raise ValueError(f"Unsupported search provider: {provider}. Expected one of: {allowed}")
     return normalized
 
 
@@ -701,64 +584,9 @@ def _extract_openai_source_results(response: Any) -> list[SearchResult]:
     return _deduplicate_results(results)
 
 
-def _extract_structured_url_results(response: Any) -> list[SearchResult]:
-    results: list[SearchResult] = []
-    for output_item in _field(response, "output", []) or []:
-        results.extend(_extract_structured_url_results_from_value(output_item))
-    return _deduplicate_results(results)
-
-
-def _extract_structured_url_results_from_value(value: Any) -> list[SearchResult]:
-    if isinstance(value, list):
-        results: list[SearchResult] = []
-        for item in value:
-            results.extend(_extract_structured_url_results_from_value(item))
-        return results
-
-    data = _as_mapping(value)
-    if not data:
-        return []
-
-    results = []
-    url = _first_text_field(data, "url", "link", "source_url")
-    if url:
-        title = _clean_text(_first_text_field(data, "title", "name", "site_name") or url)
-        snippet = _clean_text(_first_text_field(data, "snippet", "description", "summary") or "")
-        results.append(SearchResult(title=title, url=url, snippet=snippet))
-
-    for key in ("sources", "results", "citations", "references", "items"):
-        nested = data.get(key)
-        if nested is not None:
-            results.extend(_extract_structured_url_results_from_value(nested))
-    return results
-
-
-def _extract_tool_usage(response: Any) -> dict[str, int]:
-    usage = _field(response, "usage", {}) or {}
-    x_tools = _field(usage, "x_tools", {}) or {}
-    if not isinstance(x_tools, dict):
-        return {}
-
-    tool_usage: dict[str, int] = {}
-    for tool_name, details in x_tools.items():
-        count = _field(details, "count", 0)
-        try:
-            normalized_count = int(count)
-        except (TypeError, ValueError):
-            continue
-        tool_usage[str(tool_name)] = normalized_count
-    return tool_usage
-
-
 def _build_openai_search_input(query: str, result_limit: int) -> str:
     hints = [f"Search query: {query}", f"Return up to {result_limit} useful sources."]
     hints.append("Include concise findings and preserve source citations.")
-    return "\n".join(hints)
-
-
-def _build_qwen_search_input(query: str, result_limit: int) -> str:
-    hints = [query, "", f"Use web search and extraction when useful. Return up to {result_limit} useful sources."]
-    hints.append("Provide a concise answer and keep source URLs available in the response.")
     return "\n".join(hints)
 
 
@@ -860,28 +688,6 @@ def _option_value(call_value: Any, config: dict, key: str) -> Any:
     return call_value if call_value is not None else config.get(key)
 
 
-def _get_qwen_api_key(config: dict) -> str:
-    configured_key = str(config.get("api_key") or "").strip()
-    if configured_key and not is_placeholder_api_key(configured_key):
-        return configured_key
-    for env_name in QWEN_API_KEY_ENV_VARS:
-        env_value = os.getenv(env_name, "").strip()
-        if env_value:
-            return env_value
-    return ""
-
-
-def _qwen_search_base_url(config: dict) -> str:
-    return str(config.get("base_url") or QWEN_COMPATIBLE_BASE_URL).strip().rstrip("/")
-
-
-def _create_qwen_search_client(config: dict) -> Optional[AsyncOpenAI]:
-    api_key = _get_qwen_api_key(config)
-    if not api_key:
-        return None
-    return AsyncOpenAI(api_key=api_key, base_url=_qwen_search_base_url(config))
-
-
 def _get_deepseek_api_key(config: dict) -> str:
     configured_key = str(config.get("api_key") or "").strip()
     if configured_key and not is_placeholder_api_key(configured_key):
@@ -938,23 +744,6 @@ def _field(obj: Any, name: str, default: Any = None) -> Any:
     if isinstance(model_extra, dict) and name in model_extra:
         return model_extra.get(name, default)
     return value
-
-
-def _as_mapping(value: Any) -> dict[str, Any]:
-    if isinstance(value, dict):
-        return value
-    model_dump = getattr(value, "model_dump", None)
-    if callable(model_dump):
-        try:
-            dumped = model_dump()
-        except Exception:
-            dumped = None
-        if isinstance(dumped, dict):
-            return dumped
-    model_extra = getattr(value, "model_extra", None)
-    if isinstance(model_extra, dict):
-        return model_extra
-    return {}
 
 
 def _first_text_field(data: dict[str, Any], *names: str) -> str:

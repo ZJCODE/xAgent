@@ -44,7 +44,7 @@ from ..voice.config import (
 )
 
 SEARCH_PROVIDER_NONE = "none"
-SEARCH_PROVIDERS = (SEARCH_PROVIDER_NONE, PROVIDER_OPENAI, PROVIDER_DEEPSEEK, PROVIDER_QWEN)
+SEARCH_PROVIDERS = (SEARCH_PROVIDER_NONE, PROVIDER_OPENAI, PROVIDER_DEEPSEEK)
 IMAGE_GENERATION_PROVIDERS = (
     IMAGE_GENERATION_PROVIDER_NONE,
     IMAGE_GENERATION_PROVIDER_OPENAI,
@@ -589,7 +589,6 @@ _SEARCH_PROVIDER_DESCRIPTIONS = {
     "none": "Do not enable a provider-native web search tool.",
     "openai": "Use OpenAI web search.",
     "deepseek": "Use DeepSeek native web search.",
-    "qwen": "Use Qwen web search via DashScope.",
 }
 _IMAGE_GENERATION_DESCRIPTIONS = {
     "none": "Do not enable image generation.",
@@ -698,6 +697,7 @@ def build_agent_edit_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
                 PROVIDER_QWEN: list(QWEN_MODELS),
                 PROVIDER_CUSTOM: [],
             },
+            "default_models": create_schema["default_models"],
             "provider_base_urls": create_schema["provider_base_urls"],
             "custom_model_apis": create_schema["custom_model_apis"],
             "reasoning": create_schema["reasoning"],
