@@ -564,7 +564,6 @@ def _config_yaml(selection: InitSelection, port: int) -> str:
             "max_concurrent_tools": AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS,
             "diary_write_batch": AgentConfig.DIARY_WRITE_BATCH,
             "diary_context_days": AgentConfig.DIARY_CONTEXT_DAYS,
-            "notes_enabled": AgentConfig.NOTES_ENABLED,
             "subconscious_activity": AgentConfig.SUBCONSCIOUS_ACTIVITY,
         },
         "channels": {
@@ -606,10 +605,6 @@ def _config_yaml(selection: InitSelection, port: int) -> str:
     yaml_str = yaml_str.replace(
         "diary_context_days: 2\n",
         "diary_context_days: 2  # Days of diary injected each turn; 0 disables injection.\n",
-    )
-    yaml_str = yaml_str.replace(
-        "notes_enabled: true\n",
-        "notes_enabled: true  # The agent's notebook: note tools and notebook injection.\n",
     )
     return yaml_str
 

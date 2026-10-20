@@ -3,8 +3,8 @@
 Relationship cards are a *derived view* over the agent's single diary stream,
 not a second source of truth. The diary remains the authoritative memory
 carrier; each card is a regenerable projection that keeps durable relational
-facts about one person (who they are to the agent, shared history, open
-commitments, disclosure boundaries) readily available for dialogue and
+information about one person (background, preferences, shared history,
+interaction and disclosure boundaries) readily available for dialogue and
 subconscious routing.
 
 This class owns file layout and I/O only. Deciding *what* a relationship
@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import re
 from dataclasses import dataclass, field
 from datetime import date
@@ -25,6 +24,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
+
+from xagent.core.journal_commits import atomic_write_bytes, sync_directory
 
 logger = logging.getLogger(__name__)
 
@@ -91,8 +92,7 @@ class RelationshipCard:
 
     ``key`` is the stable identity (``channel:user_id``). ``body`` is the
     first-person card prose produced by the journal LLM service.
-    ``source_diary_dates`` traces the committed diary behind the projection;
-    an empty list preserves unknown provenance on legacy cards.
+    ``source.diary`` traces the committed diary behind the projection.
     """
 
     key: str
@@ -101,7 +101,7 @@ class RelationshipCard:
     channel: str = ""
     user_id: str = ""
     updated: str = ""
-    source_diary_dates: List[str] = field(default_factory=list)
+    source: Dict[str, Any] = field(default_factory=dict)
 
     @property
     def is_empty(self) -> bool:
@@ -194,6 +194,10 @@ class RelationshipStore:
         logger.debug("Wrote relationship card: %s (%d chars)", path, len(card.body))
         return path
 
+    async def delete_card(self, key: str) -> None:
+        async with self._write_lock:
+            await asyncio.to_thread(self._delete_sync, self.card_path(key))
+
     # ------------------------------------------------------------------
     # Render / parse
     # ------------------------------------------------------------------
@@ -205,9 +209,9 @@ class RelationshipStore:
         if name:
             frontmatter["name"] = name
         frontmatter["updated"] = updated
-        source_dates = self.normalize_source_diary_dates(card.source_diary_dates)
+        source_dates = self.normalize_diary_dates(card.source.get("diary"))
         if source_dates:
-            frontmatter["source_diary_dates"] = source_dates
+            frontmatter["source"] = {"diary": source_dates}
         header = yaml.safe_dump(
             frontmatter,
             sort_keys=False,
@@ -231,11 +235,14 @@ class RelationshipStore:
             channel=channel,
             user_id=user_id,
             updated=str(meta.get("updated") or "").strip(),
-            source_diary_dates=self.normalize_source_diary_dates(meta.get("source_diary_dates")),
+            source={"diary": self.normalize_diary_dates(
+                (meta.get("source") or {}).get("diary")
+                if isinstance(meta.get("source"), dict) else None
+            )},
         )
 
     @staticmethod
-    def normalize_source_diary_dates(values: Any) -> List[str]:
+    def normalize_diary_dates(values: Any) -> List[str]:
         """Keep valid diary dates, including YAML's native date values."""
         if not isinstance(values, list):
             return []
@@ -288,16 +295,16 @@ class RelationshipStore:
 
     @staticmethod
     def _write_atomic_sync(path: Path, content: str) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = path.with_name(f".{path.name}.tmp")
-        with tmp_path.open("w", encoding="utf-8") as handle:
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(tmp_path, path)
+        atomic_write_bytes(path, content.encode("utf-8"))
 
     @staticmethod
     def _list_paths_sync(search_dir: Path) -> List[Path]:
         if not search_dir.exists():
             return []
         return sorted(path for path in search_dir.rglob("*.md") if path.is_file())
+
+    @staticmethod
+    def _delete_sync(path: Path) -> None:
+        if path.exists():
+            path.unlink()
+            sync_directory(path.parent)

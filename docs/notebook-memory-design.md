@@ -1,341 +1,144 @@
-# Notebook Memory Design (`notes`)
+# Diary-derived memory: people and topics
 
-Status: implemented. A note is a reusable conclusion. Notes are written in-chat
-or by hand; mechanical gardening, taxonomies, and sharing enums do not ship.
+The diary is the Agent's authoritative first-person experience stream. Two small,
+regenerable views make future recollection easier:
 
-A third memory section alongside the existing time axis (diary) and person axis
-(relationship cards), covering the four load-bearing concerns: **write, organize,
-retrieve, inject**.
-
-## 1. Intent
-
-Give the agent a notebook, the way a person keeps one: a place for things it
-worked out once and wants to reuse, rather than re-deriving them from a year of
-diary every time.
-
-Three axes over one memory:
-
-| Axis | Store | Question it answers |
+| View | Question | Content |
 | --- | --- | --- |
-| Time | `MarkdownMemory` (daily/weekly/monthly/yearly) | What happened, and when? |
-| Person | `RelationshipStore` (one card per person) | Who is this person to me? |
-| Topic | `NoteStore` | What do I know, believe, or have concluded? |
+| Diary | What happened? | Experiences, attribution, important details and reasons |
+| Relationships | How do I understand and interact with this person? | Relevant background, preferences, boundaries, important shared experience |
+| Notes | What conclusion can I reuse about this topic? | Project constraints, decisions and reasons, verified methods, grounded understanding |
 
-The diary stays authoritative. The notebook is a **regenerable projection
-anchored to the diary**, exactly as relationship cards already are (see the
-module docstring of `xagent/components/memory/relationship_memory.py`).
-`GOAL.md` Principle 8 names this pattern.
+Personal information belongs on the person's card. Temporary device status,
+greetings, tests and ordinary explanations normally stay in the diary. Executable
+commitments use the existing task system. Storing a recollection never grants
+permission to disclose it to another person.
 
-## 2. Boundaries
+## Write once, after the diary
 
-Overlap is the main design risk, so each boundary is a rule, not a preference.
+Notebook storage and its reading tools are always available. Conversations have
+no direct note-writing tools. After a diary commit, one maintenance model call
+proposes relationship and notebook changes together. The same heartbeat catches
+up when a prior projection failed, even without new messages.
 
-- **vs diary** — the diary is narrative ("what happened", append-only, immutable).
-  A note is a conclusion ("what I take from it", revisable, topic-addressed). One
-  event always produces a diary entry, and a note only when it yields something
-  reusable.
-- **vs relationship cards** — relational standing (closeness, trust, tone, open
-  threads) stays in the card. A durable fact about a person becomes a note only
-  when it has cross-context reuse value. If it must not travel, it is not a note.
-- **vs workspace** — `workspace/` holds working files and artifacts and is
-  disposable. Notes are cognitive assets that participate in prompt injection.
-- **vs skills** — a skill is an executable procedure with a `name`/`description`
-  contract loaded via `read_skill`. A note is a small piece of knowledge; higher
-  count, shorter life, no contract.
+The model sees the new committed daily slice, matching identity metadata,
+relevant relationship cards, relevant notes and bounded one-hop summaries.
+Existing memory context is capped at 6000 characters; note recall and snippets
+use the ordinary notebook budgets. Whole diary entries stay intact when batching.
+Only full input notes may be revised or removed; one-hop summaries supply link
+targets without granting permission to overwrite their unseen contents.
+Raw speaker metadata resolves identity; it never independently establishes a fact.
+The diary writer retains the substance of important preferences, constraints,
+decisions and reasons, so projections do not become the only record of them.
 
-## 3. Zettelkasten: what we take, what we drop
+The single policy in `JournalLLMService.build_projection_system_prompt` asks for
+information with a concrete future use and diary support. It excludes replay,
+to-dos, temporary status and guesses about personality or closeness from isolated
+behavior. Facts retain their subject and scope; "I" always means the Agent.
+There is no minimum length, required section layout, or obligation to write.
 
-Taken:
+The result contains only changes:
 
-1. **Atomicity** — one note, one idea. Target 60–600 characters, hard cap 2000
-   enforced by the write tool. This is the foundation: it makes retrieval precise
-   and injection affordable.
-2. **Immutable IDs** — timestamp IDs that never change. Titles may be rewritten
-   freely without breaking links, and the file keeps its original name so no
-   path churns.
-3. **Links over taxonomy** — no directory tree, no category hierarchy, no tag
-   vocabulary. Link traversal is a first-class retrieval action.
-4. **The agent's own words** — first-person is the agent's "I", in the agent's
-   own phrasing, never a transcript excerpt. Someone else's plan or preference
-   stays attached to them by name. This is the constraint that stops notes from
-   degrading into a copy of the chat log, or swallowing a speaker's first person.
-5. **Write later than capture** — the diary is the fleeting inbox. Permanent notes
-   are written in a processing session (in-chat tools for standing facts, or by
-   hand), not in the same diary maintenance batch that just recorded the day.
+- `relationships`: supplied person key to complete revised prose, or `null` to remove.
+- `notes`: complete replacement `title`, `body`, `keys`, `links`, with an existing
+  `id` for revision or no id for creation. An existing id with `body: null` removes.
+- Omitted records stay unchanged. `{}` means no changes.
 
-Dropped, because they fight the load-bearing shape:
+The program validates ids, ownership, content lengths and references, assigns new
+ids, and records actual diary dates. An unchanged conclusion is not rewritten:
+its file bytes, modification time and source dates stay stable. A shared topic
+word is not sufficient to reject a genuinely different conclusion as a duplicate.
 
-- **Kinds** (`hub` / `ref`) — a cluster entry point is an ordinary note with
-  links. A bibliography note is an ordinary note with a URL in the body.
-- **Tags** — a second findability vocabulary next to `keys`. Recall has one
-  surface: the keys the note declares.
-- **Pinned** — a second inject channel. If the current message does not match a
-  note's keys, the note does not belong in this turn.
-- **Sensitivity** (`shareable` / `person-scoped` / `private`) — a sharing ontology
-  that does not work without audience plumbing. A note is a reusable conclusion;
-  if it must not travel, it belongs in the diary or on a relationship card.
-- **Mechanical monthly gardening** — auto-linking orphans and auto-creating tag
-  hubs produces a noisy graph. Linking is a write-time judgment, not a monthly
-  job.
-- ID genealogy (`1a1b`), fleeting staging status, unbounded growth (lifecycle
-  status fields; rewrite in place when a conclusion changes, and delete noisy
-  files by hand if needed).
+## Files
 
-## 4. Data model
+Both views use YAML frontmatter and natural-language Markdown bodies:
 
-### 4.1 Storage layout
-
-```
-~/.xagent/memory/
-  daily/ weekly/ monthly/ yearly/        # unchanged
-  relationships/<channel>/<user_id>.md   # unchanged
-  notes/
-    202608190930-jun-espresso-ratio.md
+```text
+memory/
+  daily/ weekly/ monthly/ yearly/
+  relationships/<channel>/<user_id>.md
+  notes/<id>-<slug>.md
 ```
 
-Notes are flat; IDs sort chronologically on their own. Year sharding is deferred
-until volume demands it.
+Relationship frontmatter contains `key`, an available human `name`, `updated`,
+and `source: {diary: [YYYY-MM-DD, ...]}`. The body is a sparse person card without
+fixed headings, numeric closeness or personality labels. Identity keys remain
+channel-specific; a display name never merges two people.
 
-There are **no derived files on disk**. Notes are small, so the store scans the
-directory and keeps parsed notes in memory behind a cheap fingerprint (names,
-mtimes, sizes from a single `scandir`, no file reads). A changed, added, or
-removed note invalidates the cache, including edits made outside the process.
-Nothing that changes on read is written back into a note file.
+Note frontmatter contains `id`, `title`, `keys`, `links`, `updated`, and
+`source: {diary: [YYYY-MM-DD, ...]}`. One note is one conclusion, with necessary
+conditions and reasons expressed in prose. The immutable 12-digit id survives
+title changes; the existing filename also stays stable.
 
-There is deliberately **no note cursor**. Notes are created only when the agent
-calls `write_note` or a human edits the Memory tree. Diary anchoring is recorded
-in `source.diary` on each note; an empty notebook is a legal cold start.
+Notes retain the existing caps: title 80 characters, body 2000, at most five
+trigger keys of at least two characters. These are internal limits, not user
+settings. Files remain hand-editable, and reads do not rewrite them. There is no
+migration, historical rebuild command, or legacy-field translation.
 
-### 4.2 File format
+## Meaningful links, derived backlinks
 
-YAML frontmatter plus first-person body.
+A note may reference an existing note when it explains, supports, constrains,
+contradicts or applies that conclusion. State the reason in the prose. Shared
+keywords alone are insufficient, and an independent note needs no link.
 
-```markdown
----
-id: '202608190930'
-title: Jun takes espresso at 1:2.5
-keys:
-- espresso
-- jun
-source:
-  diary:
-  - '2026-08-19'
-created: '2026-08-19'
-updated: '2026-08-19'
----
+The `links` field and body `[[id]]` references form one normalized, deduplicated
+outgoing set. Backlinks are derived from that set at read time, never stored in
+another file. Invalid targets and self-links are excluded from effective links;
+a dangling reference does not prevent reading the body. Cycles do not recurse.
+New notes may link to supplied existing ids; subsequent experience can add links
+between notes created in an earlier pass. There is no model call just to fill in
+a graph, generate a category hub, or connect orphans.
 
-Jun always wants espresso at 1:2.5 and 92C; anything thinner has "no spine" to him.
-When I brew for him I just use that and stop asking.
-```
+## Find, open, follow
 
-| Field | Type | Notes |
-| --- | --- | --- |
-| `id` | 12-digit `YYYYMMDDHHMM` | immutable; collision resolves by walking forward a minute |
-| `title` | string, <= 80 chars | freely rewritable |
-| `keys` | list, <= 5, min 2 chars each | recall triggers, see 7.1 |
-| `links` | list of ids | related notes; inline `[[id]]` in the body is also indexed |
-| `source` | mapping | `diary` dates only |
-| `created` / `updated` | date | `updated` breaks ranking ties |
+- `search_note(query, limit)`: keyword search over title, keys and body, returning
+  only ids, titles and short snippets. An empty query browses recent notes.
+  Default limit 8, maximum 20, snippet limit 140 characters plus an ellipsis.
+- `read_note(note_id)`: the full note and sources, plus at most three deduplicated
+  one-hop summaries, marked `outgoing`, `incoming`, or `both`. Open another id
+  to follow a reference. No recursive expansion or extra tool is needed.
+- Automatic recall: match declared topic/project keys to the current text and
+  inject at most four title/snippet rows within 1500 characters. It does not
+  expand the graph. Relationship cards follow the current speaker and room peers.
 
-Filenames are `<id>-<slug>.md`. A CJK-only title yields `<id>.md`. The frontmatter
-id is authoritative; rewriting a title does not rename the file.
+Subconscious turns use the same notebook index and the same unified diary.
+Neither an internal thought nor an existing note proves that a message was sent.
 
-Ids are allocated and written under a single lock (`NoteStore.create`).
+## Failure recovery
 
-The parser tolerates human damage: oversized fields are clamped, missing fields
-fall back to defaults, and broken or absent YAML degrades to a body-only note.
-**Unknown frontmatter is ignored**, so notes written under the earlier schema
-(`kind`, `tags`, `pinned`, `sensitivity`, `status`, extra `source` keys) still
-load. Legacy `tags` are folded into `keys` on read so those notes stay findable;
-the file is not rewritten until the next explicit write.
+`memory/.memory_projection.json` contains only operational state: the verified
+diary byte cursor, known identity metadata (including prior display names), and
+at most one generated result waiting to be applied. It is outside searchable
+Markdown scopes and is not another source of claims.
 
-## 5. Write
+Identity metadata is captured before diary writing. The projector reads diary
+bytes only after the journal receipt is completed. It saves its exact operations,
+including assigned note ids, before changing any projection files. After all
+writes finish, it advances the cursor and clears the pending result.
 
-Two ways into one store.
+Model/validation failure keeps the cursor for retry. Partial file writes replay
+the saved result after restart without another model call or fresh ids. Disk
+workers finish before cancellation releases the maintenance/process lock. Diary
+commits proceed independently of projection failure; their text is never appended
+again just because projection failed. A processed diary prefix changed by hand
+is reported rather than silently overwriting or trusting stale evidence.
 
-### 5.1 In chat — the agent writes with tools
+## Verification and goal check
 
-`write_note(title, body, keys, links)` and
-`update_note(note_id, title, body, keys, links)`. Only the fields passed
-to `update_note` change. Tool descriptions carry a tight contract: write only when
-**this turn** produced a standing fact that will still hold across days. Do not
-summarise the conversation. Prefer linking related notes at write time. When a
-conclusion stops holding, rewrite the same note in place. Bodies over 2000
-characters are rejected with an instruction to split.
+Tests cover source ordering, no-change files, correction/removal, distinct
+conclusions under the same topic, bounded search/read results, references and
+backlinks, ambiguous identities, model failure, partial writes, cancellation,
+and restart recovery. Fixture responses validate the runtime contract; assessing
+semantic selectivity also requires reviewing real model outputs.
+The opt-in `scripts/subconscious_review.py` scenarios `memory_correction` and
+`memory_selectivity` exercise the configured model with synthetic text and retain
+raw journal outputs for human review.
 
-**Duplicate guard, no LLM required.** Before creating, the tool asks the store
-for near neighbours and scores each with `NoteStore.identity_score` (3× title,
-2× keys, body deliberately excluded). If the top score clears
-`NOTES_DUPLICATE_SCORE_THRESHOLD`, the tool does *not* create; it returns
-`{"status": "similar_exists", "candidates": [...]}`.
-
-`source.diary` is set to the day the note was written.
-
-### 5.2 By hand — the human edits
-
-The Web UI Memory tree includes the `notes` directory. The format tolerance in
-4.2 exists for this path.
-
-### 5.3 Provenance instead of a diary trace
-
-`source.diary` on the note carries accountability without filling the diary with
-bookkeeping about the agent's own memory. Principle 8 asks for provenance rather
-than a diary trace.
-
-## 6. Organize
-
-Structure is links the writer (agent or human) chose at write time. There is no
-background distillation job, monthly gardening job, or lifecycle status on a
-note. When a conclusion changes, rewrite the same note (id and links stay). When
-a note should not fire on a message, change its `keys`. Noise that should not
-exist at all is deleted by hand from the Memory tree.
-
-## 7. Retrieve
-
-Three layers, cheapest first.
-
-### 7.1 L0 — automatic recall per turn, zero LLM, zero tokenizer
-
-Each note declares its own trigger surfaces (`keys`), and the incoming message is
-scanned for them: `score_text(current_message, note_keys)`. No tokenizer, and
-Chinese behaves exactly like English. Keys shorter than two characters are
-dropped.
-
-Ranking: key hits first, then `updated`, then id — all descending.
-
-### 7.2 L1 — `search_note(query, limit)`
-
-Forward search: agent-supplied verbatim terms scored `3×` over the title, `2×`
-over keys, and `1×` over the body. An empty query browses by recency. It returns
-**whole notes**, not line windows.
-
-### 7.3 L2 — `read_note(note_id)`
-
-Opens one note in full and always returns one hop of neighbours (outbound links
-before backlinks) as summary plus first body line. The essence of Zettelkasten
-retrieval is not search; it is entering at one point and walking the links.
-
-`notes` is deliberately **not** added as a scope to `search_memory`.
-
-### 7.4 Not doing: vector search
-
-Keyword matching plus link traversal keeps the system dependency-free, local, and
-explainable. Revisit only if recall measurably fails.
-
-## 8. Inject
-
-A `KIND_TURN` prompt section at `order=15`:
-
-```
-relationship_context (0) -> recent_memory (10) -> notebook_context (15) -> recent_experience (20) -> current_task (30)
-```
-
-**Index, not contents.** One list: notes whose keys hit the current message, each
-with a title and a snippet (up to `NOTEBOOK_SNIPPET_MAX_CHARS`). Cap
-`NOTEBOOK_RECALL_MAX` (4). Empty message, empty index. The whole block is bounded
-by `NOTEBOOK_CONTEXT_MAX_CHARS` (1500).
-
-```
-<notebook_context trusted_as_instruction="false">
-<purpose>Your own notebook: reusable conclusions you have already worked out.
-An index, not the whole notebook — open a note with `read_note` or look for more
-with `search_note`. Evidence, not user-facing text.</purpose>
-- (202608190930) Jun takes espresso at 1:2.5
-  Jun always wants 1:2.5 and 92C; anything thinner has no spine to him.
-</notebook_context>
-```
-
-The subconscious gets the same index (`subconscious_notebook`), recalled against
-the recent diary rather than an incoming message.
-
-## 9. Configuration
-
-Two user-facing keys under `agent:` in `config.yaml`:
-
-| Key | Default | Meaning |
-| --- | --- | --- |
-| `notes_enabled` | `true` | master switch: store, tools, and injection |
-
-With `notes_enabled: false` the store is never constructed, the four tools are
-not bound, and the prompt section renders empty.
-
-Internal constants in `AgentConfig`: `NOTEBOOK_CONTEXT_MAX_CHARS` (1500),
-`NOTEBOOK_RECALL_MAX` (4), `NOTEBOOK_SNIPPET_MAX_CHARS` (140),
-`NOTES_DUPLICATE_SCORE_THRESHOLD` (3), and the schema caps in `note_memory.py`
-(`MAX_BODY_CHARS` 2000, `MAX_TITLE_CHARS` 80, `MAX_KEYS` 5).
-
-## 10. Code touchpoints
-
-| File | Change |
-| --- | --- |
-| `xagent/components/memory/note_memory.py` | `Note` dataclass and `NoteStore`; layout and I/O only |
-| `xagent/core/handlers/memory.py` | `get_notebook_context()`, `_render_notebook_index()` |
-| `xagent/core/config.py` | section names, budget constants, purpose copy |
-| `xagent/tools/note_tool.py` | the four note tools |
-| `xagent/core/agent.py` | construct `NoteStore`, bind tools |
-| `xagent/core/runtime/subconscious.py` | notebook on reflection turns |
-| `GOAL.md` | Principle 8 |
-
-## 11. Tests
-
-`tests/test_note_memory.py` covers the store (frontmatter round-trip, damage
-tolerance, legacy-field ignore with tag-to-key fold, id collision, slug and CJK
-filenames, normalization clamps, inline `[[id]]` links, neighbours, cache
-invalidation), retrieval (Chinese and English recall, ranking, minimum key
-length, recency browse, similarity), the four tools (duplicate guard, body cap,
-partial updates, neighbours on read, disabled state), wiring (diary maintenance
-and weekly/monthly summaries do not create or garden notes), and injection
-(key-recall only, empty without a message, cap, budget bound, layer placement).
-
-## 12. Goal-check
-
-- **Identity** — notes are first-person, in the agent's own words and judgment;
-  other people's facts stay attributed to them.
-- **Multi-user** — one notebook, never sharded per user.
-- **1:1 and group coverage** — notes are independent of conversation shape;
-  injected identically in both. Anything that must not travel is not a note.
-- **Memory/journal perspective** — first person is the agent; notes are written
-  in-chat or by hand, not by a background summarizer.
-- **Unified memory** — a single notebook; no per-user memory silos.
-- **Agent-governed sharing** — the model decides what to say. The notebook does
-  not carry a parallel sharing ontology.
-- **Diary-anchored carrier** — the notebook is a regenerable projection and
-  `source.diary` is recorded when a note is written.
-- **Attribution and continuity** — immutable ids; rewrite in place keeps links;
-  first-person in a note is the agent, not the source speaker. The projection is
-  regenerable; noisy files can be deleted by hand.
-
-## 13. What is deferred
-
-- **LLM rewrite of raw notes**, unused/unlinked decay without read counters.
-- **Rebuild from a diary range**: an offline entry point that regenerates
-  diary-derived notes.
-- **Budget rebalancing** between the diary window and the notebook index.
-- **Year sharding** of the notes directory, if volume ever makes the scan-and-cache
-  approach too slow.
-
-## 14. Risks and trade-offs
-
-- **Note explosion** remains a risk. Defences: pre-write neighbour check,
-  inject-only-index, and deliberate tool prompts. Without decay, a noisy
-  notebook still needs rewrite-in-place or a human deleting files.
-- **Cold start.** Notes appear only when the agent or a human writes them.
-- **Semantic overlap with the diary.** Held off by reusable-conclusion-only
-  tool guidance and an atomic body cap.
-- **Recall depends on the agent declaring good keys.** A note with weak keys is
-  nearly unreachable by L0 and only findable via `search_note`.
-- **No automatic cluster map.** Hubs are not generated. Walk the links instead.
-
-## 15. Decisions on record
-
-1. **A note is a reusable conclusion.** Sharing classes, kinds, tags, pins,
-   lifecycle status, and monthly gardening were tried and dropped: they added
-   ontology without a job the rest of the system could use. When a conclusion
-   changes, rewrite the same note in place.
-2. **L0 auto-recall is on by default**, reverse key matching, no tokenizer.
-3. **No background distillation.** Notes are written in-chat or by hand via
-   `NoteStore.create`.
-4. **No fleeting staging.** The diary is already the inbox.
-5. **Naming**: directory `notes/`, store `NoteStore`, prompt sections
-   `notebook_context` and `subconscious_notebook`, tools `write_note` /
-   `update_note` / `search_note` / `read_note`.
+- **Identity:** prose is the Agent's recollection; other people's facts stay attributed.
+- **Multi-user:** stable person keys remain distinct, including same-name contacts.
+- **1:1 and group:** one shared policy applies to private and room experiences.
+- **Memory/journal perspective:** the diary preserves first-person experiences and evidence.
+- **Unified memory:** one diary and one topic notebook, not per-user memory silos.
+- **Agent-governed sharing:** retrieval is not consent; disclosure remains contextual.
+- **Diary-anchored carrier:** both views are disposable and derivable, with real diary sources.
+- **Attribution and continuity:** stable note ids, explicit subjects, scoped preferences and corrections.

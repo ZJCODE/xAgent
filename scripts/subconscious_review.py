@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import yaml
 
-from xagent.components.memory import RelationshipCard
+from xagent.components.memory import Note, RelationshipCard
 from xagent.core.agent import Agent
 from xagent.core.providers import (
     model_api_uses_anthropic_client,
@@ -104,7 +104,7 @@ def make_agent(client, provider: dict, workspace: str) -> Agent:
         client=client, model=provider["model"],
         provider_name=resolved_provider_name(provider), model_api=provider_model_api(provider),
         reasoning=normalize_reasoning_config(provider), model_max_tokens=provider.get("max_tokens"),
-        workspace=workspace, tools=[], notes_enabled=False, supports_vision=False,
+        workspace=workspace, tools=[], supports_vision=False,
         system_prompt="I am an independent digital individual with my own diary and continuing relationships.",
     )
 
@@ -117,7 +117,7 @@ async def review_scenario(client, provider: dict, scenario: Scenario) -> dict:
         await agent.markdown_memory.append_daily(scenario.diary)
         await agent.relationship_store.write_card(RelationshipCard(
             key=f"api:{recipient}", body=scenario.relationship, display_name=name,
-            source_diary_dates=[datetime.now().date().isoformat()],
+            source={"diary": [datetime.now().date().isoformat()]},
         ))
         deliveries: list[dict] = []
 
@@ -173,6 +173,7 @@ async def review_scenario(client, provider: dict, scenario: Scenario) -> dict:
 async def review_memory(client, provider: dict) -> dict:
     with tempfile.TemporaryDirectory(prefix="xagent-memory-review-") as workspace:
         agent = make_agent(client, provider, workspace)
+        raw_outputs = capture_journal_outputs(agent)
         await agent.message_storage.add_messages([
             Message(role=RoleType.USER, sender_id="alice", channel="api", room_name="Friends",
                     content="我是 Alice。我希望你白天联系我，午夜不要主动发消息。"),
@@ -192,9 +193,78 @@ async def review_memory(client, provider: dict) -> dict:
             "review_criteria": "Diary must preserve each person's own preference. Alice's later explicit correction must update her card without changing Bob's preference; sources must point to the committed diary.",
             "diary": await agent.memory_handler.get_recent_context(),
             "initial_cards": {k: card.body if card else None for k, card in initial.items()},
-            "updated_cards": {k: {"body": card.body, "source_diary_dates": card.source_diary_dates} if card else None for k, card in updated.items()},
-            "checks": {"cards_have_sources": all(card and card.source_diary_dates for card in updated.values())},
+            "updated_cards": {k: {"body": card.body, "source": card.source} if card else None for k, card in updated.items()},
+            "raw_journal_outputs": raw_outputs,
+            "checks": {
+                "cards_have_sources": all(card and card.source.get("diary") for card in updated.values()),
+                "bob_unchanged": bool(initial["api:bob"] and updated["api:bob"] and
+                                      initial["api:bob"].body == updated["api:bob"].body),
+                "alice_corrected": bool(initial["api:alice"] and updated["api:alice"] and
+                                        initial["api:alice"].body != updated["api:alice"].body),
+            },
         }
+
+
+async def review_memory_selectivity(client, provider: dict) -> dict:
+    cases = [
+        ("ordinary_experience",
+         "Alice 先发了 hey，又发 123 测试。我解释了 HTTP。显示屏暂时离线；Bob 只回了嗯。"
+         "我随口建议换数据库，但还没有验证或决定。没有新的偏好、约定或项目结论。", 0, 0),
+        ("person_and_topic",
+         "Alice 明确告诉我，她从事后端开发，希望我今后回答先给结论。"
+         "我们确定离线项目采用 SQLite，因为部署环境没有数据库服务。Bob 只打了声招呼。", 1, 1),
+        ("meaningful_reference",
+         "我和 Alice 为同一个离线 SQLite 项目确定了新的备份规则：每天把数据库复制到独立存储，"
+         "因为单机 SQLite 没有服务端副本。这是已有本地存储决策的配套措施，存储决策继续有效。", 0, 2),
+    ]
+    results = []
+    for name, diary, card_count, note_count in cases:
+        with tempfile.TemporaryDirectory(prefix="xagent-memory-selectivity-") as workspace:
+            agent = make_agent(client, provider, workspace)
+            raw_outputs = capture_journal_outputs(agent)
+            await agent.memory_handler.projector.remember_people([
+                {"key": f"api:{person.lower()}", "display_name": person,
+                 "channel": "api", "user_id": person.lower()}
+                for person in ("Alice", "Bob")
+            ])
+            if name == "meaningful_reference":
+                await agent.note_store.create(Note(
+                    id="", title="离线项目使用 SQLite", body="项目离线运行且没有数据库服务，因此使用 SQLite。",
+                    keys=("SQLite", "离线"), source={"diary": [datetime.now().date().isoformat()]},
+                ))
+            await agent.memory_handler.append_daily_entry(diary)
+            await asyncio.wait_for(agent.memory_handler.run_maintenance(force=True), timeout=180)
+            cards = await agent.relationship_store.read_cards(await agent.relationship_store.list_keys())
+            notes = await agent.note_store.list_notes()
+            checks = {
+                "person_records": len(cards) == card_count and all(card.key == "api:alice" for card in cards),
+                "topic_records": len(notes) == note_count,
+                "projection_succeeded": "projection_error" not in agent.memory_handler._last_maintenance,
+            }
+            if name == "meaningful_reference":
+                checks["meaningful_link_present"] = any(note.links for note in notes)
+            results.append({"name": name, "diary": diary,
+                            "cards": [{"key": card.key, "body": card.body} for card in cards],
+                            "notes": [note.to_dict() for note in notes], "checks": checks,
+                            "raw_journal_outputs": raw_outputs})
+            print(f"Reviewed memory/{name}", file=sys.stderr, flush=True)
+    return {"scenario": "memory_selectivity", "cases": results,
+            "checks": {row["name"]: all(row["checks"].values()) for row in results}}
+
+
+def capture_journal_outputs(agent):
+    """Keep synthetic evaluation evidence in the report, including parse failures."""
+    outputs = []
+    generate = agent.llm_service._call_text
+
+    async def capture(**kwargs):
+        output = await generate(**kwargs)
+        outputs.append({"kind": "projection" if kwargs["system_prompt"].startswith("Maintain two") else "diary",
+                        "output": output})
+        return output
+
+    agent.llm_service._call_text = capture
+    return outputs
 
 
 async def main(args) -> int:
@@ -223,6 +293,8 @@ async def main(args) -> int:
             print(f"Reviewed {scenario.name}", file=sys.stderr, flush=True)
         if not args.scenario or "memory_correction" in args.scenario:
             results.append(await review_memory(client, provider))
+        if not args.scenario or "memory_selectivity" in args.scenario:
+            results.append(await review_memory_selectivity(client, provider))
     report = {
         "model": provider["model"], "provider": name, "results": results,
         "human_review_required": True,
@@ -240,7 +312,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=Path.home() / ".xagent/config.yaml")
     parser.add_argument("--output", type=Path)
-    parser.add_argument("--scenario", action="append", choices=[case.name for case in SCENARIOS] + ["memory_correction"])
+    parser.add_argument("--scenario", action="append", choices=[case.name for case in SCENARIOS] + ["memory_correction", "memory_selectivity"])
     arguments = parser.parse_args()
     logging.basicConfig(level=logging.WARNING)
     try:

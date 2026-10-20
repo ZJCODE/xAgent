@@ -64,8 +64,13 @@ class MemoryHandler:
         self.memory = memory
         self.llm_service = llm_service
         self.message_storage = message_storage
-        self.relationship_store = relationship_store
-        self.note_store = note_store
+        from ...components.memory import NoteStore, RelationshipStore
+        from ..memory_projection import MemoryProjector
+
+        self.relationship_store = relationship_store or RelationshipStore(
+            str(self.memory.root / AgentConfig.RELATIONSHIPS_DIRNAME)
+        )
+        self.note_store = note_store or NoteStore(str(self.memory.root / AgentConfig.NOTES_DIRNAME))
         self.diary_write_batch = self._positive_int(
             diary_write_batch,
             AgentConfig.DIARY_WRITE_BATCH,
@@ -79,6 +84,10 @@ class MemoryHandler:
         self.max_journal_source_chars = self._positive_int(
             max_journal_source_chars,
             self.DEFAULT_JOURNAL_SOURCE_CHARS,
+        )
+        self.projector = MemoryProjector(
+            self.memory.root, self.note_store, self.relationship_store,
+            self.llm_service, source_chars=self.max_journal_source_chars,
         )
         self._maintenance_lock = asyncio.Lock()
         self._maintenance_task: Optional[asyncio.Task[bool]] = None
@@ -325,6 +334,15 @@ class MemoryHandler:
                 result = await self._run_maintenance_locked(
                     force=force, trigger=trigger, idle_seconds=idle_seconds
                 )
+                # Catch up even when no new message window is due. Projection
+                # failures never roll back diary commits or stop later ones.
+                try:
+                    receipt = await asyncio.to_thread(self._journal_commits.load)
+                    if not receipt or receipt["status"] == "completed":
+                        await self.projector.run()
+                except Exception as exc:
+                    self._last_maintenance["projection_error"] = str(exc)
+                    logger.warning("Memory projection deferred: %s", exc, exc_info=True)
             except asyncio.CancelledError:
                 self._last_maintenance["status"] = "interrupted"
                 raise
@@ -374,6 +392,10 @@ class MemoryHandler:
             start_exclusive=start_exclusive,
             end_inclusive=end_inclusive,
         )
+        try:
+            await self.projector.remember_people(self._extract_participants(recent_messages))
+        except Exception as exc:
+            logger.warning("Could not persist projection identities: %s", exc, exc_info=True)
         today = date.today()
         old_content = await asyncio.to_thread(read_bytes, self.memory.daily_path(today))
         if not recent_messages:
@@ -424,12 +446,6 @@ class MemoryHandler:
         ):
             return False
 
-        # Derived projections follow the durable diary/cursor commit, so
-        # failures or shutdown while projecting cannot replay diary prose.
-        await self._update_relationship_cards(
-            recent_messages, new_records,
-            committed_diary=staged_content, journal_date=today,
-        )
         logger.info(
             "Diary commit [trigger=%s] cursor %d→%d, %d msgs, %d slices → %d chars, idle=%.0fs",
             trigger, start_exclusive, end_inclusive, len(new_records), len(batches),
@@ -467,92 +483,6 @@ class MemoryHandler:
     # Relationship cards (derived projection over the diary)
     # ------------------------------------------------------------------
 
-    async def _update_relationship_cards(
-        self,
-        recent_messages: List[Message],
-        new_records: List[dict],
-        *,
-        committed_diary: str,
-        journal_date: date,
-    ) -> None:
-        """Derive/update per-person relationship cards from this batch.
-
-        A best-effort projection over the diary stream: failures here must
-        never break diary maintenance, so everything is wrapped defensively.
-        """
-        if self.relationship_store is None or not committed_diary.strip():
-            return
-        try:
-            participants = self._extract_participants(recent_messages)
-            if not participants:
-                return
-
-            store = self.relationship_store
-            existing_cards: dict[str, str] = {}
-            existing_by_key = {}
-            for participant in participants:
-                card = await store.read_card(participant["key"])
-                if card is None:
-                    continue
-                existing_by_key[participant["key"]] = card
-                if not card.is_empty:
-                    existing_cards[participant["key"]] = card.body
-
-            new_cards = await self.llm_service.update_relationship_cards(
-                participants=participants,
-                messages=new_records,
-                existing_cards=existing_cards,
-                committed_diary=committed_diary,
-            )
-            if not new_cards:
-                logger.info(
-                    "Relationship card update: no changes for %d participant(s) — %s",
-                    len(participants),
-                    ", ".join(p["key"] for p in participants),
-                )
-                return
-
-            from ...components.memory import RelationshipCard, human_display_name
-
-            today_str = journal_date.isoformat()
-            participant_by_key = {p["key"]: p for p in participants}
-            for key, body in new_cards.items():
-                participant = participant_by_key.get(key, {})
-                user_id = str(participant.get("user_id") or "")
-                display_name = human_display_name(
-                    participant.get("display_name"),
-                    user_id=user_id,
-                    key=key,
-                )
-                existing = existing_by_key.get(key)
-                if not display_name and existing is not None:
-                    display_name = human_display_name(
-                        existing.display_name,
-                        user_id=existing.user_id,
-                        key=existing.key,
-                    )
-                await store.write_card(
-                    RelationshipCard(
-                        key=key,
-                        body=body,
-                        display_name=display_name,
-                        channel=str(participant.get("channel") or ""),
-                        user_id=user_id,
-                        updated=today_str,
-                        source_diary_dates=sorted({
-                            *(existing.source_diary_dates if existing is not None else []),
-                            today_str,
-                        }),
-                    )
-                )
-            logger.info(
-                "Updated %d relationship card(s): %s",
-                len(new_cards),
-                ", ".join(f"{k} ({len(v)} chars)" for k, v in new_cards.items()),
-            )
-        except Exception as exc:
-            logger.warning("Relationship card update failed: %s", exc, exc_info=True)
-
     @staticmethod
     def _extract_participants(messages: List[Message]) -> List[dict]:
         """Collect distinct human participants (non-self) from a batch."""
@@ -583,7 +513,7 @@ class MemoryHandler:
             )
             existing = participants.get(key)
             if existing is not None:
-                if display_name and not existing["display_name"]:
+                if display_name:
                     existing["display_name"] = display_name
                 continue
             participants[key] = {
@@ -612,9 +542,6 @@ class MemoryHandler:
         ``unanswered_outbound`` adds transient delivery observations to that
         view only; these are not persisted relationship claims or send limits.
         """
-        if self.relationship_store is None:
-            return ""
-
         ordered_keys: list[str] = []
         seen: set[str] = set()
         for key in [*(speaker_keys or []), *(participant_keys or [])]:
@@ -674,8 +601,6 @@ class MemoryHandler:
         title and one snippet line so the model can decide whether to open
         them with ``read_note``.
         """
-        if self.note_store is None:
-            return ""
         query = str(current_text or "").strip()
         if not query:
             return ""

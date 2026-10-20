@@ -97,7 +97,7 @@ No new memory write. No nested vision model. No skill load.
 ## 5. Diary, notes, subconscious
 
 - **Diary** keeps using the text transcript. The path in the manifest is provenance. If the agent looked and then spoke, the spoken turn is what maintenance can narrate. Maintenance does **not** receive pixels in this proposal.
-- **Notes** are for reusable conclusions, not for caching OCR. If a screenshot yields a durable fact, `write_note` remains the knowledge write path.
+- **Notes** are for reusable conclusions, not for caching OCR. If a screenshot yields a reusable conclusion, preserve its substance and attribution in the diary; the unified projector can then create or revise a topic note.
 - **Subconscious** stays `include_images=False`. Reflection does not open the eyes.
 
 ## 6. Goal check

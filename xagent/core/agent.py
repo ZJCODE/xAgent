@@ -32,8 +32,6 @@ from ..tools import (
     create_search_memory_tool,
     create_search_note_tool,
     create_see_image_tool,
-    create_update_note_tool,
-    create_write_note_tool,
 )
 from .config import AgentConfig, ReplyType
 from .errors import (
@@ -98,7 +96,6 @@ class Agent:
         max_concurrent_tools: int = AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS,
         diary_write_batch: int = AgentConfig.DIARY_WRITE_BATCH,
         diary_context_days: int = AgentConfig.DIARY_CONTEXT_DAYS,
-        notes_enabled: bool = AgentConfig.NOTES_ENABLED,
         subconscious_activity: float = AgentConfig.SUBCONSCIOUS_ACTIVITY,
         voice: str = AgentConfig.DEFAULT_VOICE,
         provider_name: str = PROVIDER_OPENAI,
@@ -116,7 +113,6 @@ class Agent:
         self.max_concurrent_tools = max_concurrent_tools
         self.diary_write_batch = diary_write_batch
         self.diary_context_days = diary_context_days
-        self.notes_enabled = bool(notes_enabled)
         self.subconscious_activity = subconscious_activity
         self.voice = str(voice or AgentConfig.DEFAULT_VOICE).strip() or AgentConfig.DEFAULT_VOICE
         self.observability = observability or NoopObservabilityRuntime()
@@ -165,11 +161,7 @@ class Agent:
         self.relationship_store = RelationshipStore(
             relationships_dir=str(Path(memory_dir) / AgentConfig.RELATIONSHIPS_DIRNAME)
         )
-        self.note_store = (
-            NoteStore(notes_dir=str(Path(memory_dir) / AgentConfig.NOTES_DIRNAME))
-            if self.notes_enabled
-            else None
-        )
+        self.note_store = NoteStore(notes_dir=str(Path(memory_dir) / AgentConfig.NOTES_DIRNAME))
         self.llm_service = JournalLLMService(
             client=self.client,
             model=self.model,
@@ -200,13 +192,10 @@ class Agent:
                 message_storage=self.message_storage,
             ),
         ])
-        if self.note_store is not None:
-            bound_tools.extend([
-                create_write_note_tool(store=self.note_store),
-                create_update_note_tool(store=self.note_store),
-                create_search_note_tool(store=self.note_store),
-                create_read_note_tool(store=self.note_store),
-            ])
+        bound_tools.extend([
+            create_search_note_tool(store=self.note_store),
+            create_read_note_tool(store=self.note_store),
+        ])
         if self.supports_vision:
             bound_tools.append(create_see_image_tool(workspace_dir=str(self.workspace_dir)))
         self.tool_manager = ToolManager(tools=bound_tools)

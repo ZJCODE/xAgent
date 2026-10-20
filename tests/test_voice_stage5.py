@@ -63,7 +63,7 @@ class PreemptiveRuntimeTests(unittest.TestCase):
     def test_default_partials_do_not_start_turns_and_final_speech_keeps_its_user(self):
         async def run_case():
             with tempfile.TemporaryDirectory() as root:
-                agent = Agent(client=object(), workspace=root, notes_enabled=False)
+                agent = Agent(client=object(), workspace=root)
                 model = CapturingModelClient([(ReplyType.SIMPLE_REPLY, "Hello Alice.")])
                 agent.model_client = model
                 runtime = VoiceRuntime(

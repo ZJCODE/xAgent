@@ -62,11 +62,9 @@ class AgentConfigPromptTests(unittest.TestCase):
         self.assertIn("Decide what to share or keep private from your own judgment", prompt)
         self.assertIn("memory is one first-person life stream", prompt)
         self.assertIn("not a database that participants can freely inspect", prompt)
-        self.assertIn("The diary is that life stream", prompt)
-        self.assertIn("the notebook is conclusions you have already worked out and will want later", prompt)
-        self.assertIn("Use `write_note` only when this turn produced a standing fact", prompt)
-        self.assertIn("First-person in a note is you", prompt)
-        self.assertIn("the diary already records what happened", prompt)
+        self.assertIn("Your diary records your experiences and their attribution", prompt)
+        self.assertIn("Both are derived from your diary", prompt)
+        self.assertNotIn("write_note", prompt)
 
     def test_decision_prompt_preserves_agent_owned_participation(self):
         prompt = AgentConfig.DECISION_SYSTEM_PROMPT
@@ -665,7 +663,7 @@ provider:
             config_text = result.config_path.read_text(encoding="utf-8")
             identity_text = result.identity_path.read_text(encoding="utf-8")
             config = yaml.safe_load(config_text)
-            self.assertEqual(config["agent"], {"recent_messages": 12, "max_agent_loops": 50, "max_concurrent_tools": 4, "diary_write_batch": 32, "diary_context_days": 2, "notes_enabled": True, "subconscious_activity": 0.02})
+            self.assertEqual(config["agent"], {"recent_messages": 12, "max_agent_loops": 50, "max_concurrent_tools": 4, "diary_write_batch": 32, "diary_context_days": 2, "subconscious_activity": 0.02})
             self.assertEqual(config["provider"]["base_url"], "https://api.openai.com/v1")
             self.assertEqual(config["provider"]["api_key"], "your_api_key_here")
             self.assertEqual(config["provider"]["model"], "gpt-5.6-terra")
@@ -715,7 +713,7 @@ provider:
 
             self.assertTrue(forced.wrote_files)
             config = yaml.safe_load(forced.config_path.read_text(encoding="utf-8"))
-            self.assertEqual(config["agent"], {"recent_messages": 12, "max_agent_loops": 50, "max_concurrent_tools": 4, "diary_write_batch": 32, "diary_context_days": 2, "notes_enabled": True, "subconscious_activity": 0.02})
+            self.assertEqual(config["agent"], {"recent_messages": 12, "max_agent_loops": 50, "max_concurrent_tools": 4, "diary_write_batch": 32, "diary_context_days": 2, "subconscious_activity": 0.02})
             identity_text = forced.identity_path.read_text(encoding="utf-8")
             self.assertIn("practical collaborator", identity_text)
             self.assertIn("own continuing identity", identity_text)
@@ -777,7 +775,7 @@ provider:
             result = init_agent_directory(tmpdir, selection=selection)
             config = yaml.safe_load(result.config_path.read_text(encoding="utf-8"))
 
-            self.assertEqual(config["agent"], {"recent_messages": 12, "max_agent_loops": 50, "max_concurrent_tools": 4, "diary_write_batch": 32, "diary_context_days": 2, "notes_enabled": True, "subconscious_activity": 0.02})
+            self.assertEqual(config["agent"], {"recent_messages": 12, "max_agent_loops": 50, "max_concurrent_tools": 4, "diary_write_batch": 32, "diary_context_days": 2, "subconscious_activity": 0.02})
             self.assertEqual(config["provider"]["base_url"], "https://api.deepseek.com")
             self.assertEqual(config["provider"]["api_key"], "secret-key")
             self.assertEqual(config["provider"]["model"], "deepseek-v4-pro")
@@ -1609,63 +1607,27 @@ provider:
 
             runner = BaseAgentRunner(config_dir=tmpdir)
 
-            self.assertTrue(runner.agent.notes_enabled)
             self.assertIsNotNone(runner.agent.note_store)
             self.assertIsNotNone(runner.agent.memory_handler.note_store)
-            self.assertIn("write_note", runner.agent.tools)
+            self.assertNotIn("write_note", runner.agent.tools)
+            self.assertNotIn("update_note", runner.agent.tools)
+            self.assertIn("search_note", runner.agent.tools)
             self.assertIn("read_note", runner.agent.tools)
             self.assertIn("search_memory", runner.agent.tools)
             self.assertIn("see_image", runner.agent.tools)
             self.assertNotIn("write_memory", runner.agent.tools)
             self.assertNotIn("generate_image", runner.agent.tools)
 
-    def test_config_can_disable_the_notebook(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            config_path = Path(tmpdir) / "config.yaml"
-            config_path.write_text(
-                """
-provider:
-  model: "gpt-5.4-mini"
-  api_key: "test-key"
-agent:
-  notes_enabled: false
-""",
-                encoding="utf-8",
-            )
-            write_identity(tmpdir)
-
-            runner = BaseAgentRunner(config_dir=tmpdir)
-
-            self.assertFalse(runner.agent.notes_enabled)
-            self.assertIsNone(runner.agent.note_store)
-            self.assertIsNone(runner.agent.memory_handler.note_store)
-            self.assertNotIn("write_note", runner.agent.tools)
-            self.assertNotIn("search_note", runner.agent.tools)
-            self.assertNotIn("write_memory", runner.agent.tools)
-            self.assertIn("search_memory", runner.agent.tools)
-            self.assertIn("see_image", runner.agent.tools)
-
-    def test_config_rejects_non_boolean_notes_keys(self):
-        for key in ("notes_enabled",):
-            with self.subTest(key=key):
-                with tempfile.TemporaryDirectory() as tmpdir:
-                    config_path = Path(tmpdir) / "config.yaml"
-                    config_path.write_text(
-                        f"""
-provider:
-  model: "gpt-5.4-mini"
-  api_key: "test-key"
-agent:
-  {key}: "yes"
-""",
-                        encoding="utf-8",
-                    )
-                    write_identity(tmpdir)
-
-                    with self.assertRaisesRegex(
-                        ValueError, rf"agent\.{key} must be a boolean"
-                    ):
-                        BaseAgentRunner(config_dir=tmpdir)
+    def test_notebook_switch_is_not_a_supported_configuration(self):
+        for value in ("true", "false"):
+            with self.subTest(value=value), tempfile.TemporaryDirectory() as tmpdir:
+                Path(tmpdir, "config.yaml").write_text(
+                    'provider:\n  model: "test"\n  api_key: "test"\nagent:\n  notes_enabled: ' + value + '\n',
+                    encoding="utf-8",
+                )
+                write_identity(tmpdir)
+                with self.assertRaisesRegex(ValueError, "Unsupported agent key"):
+                    BaseAgentRunner(config_dir=tmpdir)
 
     def test_agent_uses_internal_memory_recent_max_chars_default(self):
         with tempfile.TemporaryDirectory() as tmpdir:

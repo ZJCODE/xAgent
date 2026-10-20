@@ -250,7 +250,6 @@ class BaseAgentRunner:
                 "max_concurrent_tools",
                 "subconscious_activity",
                 "diary_context_days",
-                "notes_enabled",
             }
             unsupported_agent_keys = sorted(set(agent_cfg) - allowed_agent_keys)
             if unsupported_agent_keys:
@@ -267,11 +266,6 @@ class BaseAgentRunner:
                     )
             if "diary_context_days" in agent_cfg:
                 self._validate_non_negative_int(agent_cfg["diary_context_days"], "agent.diary_context_days")
-            for key in ("notes_enabled",):
-                if key in agent_cfg and not isinstance(agent_cfg[key], bool):
-                    raise ValueError(
-                        f"agent.{key} must be a boolean, got {agent_cfg[key]!r}"
-                    )
         self._validate_observability_config(config.get("observability"))
         if "devices" in config:
             DeviceConfig.model_validate(config["devices"])
@@ -592,7 +586,6 @@ class BaseAgentRunner:
             max_concurrent_tools=agent_section.get("max_concurrent_tools", AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS),
             diary_write_batch=agent_section.get("diary_write_batch", AgentConfig.DIARY_WRITE_BATCH),
             diary_context_days=agent_section.get("diary_context_days", AgentConfig.DIARY_CONTEXT_DAYS),
-            notes_enabled=agent_section.get("notes_enabled", AgentConfig.NOTES_ENABLED),
             subconscious_activity=agent_section.get("subconscious_activity", AgentConfig.SUBCONSCIOUS_ACTIVITY),
             voice=voice_name,
         )
@@ -725,9 +718,7 @@ class BaseAgentRunner:
         if isinstance(images, dict) and normalize_image_generation_provider(images.get("provider")) != IMAGE_GENERATION_PROVIDER_NONE:
             names.append("generate_image")
         names.extend(["read_skill", "device", "search_memory"])
-        agent_section = agent_cfg.get("agent") or {}
-        if not isinstance(agent_section, dict) or agent_section.get("notes_enabled", AgentConfig.NOTES_ENABLED):
-            names.extend(["write_note", "update_note", "search_note", "read_note"])
+        names.extend(["search_note", "read_note"])
         vision_enabled = (
             supports_vision
             if supports_vision is not None

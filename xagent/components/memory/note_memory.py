@@ -7,9 +7,8 @@ diary stream rather than a second source of truth — every note carries the
 provenance it came from, and the system keeps working when the notebook is
 empty or thrown away.
 
-Zettelkasten supplies the shape: one idea per note, an immutable id so links
-never break, and links instead of a category tree. A note that must not travel
-is not a note — it belongs in the diary or on a relationship card.
+One idea per note, immutable ids, and meaningful links keep the notebook
+navigable. Personal background and preferences belong on relationship cards.
 
 This class owns file layout and I/O only. Deciding *what* is worth a note and
 *when* to write one lives in higher layers (note tools, journal service, memory
@@ -28,6 +27,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import yaml
+
+from xagent.core.journal_commits import atomic_write_bytes, sync_directory
 
 from xagent.utils.search_terms import normalize_terms, score_text
 
@@ -59,7 +60,6 @@ class Note:
     keys: Tuple[str, ...] = ()
     links: Tuple[str, ...] = ()
     source: Dict[str, Any] = field(default_factory=dict)
-    created: str = ""
     updated: str = ""
 
     @property
@@ -93,7 +93,6 @@ class Note:
             "keys": list(self.keys),
             "links": list(self.links),
             "source": dict(self.source),
-            "created": self.created,
             "updated": self.updated,
         }
 
@@ -107,8 +106,7 @@ class NoteStore:
     absent for titles that produce no ASCII slug.
 
     Nothing that changes on read is written back into a note file, so note
-    files stay stable, diffable, and safe to hand-edit. Unknown frontmatter
-    (legacy kind/tags/pinned/sensitivity/status) is ignored on parse.
+    files stay stable, diffable, and safe to hand-edit.
     """
 
     def __init__(self, notes_dir: str) -> None:
@@ -147,12 +145,11 @@ class NoteStore:
         """Return an unused 12-digit id, walking forward on collision."""
         stamp = (now or datetime.now()).replace(second=0, microsecond=0)
         existing = self._existing_ids_sync()
-        for _ in range(1440):
+        while True:
             candidate = stamp.strftime("%Y%m%d%H%M")
             if candidate not in existing:
                 return candidate
             stamp += timedelta(minutes=1)
-        return stamp.strftime("%Y%m%d%H%M")
 
     def _existing_ids_sync(self) -> set[str]:
         ids: set[str] = set()
@@ -180,7 +177,11 @@ class NoteStore:
 
     async def list_notes(self) -> List[Note]:
         """Return all live notes, newest id first."""
-        return list(await asyncio.to_thread(self._load_all_sync))
+        notes = list(await asyncio.to_thread(self._load_all_sync))
+        valid_ids = {note.id for note in notes}
+        return [replace(note, links=tuple(link for link in note.links
+                                         if link in valid_ids and link != note.id))
+                for note in notes]
 
     async def backlinks(self, note_id: str) -> List[Note]:
         """Return notes linking to *note_id*."""
@@ -263,55 +264,6 @@ class NoteStore:
         scored.sort(key=lambda item: item[:3], reverse=True)
         return [item[3] for item in scored[: max(0, int(limit))]]
 
-    async def find_similar(
-        self,
-        title: str,
-        keys: Optional[Sequence[str]] = None,
-        limit: int = 3,
-    ) -> List[Note]:
-        """Find notes close enough that a new note would probably duplicate one.
-
-        Used as a pre-write guard so the notebook does not accumulate five
-        variations of the same idea. Callers decide how strong a match has to be
-        before they treat it as a duplicate; see :meth:`identity_score`.
-        """
-        terms = self.identity_terms(title, keys)
-        if not terms:
-            return []
-        return await self.search(terms=terms, limit=max(1, int(limit)))
-
-    @staticmethod
-    def identity_terms(
-        title: str,
-        keys: Optional[Sequence[str]] = None,
-    ) -> List[str]:
-        """Terms that describe what a note is about, for similarity checks."""
-        return normalize_terms([
-            str(title or ""),
-            *[str(key) for key in (keys or [])],
-        ])
-
-    @classmethod
-    def identity_score(
-        cls,
-        note: Note,
-        title: str,
-        keys: Optional[Sequence[str]] = None,
-    ) -> int:
-        """Score how much *note* is about the same thing as the given fields.
-
-        The body is deliberately excluded: a note that merely mentions the topic
-        in passing is not another version of it, so counting the body would
-        block legitimately new notes.
-        """
-        terms = cls.identity_terms(title, keys)
-        if not terms:
-            return 0
-        return (
-            3 * score_text(note.title, terms)
-            + 2 * score_text(" ".join(note.keys), terms)
-        )
-
     async def count(self) -> int:
         return len(await self.list_notes())
 
@@ -336,6 +288,8 @@ class NoteStore:
 
     async def write(self, note: Note) -> Path:
         """Write (overwrite) one note atomically. The note must already have an id."""
+        if not re.fullmatch(r"\d{12}", note.id):
+            raise ValueError("A note needs a 12-digit id")
         path = self.path_for(note.id, note.title)
         rendered = self._render(note)
         async with self._write_lock:
@@ -343,6 +297,13 @@ class NoteStore:
             self._cache_signature = None
         logger.debug("Wrote note %s (%d chars)", note.id, len(note.body))
         return path
+
+    async def delete(self, note_id: str) -> None:
+        if not re.fullmatch(r"\d{12}", note_id):
+            raise ValueError("Invalid note id")
+        async with self._write_lock:
+            await asyncio.to_thread(self._delete_sync, self.path_for(note_id))
+            self._cache_signature = None
 
     # ------------------------------------------------------------------
     # Normalization
@@ -357,9 +318,10 @@ class NoteStore:
             title=cls._clean_line(note.title)[:MAX_TITLE_CHARS],
             body=str(note.body or "").strip()[:MAX_BODY_CHARS],
             keys=cls._clean_list(note.keys, MAX_KEYS, min_chars=MIN_KEY_CHARS),
-            links=cls._clean_ids(note.links),
+            links=tuple(link for link in cls._clean_ids(
+                [*note.links, *_WIKI_LINK_PATTERN.findall(note.body)]
+            ) if link != note.id),
             source=cls._clean_source(note.source),
-            created=cls._clean_line(note.created) or today,
             updated=cls._clean_line(note.updated) or today,
         )
 
@@ -393,9 +355,9 @@ class NoteStore:
         cleaned: List[str] = []
         for value in values or []:
             text = str(value or "").strip()
-            match = _ID_PATTERN.match(text)
-            if match and match.group(1) not in cleaned:
-                cleaned.append(match.group(1))
+            match = re.fullmatch(r"\d{12}", text)
+            if match and text not in cleaned:
+                cleaned.append(text)
         return tuple(cleaned)
 
     @classmethod
@@ -411,7 +373,13 @@ class NoteStore:
             if not isinstance(value, str)
             else [cls._clean_line(value)]
         )
-        dates = [item for item in dates if item]
+        valid_dates = set()
+        for item in dates:
+            try:
+                valid_dates.add(date.fromisoformat(item).isoformat())
+            except ValueError:
+                continue
+        dates = sorted(valid_dates)
         return {"diary": dates} if dates else {}
 
     # ------------------------------------------------------------------
@@ -431,7 +399,6 @@ class NoteStore:
             frontmatter["links"] = list(normalized.links)
         if normalized.source:
             frontmatter["source"] = normalized.source
-        frontmatter["created"] = normalized.created
         frontmatter["updated"] = normalized.updated
 
         header = yaml.safe_dump(
@@ -450,10 +417,6 @@ class NoteStore:
         built from the filename id and the raw text, because humans edit these
         files directly and a syntax slip must not swallow a note.
 
-        Legacy fields (kind, tags, pinned, sensitivity, status, extra source
-        keys) are ignored. Old ``tags`` are folded into ``keys`` once on read so
-        notes written before the schema cut stay findable; the file is not
-        rewritten.
         """
         fallback_id = ""
         match = _ID_PATTERN.match(path.name)
@@ -465,7 +428,7 @@ class NoteStore:
             frontmatter = {}
 
         note_id = str(frontmatter.get("id") or fallback_id or "").strip()
-        if not note_id:
+        if not re.fullmatch(r"\d{12}", note_id):
             logger.warning("Skipping note without a usable id: %s", path.name)
             return None
 
@@ -474,8 +437,6 @@ class NoteStore:
 
         title = frontmatter.get("title") or cls._title_from_body(body) or note_id
         raw_keys = [str(key) for key in (frontmatter.get("keys") or [])]
-        # Fold legacy tags into keys so older notes remain recallable.
-        raw_keys.extend(str(tag) for tag in (frontmatter.get("tags") or []))
         note = Note(
             id=note_id,
             title=str(title),
@@ -487,7 +448,6 @@ class NoteStore:
                 if isinstance(frontmatter.get("source"), Mapping)
                 else {}
             ),
-            created=str(frontmatter.get("created") or ""),
             updated=str(frontmatter.get("updated") or ""),
         )
         normalized = cls.normalize(note)
@@ -576,10 +536,10 @@ class NoteStore:
 
     @staticmethod
     def _write_atomic_sync(path: Path, content: str) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = path.with_name(f".{path.name}.tmp")
-        with tmp_path.open("w", encoding="utf-8") as handle:
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(tmp_path, path)
+        atomic_write_bytes(path, content.encode("utf-8"))
+
+    @staticmethod
+    def _delete_sync(path: Path) -> None:
+        if path.exists():
+            path.unlink()
+            sync_directory(path.parent)

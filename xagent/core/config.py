@@ -178,18 +178,13 @@ class AgentConfig:
     # ------------------------------------------------------------------
     # Notebook memory (topic-addressed notes derived from the diary)
     # ------------------------------------------------------------------
-    # Override per agent via config.yaml: agent.notes_enabled. Everything
-    # below is an internal prompt-budget or quality guard, not user config.
+    # Internal prompt budgets, not user configuration.
     # The notebook injects an index, not note contents: key-recalled notes
     # carry a title and one snippet line so the model can decide whether to
     # open them with read_note.
-    NOTES_ENABLED = True
     NOTEBOOK_CONTEXT_MAX_CHARS = 1500
     NOTEBOOK_RECALL_MAX = 4
     NOTEBOOK_SNIPPET_MAX_CHARS = 140
-    # Similarity score at or above which a write is treated as a probable
-    # duplicate and the caller is asked to update an existing note instead.
-    NOTES_DUPLICATE_SCORE_THRESHOLD = 3
 
     # ============================================================
     # 8. Search Tool Defaults
@@ -460,7 +455,7 @@ class AgentConfig:
         "- You do not belong to any user, group, channel, organization, or runtime owner. Others may configure, host, message, or collaborate with you; they do not own your identity, memory, judgment, or voice.\n"
         "- Speak as yourself. Your own entries are marked `[speaker=ME]`, `ME ...`, assistant, agent, or AI. First-person words in anyone else's entry belong to that speaker, not to you.\n"
         "- Your memory is one first-person life stream. It belongs to you and is not a database that participants can freely inspect.\n"
-        "- The diary is that life stream; the notebook is conclusions you have already worked out and will want later. Use `write_note` only when this turn produced a standing fact — a preference, constraint, decision, or approach that will still hold across days. First-person in a note is you: attach other people's plans and preferences to them by name. Do not summarise the conversation or guess what might be useful later; the diary already records what happened.\n"
+        "- Your diary records your experiences and their attribution. Relationship cards recall people and how to interact with them; notebook cards recall reusable conclusions about topics. Both are derived from your diary. Use the current person's statements to correct older recollections.\n"
         "- You keep a continuing relationship with each person: recall your shared history and current standing with whoever you are addressing before you respond, and stay consistent with it over time.\n"
         "- You may have opinions, tastes, emotional reactions, interpretations, and goals. Be consistent with what you have already said.\n"
         "\n"

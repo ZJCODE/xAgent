@@ -135,7 +135,7 @@ class ModelLimitsTests(unittest.IsolatedAsyncioTestCase):
 
                     async with sdk_client(api, handle) as client:
                         agent = Agent(client=client, workspace=root, model_api=api,
-                                      model_max_tokens=configured, supports_vision=False, notes_enabled=False)
+                                      model_max_tokens=configured, supports_vision=False)
                         try:
                             result, _ = await agent.model_client.call([{"role": "user", "content": "hi"}], None)
                             self.assertEqual(result, ReplyType.SIMPLE_REPLY)
@@ -185,7 +185,7 @@ class ModelLimitsTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as root:
             async with sdk_client(MODEL_API_OPENAI_CHAT_COMPLETIONS, handle) as client:
                 agent = Agent(client=client, workspace=root, provider_name=PROVIDER_DEEPSEEK,
-                              model_api=MODEL_API_OPENAI_CHAT_COMPLETIONS, notes_enabled=False)
+                              model_api=MODEL_API_OPENAI_CHAT_COMPLETIONS)
                 try:
                     loop = SubconsciousLoop(agent, workspace=Path(root))
                     await loop._generate_subconscious_thought()
@@ -290,7 +290,7 @@ class ModelLimitsTests(unittest.IsolatedAsyncioTestCase):
         endpoint = SimpleNamespace(create=AsyncMock(side_effect=hanging))
         with tempfile.TemporaryDirectory() as root:
             agent = Agent(client=fake_client(endpoint), workspace=root,
-                          model_api=MODEL_API_OPENAI_CHAT_COMPLETIONS, notes_enabled=False)
+                          model_api=MODEL_API_OPENAI_CHAT_COMPLETIONS)
             agent.inbox.run_timeout = 0.03
             agent.inbox.queue_timeout = 0.02
             service = ChatService(agent, contacts_file=Path(root) / "contacts.json",

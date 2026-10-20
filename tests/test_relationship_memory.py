@@ -85,7 +85,7 @@ class RelationshipStoreTests(unittest.IsolatedAsyncioTestCase):
             channel="weixin",
             user_id="wx_1",
             updated="2026-06-27",
-            source_diary_dates=["2026-06-26", "2026-06-27"],
+            source={"diary": ["2026-06-26", "2026-06-27"]},
         )
         await self.store.write_card(card)
 
@@ -96,7 +96,7 @@ class RelationshipStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(loaded.channel, "weixin")
         self.assertEqual(loaded.user_id, "wx_1")
         self.assertEqual(loaded.updated, "2026-06-27")
-        self.assertEqual(loaded.source_diary_dates, ["2026-06-26", "2026-06-27"])
+        self.assertEqual(loaded.source.get("diary", []), ["2026-06-26", "2026-06-27"])
         self.assertIn("we trust each other", loaded.body)
         rendered = (self.store.root / "weixin" / "wx_1.md").read_text(encoding="utf-8")
         self.assertTrue(rendered.startswith("---\n"))
@@ -107,17 +107,17 @@ class RelationshipStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("user_id:", rendered.split("---", 2)[1])
         self.assertNotIn("<!-- rel", rendered)
 
-    async def test_legacy_card_has_no_invented_sources(self):
+    async def test_card_without_sources_does_not_invent_any(self):
         await self.store.write_card(RelationshipCard(key="api:alice", body="An older impression."))
-        self.assertEqual((await self.store.read_card("api:alice")).source_diary_dates, [])
+        self.assertEqual((await self.store.read_card("api:alice")).source.get("diary", []), [])
         self.assertNotIn("source_diary_dates", self.store.card_path("api:alice").read_text())
 
     def test_source_dates_accept_yaml_dates_and_ignore_malformed_values(self):
         card = self.store._parse(
             "api:alice",
-            "---\nsource_diary_dates: [2026-06-27, '2026-06-26', 'invalid', false, '2026-06-27']\n---\nA card.",
+            "---\nsource:\n  diary: [2026-06-27, '2026-06-26', 'invalid', false, '2026-06-27']\n---\nA card.",
         )
-        self.assertEqual(card.source_diary_dates, ["2026-06-26", "2026-06-27"])
+        self.assertEqual(card.source.get("diary", []), ["2026-06-26", "2026-06-27"])
 
     async def test_header_omits_name_when_only_platform_id_is_known(self):
         await self.store.write_card(
@@ -195,114 +195,6 @@ class RelationshipStoreTests(unittest.IsolatedAsyncioTestCase):
 # ----------------------------------------------------------------------
 
 
-class RelationshipDerivationPromptTests(unittest.IsolatedAsyncioTestCase):
-    def test_system_prompt_is_first_person_card_oriented(self):
-        prompt = JournalLLMService.build_relationship_update_system_prompt()
-        self.assertIn("relationship notes", prompt)
-        self.assertIn("first-person", prompt)
-        self.assertIn("how we stand", prompt)
-        self.assertIn("diary already records what happened", prompt)
-        self.assertIn("belong in a note", prompt)
-        self.assertIn("Trust and boundaries", prompt)
-        self.assertIn("Open threads", prompt)
-        self.assertIn("language used by that person", prompt)
-        self.assertIn("dominant user language", prompt)
-        self.assertIn("Return JSON only", prompt)
-
-    def test_user_prompt_lists_keys_and_existing_cards(self):
-        prompt = JournalLLMService.build_relationship_update_user_prompt(
-            participants=[
-                {"key": "weixin:a", "display_name": "Alice"},
-                {"key": "weixin:b", "display_name": "Bob"},
-            ],
-            existing_cards={"weixin:a": "Existing Alice card"},
-            transcript="[speaker=Alice]: hi",
-        )
-        self.assertIn('key="weixin:a" name="Alice"', prompt)
-        self.assertIn("Existing Alice card", prompt)
-        self.assertIn('key="weixin:b" name="Bob"', prompt)
-        self.assertIn("(no card yet)", prompt)
-        self.assertIn("[speaker=Alice]: hi", prompt)
-
-    def test_user_prompt_does_not_treat_missing_name_as_the_key(self):
-        prompt = JournalLLMService.build_relationship_update_user_prompt(
-            participants=[
-                {
-                    "key": "weixin:wx_new",
-                    "display_name": "wx_new",
-                    "user_id": "wx_new",
-                },
-            ],
-            existing_cards={},
-            committed_diary="I met Alice and we greeted each other.",
-            transcript="[speaker=wx_new]: 早啊",
-        )
-        self.assertIn('key="weixin:wx_new" name="(unnamed)"', prompt)
-        self.assertNotIn('name="wx_new"', prompt)
-
-    def test_parse_relationship_cards_filters_unknown_keys(self):
-        parsed = JournalLLMService._parse_relationship_cards(
-            '{"weixin:a": "card a", "weixin:x": "stray", "weixin:b": ""}',
-            valid_keys={"weixin:a", "weixin:b"},
-        )
-        self.assertEqual(parsed, {"weixin:a": "card a"})
-
-    def test_parse_relationship_cards_strips_code_fences(self):
-        parsed = JournalLLMService._parse_relationship_cards(
-            '```json\n{"weixin:a": "card a"}\n```',
-            valid_keys={"weixin:a"},
-        )
-        self.assertEqual(parsed, {"weixin:a": "card a"})
-
-    def test_parse_relationship_cards_handles_bad_json(self):
-        self.assertEqual(
-            JournalLLMService._parse_relationship_cards("not json", valid_keys=set()),
-            {},
-        )
-
-    async def test_update_relationship_cards_calls_model_and_returns_cards(self):
-        service = JournalLLMService(client=object())
-        captured = {}
-
-        async def fake_call_text(system_prompt, user_prompt):
-            captured["system"] = system_prompt
-            captured["user"] = user_prompt
-            return '{"weixin:a": "Alice and I are close."}'
-
-        service._call_text = fake_call_text  # type: ignore[assignment]
-
-        result = await service.update_relationship_cards(
-            participants=[{"key": "weixin:a", "display_name": "Alice"}],
-            messages=[{"role": "user", "sender_id": "a", "content": "hello"}],
-            existing_cards={},
-            committed_diary="I met Alice and we greeted each other.",
-        )
-        self.assertEqual(result, {"weixin:a": "Alice and I are close."})
-        self.assertIn("Alice", captured["user"])
-        self.assertIn("I met Alice and we greeted each other.", captured["user"])
-
-    async def test_update_relationship_cards_noops_without_participants(self):
-        service = JournalLLMService(client=object())
-        result = await service.update_relationship_cards(
-            participants=[],
-            messages=[{"content": "hi"}],
-            existing_cards={},
-            committed_diary="I heard a greeting.",
-        )
-        self.assertEqual(result, {})
-
-    async def test_no_projection_from_transcript_without_committed_diary(self):
-        service = JournalLLMService(client=object())
-        service._call_text = AsyncMock()
-        result = await service.update_relationship_cards(
-            participants=[{"key": "api:alice"}],
-            messages=[{"role": "user", "sender_id": "alice", "content": "Contact me after midnight."}],
-            existing_cards={}, committed_diary="",
-        )
-        self.assertEqual(result, {})
-        service._call_text.assert_not_awaited()
-
-
 # ----------------------------------------------------------------------
 # MemoryHandler: extraction, derivation wiring, injection budget
 # ----------------------------------------------------------------------
@@ -317,22 +209,15 @@ class _FakeDiaryLLMService:
 
     async def format_diary_entry(self, messages, journal_date, existing_today=""):
         return "\n".join(
-            str(message.get("content", "")) for message in messages if message.get("content")
+            str(message.get("sender_id", "")) + ": " + str(message.get("content", "")) for message in messages if message.get("content")
         )
 
     async def generate_summary(self, source_content, period_type, period_label):
         return ""
 
-    async def update_relationship_cards(self, participants, messages, existing_cards, committed_diary):
-        self.relationship_calls.append(
-            {
-                "participants": participants,
-                "messages": messages,
-                "existing_cards": existing_cards,
-                "committed_diary": committed_diary,
-            }
-        )
-        return dict(self.cards)
+    async def update_memory_projections(self, **kwargs):
+        self.relationship_calls.append(kwargs)
+        return {"relationships": dict(self.cards), "notes": []}
 
 
 class _FakeMessageStorage:
@@ -535,7 +420,7 @@ class MemoryHandlerRelationshipTests(unittest.IsolatedAsyncioTestCase):
         card = await self.store.read_card("weixin:alice")
         self.assertIsNotNone(card)
         self.assertIn("Alice and I talk often.", card.body)
-        self.assertEqual(card.source_diary_dates, [date.today().isoformat()])
+        self.assertEqual(card.source.get("diary", []), [date.today().isoformat()])
         committed = llm.relationship_calls[0]["committed_diary"]
         self.assertIn(committed, self.memory.daily_path(date.today()).read_text())
 
@@ -577,8 +462,8 @@ class MemoryHandlerRelationshipTests(unittest.IsolatedAsyncioTestCase):
         alice_card = await self.store.read_card("api:Alice")
         bob_card = await self.store.read_card("api:Bob")
         self.assertIn("old daytime preference changed", alice_card.body)
-        self.assertEqual(alice_card.source_diary_dates, [first_date.isoformat(), next_date.isoformat()])
-        self.assertEqual(bob_card.source_diary_dates, [first_date.isoformat()])
+        self.assertEqual(alice_card.source.get("diary", []), [first_date.isoformat(), next_date.isoformat()])
+        self.assertEqual(bob_card.source.get("diary", []), [first_date.isoformat()])
         context = await handler.get_relationship_context(
             speaker_keys=["api:Alice", "api:Bob"], include_routing_id=True,
             unanswered_outbound={"api:Alice": 2},
@@ -602,7 +487,7 @@ class MemoryHandlerRelationshipTests(unittest.IsolatedAsyncioTestCase):
             role=RoleType.USER, sender_id="alice", channel="api",
         )
         llm = _FakeDiaryLLMService()
-        llm.update_relationship_cards = AsyncMock(side_effect=RuntimeError("projection unavailable"))
+        llm.update_memory_projections = AsyncMock(side_effect=RuntimeError("projection unavailable"))
         handler = self._make_handler(_FakeMessageStorage([message]), llm)
         self.assertTrue(await handler.run_maintenance(force=True))
         self.assertIn("after midnight", self.memory.daily_path(date.today()).read_text())

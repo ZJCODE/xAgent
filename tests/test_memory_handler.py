@@ -42,6 +42,9 @@ class _FakeLLMService:
             return ""
         return "\n".join(str(message.get("content", "")) for message in messages if message.get("content"))
 
+    async def update_memory_projections(self, **kwargs):
+        return {}
+
     async def generate_summary(self, source_content, period_type, period_label):
         self.summary_calls.append((source_content, period_type, period_label))
         return f"[Summary: {period_type} {period_label}]"
@@ -918,8 +921,8 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_projection_failure_does_not_replay_committed_diary(self):
         handler = self._handler_with_one_message()
-        with patch.object(handler, "_update_relationship_cards", AsyncMock(side_effect=RuntimeError("projection failed"))):
-            self.assertFalse(await handler.run_maintenance(force=True))
+        with patch.object(handler.projector, "run", AsyncMock(side_effect=RuntimeError("projection failed"))):
+            self.assertTrue(await handler.run_maintenance(force=True))
         self.assertEqual(handler._last_processed_message_id, 1)
         before = self.memory.daily_path(date.today()).read_bytes()
         self.assertFalse(await handler.run_maintenance(force=True))

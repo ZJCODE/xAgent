@@ -18,8 +18,6 @@ from xagent.schemas import Message, RoleType
 from xagent.tools.note_tool import (
     create_read_note_tool,
     create_search_note_tool,
-    create_update_note_tool,
-    create_write_note_tool,
 )
 
 
@@ -41,6 +39,7 @@ class NoteStoreTests(unittest.IsolatedAsyncioTestCase):
         self._tmpdir.cleanup()
 
     async def test_write_read_roundtrip_preserves_fields(self):
+        await self.store.write(Note(id="202608190931", title="Brewing temperature", body="92C."))
         note = _note(
             self.store,
             "Jun takes espresso at 1:2.5",
@@ -126,41 +125,12 @@ class NoteStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([note.id for note in notes], ["202608190931"])
         self.assertEqual(notes[0].title, "Just a body someone typed by hand.")
 
-    async def test_parse_ignores_legacy_fields_and_folds_tags_into_keys(self):
-        path = Path(self._tmpdir.name) / "202608190930-legacy.md"
-        path.write_text(
-            "---\n"
-            "id: '202608190930'\n"
-            "title: Legacy espresso\n"
-            "kind: hub\n"
-            "status: active\n"
-            "tags:\n"
-            "- coffee\n"
-            "keys:\n"
-            "- espresso\n"
-            "pinned: true\n"
-            "sensitivity: person-scoped\n"
-            "source:\n"
-            "  diary:\n"
-            "  - '2026-08-19'\n"
-            "  person: weixin:wx_a\n"
-            "created: '2026-08-19'\n"
-            "updated: '2026-08-19'\n"
-            "---\n\n"
-            "Jun wants 1:2.5.\n",
-            encoding="utf-8",
-        )
-        loaded = await self.store.read("202608190930")
-        self.assertIsNotNone(loaded)
-        self.assertEqual(loaded.keys, ("espresso", "coffee"))
-        self.assertEqual(loaded.source, {"diary": ["2026-08-19"]})
-        self.assertFalse(hasattr(loaded, "kind"))
-        self.assertFalse(hasattr(loaded, "tags"))
-        self.assertFalse(hasattr(loaded, "pinned"))
-        self.assertFalse(hasattr(loaded, "sensitivity"))
-        self.assertFalse(hasattr(loaded, "status"))
-        # Read does not rewrite the file.
-        self.assertIn("kind: hub", path.read_text(encoding="utf-8"))
+    async def test_new_format_contains_only_notebook_fields(self):
+        note = await self.store.create(Note(id="", title="Offline storage", body="Use SQLite.",
+                                            keys=("SQLite",), source={"diary": ["2026-10-20"]}))
+        rendered = self.store.path_for(note.id).read_text()
+        self.assertNotIn("created:", rendered)
+        self.assertEqual((await self.store.read(note.id)).source, {"diary": ["2026-10-20"]})
 
     async def test_normalize_clamps_body_and_keys(self):
         note = NoteStore.normalize(
@@ -272,27 +242,6 @@ class NoteRetrievalTests(unittest.IsolatedAsyncioTestCase):
         results = await self.store.search([])
         self.assertEqual({note.id for note in results}, {self.espresso.id, self.grinder.id})
 
-    async def test_find_similar_surfaces_an_existing_note_on_the_same_idea(self):
-        similar = await self.store.find_similar(title="浓缩的粉水比", keys=["浓缩"])
-        self.assertEqual(similar[0].id, self.espresso.id)
-
-    async def test_identity_score_ignores_a_passing_body_mention(self):
-        mentions = _note(
-            self.store,
-            "Kitchen inventory",
-            "We are low on beans, and the grinder needs descaling.",
-            keys=("inventory",),
-        )
-        await self.store.write(mentions)
-
-        self.assertEqual(
-            NoteStore.identity_score(mentions, "grinder offset", keys=["grinder"]), 0
-        )
-        self.assertGreater(
-            NoteStore.identity_score(self.grinder, "grinder offset", keys=["grinder"]), 0
-        )
-
-
 # ----------------------------------------------------------------------
 # Note tools
 # ----------------------------------------------------------------------
@@ -302,121 +251,53 @@ class NoteToolTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self._tmpdir = tempfile.TemporaryDirectory()
         self.store = NoteStore(self._tmpdir.name)
-        self.write_note = create_write_note_tool(self.store)
-        self.update_note = create_update_note_tool(self.store)
         self.search_note = create_search_note_tool(self.store)
         self.read_note = create_read_note_tool(self.store)
 
     def tearDown(self):
         self._tmpdir.cleanup()
 
-    def test_write_and_update_prompts_keep_agent_first_person(self):
-        write_fn = self.write_note.tool_spec["function"]
-        update_fn = self.update_note.tool_spec["function"]
-        self.assertIn("do not copy their 'I' as yours", write_fn["description"])
-        self.assertIn("'I' is you", write_fn["parameters"]["properties"]["body"]["description"])
-        self.assertIn(
-            "If the fact belongs to a person, name them",
-            write_fn["parameters"]["properties"]["title"]["description"],
-        )
-        self.assertIn("'I' is you", update_fn["parameters"]["properties"]["body"]["description"])
-        self.assertIn("rewrite this note in place", update_fn["description"])
-        self.assertNotIn("archive", update_fn["parameters"]["properties"])
+    async def test_search_is_bounded_summary_and_read_returns_full_note_and_source(self):
+        body = "SQLite works offline. " + "Detailed rationale. " * 40
+        note = await self.store.create(Note(id="", title="Offline storage", body=body,
+                                            keys=("SQLite",), source={"diary": ["2026-10-20"]}))
+        results = await self.search_note(query=["SQLite"])
+        row = results["notes"][0]
+        self.assertEqual(set(row), {"id", "title", "snippet"})
+        self.assertLess(len(row["snippet"]), len(body))
+        opened = await self.read_note(row["id"])
+        self.assertEqual(opened["note"]["body"], body.strip())
+        self.assertEqual(opened["note"]["source"], note.source)
 
-    async def test_write_note_stores_a_note(self):
-        result = await self.write_note(
-            title="Jun takes espresso at 1:2.5",
-            body="Jun wants 1:2.5 at 92C.",
-            keys=["espresso", "Jun"],
-        )
-        self.assertEqual(result["status"], "ok")
-        stored = await self.store.read(result["note"]["id"])
-        self.assertEqual(stored.keys, ("espresso", "Jun"))
-        self.assertEqual(stored.source["diary"][0], stored.created)
+    async def test_read_shows_both_directions_once_and_never_recurses(self):
+        target = await self.store.create(Note(id="", title="Target", body="Conclusion."))
+        other = await self.store.create(Note(id="", title="Other", body="Application.", links=(target.id,)))
+        await self.store.write(Note(id=target.id, title=target.title, body=target.body,
+                                    links=(other.id, target.id, "999999999999")))
+        for index in range(4):
+            await self.store.create(Note(id="", title=f"Incoming {index}", body="Support.", links=(target.id,)))
+        opened = await self.read_note(target.id)
+        self.assertEqual(opened["note"]["links"], [other.id])
+        self.assertEqual(len(opened["neighbours"]), 3)
+        both = next(row for row in opened["neighbours"] if row["id"] == other.id)
+        self.assertEqual(both["direction"], "both")
+        self.assertTrue(all("body" not in row and "neighbours" not in row for row in opened["neighbours"]))
+        self.assertEqual(len({row["id"] for row in opened["neighbours"]}), 3)
 
-    async def test_write_note_requires_title_and_body(self):
-        self.assertEqual((await self.write_note(title="", body="x"))["status"], "skipped")
-        self.assertEqual((await self.write_note(title="x", body="  "))["status"], "skipped")
+    async def test_reference_changes_update_backlinks_and_deletion_is_safe(self):
+        target = await self.store.create(Note(id="", title="Target", body="Conclusion."))
+        source = await self.store.create(Note(id="", title="Source", body=f"Applies [[{target.id}]]."))
+        opened = await self.read_note(target.id)
+        self.assertEqual(opened["neighbours"][0]["direction"], "incoming")
+        await self.store.write(Note(id=source.id, title="Renamed", body="Independent conclusion."))
+        self.assertEqual((await self.read_note(target.id))["neighbours"], [])
+        await self.store.delete(target.id)
+        self.assertEqual((await self.read_note(target.id))["status"], "not_found")
 
-    async def test_write_note_rejects_a_body_beyond_the_atomicity_cap(self):
-        result = await self.write_note(title="Too much", body="x" * (MAX_BODY_CHARS + 1))
-        self.assertEqual(result["status"], "too_long")
-        self.assertEqual(await self.store.count(), 0)
-
-    async def test_write_note_reports_an_existing_note_on_the_same_idea(self):
-        first = await self.write_note(
-            title="Jun takes espresso at 1:2.5",
-            body="Jun wants 1:2.5 at 92C.",
-            keys=["espresso", "Jun"],
-        )
-        duplicate = await self.write_note(
-            title="Jun espresso 1:2.5 preference",
-            body="Jun likes it at 1:2.5.",
-            keys=["espresso", "Jun"],
-        )
-        self.assertEqual(duplicate["status"], "similar_exists")
-        self.assertEqual(duplicate["candidates"][0]["id"], first["note"]["id"])
-        self.assertEqual(await self.store.count(), 1)
-
-    async def test_write_note_allows_a_genuinely_different_note(self):
-        await self.write_note(title="Espresso ratio", body="1:2.5", keys=["espresso"])
-        other = await self.write_note(
-            title="Train to Hangzhou leaves at 7",
-            body="The early train is the only one that connects.",
-            keys=["train", "Hangzhou"],
-        )
-        self.assertEqual(other["status"], "ok")
-        self.assertEqual(await self.store.count(), 2)
-
-    async def test_update_note_changes_only_given_fields(self):
-        created = await self.write_note(
-            title="Espresso ratio", body="1:2.5", keys=["espresso"]
-        )
-        note_id = created["note"]["id"]
-
-        result = await self.update_note(note_id=note_id, body="1:2.5 at 92C")
-        self.assertEqual(result["status"], "ok")
-        stored = await self.store.read(note_id)
-        self.assertEqual(stored.body, "1:2.5 at 92C")
-        self.assertEqual(stored.title, "Espresso ratio")
-        self.assertEqual(stored.keys, ("espresso",))
-
-    async def test_update_note_reports_missing_notes(self):
-        result = await self.update_note(note_id="202608190930", body="x")
-        self.assertEqual(result["status"], "not_found")
-
-    async def test_search_note_returns_whole_notes(self):
-        await self.write_note(
-            title="Grinder reads two clicks coarse",
-            body="Dial finer than the recipe says.",
-            keys=["grinder"],
-        )
-        result = await self.search_note(query=["grinder"])
-        self.assertEqual(result["total"], 1)
-        self.assertIn("Dial finer", result["notes"][0]["body"])
-
-    async def test_read_note_always_returns_neighbours(self):
-        target = await self.write_note(title="Ratio", body="1:2.5", keys=["ratio"])
-        source = await self.write_note(
-            title="How I brew for Jun",
-            body="Use the ratio note.",
-            keys=["coffee"],
-            links=[target["note"]["id"]],
-        )
-        walked = await self.read_note(note_id=source["note"]["id"])
-        self.assertEqual(walked["neighbours"][0]["id"], target["note"]["id"])
-        self.assertEqual(walked["neighbours"][0]["snippet"], "1:2.5")
-
-    async def test_read_note_reports_missing_notes(self):
-        self.assertEqual(
-            (await self.read_note(note_id="202608190930"))["status"], "not_found"
-        )
-
-    async def test_tools_report_disabled_state(self):
-        write_note = create_write_note_tool(self.store, is_enabled=False)
-        search_note = create_search_note_tool(self.store, is_enabled=False)
-        self.assertEqual((await write_note(title="t", body="b"))["status"], "disabled")
-        self.assertFalse((await search_note(query=["t"]))["enabled"])
+    async def test_empty_search_browses_and_limit_is_enforced(self):
+        for index in range(4):
+            await self.store.create(Note(id="", title=f"Topic {index}", body="Conclusion."))
+        self.assertEqual(len((await self.search_note(limit=2))["notes"]), 2)
 
 
 # ----------------------------------------------------------------------
@@ -440,7 +321,7 @@ class _FakeDiaryLLMService:
         self.summary_calls.append((source_content, period_type, period_label))
         return self.summary_text
 
-    async def update_relationship_cards(self, participants, messages, existing_cards, committed_diary):
+    async def update_memory_projections(self, **kwargs):
         return {}
 
 
@@ -474,13 +355,13 @@ class MemoryHandlerNotebookTests(unittest.IsolatedAsyncioTestCase):
     def tearDown(self):
         self._tmpdir.cleanup()
 
-    def _make_handler(self, storage, llm, diary_write_batch=20, notes_enabled=True):
+    def _make_handler(self, storage, llm, diary_write_batch=20):
         return MemoryHandler(
             memory=self.memory,
             llm_service=llm,
             message_storage=storage,
             diary_write_batch=diary_write_batch,
-            note_store=self.notes if notes_enabled else None,
+            note_store=self.notes,
         )
 
     def _batch(self, count=20, sender="jun", channel="weixin"):
@@ -493,7 +374,7 @@ class MemoryHandlerNotebookTests(unittest.IsolatedAsyncioTestCase):
         return messages
 
 
-    async def test_diary_maintenance_does_not_create_notes(self):
+    async def test_no_change_projection_keeps_notebook_empty(self):
         storage = _FakeMessageStorage(self._batch())
         llm = _FakeDiaryLLMService()
         handler = self._make_handler(storage, llm)
@@ -534,7 +415,7 @@ class MemoryHandlerNotebookTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(notes), 4)
         self.assertTrue(all(not note.links for note in notes))
 
-    async def test_notebook_context_is_empty_without_a_store(self):
+    async def test_notebook_context_is_empty_without_matching_notes(self):
         handler = MemoryHandler(
             memory=self.memory,
             llm_service=_FakeDiaryLLMService(),

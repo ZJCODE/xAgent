@@ -106,7 +106,7 @@ class ContactManagementTests(unittest.TestCase):
 class AgentSubconsciousThoughtTests(unittest.IsolatedAsyncioTestCase):
     async def test_persisted_followups_remain_visible_after_restart_without_merging_ids(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            agent = Agent(client=object(), workspace=tmpdir, notes_enabled=False)
+            agent = Agent(client=object(), workspace=tmpdir)
             await agent.message_storage.add_messages(Message(
                 role=RoleType.USER, sender_id="Alice", channel="api", content="Let me know what you find.",
             ))

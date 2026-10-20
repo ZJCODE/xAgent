@@ -51,23 +51,22 @@ class AgentInfoToolsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
         info = response.json()
         self.assertEqual(info["tools_source"], "configured")
-        self.assertTrue({"run_command", "manage_scheduled_tasks", "read_skill", "search_memory", "write_note", "see_image"}.issubset(info["tools"]))
+        self.assertTrue({"run_command", "manage_scheduled_tasks", "read_skill", "search_memory", "search_note", "read_note", "see_image"}.issubset(info["tools"]))
         self.assertNotIn("web_search", info["tools"])
         self.assertNotIn("generate_image", info["tools"])
         ensure.assert_not_called()
 
     async def test_offline_metadata_matches_actual_tools_for_optional_features(self):
         cases = [
-            ("none", "none", True, True),
-            ("off", "disabled", False, False),
-            ("openai", "openai", True, False),
-            ("deepseek_search", "qwen_images", False, True),
+            ("none", "none", True),
+            ("off", "disabled", False),
+            ("openai", "openai", False),
+            ("deepseek_search", "qwen_images", True),
         ]
-        for search, images, notes, vision in cases:
-            with self.subTest(search=search, images=images, notes=notes, vision=vision):
+        for search, images, vision in cases:
+            with self.subTest(search=search, images=images, vision=vision):
                 self.config["search"] = {"provider": search, "api_key": "feature-key"}
                 self.config["image_generation"] = {"provider": images, "api_key": "feature-key"}
-                self.config["agent"] = {"notes_enabled": notes}
                 self.config["provider"]["supports_vision"] = vision
                 self.write_config()
                 with patch.object(BaseAgentRunner, "_initialize_client", return_value=object()), patch.object(
@@ -91,7 +90,6 @@ class AgentInfoToolsTests(unittest.IsolatedAsyncioTestCase):
         owner_app = FastAPI()
         register_admin_routes(owner_app, lambda: admin)
         # Saved changes apply at restart. Loaded tools must remain authoritative.
-        self.config["agent"] = {"notes_enabled": False}
         self.config["provider"]["supports_vision"] = False
         self.write_config()
         ownership = RuntimeOwnership(self.agent_dir).acquire()
@@ -111,7 +109,8 @@ class AgentInfoToolsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()["tools"], list(runner.agent.tools))
         self.assertEqual(response.json()["tools_source"], "runtime")
-        self.assertIn("write_note", response.json()["tools"])
+        self.assertIn("read_note", response.json()["tools"])
+        self.assertNotIn("write_note", response.json()["tools"])
         self.assertTrue(response.json()["capabilities"]["vision"])
         constructor.assert_called_once_with(self.agent_dir)
         socket_client.request.assert_awaited_once_with("GET", "/api/agent/info", timeout=1.5)

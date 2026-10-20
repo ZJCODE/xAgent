@@ -51,8 +51,8 @@ class Journal:
         identifiers = [str(row.get("content", "")) for row in messages if not row.get("already_journaled")]
         return "I experienced these events: " + " | ".join(identifiers)
 
-    async def update_relationship_cards(self, **kwargs):
-        return []
+    async def update_memory_projections(self, **kwargs):
+        return {}
 
     async def generate_summary(self, source_content, period_type, period_label):
         return f"I reviewed my {period_type} experiences for {period_label}."
@@ -108,7 +108,7 @@ async def soak(args):
     (root / "config.yaml").write_text(yaml.safe_dump({
         "provider": {"name": "openai", "model": "soak-model", "api_key": "test-key"},
         "channels": {"api": {"enabled": False}},
-        "agent": {"notes_enabled": False, "subconscious_activity": 0, "diary_write_batch": 16},
+        "agent": {"subconscious_activity": 0, "diary_write_batch": 16},
         "runtime": {"heartbeat_enabled": True, "heartbeat_interval_seconds": 5},
     }), encoding="utf-8")
     (root / "identity.md").write_text("I am the deterministic soak agent.", encoding="utf-8")
