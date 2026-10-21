@@ -269,6 +269,7 @@ class AgentInboxTests(unittest.IsolatedAsyncioTestCase):
 
         model_client = SerialModelClient()
         agent = self._build_agent(storage, model_client)
+        agent.busy_input = AgentConfig.BUSY_INPUT_FOLLOWUP
 
         async def run_turn(text: str):
             return [
@@ -287,8 +288,11 @@ class AgentInboxTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(agent.inbox.busy)
         self.assertEqual(model_client.max_active, 1)
         release.set()
-        await asyncio.gather(first, second)
+        first_events, second_events = await asyncio.gather(first, second)
 
+        self.assertFalse(any(
+            event.get("type") == "steered" for event in [*first_events, *second_events]
+        ))
         self.assertEqual(model_client.max_active, 1)
         self.assertEqual(len(model_client.calls), 2)
         self.assertEqual(order, ["start:1", "end:1", "start:2", "end:2"])
@@ -795,6 +799,245 @@ class SteerQueueTests(unittest.IsolatedAsyncioTestCase):
             ))
         finally:
             inbox.release_turn()
+
+
+class _HoldTextModel(CapturingModelClient):
+    """Block the first model call, then answer every call with plain text."""
+
+    def __init__(self):
+        super().__init__([])
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def model_turn_events(self, messages, tool_specs, instructions=None, stream=False):
+        self.calls.append(messages)
+        self.instructions_calls.append(instructions)
+        if len(self.calls) == 1:
+            self.started.set()
+            await self.release.wait()
+        yield ModelStreamEvent(type="delta", delta="ok")
+
+
+class _HoldToolModel(_HoldTextModel):
+    async def model_turn_events(self, messages, tool_specs, instructions=None, stream=False):
+        self.calls.append(messages)
+        self.instructions_calls.append(instructions)
+        if len(self.calls) == 1:
+            self.started.set()
+            await self.release.wait()
+            yield ModelStreamEvent(
+                type="tool_calls",
+                tool_calls=[ChatToolCall(call_id="call-1", name="lookup", arguments="{}")],
+            )
+            return
+        yield ModelStreamEvent(type="delta", delta="ok")
+
+
+class _AdjacentPairExecutor:
+    async def handle_tool_calls(self, tool_calls, input_messages, max_concurrent_tools, **kwargs):
+        call_id = getattr(tool_calls[0], "call_id", None) or "call-1"
+        input_messages.extend([
+            {"type": "function_call", "call_id": call_id, "name": "lookup", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": call_id, "output": "ok"},
+        ])
+        return None
+
+
+class BusyInputRoutingTests(unittest.IsolatedAsyncioTestCase):
+    _build_agent = AgentInboxTests._build_agent
+
+    async def _collect(self, agent, text, **kwargs):
+        options = {"user_id": "alice", "channel": "cli", "room_name": "lab"}
+        options.update(kwargs)
+        return [
+            event
+            async for event in agent.chat_events(user_message=text, **options)
+        ]
+
+    async def _wait_until(self, predicate, steps: int = 100):
+        for _ in range(steps):
+            if predicate():
+                return
+            await asyncio.sleep(0.001)
+        self.assertTrue(predicate())
+
+    async def test_same_session_busy_message_is_steered(self):
+        storage = InMemoryMessageStorage()
+        model = _HoldToolModel()
+        agent = self._build_agent(storage, model, tool_executor=_AdjacentPairExecutor())
+
+        first = asyncio.create_task(self._collect(agent, "inspect the service", sender_name="Alice"))
+        await model.started.wait()
+        second_events = await asyncio.wait_for(
+            self._collect(agent, "check the logs", sender_name="Alice"),
+            timeout=1,
+        )
+
+        self.assertEqual([event.get("type") for event in second_events], ["steered", "done"])
+        self.assertEqual(second_events[0]["turn_id"], agent.inbox.current_turn_id)
+        self.assertEqual(second_events[0]["user_id"], "alice")
+        self.assertEqual(second_events[0]["room_name"], "lab")
+        self.assertEqual(second_events[0]["content"], "check the logs")
+        self.assertTrue(second_events[1].get("steered"))
+        self.assertFalse(any(event.get("type") == "message_done" for event in second_events))
+        self.assertEqual([message.content for message in storage.messages], ["inspect the service"])
+
+        model.release.set()
+        first_events = await first
+
+        self.assertTrue(any(event.get("type") == "tool_result" for event in first_events))
+        self.assertEqual(len(model.calls), 2)
+        self.assertNotIn("check the logs", repr(model.calls[0]))
+        self.assertEqual(model.instructions_calls[0], model.instructions_calls[1])
+        _assert_tool_pairs_intact(self, model.calls[1])
+        tail = model.calls[1][-3:]
+        self.assertEqual(tail[0].get("type"), "function_call")
+        self.assertEqual(tail[1].get("type"), "function_call_output")
+        self.assertEqual(tail[1].get("call_id"), tail[0].get("call_id"))
+        self.assertIn("check the logs", tail[2]["content"])
+        self.assertIn("Alice", tail[2]["content"])
+        stored = [
+            message for message in storage.messages
+            if (message.metadata or {}).get(INBOX_KIND_METADATA_KEY) == InboxKind.STEER.value
+        ]
+        self.assertEqual([message.content for message in stored], ["check the logs"])
+        self.assertNotIn("[Mid-task message from ", stored[0].content)
+        experience_ids = {id(message) for message in agent.memory_handler.experience_messages}
+        self.assertIn(id(stored[0]), experience_ids)
+        self.assertFalse(agent.inbox.busy)
+        self.assertFalse(agent.inbox.has_pending_steer())
+
+    async def test_other_user_or_room_stays_queued(self):
+        storage = InMemoryMessageStorage()
+        model = _HoldTextModel()
+        agent = self._build_agent(storage, model)
+
+        first = asyncio.create_task(self._collect(agent, "hello"))
+        await model.started.wait()
+        other_user = asyncio.create_task(self._collect(agent, "from bob", user_id="bob"))
+        other_room = asyncio.create_task(self._collect(agent, "other room", room_name="kitchen"))
+        await self._wait_until(lambda: agent.inbox.pending_count == 2 and not other_user.done() and not other_room.done())
+
+        self.assertFalse(other_user.done())
+        self.assertFalse(other_room.done())
+        self.assertEqual(agent.inbox.pending_count, 2)
+        queued = [message.content for message in storage.messages if message.role == RoleType.USER]
+        self.assertEqual(queued, ["hello", "from bob", "other room"])
+        self.assertTrue(all(
+            message.metadata.get(INBOX_KIND_METADATA_KEY) == InboxKind.USER_TURN.value
+            for message in storage.messages
+            if message.role == RoleType.USER
+        ))
+        self.assertNotIn("from bob", repr(model.calls[0]))
+        self.assertNotIn("other room", repr(model.calls[0]))
+
+        model.release.set()
+        first_events, user_events, room_events = await asyncio.gather(first, other_user, other_room)
+
+        self.assertEqual(len(model.calls), 3)
+        self.assertNotIn("from bob", repr(model.calls[0]))
+        self.assertNotIn("other room", repr(model.calls[0]))
+        self.assertIn("from bob", repr(model.calls[1]))
+        self.assertIn("other room", repr(model.calls[2]))
+        self.assertFalse(any(
+            event.get("type") == "steered"
+            for event in [*first_events, *user_events, *room_events]
+        ))
+        self.assertFalse(agent.inbox.busy)
+
+    async def test_followup_mode_queues_same_session_message(self):
+        storage = InMemoryMessageStorage()
+        model = _HoldTextModel()
+        agent = self._build_agent(storage, model)
+        agent.busy_input = AgentConfig.BUSY_INPUT_FOLLOWUP
+
+        first = asyncio.create_task(self._collect(agent, "first"))
+        await model.started.wait()
+        second = asyncio.create_task(self._collect(agent, "second"))
+        await self._wait_until(lambda: agent.inbox.pending_count == 1 and not second.done())
+
+        self.assertFalse(second.done())
+        self.assertEqual(
+            [message.content for message in storage.messages if message.role == RoleType.USER],
+            ["first", "second"],
+        )
+        self.assertTrue(all(
+            message.metadata.get(INBOX_KIND_METADATA_KEY) == InboxKind.USER_TURN.value
+            for message in storage.messages
+            if message.role == RoleType.USER
+        ))
+
+        model.release.set()
+        first_events, second_events = await asyncio.gather(first, second)
+
+        self.assertEqual(len(model.calls), 2)
+        self.assertNotIn("second", repr(model.calls[0]))
+        self.assertIn("second", repr(model.calls[1]))
+        self.assertNotIn("Mid-task", repr(model.calls[1]))
+        self.assertFalse(any(event.get("type") == "steered" for event in [*first_events, *second_events]))
+        self.assertFalse(agent.inbox.busy)
+
+    async def test_rejected_steer_falls_back_to_the_queue(self):
+        storage = InMemoryMessageStorage()
+        model = _HoldTextModel()
+        agent = self._build_agent(storage, model)
+
+        async def reject(*args, **kwargs):
+            return False
+
+        agent.steer = reject
+        first = asyncio.create_task(self._collect(agent, "first"))
+        await model.started.wait()
+        second = asyncio.create_task(self._collect(agent, "still here"))
+        await self._wait_until(lambda: agent.inbox.pending_count == 1 and not second.done())
+
+        self.assertFalse(second.done())
+        self.assertEqual(
+            [message.content for message in storage.messages if message.role == RoleType.USER],
+            ["first", "still here"],
+        )
+        self.assertFalse(agent.inbox.has_pending_steer())
+
+        model.release.set()
+        first_events, second_events = await asyncio.gather(first, second)
+
+        self.assertEqual(len(model.calls), 2)
+        self.assertIn("still here", repr(model.calls[1]))
+        self.assertNotIn("Mid-task", repr(model.calls[1]))
+        self.assertFalse(any(event.get("type") == "steered" for event in [*first_events, *second_events]))
+        self.assertEqual(
+            storage.messages[1].metadata.get(INBOX_KIND_METADATA_KEY),
+            InboxKind.USER_TURN.value,
+        )
+        self.assertFalse(agent.inbox.busy)
+
+    async def test_queued_message_outlasts_a_full_turn(self):
+        self.assertGreaterEqual(
+            AgentConfig.DEFAULT_TURN_QUEUE_TIMEOUT,
+            AgentConfig.DEFAULT_TURN_RUN_TIMEOUT,
+        )
+        self.assertEqual(
+            AgentConfig.DEFAULT_TURN_QUEUE_TIMEOUT,
+            AgentConfig.DEFAULT_TURN_RUN_TIMEOUT + AgentConfig.DEFAULT_TURN_QUEUE_GRACE_SECONDS,
+        )
+        run_timeout = 0.2
+        inbox = AgentInbox(
+            run_timeout=run_timeout,
+            queue_timeout=run_timeout + AgentConfig.DEFAULT_TURN_QUEUE_GRACE_SECONDS,
+        )
+        holder = inbox.reserve_turn(channel="cli", user_id="alice", room_name="lab")
+        await inbox.acquire_turn(holder)
+        waiter = inbox.reserve_turn(channel="api", user_id="bob", room_name="other")
+
+        async def release_after_budget():
+            await asyncio.sleep(run_timeout)
+            inbox.release_turn()
+
+        releasing = asyncio.create_task(release_after_budget())
+        await asyncio.wait_for(inbox.acquire_turn(waiter), timeout=1)
+        self.assertEqual(inbox.current_turn_id, waiter.turn_id)
+        inbox.release_turn()
+        await releasing
 
 
 class AgentInboxAbortTests(unittest.IsolatedAsyncioTestCase):

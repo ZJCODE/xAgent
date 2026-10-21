@@ -565,6 +565,7 @@ def _config_yaml(selection: InitSelection, port: int) -> str:
             "diary_write_batch": AgentConfig.DIARY_WRITE_BATCH,
             "diary_context_days": AgentConfig.DIARY_CONTEXT_DAYS,
             "subconscious_activity": AgentConfig.SUBCONSCIOUS_ACTIVITY,
+            "busy_input": AgentConfig.DEFAULT_BUSY_INPUT,
         },
         "channels": {
             "api": {
@@ -605,6 +606,11 @@ def _config_yaml(selection: InitSelection, port: int) -> str:
     yaml_str = yaml_str.replace(
         "diary_context_days: 2\n",
         "diary_context_days: 2  # Days of diary injected each turn; 0 disables injection.\n",
+    )
+    yaml_str = yaml_str.replace(
+        f"busy_input: {AgentConfig.DEFAULT_BUSY_INPUT}\n",
+        f"busy_input: {AgentConfig.DEFAULT_BUSY_INPUT}  "
+        "# steer joins a busy same-session turn; followup waits in the queue.\n",
     )
     return yaml_str
 

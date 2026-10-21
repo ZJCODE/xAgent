@@ -250,6 +250,7 @@ class BaseAgentRunner:
                 "max_concurrent_tools",
                 "subconscious_activity",
                 "diary_context_days",
+                "busy_input",
             }
             unsupported_agent_keys = sorted(set(agent_cfg) - allowed_agent_keys)
             if unsupported_agent_keys:
@@ -266,6 +267,8 @@ class BaseAgentRunner:
                     )
             if "diary_context_days" in agent_cfg:
                 self._validate_non_negative_int(agent_cfg["diary_context_days"], "agent.diary_context_days")
+            if "busy_input" in agent_cfg:
+                AgentConfig.normalize_busy_input(agent_cfg["busy_input"], allow_default=False)
         self._validate_observability_config(config.get("observability"))
         if "devices" in config:
             DeviceConfig.model_validate(config["devices"])
@@ -588,6 +591,7 @@ class BaseAgentRunner:
             diary_context_days=agent_section.get("diary_context_days", AgentConfig.DIARY_CONTEXT_DAYS),
             subconscious_activity=agent_section.get("subconscious_activity", AgentConfig.SUBCONSCIOUS_ACTIVITY),
             voice=voice_name,
+            busy_input=agent_section.get("busy_input", AgentConfig.DEFAULT_BUSY_INPUT),
         )
         return agent
 

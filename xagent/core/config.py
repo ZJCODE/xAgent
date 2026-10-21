@@ -199,11 +199,37 @@ class AgentConfig:
     # legacy callable-agent settings are kept alongside their shared defaults.
     # ============================================================
     DEFAULT_MAX_PENDING_TURNS = 32
-    DEFAULT_TURN_QUEUE_TIMEOUT = 30.0
     DEFAULT_TURN_RUN_TIMEOUT = 600.0  # 10 minutes, across all model/tool iterations
+    # A queued follow-up has to outlive the turn already holding the lock.
+    # The wait is one full run budget plus a short grace. The grace covers
+    # the gap between reserving the waiter and the holder starting its run
+    # clock, so a turn that uses its entire budget still releases first.
+    DEFAULT_TURN_QUEUE_GRACE_SECONDS = 30.0
+    DEFAULT_TURN_QUEUE_TIMEOUT = DEFAULT_TURN_RUN_TIMEOUT + DEFAULT_TURN_QUEUE_GRACE_SECONDS
     DEFAULT_HTTP_MAX_CONCURRENT_CHATS = 4
-    DEFAULT_HTTP_QUEUE_TIMEOUT = DEFAULT_TURN_QUEUE_TIMEOUT
+    # Slot wait for a standalone callable agent. A core Agent does not use
+    # this semaphore; its wait is DEFAULT_TURN_QUEUE_TIMEOUT.
+    DEFAULT_HTTP_QUEUE_TIMEOUT = 30.0
     DEFAULT_HTTP_CHAT_TIMEOUT = DEFAULT_TURN_RUN_TIMEOUT
+    BUSY_INPUT_STEER = "steer"
+    BUSY_INPUT_FOLLOWUP = "followup"
+    DEFAULT_BUSY_INPUT = BUSY_INPUT_STEER
+
+    @staticmethod
+    def normalize_busy_input(value, *, allow_default: bool = True) -> str:
+        """Return ``steer`` or ``followup``.
+
+        ``steer`` injects a same-session chat into the running turn.
+        ``followup`` leaves it in the queue until that turn releases.
+        """
+        if value is None or (isinstance(value, str) and not str(value).strip()):
+            if allow_default:
+                return AgentConfig.BUSY_INPUT_STEER
+            raise ValueError("agent.busy_input must be 'steer' or 'followup'")
+        raw = str(value).strip().lower()
+        if raw not in {AgentConfig.BUSY_INPUT_STEER, AgentConfig.BUSY_INPUT_FOLLOWUP}:
+            raise ValueError("agent.busy_input must be 'steer' or 'followup'")
+        return raw
 
     @staticmethod
     def transport_timeout_seconds(

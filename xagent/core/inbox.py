@@ -180,6 +180,27 @@ class AgentInbox:
         return self._current.turn_id if self._current else None
 
     @property
+    def current_ticket(self) -> "TurnTicket | None":
+        return self._current
+
+    def matches_session(
+        self,
+        *,
+        channel: str | None,
+        user_id: str | None,
+        room_name: str | None,
+    ) -> bool:
+        """True when a live turn belongs to this channel, user, and room."""
+        current = self._current
+        if current is None:
+            return False
+        return (
+            _scope_text(channel) == _scope_text(current.channel)
+            and _scope_text(user_id) == _scope_text(current.user_id)
+            and _scope_text(room_name) == _scope_text(current.room_name)
+        )
+
+    @property
     def pending_count(self) -> int:
         return len(self._pending)
 

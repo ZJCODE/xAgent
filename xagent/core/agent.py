@@ -102,6 +102,7 @@ class Agent:
         voice: str = AgentConfig.DEFAULT_VOICE,
         provider_name: str = PROVIDER_OPENAI,
         reasoning: Optional[ReasoningConfig] = None,
+        busy_input: str = AgentConfig.DEFAULT_BUSY_INPUT,
     ):
         self.model = model or AgentConfig.DEFAULT_MODEL
         self.provider_name = normalize_provider_name(provider_name) or PROVIDER_OPENAI
@@ -117,6 +118,7 @@ class Agent:
         self.diary_context_days = diary_context_days
         self.subconscious_activity = subconscious_activity
         self.voice = str(voice or AgentConfig.DEFAULT_VOICE).strip() or AgentConfig.DEFAULT_VOICE
+        self.busy_input = AgentConfig.normalize_busy_input(busy_input)
         self.observability = observability or NoopObservabilityRuntime()
         self.client = client
         if self.client is None:
@@ -286,6 +288,81 @@ class Agent:
             room_name=room_name,
             sender_name=sender_name,
         )
+
+    def _busy_input_mode(self) -> str:
+        try:
+            return AgentConfig.normalize_busy_input(getattr(self, "busy_input", None))
+        except ValueError:
+            return AgentConfig.BUSY_INPUT_STEER
+
+    @staticmethod
+    def _chat_has_media(item: InboxItem) -> bool:
+        """True when queueing is required to keep attachments or images."""
+        if item.attachments:
+            return True
+        source = item.image_source
+        if source is None:
+            return False
+        if isinstance(source, str):
+            return bool(source.strip())
+        return any(str(part or "").strip() for part in source)
+
+    async def _steer_busy_chat(self, item: InboxItem) -> Optional[dict]:
+        """Inject a same-session user message into the running turn.
+
+        Returns the ``steered`` event when the running turn accepted it.
+        Returns None when this message should take the normal queue, including
+        when steer is disabled, the session does not match, or the turn
+        releases before the message is accepted.
+        """
+        if self._busy_input_mode() != AgentConfig.BUSY_INPUT_STEER:
+            return None
+        if item.kind is not InboxKind.USER_TURN:
+            return None
+        if self._chat_has_media(item):
+            return None
+        text = str(item.content or "").strip()
+        if not text or not self.inbox.busy:
+            return None
+        if not self.inbox.matches_session(
+            channel=item.channel,
+            user_id=item.user_id,
+            room_name=item.room_name,
+        ):
+            return None
+        ticket = self.inbox.current_ticket
+        if ticket is None:
+            return None
+        sender_name = str((item.metadata or {}).get("sender_name") or "")
+        accepted = await self.steer(
+            ticket.turn_id,
+            text,
+            channel=item.channel,
+            user_id=item.user_id,
+            room_name=item.room_name,
+            sender_name=sender_name,
+        )
+        if not accepted:
+            logger.info(
+                "Busy steer was not accepted; queueing instead user_id=%s room=%s",
+                item.user_id,
+                item.room_name,
+            )
+            return None
+        logger.info(
+            "Steered busy input into running turn turn_id=%s user_id=%s room=%s",
+            ticket.turn_id,
+            item.user_id,
+            item.room_name,
+        )
+        return {
+            "type": "steered",
+            "turn_id": ticket.turn_id,
+            "channel": item.channel,
+            "user_id": item.user_id,
+            "room_name": item.room_name,
+            "content": text,
+        }
 
     async def _consume_steers(
         self,
@@ -739,6 +816,11 @@ class Agent:
             inbox_kind: How this input should be classified. Defaults to a
                 user turn; scheduled delivery context upgrades it to
                 ``scheduled_turn``.
+
+        A user message for the same channel, user, and room as the running
+        turn is injected into that turn when ``busy_input`` is ``steer``.
+        The caller then receives ``type: steered`` and the reply continues
+        on the running turn. Anything that cannot be steered is queued.
         """
         self._record_last_interaction()
         from .runtime import current_delivery_context
@@ -762,6 +844,11 @@ class Agent:
             delivery_context=delivery_context,
             extra_message_metadata=extra_message_metadata,
         )
+        steered = await self._steer_busy_chat(inbox_item)
+        if steered is not None:
+            yield steered
+            yield {"type": "done", "turn_id": steered.get("turn_id"), "steered": True}
+            return
         async for event in self._run_inbox_turn(
             inbox_item, stream=stream, max_agent_loops=max_agent_loops,
             event_id=event_id, turn_id=turn_id, request_id=request_id,
