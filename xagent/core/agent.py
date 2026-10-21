@@ -289,6 +289,32 @@ class Agent:
             sender_name=sender_name,
         )
 
+    async def offer_steer(
+        self,
+        turn_id: Optional[str],
+        content: str,
+        *,
+        channel: Optional[str] = None,
+        user_id: Optional[str] = None,
+        room_name: Optional[str] = None,
+        sender_name: str = "",
+    ) -> bool:
+        """Public steer used by channels. ``followup`` mode always refuses.
+
+        Voice calls ``steer()`` directly so a spoken correction still joins
+        the running voice turn when ``busy_input`` is ``followup``.
+        """
+        if self._busy_input_mode() != AgentConfig.BUSY_INPUT_STEER:
+            return False
+        return await self.steer(
+            turn_id,
+            content,
+            channel=channel,
+            user_id=user_id,
+            room_name=room_name,
+            sender_name=sender_name,
+        )
+
     def _busy_input_mode(self) -> str:
         try:
             return AgentConfig.normalize_busy_input(getattr(self, "busy_input", None))

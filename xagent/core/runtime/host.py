@@ -762,7 +762,7 @@ class RuntimeHost:
 
         @app.post("/runtime/turns/steer")
         async def steer(payload: TurnControl):
-            return {"steered": await self.agent.steer(
+            return {"steered": await self.agent.offer_steer(
                 payload.turn_id,
                 payload.content,
                 channel=payload.channel,

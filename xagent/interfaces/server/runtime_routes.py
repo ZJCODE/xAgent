@@ -11,11 +11,19 @@ from pydantic import BaseModel
 
 from .models import AgentInput, ChatInput, ObserveInput
 from .serializers import response_payload
+from ...integrations.api.chat_relay import ChatPayloadError, relay_chat_socket
 from ...integrations.api.constants import CLIENT_HTTP, CLIENT_WS
 
 
 class StopInput(BaseModel):
     turn_id: str
+
+
+class SteerInput(BaseModel):
+    turn_id: str
+    content: str = ""
+    user_id: str | None = None
+    room_name: str | None = None
 
 if TYPE_CHECKING:
     from ...integrations.api.adapter import ApiChannelAdapter
@@ -49,50 +57,52 @@ def register_runtime_routes(app: FastAPI, adapter: "ApiChannelAdapter") -> None:
         adapter.logger.info("Chat stop requested: stopped=%s", result.get("stopped"))
         return result
 
+    @app.post("/chat/steer")
+    async def steer_chat(input_data: SteerInput):
+        if not input_data.turn_id:
+            raise HTTPException(422, "turn_id is required")
+        result = await adapter.chat.steer_turn(
+            turn_id=input_data.turn_id,
+            content=input_data.content,
+            user_id=input_data.user_id,
+            room_name=input_data.room_name,
+        )
+        adapter.logger.info("Chat steer requested: steered=%s", result.get("steered"))
+        return result
+
     @app.websocket("/ws/chat")
     async def websocket_chat(websocket: WebSocket):
         await websocket.accept()
         adapter.logger.info("WebSocket chat connected")
 
-        while True:
+        def start_stream(payload: dict):
+            if not isinstance(payload, dict):
+                raise ChatPayloadError("Invalid chat payload.", status_code=422)
             try:
-                raw_payload = await websocket.receive_json()
-                input_data = AgentInput.model_validate(raw_payload)
-                adapter.logger.info(
-                    "WebSocket chat request from %s, stream=%s",
-                    input_data.user_id,
-                    input_data.stream,
-                )
-                await adapter.chat.send_websocket_chat_events(
-                    websocket,
-                    input_data,
-                    client=CLIENT_WS,
-                )
-            except WebSocketDisconnect:
-                adapter.logger.info("WebSocket chat disconnected")
-                break
-            except json.JSONDecodeError as exc:
-                adapter.logger.warning("Invalid WebSocket chat JSON: %s", exc)
-                await adapter.chat.send_websocket_error(
-                    websocket,
-                    "Invalid JSON payload.",
-                    status_code=400,
-                    details=str(exc),
-                )
+                input_data = AgentInput.model_validate(payload)
             except ValidationError as exc:
-                adapter.logger.warning("Invalid WebSocket chat payload: %s", exc)
-                await adapter.chat.send_websocket_error(
-                    websocket,
+                raise ChatPayloadError(
                     "Invalid chat payload.",
                     status_code=422,
                     details=exc.errors(),
-                )
-            except Exception as exc:
-                adapter.logger.error("Unexpected WebSocket chat error: %s", exc)
-                await adapter.chat.send_websocket_error(
-                    websocket,
-                    f"Agent processing error: {str(exc)}",
-                )
+                ) from exc
+            adapter.logger.info(
+                "WebSocket chat request from %s, stream=%s",
+                input_data.user_id,
+                input_data.stream,
+            )
+            return adapter.chat.chat_event_stream(input_data, client=CLIENT_WS)
+
+        try:
+            await relay_chat_socket(websocket, start_stream)
+        except WebSocketDisconnect:
+            adapter.logger.info("WebSocket chat disconnected")
+        except Exception as exc:
+            adapter.logger.error("Unexpected WebSocket chat error: %s", exc)
+            await adapter.chat.send_websocket_error(
+                websocket,
+                f"Agent processing error: {str(exc)}",
+            )
 
     @app.websocket("/ws/observe")
     async def websocket_observe(websocket: WebSocket):

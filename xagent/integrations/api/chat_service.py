@@ -79,6 +79,8 @@ class ChatService:
                 payload.update({key: event[key] for key in ("turn_id", "event_id", "request_id") if event.get(key)})
                 if event.get("type") == "error":
                     raise PublicHTTPException(event)
+                if event.get("type") == "steered":
+                    payload["steered"] = True
                 if event.get("type") == "message_done" and event.get("phase") == "final":
                     payload["reply"] = str(event.get("content") or "") or payload["reply"]
                     attachments = event.get("attachments")
@@ -87,6 +89,32 @@ class ChatService:
                             *payload.get("attachments", []), *attachments,
                         ])
         return payload
+
+    async def steer_turn(
+        self,
+        *,
+        turn_id: str,
+        content: str,
+        user_id: str | None = None,
+        room_name: str | None = None,
+    ) -> dict[str, Any]:
+        """Offer a same-session message to the running API turn.
+
+        ``steered`` is false when follow-up mode is on, the turn cannot
+        accept the message, or the session does not match. Callers then
+        queue the message instead of dropping it.
+        """
+        offer = getattr(self.agent, "offer_steer", None)
+        if not callable(offer):
+            return {"steered": False, "turn_id": turn_id}
+        steered = bool(await offer(
+            turn_id,
+            content,
+            channel=CHANNEL_API,
+            user_id=user_id,
+            room_name=room_name,
+        ))
+        return {"steered": steered, "turn_id": turn_id}
 
     def abort_turn(self, turn_id: str | None = None) -> dict[str, bool]:
         """Ask the in-flight agent turn to stop at the next iteration boundary."""

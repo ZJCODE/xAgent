@@ -109,6 +109,17 @@ export async function stopChat(turnId: string): Promise<{ stopped: boolean }> {
   });
 }
 
+export async function steerChat(input: {
+  turn_id: string;
+  content: string;
+  user_id?: string;
+}): Promise<{ steered: boolean; turn_id?: string }> {
+  return requestJson("/chat/steer", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
 export async function getWebHealth(): Promise<{ status: string; web: boolean; api_reachable: boolean }> {
   return requestJson("/api/health", { signal: AbortSignal.timeout(5000) });
 }

@@ -78,6 +78,7 @@ function ChatMessageView({ message }: { message: ChatPanelState["messages"][numb
           {message.pending && message.content ? <span className="typing-cursor" /> : null}
         </div>
       ) : null}
+      {message.meta ? <div className="message-meta">{message.meta}</div> : null}
       {images.map((src, index) => (
         <a key={`${message.id}-${index}`} href={src} target="_blank" rel="noreferrer" className="message-image-link">
           <img src={src} alt="" className="message-image-preview" />
@@ -186,7 +187,7 @@ function ChatPanel({
   useEffect(() => {
     const node = scrollRef.current;
     if (node) node.scrollTop = node.scrollHeight;
-  }, [panel.messages.length, panel.messages[panel.messages.length - 1]?.content]);
+  }, [panel.messages.length, panel.messages[panel.messages.length - 1]?.content, panel.messages[panel.messages.length - 1]?.meta]);
 
   useEffect(() => {
     if (!chatEnabled) setUserIdOpen(false);
@@ -340,16 +341,20 @@ function ChatPanel({
       <form onSubmit={submitMessage} className={classNames("composer-row", (!statusReady || !chatEnabled) && "is-disabled")}>
         <textarea
           rows={1}
-          placeholder={!statusReady ? "Checking API channel..." : chatEnabled ? "Message xAgent..." : "Start the API channel to chat..."}
+          placeholder={
+            !statusReady
+              ? "Checking API channel..."
+              : !chatEnabled
+                ? "Start the API channel to chat..."
+                : panel.sending
+                  ? "Send a message to join the running task..."
+                  : "Message xAgent..."
+          }
           value={messageText}
           disabled={!statusReady || !chatEnabled}
           onChange={(event) => setMessageText(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === "Enter" && !event.shiftKey) {
-              if (panel.sending) {
-                event.preventDefault();
-                return;
-              }
               submitMessage(event);
             }
           }}
@@ -386,7 +391,7 @@ function ChatPanel({
             className="composer-upload-button"
             onClick={() => fileInputRef.current?.click()}
             title="Attach files"
-            disabled={!statusReady || !chatEnabled || panel.sending}
+            disabled={!statusReady || !chatEnabled}
           >
             <Paperclip size={18} />
           </IconButton>
@@ -400,18 +405,19 @@ function ChatPanel({
               event.currentTarget.value = "";
             }}
           />
-          {panel.sending ? (
-            <Button
-              type="button"
-              variant="danger"
-              className="send-button"
-              disabled={!currentTurnId}
-              onClick={() => void stopTurn()}
-            >
-              <Square size={16} />
-              Stop
-            </Button>
-          ) : (
+          <div className="composer-send-cluster">
+            {panel.sending ? (
+              <Button
+                type="button"
+                variant="danger"
+                className="send-button"
+                disabled={!currentTurnId}
+                onClick={() => void stopTurn()}
+              >
+                <Square size={16} />
+                Stop
+              </Button>
+            ) : null}
             <Button
               type="submit"
               variant="primary"
@@ -423,7 +429,7 @@ function ChatPanel({
               <Send size={16} />
               Send
             </Button>
-          )}
+          </div>
         </div>
       </form>
     </section>
