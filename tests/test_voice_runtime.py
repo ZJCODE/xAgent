@@ -816,8 +816,28 @@ class VoiceRuntimeTests(unittest.TestCase):
             runtime._steer_result = asyncio.get_running_loop().create_future()
             await runtime._utterance_queue.put(VoiceUtterance(text="also check tomorrow"))
             await runtime._steer_during_think("check today", asyncio.Event())
-            agent.steer.assert_awaited_once_with("own-voice-turn", "also check tomorrow", channel="voice")
+            agent.steer.assert_awaited_once_with(
+                "own-voice-turn",
+                "also check tomorrow",
+                channel="voice",
+                user_id="alice",
+                room_name="local_room",
+            )
             self.assertFalse(runtime._steer_result.done(), "a successfully steered turn must not start another reply")
+        asyncio.run(run())
+
+    def test_voice_supplement_starts_another_reply_when_steer_is_rejected(self):
+        async def run():
+            agent = FakeAgent()
+            agent.steer = AsyncMock(return_value=False)
+            runtime = self.make_runtime(agent=agent)
+            runtime._active_voice_turn_id = "own-voice-turn"
+            runtime._utterance_queue = asyncio.Queue()
+            runtime._steer_result = asyncio.get_running_loop().create_future()
+            await runtime._utterance_queue.put(VoiceUtterance(text="also check tomorrow"))
+            await runtime._steer_during_think("check today", asyncio.Event())
+            self.assertTrue(runtime._steer_result.done())
+            self.assertEqual(runtime._steer_result.result(), "check today also check tomorrow")
         asyncio.run(run())
 
     def setUp(self):

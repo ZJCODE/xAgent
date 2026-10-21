@@ -197,6 +197,7 @@ class VoiceRuntime:
         self._utterance_queue: asyncio.Queue[VoiceUtterance | Exception | None] | None = None
         self._steer_result: asyncio.Future[str] | None = None
         self._active_voice_turn_id: str | None = None
+        self._active_voice_user_id: str | None = None
         self._preemptive_turn_id: str | None = None
         self.task_scheduler: AsyncTaskScheduler | None = None
         self._allow_proactive_output = bool(self.options.allow_proactive_output)
@@ -482,6 +483,7 @@ class VoiceRuntime:
     ) -> None:
         transcript = utterance.text.strip()
         resolved_user = user_id or self.options.user_id
+        self._active_voice_user_id = resolved_user
         self._floor.allow_duplex_capture = self._duplex_capture_enabled
         while transcript:
             timing = _TurnTiming(endpoint_at=endpoint_at)
@@ -578,7 +580,13 @@ class VoiceRuntime:
                 continue
             steer = getattr(self.agent, "steer", None)
             if self._active_voice_turn_id and callable(steer):
-                if await steer(self._active_voice_turn_id, addition, channel="voice"):
+                if await steer(
+                    self._active_voice_turn_id,
+                    addition,
+                    channel="voice",
+                    user_id=self._active_voice_user_id or self.options.user_id,
+                    room_name=self.config.room_name,
+                ):
                     return
             merged = f"{merged} {addition}".strip()
             await self._execute_floor_commands(

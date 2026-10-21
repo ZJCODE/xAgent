@@ -391,6 +391,412 @@ class AgentInboxTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(model_client.responses), 1)
 
 
+def _steer_model_texts(messages) -> list[str]:
+    texts = []
+    for message in messages:
+        content = message.get("content") if isinstance(message, dict) else None
+        if isinstance(content, str) and content.startswith("[Mid-task message from "):
+            texts.append(content)
+    return texts
+
+
+def _assert_tool_pairs_intact(test, messages) -> None:
+    for index, message in enumerate(messages):
+        if not isinstance(message, dict) or message.get("type") != "function_call":
+            continue
+        nxt = messages[index + 1]
+        test.assertEqual(nxt.get("type"), "function_call_output")
+        test.assertEqual(nxt.get("call_id"), message.get("call_id"))
+
+
+class SteerInjectionTests(unittest.IsolatedAsyncioTestCase):
+    _build_agent = AgentInboxTests._build_agent
+    async def test_steer_persists_across_tool_iterations(self):
+        storage = InMemoryMessageStorage()
+        executor = _ResponsesBatchExecutor()
+        model_client = CapturingModelClient([
+            (ReplyType.TOOL_CALL, [FakeToolCall(call_id="call-1")]),
+            (ReplyType.TOOL_CALL, [FakeToolCall(call_id="call-2")]),
+            (ReplyType.SIMPLE_REPLY, "finished"),
+        ])
+        agent = self._build_agent(storage, model_client, tool_executor=executor)
+        executor.agent = agent
+
+        events = [
+            event
+            async for event in agent.chat_events(
+                user_message="inspect the service",
+                user_id="alice",
+                channel="cli",
+                room_name="lab",
+            )
+        ]
+
+        self.assertTrue(any(event.get("type") == "done" for event in events))
+        self.assertEqual(len(model_client.calls), 3)
+        self.assertEqual(_steer_model_texts(model_client.calls[0]), [])
+        first_tail = _steer_model_texts(model_client.calls[1])
+        second_tail = _steer_model_texts(model_client.calls[2])
+        self.assertEqual(len(first_tail), 2)
+        self.assertEqual(first_tail, second_tail)
+        self.assertRegex(
+            first_tail[0],
+            r"^\[Mid-task message from Alice at \d{4}-\d{2}-\d{2} \d{2}:\d{2}\]\ncheck the logs$",
+        )
+        self.assertRegex(
+            first_tail[1],
+            r"^\[Mid-task message from Alice at \d{4}-\d{2}-\d{2} \d{2}:\d{2}\]\nthen restart$",
+        )
+        self.assertEqual(model_client.calls[1][-2:], [
+            {"role": "user", "content": first_tail[0]},
+            {"role": "user", "content": first_tail[1]},
+        ])
+        self.assertEqual(model_client.calls[1][-4]["type"], "function_call")
+        self.assertEqual(model_client.calls[1][-3]["type"], "function_call_output")
+        for call in model_client.calls:
+            _assert_tool_pairs_intact(self, call)
+            self.assertEqual(call[:len(model_client.calls[0])], model_client.calls[0])
+        self.assertEqual(model_client.instructions_calls[0], model_client.instructions_calls[1])
+        self.assertEqual(model_client.instructions_calls[0], model_client.instructions_calls[2])
+        self.assertNotIn("check the logs", repr(model_client.instructions_calls[0]))
+        self.assertNotIn("Mid-task", repr(model_client.instructions_calls[0]))
+        self.assertNotIn("check the logs", repr(executor.seen[0]))
+
+        stored = [
+            message for message in storage.messages
+            if (message.metadata or {}).get(INBOX_KIND_METADATA_KEY) == InboxKind.STEER.value
+        ]
+        self.assertEqual([message.content for message in stored], ["check the logs", "then restart"])
+        self.assertTrue(all(
+            message.type == MessageType.MESSAGE and message.role == RoleType.USER and message.metadata.get("steer") is True
+            for message in stored
+        ))
+        self.assertFalse(any(message.type == MessageType.CONTEXT_EVENT for message in storage.messages))
+        experience_ids = {id(message) for message in agent.memory_handler.experience_messages}
+        self.assertTrue(all(id(message) in experience_ids for message in stored))
+
+    async def test_steer_during_final_reply_continues_the_loop(self):
+        storage = InMemoryMessageStorage()
+        agent_box = {}
+        model_client = _SteerDuringReplyModel(agent_box)
+        agent = self._build_agent(storage, model_client)
+        agent_box["agent"] = agent
+
+        events = [
+            event
+            async for event in agent.chat_events(
+                user_message="summarize the numbers",
+                user_id="alice",
+                channel="cli",
+                room_name="lab",
+            )
+        ]
+
+        done = [event for event in events if event.get("type") == "message_done"]
+        self.assertEqual(
+            [(event.get("phase"), event.get("content")) for event in done],
+            [("interim", "draft answer"), ("final", "revised answer")],
+        )
+        self.assertEqual(len(model_client.calls), 2)
+        self.assertEqual(_steer_model_texts(model_client.calls[0]), [])
+        self.assertEqual(
+            model_client.calls[1][:len(model_client.calls[0])],
+            model_client.calls[0],
+        )
+        added = model_client.calls[1][len(model_client.calls[0]):]
+        self.assertEqual(added[0], {"role": "assistant", "content": "draft answer"})
+        self.assertEqual(len(added), 3)
+        self.assertIn("use metric units", added[1]["content"])
+        self.assertIn("round to two decimals", added[2]["content"])
+        self.assertEqual(model_client.instructions_calls[0], model_client.instructions_calls[1])
+        self.assertNotIn("use metric units", repr(model_client.instructions_calls[0]))
+
+        stored = [
+            message for message in storage.messages
+            if (message.metadata or {}).get(INBOX_KIND_METADATA_KEY) == InboxKind.STEER.value
+        ]
+        self.assertEqual(
+            [message.content for message in stored],
+            ["use metric units", "round to two decimals"],
+        )
+        phases = [
+            message.metadata.get("turn_phase")
+            for message in storage.messages
+            if message.role == RoleType.ASSISTANT
+        ]
+        self.assertEqual(phases, ["interim", "final"])
+        experience_ids = {id(message) for message in agent.memory_handler.experience_messages}
+        self.assertTrue(all(id(message) in experience_ids for message in stored))
+        self.assertFalse(agent.inbox.busy)
+        self.assertFalse(agent.inbox.has_pending_steer())
+
+    async def test_steer_rejects_other_user_or_room(self):
+        storage = InMemoryMessageStorage()
+        agent_box = {}
+        model_client = _RejectingSteerModel(agent_box)
+        agent = self._build_agent(storage, model_client)
+        agent_box["agent"] = agent
+
+        self.assertFalse(await agent.steer(
+            "no-turn", "early", channel="cli", user_id="alice", room_name="lab",
+        ))
+        self.assertEqual(storage.messages, [])
+
+        events = [
+            event
+            async for event in agent.chat_events(
+                user_message="hello",
+                user_id="alice",
+                channel="cli",
+                room_name="lab",
+            )
+        ]
+
+        self.assertTrue(any(event.get("type") == "done" for event in events))
+        self.assertEqual(len(model_client.calls), 1)
+        self.assertTrue(model_client.results)
+        self.assertFalse(any(model_client.results.values()))
+        contents = [message.content for message in storage.messages]
+        self.assertEqual(contents, ["hello", "ok"])
+        self.assertFalse(any(
+            (message.metadata or {}).get(INBOX_KIND_METADATA_KEY) == InboxKind.STEER.value
+            or (message.metadata or {}).get("event_type") == "steer"
+            or message.type == MessageType.CONTEXT_EVENT
+            for message in storage.messages
+        ))
+
+    async def test_leftover_steer_becomes_followup_turn(self):
+        storage = InMemoryMessageStorage()
+        model_client = CapturingModelClient([
+            (ReplyType.SIMPLE_REPLY, "done"),
+            (ReplyType.SIMPLE_REPLY, "followed up"),
+        ])
+        agent = self._build_agent(storage, model_client)
+        original = agent.message_handler.store_model_reply
+        state = {"done": False}
+
+        async def store_model_reply(*args, **kwargs):
+            message = await original(*args, **kwargs)
+            metadata = kwargs.get("metadata") or {}
+            if metadata.get("turn_phase") == "final" and not state["done"]:
+                state["done"] = True
+                turn_id = agent.inbox.current_turn_id
+                accepted = [
+                    agent.inbox.request_steer(
+                        turn_id,
+                        text,
+                        channel="cli",
+                        user_id="alice",
+                        room_name="lab",
+                        sender_name="Alice",
+                    )
+                    for text in ("alpha", "beta")
+                ]
+                if accepted != [True, True]:
+                    raise AssertionError(f"leftover steer was rejected: {accepted}")
+            return message
+
+        agent.message_handler.store_model_reply = store_model_reply
+
+        events = [
+            event
+            async for event in agent.chat_events(
+                user_message="work",
+                user_id="alice",
+                channel="cli",
+                room_name="lab",
+            )
+        ]
+
+        self.assertEqual([event.get("type") for event in events].count("done"), 1)
+        self.assertEqual(len(model_client.calls), 2)
+        self.assertNotIn("alpha", repr(model_client.calls[0]))
+        self.assertIn("alpha", repr(model_client.calls[1]))
+        self.assertIn("beta", repr(model_client.calls[1]))
+        follow_up = next(
+            message for message in storage.messages
+            if message.role == RoleType.USER and "alpha" in message.content
+        )
+        self.assertEqual(follow_up.content, "alpha\n\nbeta")
+        self.assertTrue(follow_up.metadata.get("deferred_steer"))
+        self.assertEqual(
+            follow_up.metadata.get(INBOX_KIND_METADATA_KEY),
+            InboxKind.USER_TURN.value,
+        )
+        self.assertIn(follow_up, agent.memory_handler.experience_messages)
+        self.assertFalse(agent.inbox.busy)
+        self.assertFalse(agent.inbox.has_pending_steer())
+
+
+class _ResponsesBatchExecutor:
+    def __init__(self):
+        self.agent = None
+        self.seen = []
+        self._round = 0
+
+    async def handle_tool_calls(self, tool_calls, input_messages, max_concurrent_tools, **kwargs):
+        self._round += 1
+        if self._round == 1:
+            agent = self.agent
+            turn_id = agent.inbox.current_turn_id
+            accepted = [
+                await agent.steer(
+                    turn_id,
+                    text,
+                    channel="cli",
+                    user_id="alice",
+                    room_name="lab",
+                    sender_name="Alice",
+                )
+                for text in ("check the logs", "then restart")
+            ]
+            if accepted != [True, True]:
+                raise AssertionError(f"steer rejected during tool batch: {accepted}")
+            if "check the logs" in repr(input_messages) or "Mid-task" in repr(input_messages):
+                raise AssertionError("steer was injected inside the tool batch")
+        self.seen.append(list(input_messages))
+        call_id = getattr(tool_calls[0], "call_id", None) or "call-1"
+        input_messages.extend([
+            {"type": "function_call", "call_id": call_id, "name": "lookup", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": call_id, "output": f"result-{call_id}"},
+        ])
+        return None
+
+
+class _SteerDuringReplyModel(CapturingModelClient):
+    def __init__(self, agent_box):
+        super().__init__([
+            (ReplyType.SIMPLE_REPLY, "draft answer"),
+            (ReplyType.SIMPLE_REPLY, "revised answer"),
+        ])
+        self.agent_box = agent_box
+
+    async def model_turn_events(self, messages, tool_specs, instructions=None, stream=False):
+        self.calls.append(messages)
+        self.instructions_calls.append(instructions)
+        if len(self.calls) == 1:
+            agent = self.agent_box["agent"]
+            turn_id = agent.inbox.current_turn_id
+            accepted = [
+                await agent.steer(
+                    turn_id,
+                    text,
+                    channel="cli",
+                    user_id="alice",
+                    room_name="lab",
+                    sender_name="Alice",
+                )
+                for text in ("use metric units", "round to two decimals")
+            ]
+            if accepted != [True, True]:
+                raise AssertionError(f"steer rejected during final reply: {accepted}")
+        _reply_type, response = self.responses.pop(0)
+        yield ModelStreamEvent(type="delta", delta=str(response))
+
+
+class _RejectingSteerModel(CapturingModelClient):
+    def __init__(self, agent_box):
+        super().__init__([(ReplyType.SIMPLE_REPLY, "ok")])
+        self.agent_box = agent_box
+        self.results = {}
+
+    async def model_turn_events(self, messages, tool_specs, instructions=None, stream=False):
+        self.calls.append(messages)
+        self.instructions_calls.append(instructions)
+        agent = self.agent_box["agent"]
+        turn_id = agent.inbox.current_turn_id
+        self.results = {
+            "other_user": await agent.steer(
+                turn_id, "from bob", channel="cli", user_id="bob", room_name="lab",
+            ),
+            "other_room": await agent.steer(
+                turn_id, "other room", channel="cli", user_id="alice", room_name="other",
+            ),
+            "other_channel": await agent.steer(
+                turn_id, "other channel", channel="api", user_id="alice", room_name="lab",
+            ),
+            "missing_user": await agent.steer(
+                turn_id, "no user", channel="cli", room_name="lab",
+            ),
+            "wrong_turn": await agent.steer(
+                "someone-else", "nope", channel="cli", user_id="alice", room_name="lab",
+            ),
+        }
+        yield ModelStreamEvent(type="delta", delta="ok")
+
+
+class SteerQueueTests(unittest.IsolatedAsyncioTestCase):
+    async def test_request_steer_requires_same_user_and_room(self):
+        inbox = AgentInbox()
+        ticket = inbox.reserve_turn(channel="cli", user_id="alice", room_name="lab")
+        await inbox.acquire_turn(ticket)
+        try:
+            self.assertFalse(inbox.request_steer(
+                ticket.turn_id, " ", channel="cli", user_id="alice", room_name="lab",
+            ))
+            self.assertFalse(inbox.request_steer(
+                "other", "hi", channel="cli", user_id="alice", room_name="lab",
+            ))
+            self.assertFalse(inbox.request_steer(
+                ticket.turn_id, "hi", channel="api", user_id="alice", room_name="lab",
+            ))
+            self.assertFalse(inbox.request_steer(
+                ticket.turn_id, "hi", channel="cli", user_id="bob", room_name="lab",
+            ))
+            self.assertFalse(inbox.request_steer(
+                ticket.turn_id, "hi", channel="cli", user_id="alice", room_name="other",
+            ))
+            self.assertFalse(inbox.request_steer(
+                ticket.turn_id, "hi", channel="cli", user_id="alice",
+            ))
+            self.assertFalse(inbox.request_steer(
+                ticket.turn_id, "hi", channel="cli", room_name="lab",
+            ))
+            self.assertTrue(inbox.request_steer(
+                ticket.turn_id, " one ", channel="cli", user_id="alice", room_name="lab",
+                sender_name="Alice",
+            ))
+            self.assertTrue(inbox.request_steer(
+                ticket.turn_id, "two", channel="cli", user_id="alice", room_name="lab",
+            ))
+            pending = inbox.take_steering()
+            self.assertEqual([item.content for item in pending], ["one", "two"])
+            self.assertEqual(pending[0].sender_name, "Alice")
+            self.assertFalse(inbox.has_pending_steer())
+        finally:
+            inbox.release_turn()
+
+    async def test_release_returns_pending_steers(self):
+        inbox = AgentInbox()
+        ticket = inbox.reserve_turn(channel="cli", user_id="alice", room_name="lab")
+        await inbox.acquire_turn(ticket)
+        self.assertTrue(inbox.request_steer(
+            ticket.turn_id, "one", channel="cli", user_id="alice", room_name="lab",
+        ))
+        self.assertTrue(inbox.request_steer(
+            ticket.turn_id, "two", channel="cli", user_id="alice", room_name="lab",
+        ))
+        pending = inbox.release_turn()
+        self.assertEqual([item.content for item in pending], ["one", "two"])
+        self.assertFalse(inbox.busy)
+        self.assertIsNone(inbox.current_turn_id)
+        self.assertEqual(inbox.take_steering(), [])
+
+    async def test_roomless_turn_matches_blank_room_only(self):
+        inbox = AgentInbox()
+        ticket = inbox.reserve_turn(channel="cli", user_id="alice")
+        await inbox.acquire_turn(ticket)
+        try:
+            self.assertFalse(inbox.request_steer(
+                ticket.turn_id, "no", channel="cli", user_id="alice", room_name="lab",
+            ))
+            self.assertTrue(inbox.request_steer(
+                ticket.turn_id, "yes", channel="cli", user_id="alice",
+            ))
+        finally:
+            inbox.release_turn()
+
+
 class AgentInboxAbortTests(unittest.IsolatedAsyncioTestCase):
     async def test_request_abort_is_noop_when_idle(self):
         inbox = AgentInbox()

@@ -46,6 +46,8 @@ from .inbox import (
     AgentInbox,
     InboxItem,
     InboxKind,
+    PendingSteer,
+    format_steer_model_text,
     is_scheduled_work,
     normalize_inbox_kind,
     InboxCapacityError,
@@ -256,15 +258,154 @@ class Agent:
         """
         return self.inbox.request_abort(turn_id, channel=channel)
 
-    async def steer(self, turn_id: Optional[str], content: str, *, channel: Optional[str] = None) -> bool:
-        if not content.strip() or not turn_id or self.inbox.current_turn_id != turn_id:
+    async def steer(
+        self,
+        turn_id: Optional[str],
+        content: str,
+        *,
+        channel: Optional[str] = None,
+        user_id: Optional[str] = None,
+        room_name: Optional[str] = None,
+        sender_name: str = "",
+    ) -> bool:
+        """Queue a same-session message onto the running turn.
+
+        Returns True only when the message was accepted. Acceptance requires
+        the running turn's id, channel, user, and room. The message is not
+        persisted until it is injected into that turn, or until a leftover is
+        carried into a follow-up turn. Voice treats True as "do not start
+        another reply."
+        """
+        if not str(content or "").strip() or not turn_id:
             return False
-        current = self.inbox._current
-        if channel is not None and current is not None and current.channel != channel:
-            return False
-        await self.message_handler.store_context_event(content, source="runtime", event_type="steer",
-            channel=channel, metadata={"turn_id": turn_id, "inbox_kind": "steer"})
-        return self.inbox.request_steer(turn_id, content, channel=channel)
+        return self.inbox.request_steer(
+            turn_id,
+            content,
+            channel=channel,
+            user_id=user_id,
+            room_name=room_name,
+            sender_name=sender_name,
+        )
+
+    async def _consume_steers(
+        self,
+        iteration_messages: list,
+        *,
+        user_id: str,
+        channel: Optional[str],
+        room_name: Optional[str],
+        turn_id: Optional[str],
+    ) -> List[Message]:
+        """Persist queued steers and append them after the current message list.
+
+        Caller must be at a model-call boundary, after any tool batch has
+        written its call/result pairs. Nothing is inserted into that pair.
+        """
+        pending = self.inbox.take_steering()
+        if not pending:
+            return []
+        logger.info("Injecting steer messages turn_id=%s count=%s", turn_id, len(pending))
+        stored: List[Message] = []
+        for index, steer in enumerate(pending):
+            metadata: Dict[str, Any] = {
+                INBOX_KIND_METADATA_KEY: InboxKind.STEER.value,
+                "steer": True,
+            }
+            if turn_id:
+                metadata["turn_id"] = turn_id
+            if steer.sender_name:
+                metadata["sender_name"] = steer.sender_name
+            try:
+                message = await self.message_handler.store_user_message(
+                    steer.content,
+                    user_id,
+                    room_name=room_name,
+                    channel=channel,
+                    metadata=metadata,
+                )
+            except Exception:
+                self.inbox.requeue_steering(pending[index:])
+                raise
+            stored.append(message)
+            iteration_messages.append({
+                "role": "user",
+                "content": format_steer_model_text(steer),
+            })
+        return stored
+
+    def _track_steer_followup(self, task: "asyncio.Task[None]") -> None:
+        tasks = getattr(self, "_steer_followups", None)
+        if tasks is None:
+            tasks = set()
+            self._steer_followups = tasks
+        tasks.add(task)
+
+        def _finished(done: "asyncio.Task[None]") -> None:
+            tasks.discard(done)
+            if done.cancelled():
+                return
+            error = done.exception()
+            if error is not None:
+                logger.error("Steer follow-up failed: %s", error, exc_info=error)
+
+        task.add_done_callback(_finished)
+
+    async def _run_steer_followup(self, source: InboxItem, pending: List[PendingSteer]) -> None:
+        """Run leftover steers as one normal user turn, in arrival order."""
+        content = "\n\n".join(item.content.strip() for item in pending if item.content.strip())
+        if not content:
+            return
+        sender_name = next((item.sender_name for item in pending if item.sender_name), "")
+        metadata: Dict[str, Any] = {
+            "deferred_steer": True,
+            "steer_count": len(pending),
+        }
+        if sender_name:
+            metadata["sender_name"] = sender_name
+        logger.info(
+            "Starting follow-up for leftover steer messages count=%s user_id=%s room=%s",
+            len(pending),
+            source.user_id,
+            source.room_name,
+        )
+        if not self.inbox.accepting:
+            await self._persist_visible_steer(source, content, metadata)
+            return
+        follow = InboxItem(
+            kind=InboxKind.USER_TURN,
+            content=content,
+            user_id=source.user_id,
+            channel=source.channel,
+            room_name=source.room_name,
+            channel_instructions=source.channel_instructions,
+            metadata=metadata,
+        )
+        accepted = False
+        async for event in self._run_inbox_turn(follow, stream=False):
+            if event.get("type") == "accepted":
+                accepted = True
+        if not accepted:
+            await self._persist_visible_steer(source, content, metadata)
+
+    async def _persist_visible_steer(
+        self,
+        source: InboxItem,
+        content: str,
+        metadata: Dict[str, Any],
+    ) -> None:
+        """Store a leftover steer when a follow-up turn cannot run."""
+        payload = {
+            INBOX_KIND_METADATA_KEY: InboxKind.USER_TURN.value,
+            "steer": True,
+            **metadata,
+        }
+        await self.message_handler.store_user_message(
+            content,
+            source.user_id,
+            room_name=source.room_name,
+            channel=source.channel,
+            metadata=payload,
+        )
 
     @property
     def turn_store(self):
@@ -642,7 +783,12 @@ class Agent:
         scope = json.dumps([item.channel or "local", item.user_id, item.room_name], ensure_ascii=False)
         event_key = hashlib.sha256((scope + "\0" + event_id).encode()).hexdigest()
         try:
-            ticket = self.inbox.reserve_turn(turn_id=turn_id, channel=item.channel)
+            ticket = self.inbox.reserve_turn(
+                turn_id=turn_id,
+                channel=item.channel,
+                user_id=item.user_id,
+                room_name=item.room_name,
+            )
         except InboxCapacityError as exc:
             yield build_public_error(code="capacity", cause=exc)
             yield {"type": "done"}
@@ -738,15 +884,28 @@ class Agent:
             yield event
             yield done
         finally:
+            pending_steers: List[PendingSteer] = []
             try:
                 if iterator is not None:
                     await iterator.aclose()
             finally:
-                self.inbox.discard(ticket)
-                if claimed:
-                    self.inbox.release_turn()
-                if record is not None and not finished:
-                    await asyncio.shield(self.turn_store.update(ticket.turn_id, state="interrupted", needs_review=True))
+                try:
+                    self.inbox.discard(ticket)
+                    if claimed:
+                        pending_steers = self.inbox.release_turn()
+                    if record is not None and not finished:
+                        await asyncio.shield(self.turn_store.update(ticket.turn_id, state="interrupted", needs_review=True))
+                finally:
+                    if pending_steers:
+                        follow_up = asyncio.create_task(
+                            self._run_steer_followup(item, pending_steers),
+                            name="steer-followup",
+                        )
+                        self._track_steer_followup(follow_up)
+                        try:
+                            await asyncio.shield(follow_up)
+                        except Exception:
+                            logger.exception("Steer follow-up failed")
 
     async def _drive_claimed_turn(
         self,
@@ -828,14 +987,34 @@ class Agent:
             loop_cap = max_agent_loops if max_agent_loops is not None else self.max_agent_loops
             delivered_paths: set[str] = set()
             delivered_messages: list[Message] = []
+            steer_messages: list[Message] = []
+
+            def turn_experience(assistant: Optional[Message] = None) -> list[Message]:
+                messages = [user_msg, *steer_messages, *delivered_messages]
+                if assistant is not None:
+                    messages.append(assistant)
+                return messages
+
             for iteration_index in range(loop_cap):
                 if self.inbox.abort_requested():
                     yield self._aborted_event()
                     yield {"type": "done"}
                     return
 
-                for instruction in self.inbox.take_steering():
-                    input_messages.append({"role": "user", "content": f"Additional instruction for this turn:\n{instruction}"})
+                # Inject only before a model call, after the previous tool
+                # batch has appended every call/result pair. Later iterations
+                # keep the same iteration_messages list, so the steer stays.
+                stored_steers = await self._consume_steers(
+                    iteration_messages,
+                    user_id=user_id,
+                    channel=channel,
+                    room_name=room_name,
+                    turn_id=trace_metadata.get("turn_id"),
+                )
+                if stored_steers:
+                    steer_messages.extend(stored_steers)
+                    input_messages = msg_handler.sanitize_input_messages(list(iteration_messages))
+                    self._schedule_experience_write(messages=turn_experience())
 
                 message_id = self._turn_message_id(user_msg, iteration_index)
                 text_parts: list[str] = []
@@ -973,9 +1152,7 @@ class Agent:
                                 recipient_id=room_name or user_id,
                             )
                             delivered_messages.append(assistant_msg)
-                            self._schedule_experience_write(
-                                messages=[user_msg, *delivered_messages],
-                            )
+                            self._schedule_experience_write(messages=turn_experience())
                         # Completing a displayed message does not complete the turn.
                         # Replay the tool result so the model can finish the user's request.
 
@@ -988,6 +1165,47 @@ class Agent:
                     continue
 
                 if visible_text:
+                    # A steer that landed while this reply was generated must
+                    # keep the turn going. Leave anything that arrives after
+                    # this check queued so release can start a follow-up.
+                    steer_before_finish = (
+                        iteration_index + 1 < loop_cap
+                        and not self.inbox.abort_requested()
+                        and self.inbox.has_pending_steer()
+                    )
+                    if steer_before_finish:
+                        if message_started:
+                            yield self._message_done_event(message_id, "interim", visible_text)
+                        else:
+                            for event in self._message_events(
+                                message_id=message_id,
+                                phase="interim",
+                                content=visible_text,
+                                stream=stream,
+                                deltas=text_parts,
+                            ):
+                                yield event
+                        await msg_handler.store_model_reply(
+                            visible_text,
+                            self._assistant_sender_id,
+                            metadata={**trace_metadata, "turn_phase": "interim"},
+                            room_name=room_name,
+                            channel=channel,
+                            recipient_id=room_name or user_id,
+                        )
+                        iteration_messages.append({"role": "assistant", "content": visible_text})
+                        stored_steers = await self._consume_steers(
+                            iteration_messages,
+                            user_id=user_id,
+                            channel=channel,
+                            room_name=room_name,
+                            turn_id=trace_metadata.get("turn_id"),
+                        )
+                        steer_messages.extend(stored_steers)
+                        input_messages = msg_handler.sanitize_input_messages(list(iteration_messages))
+                        self._schedule_experience_write(messages=turn_experience())
+                        continue
+
                     if message_started:
                         yield self._message_done_event(message_id, "final", visible_text)
                     else:
@@ -1007,9 +1225,7 @@ class Agent:
                         channel=channel,
                         recipient_id=room_name or user_id,
                     )
-                    self._schedule_experience_write(
-                        messages=[user_msg, *delivered_messages, assistant_msg],
-                    )
+                    self._schedule_experience_write(messages=turn_experience(assistant_msg))
                     turn_obs.set_output(visible_text)
                     yield {"type": "done"}
                     return

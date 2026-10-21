@@ -10,6 +10,7 @@ import asyncio
 import time
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional, Union
 
@@ -54,6 +55,11 @@ def scheduled_task_display_content(
     if text.startswith(SCHEDULED_AGENT_PROMPT_PREFIX):
         return text[len(SCHEDULED_AGENT_PROMPT_PREFIX) :].strip()
     return text.strip()
+
+
+def _scope_text(value: Optional[str]) -> str:
+    """Normalize a session field so missing and blank values compare equal."""
+    return str(value or "").strip()
 
 
 def normalize_inbox_kind(
@@ -103,6 +109,30 @@ class InboxItem:
         return payload
 
 
+@dataclass(frozen=True)
+class PendingSteer:
+    """One same-session message accepted onto the running turn, in arrival order."""
+
+    content: str
+    user_id: str = ""
+    channel: Optional[str] = None
+    room_name: Optional[str] = None
+    sender_name: str = ""
+    created_at: float = field(default_factory=time.time)
+
+
+def format_steer_model_text(steer: PendingSteer) -> str:
+    """Model-facing text for a steer message.
+
+    The marker is appended with the message. It is not part of the stored user
+    text and must not be written into the instruction prefix.
+    """
+    raw_sender = steer.sender_name or steer.user_id or "the user"
+    sender = " ".join(raw_sender.replace("]", " ").split()) or "the user"
+    when = datetime.fromtimestamp(steer.created_at).strftime("%Y-%m-%d %H:%M")
+    return f"[Mid-task message from {sender} at {when}]\n{steer.content}"
+
+
 class AgentInbox:
     """Per-agent turn lock so one identity never interleaves two live turns."""
 
@@ -118,7 +148,7 @@ class AgentInbox:
         self.run_timeout = run_timeout
         self._pending: dict[str, TurnTicket] = {}
         self._current: TurnTicket | None = None
-        self._steering: list[str] = []
+        self._steering: list[PendingSteer] = []
         self.accepting = True
 
     @property
@@ -153,12 +183,24 @@ class AgentInbox:
     def pending_count(self) -> int:
         return len(self._pending)
 
-    def reserve_turn(self, *, turn_id: str | None = None, channel: str | None = None) -> "TurnTicket":
+    def reserve_turn(
+        self,
+        *,
+        turn_id: str | None = None,
+        channel: str | None = None,
+        user_id: str | None = None,
+        room_name: str | None = None,
+    ) -> "TurnTicket":
         if not self.accepting:
             raise InboxCapacityError("Agent runtime is stopping")
         if len(self._pending) >= self.max_pending:
             raise InboxCapacityError("Agent pending queue is full")
-        ticket = TurnTicket(turn_id=turn_id or uuid.uuid4().hex, channel=channel)
+        ticket = TurnTicket(
+            turn_id=turn_id or uuid.uuid4().hex,
+            channel=channel,
+            user_id=user_id,
+            room_name=room_name,
+        )
         if ticket.turn_id in self._pending or ticket.turn_id == self.current_turn_id:
             ticket.turn_id = uuid.uuid4().hex
         self._pending[ticket.turn_id] = ticket
@@ -175,16 +217,56 @@ class AgentInbox:
             if channel is None or ticket.channel == channel:
                 ticket.cancelled.set()
 
-    def request_steer(self, turn_id: str, content: str, *, channel: str | None = None) -> bool:
-        current = self._current
-        if current is None or current.turn_id != turn_id or (channel is not None and channel != current.channel):
+    def request_steer(
+        self,
+        turn_id: str,
+        content: str,
+        *,
+        channel: str | None = None,
+        user_id: str | None = None,
+        room_name: str | None = None,
+        sender_name: str = "",
+    ) -> bool:
+        """Queue a steer only when it belongs to the running turn's session.
+
+        Turn id, channel, user, and room must all match. A missing user or room
+        does not match a turn that has one, so one session cannot inject into
+        another. Returns True only after the message is queued.
+        """
+        text = str(content or "").strip()
+        if not text or not str(turn_id or "").strip():
             return False
-        self._steering.append(content)
+        current = self._current
+        if current is None or current.turn_id != turn_id:
+            return False
+        if _scope_text(channel) != _scope_text(current.channel):
+            return False
+        if _scope_text(user_id) != _scope_text(current.user_id):
+            return False
+        if _scope_text(room_name) != _scope_text(current.room_name):
+            return False
+        self._steering.append(PendingSteer(
+            content=text,
+            user_id=_scope_text(current.user_id),
+            channel=current.channel,
+            room_name=current.room_name,
+            sender_name=_scope_text(sender_name),
+        ))
         return True
 
-    def take_steering(self) -> list[str]:
+    def has_pending_steer(self) -> bool:
+        return bool(self._steering)
+
+    def take_steering(self) -> list[PendingSteer]:
         items, self._steering = self._steering, []
         return items
+
+    def requeue_steering(self, items: list[PendingSteer]) -> None:
+        """Put unconsumed steers back at the front, ahead of anything newer."""
+        pending = [item for item in items if str(item.content or "").strip()]
+        if not pending:
+            return
+        self._steering = [*pending, *self._steering]
 
     async def acquire_turn(self, ticket: "TurnTicket | None" = None) -> None:
         ticket = ticket or self.reserve_turn()
@@ -212,12 +294,19 @@ class AgentInbox:
         self._steering.clear()
         self._abort.clear()
 
-    def release_turn(self) -> None:
+    def release_turn(self) -> list[PendingSteer]:
+        """Release the turn lock and return steers that were not injected.
+
+        Callers must keep the returned messages. Clearing them here used to
+        drop a steer that arrived after the loop's last check.
+        """
+        pending = list(self._steering)
+        self._steering.clear()
         self._abort.clear()
         self._current = None
-        self._steering.clear()
         if self._turn_lock.locked():
             self._turn_lock.release()
+        return pending
 
 
 class InboxCapacityError(RuntimeError):
@@ -236,5 +325,7 @@ class InboxCancelledError(RuntimeError):
 class TurnTicket:
     turn_id: str
     channel: str | None = None
+    user_id: str | None = None
+    room_name: str | None = None
     created_at: float = field(default_factory=time.monotonic)
     cancelled: asyncio.Event = field(default_factory=asyncio.Event)
