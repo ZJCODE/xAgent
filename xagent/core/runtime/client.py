@@ -56,6 +56,24 @@ class RuntimeClient:
             "turn_id": turn_id, "channel": channel,
         })).json()
 
+    async def steer(
+        self,
+        *,
+        turn_id: str,
+        content: str,
+        channel: str | None = None,
+        user_id: str | None = None,
+        room_name: str | None = None,
+    ) -> dict:
+        body: dict[str, Any] = {"turn_id": turn_id, "content": content}
+        if channel is not None:
+            body["channel"] = channel
+        if user_id is not None:
+            body["user_id"] = user_id
+        if room_name is not None:
+            body["room_name"] = room_name
+        return (await self.request("POST", "/runtime/turns/steer", json=body)).json()
+
     async def observe(self, **kwargs) -> dict:
         return (await self.request("POST", "/runtime/observe", json=kwargs)).json()
 

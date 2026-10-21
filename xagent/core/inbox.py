@@ -29,7 +29,6 @@ class InboxKind(str, Enum):
     USER_TURN = "user_turn"
     SCHEDULED_TURN = "scheduled_turn"
     OBSERVATION = "observation"
-    STEER = "steer"
 
 
 def is_scheduled_work(metadata: Optional[Dict[str, Any]] = None) -> bool:
@@ -54,6 +53,11 @@ def scheduled_task_display_content(
     if text.startswith(SCHEDULED_AGENT_PROMPT_PREFIX):
         return text[len(SCHEDULED_AGENT_PROMPT_PREFIX) :].strip()
     return text.strip()
+
+
+def _scope_text(value: Optional[str]) -> str:
+    """Normalize a session field so missing and blank values compare equal."""
+    return str(value or "").strip()
 
 
 def normalize_inbox_kind(
@@ -119,6 +123,7 @@ class AgentInbox:
         self._pending: dict[str, TurnTicket] = {}
         self._current: TurnTicket | None = None
         self._steering: list[str] = []
+        self._steering_open = False
         self.accepting = True
 
     @property
@@ -150,15 +155,48 @@ class AgentInbox:
         return self._current.turn_id if self._current else None
 
     @property
+    def current_ticket(self) -> "TurnTicket | None":
+        return self._current
+
+    def matches_session(
+        self,
+        *,
+        channel: str | None,
+        user_id: str | None,
+        room_name: str | None,
+    ) -> bool:
+        """True when a live turn belongs to this channel, user, and room."""
+        current = self._current
+        if current is None:
+            return False
+        return (
+            _scope_text(channel) == _scope_text(current.channel)
+            and _scope_text(user_id) == _scope_text(current.user_id)
+            and _scope_text(room_name) == _scope_text(current.room_name)
+        )
+
+    @property
     def pending_count(self) -> int:
         return len(self._pending)
 
-    def reserve_turn(self, *, turn_id: str | None = None, channel: str | None = None) -> "TurnTicket":
+    def reserve_turn(
+        self,
+        *,
+        turn_id: str | None = None,
+        channel: str | None = None,
+        user_id: str | None = None,
+        room_name: str | None = None,
+    ) -> "TurnTicket":
         if not self.accepting:
             raise InboxCapacityError("Agent runtime is stopping")
         if len(self._pending) >= self.max_pending:
             raise InboxCapacityError("Agent pending queue is full")
-        ticket = TurnTicket(turn_id=turn_id or uuid.uuid4().hex, channel=channel)
+        ticket = TurnTicket(
+            turn_id=turn_id or uuid.uuid4().hex,
+            channel=channel,
+            user_id=user_id,
+            room_name=room_name,
+        )
         if ticket.turn_id in self._pending or ticket.turn_id == self.current_turn_id:
             ticket.turn_id = uuid.uuid4().hex
         self._pending[ticket.turn_id] = ticket
@@ -175,16 +213,54 @@ class AgentInbox:
             if channel is None or ticket.channel == channel:
                 ticket.cancelled.set()
 
-    def request_steer(self, turn_id: str, content: str, *, channel: str | None = None) -> bool:
-        current = self._current
-        if current is None or current.turn_id != turn_id or (channel is not None and channel != current.channel):
+    def request_steer(
+        self,
+        turn_id: str,
+        content: str,
+        *,
+        channel: str | None = None,
+        user_id: str | None = None,
+        room_name: str | None = None,
+    ) -> bool:
+        """Queue a steer only when it belongs to the running turn's session.
+
+        Turn id, channel, user, and room must all match. A missing user or room
+        does not match a turn that has one, so one session cannot inject into
+        another. Returns True only after the text is queued. Once the turn
+        stops accepting, this returns False and the caller uses the normal queue.
+        """
+        text = str(content or "").strip()
+        if not text or not str(turn_id or "").strip() or not self._steering_open:
             return False
-        self._steering.append(content)
+        current = self._current
+        if current is None or current.turn_id != turn_id:
+            return False
+        if _scope_text(channel) != _scope_text(current.channel):
+            return False
+        if _scope_text(user_id) != _scope_text(current.user_id):
+            return False
+        if _scope_text(room_name) != _scope_text(current.room_name):
+            return False
+        self._steering.append(text)
         return True
+
+    def close_steering(self) -> None:
+        """Reject new steers. Text already queued stays until it is drained."""
+        self._steering_open = False
+
+    def has_pending_steer(self) -> bool:
+        return bool(self._steering)
 
     def take_steering(self) -> list[str]:
         items, self._steering = self._steering, []
         return items
+
+    def requeue_steering(self, items: list[str]) -> None:
+        """Put unconsumed steers back at the front, ahead of anything newer."""
+        pending = [text for text in items if str(text or "").strip()]
+        if not pending:
+            return
+        self._steering = [*pending, *self._steering]
 
     async def acquire_turn(self, ticket: "TurnTicket | None" = None) -> None:
         ticket = ticket or self.reserve_turn()
@@ -210,12 +286,15 @@ class AgentInbox:
             await asyncio.gather(acquire, cancelled, return_exceptions=True)
         self._current = ticket
         self._steering.clear()
+        self._steering_open = True
         self._abort.clear()
 
     def release_turn(self) -> None:
+        """Release the turn lock. Accepted steers must already have been drained."""
+        self._steering.clear()
+        self._steering_open = False
         self._abort.clear()
         self._current = None
-        self._steering.clear()
         if self._turn_lock.locked():
             self._turn_lock.release()
 
@@ -236,5 +315,7 @@ class InboxCancelledError(RuntimeError):
 class TurnTicket:
     turn_id: str
     channel: str | None = None
+    user_id: str | None = None
+    room_name: str | None = None
     created_at: float = field(default_factory=time.monotonic)
     cancelled: asyncio.Event = field(default_factory=asyncio.Event)

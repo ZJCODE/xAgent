@@ -199,10 +199,17 @@ class AgentConfig:
     # legacy callable-agent settings are kept alongside their shared defaults.
     # ============================================================
     DEFAULT_MAX_PENDING_TURNS = 32
-    DEFAULT_TURN_QUEUE_TIMEOUT = 30.0
     DEFAULT_TURN_RUN_TIMEOUT = 600.0  # 10 minutes, across all model/tool iterations
+    # A queued follow-up has to outlive the turn already holding the lock.
+    # The wait is one full run budget plus a short grace. The grace covers
+    # the gap between reserving the waiter and the holder starting its run
+    # clock, so a turn that uses its entire budget still releases first.
+    DEFAULT_TURN_QUEUE_GRACE_SECONDS = 30.0
+    DEFAULT_TURN_QUEUE_TIMEOUT = DEFAULT_TURN_RUN_TIMEOUT + DEFAULT_TURN_QUEUE_GRACE_SECONDS
     DEFAULT_HTTP_MAX_CONCURRENT_CHATS = 4
-    DEFAULT_HTTP_QUEUE_TIMEOUT = DEFAULT_TURN_QUEUE_TIMEOUT
+    # Slot wait for a standalone callable agent. A core Agent does not use
+    # this semaphore; its wait is DEFAULT_TURN_QUEUE_TIMEOUT.
+    DEFAULT_HTTP_QUEUE_TIMEOUT = 30.0
     DEFAULT_HTTP_CHAT_TIMEOUT = DEFAULT_TURN_RUN_TIMEOUT
 
     @staticmethod

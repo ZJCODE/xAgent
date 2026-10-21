@@ -27,6 +27,13 @@ const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_ATTACHMENTS_PER_MESSAGE = 10;
 const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024;
 const ACCEPTED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
+const STEERED_NOTICE = "Added to the running task";
+const QUEUED_NOTICE = "Will be handled next";
+
+type SocketOptions = {
+  followup?: boolean;
+  userMessageId?: string;
+};
 
 type PanelId = ChatPanelState["id"];
 
@@ -191,6 +198,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const [capabilities, setCapabilities] = useState<AgentCapabilities>(DEFAULT_CAPABILITIES);
   const [currentTurnId, setCurrentTurnId] = useState<string | null>(null);
   const socketsRef = useRef<Record<string, WebSocket>>({});
+  const sendingRef = useRef(false);
+  const turnIdRef = useRef<string | null>(null);
 
   const patchPanel = useCallback((panelId: PanelId, updater: (panel: ChatPanelState) => ChatPanelState) => {
     void panelId;
@@ -350,7 +359,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     [patchPanel],
   );
 
-  const runSocket = useCallback((panelId: PanelId, payload: Record<string, unknown>, assistantId: string) => {
+  const runSocket = useCallback((panelId: PanelId, payload: Record<string, unknown>, assistantId: string, options?: SocketOptions) => {
     return new Promise<void>((resolve, reject) => {
       const socketKey = `${panelId}-${assistantId}`;
       const socket = new WebSocket(webSocketUrl("/ws/chat"));
@@ -361,6 +370,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       const localMessageIds = new Set<string>([assistantId]);
       const remoteToLocalMessageId = new Map<string, string>();
       let claimedPlaceholder = false;
+      let steeredStream = false;
+      const followup = Boolean(options?.followup);
 
       const ensureAssistantMessage = (event: ChatEvent): string => {
         const remoteMessageId = event.message_id;
@@ -391,16 +402,20 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         if (settled) return;
         settled = true;
         delete socketsRef.current[socketKey];
-        setCurrentTurnId(null);
+        if (!followup) {
+          turnIdRef.current = null;
+          sendingRef.current = false;
+          setCurrentTurnId(null);
+        }
         if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
           socket.close(1000);
         }
         patchPanel(panelId, (panel) => ({
           ...panel,
-          sending: false,
+          sending: followup ? panel.sending : false,
           messages: panel.messages.flatMap((message) => {
             if (!localMessageIds.has(message.id) || !message.pending) return [message];
-            if (aborted && !message.content) return [];
+            if ((aborted || steeredStream) && !message.content) return [];
             return [{
               ...message,
               pending: false,
@@ -427,7 +442,29 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         }
 
         if (parsed.type === "accepted") {
-          setCurrentTurnId(parsed.turn_id || null);
+          if (!followup) {
+            turnIdRef.current = parsed.turn_id || null;
+            setCurrentTurnId(parsed.turn_id || null);
+          } else if (options?.userMessageId) {
+            patchPanel(panelId, (panel) => ({
+              ...panel,
+              messages: panel.messages.map((message) =>
+                message.id === options.userMessageId ? { ...message, meta: QUEUED_NOTICE } : message,
+              ),
+            }));
+          }
+          return;
+        }
+        if (parsed.type === "steered") {
+          steeredStream = true;
+          if (options?.userMessageId) {
+            patchPanel(panelId, (panel) => ({
+              ...panel,
+              messages: panel.messages.map((message) =>
+                message.id === options.userMessageId ? { ...message, meta: STEERED_NOTICE } : message,
+              ),
+            }));
+          }
           return;
         }
         if (parsed.type === "aborted") {
@@ -499,7 +536,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           return;
         }
 
-        if (parsed.type === "done") finish();
+        if (parsed.type === "done") {
+          if (parsed.steered && !followup) return;
+          finish();
+        }
       });
 
       socket.addEventListener("error", () => finish(new Error("WebSocket connection failed.")));
@@ -512,7 +552,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const sendMessage = useCallback(
     async (panelId: PanelId, rawText: string) => {
       const text = rawText.trim();
-      if (panel.sending) return;
       const currentPanel = panel;
       const attachments = [...currentPanel.pendingAttachments];
       const images = attachmentImageUrls(attachments);
@@ -526,24 +565,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         attachments,
         attachmentCount: attachments.length || undefined,
       };
-      const assistantMessage: ChatMessage = {
-        id: makeId("assistant"),
-        role: "assistant",
-        content: "",
-        pending: true,
-      };
-
-      patchPanel(panelId, (current) => ({
-        ...current,
-        pendingAttachments: [],
-        sending: true,
-        messages: [...current.messages, userMessage, assistantMessage],
-      }));
-
       const payload: Record<string, unknown> = {
-        user_id: panel.settings.userId,
+        user_id: currentPanel.settings.userId,
         user_message: text,
-        stream: panel.settings.stream,
+        stream: currentPanel.settings.stream,
         event_id: userMessage.id,
       };
       if (attachments.length) payload.attachments = attachments;
@@ -553,15 +578,48 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       }
       persistSettings(currentPanel);
 
+      if (sendingRef.current) {
+        const assistantMessage: ChatMessage = {
+          id: makeId("assistant"),
+          role: "assistant",
+          content: "",
+          pending: true,
+        };
+        patchPanel(panelId, (current) => ({
+          ...current,
+          pendingAttachments: [],
+          messages: [...current.messages, userMessage, assistantMessage],
+        }));
+        await runSocket(panelId, payload, assistantMessage.id, {
+          followup: true,
+          userMessageId: userMessage.id,
+        }).catch(() => undefined);
+        return;
+      }
+
+      const assistantMessage: ChatMessage = {
+        id: makeId("assistant"),
+        role: "assistant",
+        content: "",
+        pending: true,
+      };
+      sendingRef.current = true;
+      patchPanel(panelId, (current) => ({
+        ...current,
+        pendingAttachments: [],
+        sending: true,
+        messages: [...current.messages, userMessage, assistantMessage],
+      }));
       await runSocket(panelId, payload, assistantMessage.id).catch(() => undefined);
     },
     [capabilities, panel, patchPanel, runSocket],
   );
 
   const stopTurn = useCallback(async () => {
-    if (!panel.sending || !currentTurnId) return;
-    await stopChat(currentTurnId).catch(() => undefined);
-  }, [panel.sending, currentTurnId]);
+    const turnId = turnIdRef.current;
+    if (!sendingRef.current || !turnId) return;
+    await stopChat(turnId).catch(() => undefined);
+  }, []);
 
   const sendObservation = useCallback(
     async (panelId: PanelId, rawText: string) => {

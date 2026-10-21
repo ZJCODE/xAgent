@@ -41,11 +41,13 @@ from ...utils.image_utils import (
 )
 from .client import SESSION_EXPIRED_ERRCODE, WeixinClient, _error_code, raise_for_api_error
 from .config import WeixinAdapterConfig
-from .media import ITEM_FILE, ITEM_IMAGE, ITEM_VIDEO, ITEM_VOICE, InboundMedia, download_inbound_media, upload_outbound_media
+from .media import ITEM_FILE, ITEM_IMAGE, ITEM_TEXT, ITEM_VIDEO, ITEM_VOICE, InboundMedia, download_inbound_media, upload_outbound_media
 from .send import extract_text, make_client_id, split_text
 from .state import WeixinCredentials, WeixinStateStore
 
 
+WEIXIN_STEER_NOTICE = "Added to the current reply."
+WEIXIN_QUEUE_NOTICE = "I'll handle that next."
 WEIXIN_INBOUND_IMAGE_DIR = "assets/inbound/weixin/images"
 WEIXIN_OUTBOUND_IMAGE_DIR = "assets/derived/weixin/outbound/images"
 WEIXIN_ATTACHMENT_DIR = "assets/inbound/weixin/files"
@@ -325,6 +327,9 @@ class WeixinAdapter:
         if not self._should_route_message(message):
             return
         user_id = str(message.get("from_user_id") or "").strip()
+        if self._should_join_running_turn(user_id, message):
+            await self._handle_dm(message, user_id=user_id, announce_queue=True)
+            return
         entry = self._chat_locks.get(user_id)
         if entry is None:
             entry = _UserChatLock()
@@ -372,7 +377,35 @@ class WeixinAdapter:
         values = [message.get("from_user_id"), message.get("to_user_id"), message.get("session_id")]
         return any("@chatroom" in str(value or "") for value in values)
 
-    async def _handle_dm(self, message: dict[str, Any], *, user_id: str) -> None:
+    def _should_join_running_turn(self, user_id: str, message: dict[str, Any]) -> bool:
+        """True when this user's plain text can join their own running turn.
+
+        Media and any message that does not belong to the turn already
+        running stay on the per-user lock.
+        """
+        inbox = self.agent.inbox
+        if not inbox.busy:
+            return False
+        if not inbox.matches_session(channel="weixin", user_id=user_id, room_name=None):
+            return False
+        return self._is_plain_text_message(message)
+
+    @staticmethod
+    def _is_plain_text_message(message: dict[str, Any]) -> bool:
+        items = [item for item in message.get("item_list") or [] if isinstance(item, dict)]
+        if not items:
+            return False
+        return all(int(item.get("type") or 0) == ITEM_TEXT for item in items)
+
+    def _accepted_while_another_turn_is_running(self, event: dict[str, Any]) -> bool:
+        inbox = self.agent.inbox
+        if not inbox.busy:
+            return False
+        current = inbox.current_turn_id
+        accepted = event.get("turn_id")
+        return bool(current and accepted and current != accepted)
+
+    async def _handle_dm(self, message: dict[str, Any], *, user_id: str, announce_queue: bool = False) -> None:
         assert self._credentials is not None
         context_token = str(message.get("context_token") or "").strip()
         self._remember_context(user_id, context_token)
@@ -420,6 +453,7 @@ class WeixinAdapter:
                     context_token=context_token,
                     source_message_id=source_message_id,
                     chat_kwargs=chat_kwargs,
+                    announce_queue=announce_queue,
                 )
         finally:
             if typing_task is not None:
@@ -544,6 +578,7 @@ class WeixinAdapter:
         context_token: str,
         source_message_id: str,
         chat_kwargs: Optional[dict[str, Any]] = None,
+        announce_queue: bool = False,
     ) -> None:
         chat_events = getattr(self.agent, "chat_events", None)
         if not callable(chat_events):
@@ -556,11 +591,30 @@ class WeixinAdapter:
             delivery_timeout=AgentConfig.WEIXIN_DELIVERY_TIMEOUT_SECONDS,
         )
         sent_count = 0
+        announced_queue = False
         try:
             async with asyncio.timeout(timeout_seconds):
                 async for event in event_source:
                     event_type = event.get("type")
-                    if event_type == "message_done":
+                    if event_type == "steered":
+                        sent_count += 1
+                        await self._send_text(
+                            user_id=user_id,
+                            context_token=context_token,
+                            text=WEIXIN_STEER_NOTICE,
+                            stable_key=f"{source_message_id or 'message'}:steered:{sent_count}",
+                        )
+                    elif event_type == "accepted" and announce_queue and not announced_queue:
+                        if self._accepted_while_another_turn_is_running(event):
+                            announced_queue = True
+                            sent_count += 1
+                            await self._send_text(
+                                user_id=user_id,
+                                context_token=context_token,
+                                text=WEIXIN_QUEUE_NOTICE,
+                                stable_key=f"{source_message_id or 'message'}:queued:{sent_count}",
+                            )
+                    elif event_type == "message_done":
                         content = str(event.get("content") or "").strip()
                         attachments = self._outbound_attachments_from_event(event)
                         if not content and not attachments:

@@ -1465,6 +1465,13 @@ input::placeholder {
   color: color-mix(in srgb, var(--message-user-text) 56%, transparent);
 }
 
+.message-meta {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 0 4px;
+}
+
 .typing-cursor::after {
   display: inline-block;
   width: 6px;
@@ -1552,6 +1559,12 @@ input::placeholder {
 .send-button {
   min-width: 92px;
   min-height: 42px;
+}
+
+.composer-send-cluster {
+  display: flex;
+  align-items: end;
+  gap: 8px;
 }
 
 .image-chip,
@@ -3274,8 +3287,15 @@ input::placeholder {
     grid-template-columns: 42px 42px 42px minmax(0, 1fr);
   }
 
-  .composer-actions .send-button {
+  .composer-actions .composer-send-cluster {
     width: 100%;
+    min-width: 0;
+  }
+
+  .composer-actions .composer-send-cluster .send-button {
+    width: auto;
+    min-width: 0;
+    flex: 1;
   }
 
   .maintenance-row {
