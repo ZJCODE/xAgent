@@ -43,21 +43,6 @@ xagent
 
 The interactive launcher will guide you through creating and managing your agents.
 
-New OpenAI and DeepSeek agents enable the matching web search service automatically,
-reusing the main API key. Other providers start with search disabled. You can change
-search in Agent setup; changing an existing agent's model provider preserves its
-search selection.
-
-In the terminal launcher, choose **Runtime → Start**, then open **Channel** to
-connect Weixin or Voice. In the Web client, manage connections from
-**Channels**. Restart the Agent after changing its configuration or identity.
-
-To add a hardware or software device, open **Agent → Devices** and follow the
-pairing steps. No configuration edits or restart are needed.
-
-Learn more: [Managing channels and restarts](docs/runtime-core.md) ·
-[Connecting devices](docs/device-execution.md).
-
 ## Updating
 
 Update xAgent without changing how it was installed:
