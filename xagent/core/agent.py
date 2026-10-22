@@ -74,6 +74,14 @@ from .working_context import (
 
 logger = logging.getLogger(__name__)
 
+# Model-facing only. Not stored and not shown to the user.
+STEER_CONTINUATION_NUDGE = (
+    "Address the new user message. "
+    "Unless that message cancels or fully replaces the earlier request, "
+    "finish the unfinished work in this same turn. "
+    "Do not only promise to continue later."
+)
+
 
 class Agent:
     """AI agent runtime for a continuous agent-level message stream."""
@@ -361,6 +369,7 @@ class Agent:
         Caller must be at a model-call boundary, after any tool batch has
         written its call/result pairs. Nothing is inserted into that pair.
         The stored text and the model-facing text are the same string.
+        A short continuation note follows those user messages. It is not stored.
         """
         pending = self.inbox.take_steering()
         if not pending:
@@ -384,6 +393,7 @@ class Agent:
                 raise
             stored.append(message)
             iteration_messages.append({"role": "user", "content": text})
+        iteration_messages.append({"role": "system", "content": STEER_CONTINUATION_NUDGE})
         return stored
 
     @property

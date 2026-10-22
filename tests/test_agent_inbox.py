@@ -1,7 +1,7 @@
 import asyncio
 import unittest
 
-from xagent.core.agent import Agent
+from xagent.core.agent import STEER_CONTINUATION_NUDGE, Agent
 from xagent.core.config import AgentConfig, ReplyType
 from xagent.core.handlers.message import MessageHandler
 from xagent.core.handlers.model import ChatToolCall, ModelStreamEvent
@@ -394,6 +394,26 @@ class AgentInboxTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(model_client.responses), 1)
 
 
+def _assert_continuation_nudge(test, messages, *steer_texts: str) -> None:
+    """The raw steer text stays a user message, then a same-turn continuation note."""
+    user_indexes = [
+        index
+        for index, message in enumerate(messages)
+        if isinstance(message, dict) and message.get("role") == "user" and message.get("content") in steer_texts
+    ]
+    test.assertEqual(len(user_indexes), len(steer_texts))
+    nudge_at = max(user_indexes) + 1
+    test.assertLess(nudge_at, len(messages))
+    nudge = messages[nudge_at]
+    test.assertEqual(nudge.get("role"), "system")
+    test.assertEqual(nudge.get("content"), STEER_CONTINUATION_NUDGE)
+    lowered = STEER_CONTINUATION_NUDGE.lower()
+    test.assertIn("cancels", lowered)
+    test.assertIn("replaces", lowered)
+    test.assertIn("same turn", lowered)
+    test.assertIn("later", lowered)
+
+
 def _user_texts(messages) -> list[str]:
     texts = []
     for message in messages:
@@ -450,9 +470,15 @@ class SteerInjectionTests(unittest.IsolatedAsyncioTestCase):
             _user_texts(model_client.calls[1])[-2:],
             ["check the logs", "then restart"],
         )
+        _assert_continuation_nudge(self, model_client.calls[1], "check the logs", "then restart")
         self.assertEqual(_user_texts(model_client.calls[1]), _user_texts(model_client.calls[2]))
-        self.assertEqual(model_client.calls[1][-4]["type"], "function_call")
-        self.assertEqual(model_client.calls[1][-3]["type"], "function_call_output")
+        _assert_continuation_nudge(self, model_client.calls[2], "check the logs", "then restart")
+        tail = model_client.calls[1][-5:]
+        self.assertEqual(tail[0]["type"], "function_call")
+        self.assertEqual(tail[1]["type"], "function_call_output")
+        self.assertEqual(tail[2]["content"], "check the logs")
+        self.assertEqual(tail[3]["content"], "then restart")
+        self.assertEqual(tail[4], {"role": "system", "content": STEER_CONTINUATION_NUDGE})
         for call in model_client.calls:
             _assert_tool_pairs_intact(self, call)
         self.assertNotIn("check the logs", repr(executor.seen[0]))
@@ -495,9 +521,10 @@ class SteerInjectionTests(unittest.IsolatedAsyncioTestCase):
         added = model_client.calls[1][len(model_client.calls[0]):]
         self.assertEqual(added[0], {"role": "assistant", "content": "draft answer"})
         self.assertEqual(
-            [item.get("content") for item in added[1:]],
+            [item.get("content") for item in added[1:-1]],
             ["use metric units", "round to two decimals"],
         )
+        _assert_continuation_nudge(self, model_client.calls[1], "use metric units", "round to two decimals")
 
         stored = _stored_steers(storage)
         self.assertEqual(
@@ -625,6 +652,8 @@ class SteerInjectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(model_client.calls), 2)
         self.assertNotIn("check the logs", repr(model_client.calls[0]))
         self.assertIn("check the logs", repr(model_client.calls[1]))
+        _assert_continuation_nudge(self, model_client.calls[1], "check the logs")
+        self.assertNotIn(STEER_CONTINUATION_NUDGE, [message.content for message in storage.messages])
         self.assertEqual([message.content for message in _stored_steers(storage)], ["check the logs"])
         self.assertFalse(agent.inbox.has_pending_steer())
 
@@ -906,11 +935,13 @@ class BusyInputRoutingTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("check the logs", repr(model.calls[0]))
         self.assertEqual(model.instructions_calls[0], model.instructions_calls[1])
         _assert_tool_pairs_intact(self, model.calls[1])
-        tail = model.calls[1][-3:]
+        tail = model.calls[1][-4:]
         self.assertEqual(tail[0].get("type"), "function_call")
         self.assertEqual(tail[1].get("type"), "function_call_output")
         self.assertEqual(tail[1].get("call_id"), tail[0].get("call_id"))
         self.assertEqual(tail[2]["content"], "check the logs")
+        self.assertEqual(tail[3], {"role": "system", "content": STEER_CONTINUATION_NUDGE})
+        self.assertNotIn(STEER_CONTINUATION_NUDGE, [message.content for message in storage.messages])
         stored = _stored_steers(storage)
         self.assertEqual([message.content for message in stored], ["check the logs"])
         self.assertFalse(agent.inbox.busy)
