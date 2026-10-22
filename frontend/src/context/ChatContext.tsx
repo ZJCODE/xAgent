@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import { getAgentInfo, stopChat, uploadWorkspaceFile, workspaceBlobUrl } from "../lib/api";
+import { insertUserBeforeRunningReply, placeQueuedFollowup, placeSteeredUser } from "../lib/chatOrder";
 import type { AgentCapabilities, AttachmentAsset, ChatEvent, ChatMessage, ChatPanelState, ChatSettings } from "../types";
 import { makeId } from "../lib/format";
 
@@ -372,6 +373,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       let claimedPlaceholder = false;
       let steeredStream = false;
       const followup = Boolean(options?.followup);
+      const followupUserId = options?.userMessageId;
 
       const ensureAssistantMessage = (event: ChatEvent): string => {
         const remoteMessageId = event.message_id;
@@ -384,12 +386,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           remoteToLocalMessageId.set(remoteMessageId, localId);
           localMessageIds.add(localId);
 
-          if (localId !== assistantId) {
-            patchPanel(panelId, (panel) => ({
+          patchPanel(panelId, (panel) => {
+            if (panel.messages.some((message) => message.id === localId)) return panel;
+            return {
               ...panel,
               messages: [...panel.messages, { id: localId, role: "assistant", content: "", pending: true }],
-            }));
-          }
+            };
+          });
 
           return localId;
         }
@@ -410,20 +413,31 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
           socket.close(1000);
         }
-        patchPanel(panelId, (panel) => ({
-          ...panel,
-          sending: followup ? panel.sending : false,
-          messages: panel.messages.flatMap((message) => {
-            if (!localMessageIds.has(message.id) || !message.pending) return [message];
-            if ((aborted || steeredStream) && !message.content) return [];
-            return [{
-              ...message,
-              pending: false,
-              error: Boolean(error),
-              content: error && !message.content ? `Error: ${error.message}` : message.content,
-            }];
-          }),
-        }));
+        patchPanel(panelId, (panel) => {
+          let messages = panel.messages;
+          if (followup && error && !steeredStream && followupUserId) {
+            messages = placeQueuedFollowup(
+              messages,
+              followupUserId,
+              { id: assistantId, role: "assistant", content: "", pending: true },
+              "",
+            );
+          }
+          return {
+            ...panel,
+            sending: followup ? panel.sending : false,
+            messages: messages.flatMap((message) => {
+              if (!localMessageIds.has(message.id) || !message.pending) return [message];
+              if ((aborted || steeredStream) && !message.content) return [];
+              return [{
+                ...message,
+                pending: false,
+                error: Boolean(error),
+                content: error && !message.content ? `Error: ${error.message}` : message.content,
+              }];
+            }),
+          };
+        });
         if (error) reject(error);
         else resolve();
       };
@@ -445,24 +459,26 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           if (!followup) {
             turnIdRef.current = parsed.turn_id || null;
             setCurrentTurnId(parsed.turn_id || null);
-          } else if (options?.userMessageId) {
+          } else if (followupUserId) {
+            const queuedAssistant: ChatMessage = {
+              id: assistantId,
+              role: "assistant",
+              content: "",
+              pending: true,
+            };
             patchPanel(panelId, (panel) => ({
               ...panel,
-              messages: panel.messages.map((message) =>
-                message.id === options.userMessageId ? { ...message, meta: QUEUED_NOTICE } : message,
-              ),
+              messages: placeQueuedFollowup(panel.messages, followupUserId, queuedAssistant, QUEUED_NOTICE),
             }));
           }
           return;
         }
         if (parsed.type === "steered") {
           steeredStream = true;
-          if (options?.userMessageId) {
+          if (followupUserId) {
             patchPanel(panelId, (panel) => ({
               ...panel,
-              messages: panel.messages.map((message) =>
-                message.id === options.userMessageId ? { ...message, meta: STEERED_NOTICE } : message,
-              ),
+              messages: placeSteeredUser(panel.messages, followupUserId, STEERED_NOTICE),
             }));
           }
           return;
@@ -588,7 +604,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         patchPanel(panelId, (current) => ({
           ...current,
           pendingAttachments: [],
-          messages: [...current.messages, userMessage, assistantMessage],
+          messages: insertUserBeforeRunningReply(current.messages, userMessage),
         }));
         await runSocket(panelId, payload, assistantMessage.id, {
           followup: true,

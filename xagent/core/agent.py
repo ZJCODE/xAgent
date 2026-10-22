@@ -997,6 +997,21 @@ class Agent:
                     return True
                 return grant_extra()
 
+            async def take_steers() -> None:
+                nonlocal input_messages
+                stored = await self._consume_steers(
+                    iteration_messages,
+                    user_id=user_id,
+                    channel=channel,
+                    room_name=room_name,
+                    turn_id=trace_metadata.get("turn_id"),
+                )
+                if not stored:
+                    return
+                steer_messages.extend(stored)
+                input_messages = msg_handler.sanitize_input_messages(list(iteration_messages))
+                self._schedule_experience_write(messages=turn_experience())
+
             while True:
                 if iteration_index >= loop_cap and not allow_extra:
                     if not (self.inbox.has_pending_steer() and grant_extra()):
@@ -1022,17 +1037,7 @@ class Agent:
                 # Inject only before a model call, after the previous tool
                 # batch has appended every call/result pair. Later iterations
                 # keep the same iteration_messages list, so the steer stays.
-                stored_steers = await self._consume_steers(
-                    iteration_messages,
-                    user_id=user_id,
-                    channel=channel,
-                    room_name=room_name,
-                    turn_id=trace_metadata.get("turn_id"),
-                )
-                if stored_steers:
-                    steer_messages.extend(stored_steers)
-                    input_messages = msg_handler.sanitize_input_messages(list(iteration_messages))
-                    self._schedule_experience_write(messages=turn_experience())
+                await take_steers()
 
                 message_id = self._turn_message_id(user_msg, iteration_index)
                 text_parts: list[str] = []
@@ -1213,6 +1218,11 @@ class Agent:
                                 deltas=text_parts,
                             ):
                                 yield event
+                        # The model list stays assistant-then-steer. The stored
+                        # transcript writes the steer first, so a history reload
+                        # shows that user message above this reply.
+                        iteration_messages.append({"role": "assistant", "content": visible_text})
+                        await take_steers()
                         await msg_handler.store_model_reply(
                             visible_text,
                             self._assistant_sender_id,
@@ -1221,7 +1231,6 @@ class Agent:
                             channel=channel,
                             recipient_id=room_name or user_id,
                         )
-                        iteration_messages.append({"role": "assistant", "content": visible_text})
                         input_messages = msg_handler.sanitize_input_messages(list(iteration_messages))
                         iteration_index += 1
                         continue

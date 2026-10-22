@@ -459,6 +459,9 @@ class SteerInjectionTests(unittest.IsolatedAsyncioTestCase):
 
         stored = _stored_steers(storage)
         self.assertEqual([message.content for message in stored], ["check the logs", "then restart"])
+        contents = [message.content for message in storage.messages]
+        self.assertLess(contents.index("check the logs"), contents.index("finished"))
+        self.assertLess(contents.index("then restart"), contents.index("finished"))
         self.assertTrue(all(
             message.type == MessageType.MESSAGE and message.role == RoleType.USER
             for message in stored
@@ -507,6 +510,16 @@ class SteerInjectionTests(unittest.IsolatedAsyncioTestCase):
             if message.role == RoleType.ASSISTANT
         ]
         self.assertEqual(phases, ["interim", "final"])
+        self.assertEqual(
+            [message.content for message in storage.messages],
+            [
+                "summarize the numbers",
+                "use metric units",
+                "round to two decimals",
+                "draft answer",
+                "revised answer",
+            ],
+        )
         self.assertFalse(agent.inbox.busy)
         self.assertFalse(agent.inbox.has_pending_steer())
 
