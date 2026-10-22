@@ -16,10 +16,10 @@ from xagent.core.inbox import InboxKind
 from xagent.core.runtime.client import RuntimeClient
 from xagent.integrations.api.chat_service import ChatService
 from xagent.integrations.api.config import ChatLimits
-from xagent.integrations.weixin.adapter import WEIXIN_QUEUE_NOTICE, WEIXIN_STEER_NOTICE, WeixinAdapter
+from xagent.integrations.weixin.adapter import WeixinAdapter
 from xagent.integrations.weixin.config import WeixinAdapterConfig
 from xagent.integrations.weixin.state import WeixinCredentials, WeixinStateStore
-from xagent.interfaces.cli.chat import CLI_QUEUE_NOTICE, CLI_STEER_NOTICE, AgentCLI
+from xagent.interfaces.cli.chat import AgentCLI
 from xagent.interfaces.server import AgentHTTPServer
 from xagent.interfaces.server.models import AgentInput
 from tests.test_agent_chat_flow import InMemoryMessageStorage
@@ -314,6 +314,15 @@ def _sent(client):
     return [item["text"] for item in client.sent_text]
 
 
+_WEIXIN_STEER_NOTICES = ("Added to the current reply.", "I'll handle that next.")
+_CLI_STEER_NOTICES = ("Added to the running task.", "Will be handled next.")
+
+
+def _assert_notices_absent(test, texts):
+    for notice in _WEIXIN_STEER_NOTICES:
+        test.assertNotIn(notice, texts)
+
+
 class WeixinChannelSteerTests(unittest.IsolatedAsyncioTestCase):
     async def test_same_user_text_joins_the_running_turn(self):
         model = _HoldTextModel()
@@ -325,13 +334,13 @@ class WeixinChannelSteerTests(unittest.IsolatedAsyncioTestCase):
             ))
             await model.started.wait()
             await adapter._process_message(_weixin_message("2", "owner@im.wechat", "check the logs"))
-            self.assertIn(WEIXIN_STEER_NOTICE, _sent(client))
+            _assert_notices_absent(self, _sent(client))
             self.assertNotIn("check the logs", repr(model.calls[0]))
             model.release.set()
             await first
         self.assertIn("check the logs", repr(model.calls[-1]))
 
-    async def test_rejected_steer_tells_the_user_it_is_next(self):
+    async def test_rejected_steer_waits_in_the_queue(self):
         model = _HoldTextModel()
         agent, _storage = _build_agent(model)
         _reject_steer(agent)
@@ -344,8 +353,8 @@ class WeixinChannelSteerTests(unittest.IsolatedAsyncioTestCase):
             second = asyncio.create_task(adapter._process_message(
                 _weixin_message("2", "owner@im.wechat", "still here"),
             ))
-            await _wait_until(lambda: WEIXIN_QUEUE_NOTICE in _sent(client) and agent.inbox.pending_count == 1)
-            self.assertNotIn(WEIXIN_STEER_NOTICE, _sent(client))
+            await _wait_until(lambda: agent.inbox.pending_count == 1)
+            _assert_notices_absent(self, _sent(client))
             self.assertNotIn("still here", repr(model.calls[0]))
             model.release.set()
             await asyncio.gather(first, second)
@@ -365,12 +374,12 @@ class WeixinChannelSteerTests(unittest.IsolatedAsyncioTestCase):
             ))
             await _wait_until(lambda: agent.inbox.pending_count == 1 and not other.done())
             self.assertNotIn("from bob", repr(model.calls[0]))
-            self.assertNotIn(WEIXIN_STEER_NOTICE, _sent(client))
+            _assert_notices_absent(self, _sent(client))
             model.release.set()
             await asyncio.gather(first, other)
         self.assertNotIn("from bob", repr(model.calls[0]))
         self.assertIn("from bob", repr(model.calls[1]))
-        self.assertNotIn(WEIXIN_STEER_NOTICE, _sent(client))
+        _assert_notices_absent(self, _sent(client))
 
 
 class CliChannelSteerTests(unittest.IsolatedAsyncioTestCase):
@@ -399,8 +408,9 @@ class CliChannelSteerTests(unittest.IsolatedAsyncioTestCase):
         ))
         await model.started.wait()
         await lines.put("check the logs")
-        await _wait_until(lambda: any(
-            call.args and call.args[0] == CLI_STEER_NOTICE
+        await _wait_until(lambda: agent.inbox.has_pending_steer())
+        self.assertFalse(any(
+            call.args and call.args[0] in _CLI_STEER_NOTICES
             for call in ui.print_panel.call_args_list
         ))
         model.release.set()
@@ -429,8 +439,9 @@ class CliChannelSteerTests(unittest.IsolatedAsyncioTestCase):
         ))
         await model.started.wait()
         await lines.put("still here")
-        await _wait_until(lambda: any(
-            call.args and call.args[0] == CLI_QUEUE_NOTICE
+        await _wait_until(lambda: lines.empty())
+        self.assertFalse(any(
+            call.args and call.args[0] in _CLI_STEER_NOTICES
             for call in ui.print_panel.call_args_list
         ))
         self.assertNotIn("still here", repr(model.calls[0]))

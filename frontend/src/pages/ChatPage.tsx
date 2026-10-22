@@ -346,9 +346,7 @@ function ChatPanel({
               ? "Checking API channel..."
               : !chatEnabled
                 ? "Start the API channel to chat..."
-                : panel.sending
-                  ? "Send a message to join the running task..."
-                  : "Message xAgent..."
+                : "Message xAgent..."
           }
           value={messageText}
           disabled={!statusReady || !chatEnabled}

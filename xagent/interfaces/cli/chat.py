@@ -130,10 +130,6 @@ def _default_cli_user_id() -> str:
     return "cli_user"
 
 
-CLI_STEER_NOTICE = "Added to the running task."
-CLI_QUEUE_NOTICE = "Will be handled next."
-
-
 def _cli_delivery_context(user_id: str):
     return scheduled_delivery_context(
         ScheduledDeliveryContext(
@@ -594,7 +590,7 @@ class AgentCLI:
                             lines.put_nowait(None)
                             reading = False
                         else:
-                            await self._steer_or_defer(ui, line_item, user_id, deferred)
+                            await self._steer_or_defer(line_item, user_id, deferred)
                     elif line_task is not None:
                         await self._restore_line(line_task, lines)
                     event_task = asyncio.create_task(streamed.get())
@@ -604,7 +600,7 @@ class AgentCLI:
                         lines.put_nowait(None)
                         reading = False
                     else:
-                        await self._steer_or_defer(ui, line_item, user_id, deferred)
+                        await self._steer_or_defer(line_item, user_id, deferred)
         finally:
             if not event_task.done():
                 await self._restore_line(event_task, streamed)
@@ -612,7 +608,7 @@ class AgentCLI:
                 pump.cancel()
             await asyncio.gather(pump, return_exceptions=True)
 
-    async def _steer_or_defer(self, ui: TerminalUI, line: Any, user_id: str, deferred: list[Any]) -> None:
+    async def _steer_or_defer(self, line: Any, user_id: str, deferred: list[Any]) -> None:
         text = str(line or "").strip()
         if not text:
             return
@@ -621,9 +617,7 @@ class AgentCLI:
             return
         turn_id = self._live_turn_id
         if turn_id and await self.agent.steer(turn_id, text, channel="cli", user_id=user_id):
-            ui.print_panel(CLI_STEER_NOTICE, title="Message")
             return
-        ui.print_panel(CLI_QUEUE_NOTICE, title="Message")
         deferred.append(text)
 
     @staticmethod
