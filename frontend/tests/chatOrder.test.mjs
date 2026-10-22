@@ -33,16 +33,16 @@ test("a steer stays above every assistant bubble already in the running turn", (
     message("assistant-interim", "assistant", "先看综合新闻"),
     message("assistant-final", "assistant", "财经方面"),
   ];
-  const placed = placeSteeredUser(
-    [...messages, message("user-2", "user", "财经方向")],
-    "user-2",
-    "Added to the running task",
-  );
+  const placed = placeSteeredUser([...messages, message("user-2", "user", "财经方向")], "user-2");
   assert.deepEqual(
     placed.map((item) => item.id),
     ["user-1", "user-2", "assistant-interim", "assistant-final"],
   );
-  assert.equal(placed[1].meta, "Added to the running task");
+  assert.equal(placed[1].meta, undefined);
+  assert.equal(
+    placed.some((item) => item.meta === "Added to the running task" || item.meta === "Will be handled next"),
+    false,
+  );
 });
 
 test("a second steer lines up with the earlier user messages", () => {
@@ -61,13 +61,15 @@ test("a second steer lines up with the earlier user messages", () => {
 test("placing an already ordered steer does not move it again", () => {
   const messages = [
     message("user-1", "user", "今天杭州有什么新闻"),
-    { ...message("user-2", "user", "财经方向"), meta: "Added to the running task" },
+    message("user-2", "user", "财经方向"),
     message("assistant-1", "assistant", "财经方面"),
   ];
+  const placed = placeSteeredUser(messages, "user-2");
   assert.deepEqual(
-    placeSteeredUser(messages, "user-2", "Added to the running task").map((item) => item.id),
+    placed.map((item) => item.id),
     ["user-1", "user-2", "assistant-1"],
   );
+  assert.equal(placed[1].meta, undefined);
 });
 
 test("a rejected steer falls back below the running reply with its own assistant bubble", () => {
@@ -76,17 +78,16 @@ test("a rejected steer falls back below the running reply with its own assistant
     message("user-2", "user", "财经方向"),
     message("assistant-1", "assistant", "财经方面"),
   ];
-  const queued = placeQueuedFollowup(
-    messages,
-    "user-2",
-    message("assistant-2", "assistant", ""),
-    "Will be handled next",
-  );
+  const queued = placeQueuedFollowup(messages, "user-2", message("assistant-2", "assistant", ""));
   assert.deepEqual(
     queued.map((item) => item.id),
     ["user-1", "assistant-1", "user-2", "assistant-2"],
   );
-  assert.equal(queued[2].meta, "Will be handled next");
+  assert.equal(queued[2].meta, undefined);
+  assert.equal(
+    queued.some((item) => item.meta === "Added to the running task" || item.meta === "Will be handled next"),
+    false,
+  );
 });
 
 test("older turns stay above the running reply when a new steer arrives", () => {

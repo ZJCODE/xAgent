@@ -28,9 +28,6 @@ const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_ATTACHMENTS_PER_MESSAGE = 10;
 const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024;
 const ACCEPTED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
-const STEERED_NOTICE = "Added to the running task";
-const QUEUED_NOTICE = "Will be handled next";
-
 type SocketOptions = {
   followup?: boolean;
   userMessageId?: string;
@@ -416,12 +413,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         patchPanel(panelId, (panel) => {
           let messages = panel.messages;
           if (followup && error && !steeredStream && followupUserId) {
-            messages = placeQueuedFollowup(
-              messages,
-              followupUserId,
-              { id: assistantId, role: "assistant", content: "", pending: true },
-              "",
-            );
+            messages = placeQueuedFollowup(messages, followupUserId, {
+              id: assistantId,
+              role: "assistant",
+              content: "",
+              pending: true,
+            });
           }
           return {
             ...panel,
@@ -468,7 +465,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             };
             patchPanel(panelId, (panel) => ({
               ...panel,
-              messages: placeQueuedFollowup(panel.messages, followupUserId, queuedAssistant, QUEUED_NOTICE),
+              messages: placeQueuedFollowup(panel.messages, followupUserId, queuedAssistant),
             }));
           }
           return;
@@ -478,7 +475,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           if (followupUserId) {
             patchPanel(panelId, (panel) => ({
               ...panel,
-              messages: placeSteeredUser(panel.messages, followupUserId, STEERED_NOTICE),
+              messages: placeSteeredUser(panel.messages, followupUserId),
             }));
           }
           return;

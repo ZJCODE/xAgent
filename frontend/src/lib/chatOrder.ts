@@ -19,14 +19,10 @@ export function insertUserBeforeRunningReply<T extends OrderedChatMessage>(messa
 }
 
 /** Keep a confirmed steer above the running reply, including when it was appended later. */
-export function placeSteeredUser<T extends OrderedChatMessage>(
-  messages: T[],
-  userMessageId: string,
-  meta: string,
-): T[] {
+export function placeSteeredUser<T extends OrderedChatMessage>(messages: T[], userMessageId: string): T[] {
   const index = messages.findIndex((message) => message.id === userMessageId);
   if (index < 0) return messages;
-  const user = { ...messages[index], meta };
+  const user = messages[index];
   const rest = messages.filter((message) => message.id !== userMessageId);
   return insertUserBeforeRunningReply(rest, user);
 }
@@ -36,12 +32,11 @@ export function placeQueuedFollowup<T extends OrderedChatMessage>(
   messages: T[],
   userMessageId: string,
   assistantMessage: T,
-  meta: string,
 ): T[] {
   const user = messages.find((message) => message.id === userMessageId);
   const rest = messages.filter(
     (message) => message.id !== userMessageId && message.id !== assistantMessage.id,
   );
   if (!user) return [...rest, assistantMessage];
-  return [...rest, { ...user, meta }, assistantMessage];
+  return [...rest, user, assistantMessage];
 }
