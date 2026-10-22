@@ -95,6 +95,7 @@ export interface ChatEvent {
   turn_id?: string;
   event_id?: string;
   request_id?: string;
+  steered?: boolean;
 }
 
 export interface ScheduledTaskRecurrenceRule {

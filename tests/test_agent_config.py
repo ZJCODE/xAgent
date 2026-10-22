@@ -1428,6 +1428,24 @@ provider:
             with self.assertRaisesRegex(ValueError, "Unsupported agent key"):
                 BaseAgentRunner(config_dir=tmpdir)
 
+    def test_config_rejects_busy_input_key(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                """
+agent:
+  busy_input: steer
+provider:
+  model: "gpt-5.4-mini"
+  api_key: "test-key"
+""",
+                encoding="utf-8",
+            )
+            write_identity(tmpdir)
+
+            with self.assertRaisesRegex(ValueError, "busy_input"):
+                BaseAgentRunner(config_dir=tmpdir)
+
     def test_config_rejects_system_prompt_key(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "config.yaml"

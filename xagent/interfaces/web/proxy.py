@@ -140,13 +140,19 @@ async def _local_http_request(request: Request, path: str, root: Path) -> Respon
             return JSONResponse(await client.observe(**payload))
         final = ""
         identifiers = {}
+        steered = False
         async for event in client.chat_events(**_chat_kwargs(payload)):
             identifiers.update({key: event[key] for key in ("turn_id", "event_id", "request_id") if event.get(key)})
+            if event.get("type") == "steered":
+                steered = True
             if event.get("type") == "error":
                 return JSONResponse(event, status_code=int(event.get("status_code") or 500))
             if event.get("type") == "message_done":
                 final = str(event.get("content") or "")
-        return JSONResponse({"reply": final, **identifiers})
+        body = {"reply": final, **identifiers}
+        if steered:
+            body["steered"] = True
+        return JSONResponse(body)
     except httpx.HTTPStatusError as exc:
         return Response(exc.response.content, status_code=exc.response.status_code, media_type="application/json")
     except ValueError as exc:
@@ -195,15 +201,47 @@ async def _local_websocket(websocket: WebSocket, path: str, root: Path, logger) 
             await websocket.close(code=1008, reason="Unknown runtime stream")
             return
         client = await ensure_runtime(root)
+        if path == "chat":
+            from pydantic import ValidationError
+
+            from ...integrations.api.chat_relay import ChatPayloadError, relay_chat_socket
+            from ..server.models import AgentInput
+
+            async def steer_payload(turn_id: str, payload: dict) -> bool:
+                if not isinstance(payload, dict):
+                    raise ChatPayloadError("Invalid chat payload.", status_code=422)
+                try:
+                    data = AgentInput.model_validate(payload)
+                except ValidationError as exc:
+                    raise ChatPayloadError(
+                        "Invalid chat payload.",
+                        status_code=422,
+                        details=exc.errors(),
+                    ) from exc
+                if data.attachments or data.image_source or data.images:
+                    return False
+                text = str(data.user_message or "").strip()
+                if not text:
+                    return False
+                result = await client.steer(
+                    turn_id=turn_id,
+                    content=text,
+                    channel="api",
+                    user_id=data.user_id,
+                )
+                return bool(result.get("steered"))
+
+            await relay_chat_socket(
+                websocket,
+                lambda payload: client.chat_events(**_chat_kwargs(payload)),
+                steer_payload,
+            )
+            return
         while True:
             payload = await websocket.receive_json()
             try:
-                if path == "chat":
-                    async for event in client.chat_events(**_chat_kwargs(payload)):
-                        await websocket.send_json(event)
-                else:
-                    await websocket.send_json({"type": "result", "result": await client.observe(**payload)})
-                    await websocket.send_json({"type": "done"})
+                await websocket.send_json({"type": "result", "result": await client.observe(**payload)})
+                await websocket.send_json({"type": "done"})
             except ValueError as exc:
                 await websocket.send_json({"type": "error", "error": str(exc), "status_code": 422})
                 await websocket.send_json({"type": "done"})

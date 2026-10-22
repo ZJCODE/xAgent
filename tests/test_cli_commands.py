@@ -617,7 +617,9 @@ class CLICommandTests(unittest.TestCase):
         fake_ui = MagicMock()
         fake_ui.input.return_value = "bye"
 
-        with patch("xagent.interfaces.cli.TerminalUI", return_value=fake_ui):
+        with patch("xagent.interfaces.cli.TerminalUI", return_value=fake_ui), patch(
+            "xagent.interfaces.cli.chat.sys.stdin.isatty", return_value=False,
+        ):
             asyncio.run(cli._chat_interactive_terminal_ui(
                 user_id="alice",
                 stream=False,

@@ -79,6 +79,8 @@ class ChatService:
                 payload.update({key: event[key] for key in ("turn_id", "event_id", "request_id") if event.get(key)})
                 if event.get("type") == "error":
                     raise PublicHTTPException(event)
+                if event.get("type") == "steered":
+                    payload["steered"] = True
                 if event.get("type") == "message_done" and event.get("phase") == "final":
                     payload["reply"] = str(event.get("content") or "") or payload["reply"]
                     attachments = event.get("attachments")

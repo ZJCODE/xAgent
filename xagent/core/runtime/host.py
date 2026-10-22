@@ -48,6 +48,8 @@ class TurnControl(BaseModel):
     turn_id: str
     channel: str | None = "api"
     content: str = ""
+    user_id: str | None = None
+    room_name: str | None = None
 
 
 class RuntimeStopInput(BaseModel):
@@ -760,7 +762,13 @@ class RuntimeHost:
 
         @app.post("/runtime/turns/steer")
         async def steer(payload: TurnControl):
-            return {"steered": await self.agent.steer(payload.turn_id, payload.content, channel=payload.channel)}
+            return {"steered": await self.agent.steer(
+                payload.turn_id,
+                payload.content,
+                channel=payload.channel,
+                user_id=payload.user_id,
+                room_name=payload.room_name,
+            )}
 
         @app.post("/runtime/chat/events")
         @app.post("/runtime/chat")

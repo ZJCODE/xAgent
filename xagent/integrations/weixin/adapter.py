@@ -41,7 +41,7 @@ from ...utils.image_utils import (
 )
 from .client import SESSION_EXPIRED_ERRCODE, WeixinClient, _error_code, raise_for_api_error
 from .config import WeixinAdapterConfig
-from .media import ITEM_FILE, ITEM_IMAGE, ITEM_VIDEO, ITEM_VOICE, InboundMedia, download_inbound_media, upload_outbound_media
+from .media import ITEM_FILE, ITEM_IMAGE, ITEM_TEXT, ITEM_VIDEO, ITEM_VOICE, InboundMedia, download_inbound_media, upload_outbound_media
 from .send import extract_text, make_client_id, split_text
 from .state import WeixinCredentials, WeixinStateStore
 
@@ -325,6 +325,9 @@ class WeixinAdapter:
         if not self._should_route_message(message):
             return
         user_id = str(message.get("from_user_id") or "").strip()
+        if self._should_join_running_turn(user_id, message):
+            await self._handle_dm(message, user_id=user_id)
+            return
         entry = self._chat_locks.get(user_id)
         if entry is None:
             entry = _UserChatLock()
@@ -371,6 +374,26 @@ class WeixinAdapter:
             return True
         values = [message.get("from_user_id"), message.get("to_user_id"), message.get("session_id")]
         return any("@chatroom" in str(value or "") for value in values)
+
+    def _should_join_running_turn(self, user_id: str, message: dict[str, Any]) -> bool:
+        """True when this user's plain text can join their own running turn.
+
+        Media and any message that does not belong to the turn already
+        running stay on the per-user lock.
+        """
+        inbox = self.agent.inbox
+        if not inbox.busy:
+            return False
+        if not inbox.matches_session(channel="weixin", user_id=user_id, room_name=None):
+            return False
+        return self._is_plain_text_message(message)
+
+    @staticmethod
+    def _is_plain_text_message(message: dict[str, Any]) -> bool:
+        items = [item for item in message.get("item_list") or [] if isinstance(item, dict)]
+        if not items:
+            return False
+        return all(int(item.get("type") or 0) == ITEM_TEXT for item in items)
 
     async def _handle_dm(self, message: dict[str, Any], *, user_id: str) -> None:
         assert self._credentials is not None
@@ -560,6 +583,8 @@ class WeixinAdapter:
             async with asyncio.timeout(timeout_seconds):
                 async for event in event_source:
                     event_type = event.get("type")
+                    if event_type in {"steered", "accepted"}:
+                        continue
                     if event_type == "message_done":
                         content = str(event.get("content") or "").strip()
                         attachments = self._outbound_attachments_from_event(event)

@@ -13,6 +13,16 @@ from xagent.integrations.weixin.config import WeixinAdapterConfig
 from xagent.integrations.weixin.state import WeixinCredentials, WeixinStateStore
 
 
+class _IdleInbox:
+    busy = False
+    current_turn_id = None
+    run_timeout = 600
+    queue_timeout = 630
+
+    def matches_session(self, **kwargs):
+        return False
+
+
 class _FakeAgent:
     supports_vision = True
 
@@ -21,6 +31,7 @@ class _FakeAgent:
         self.chat_calls = []
         self.maintenance_count = 0
         self.workspace_dir = None
+        self.inbox = _IdleInbox()
 
     async def chat_events(self, **kwargs):
         self.chat_calls.append(kwargs)

@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import { getAgentInfo, stopChat, uploadWorkspaceFile, workspaceBlobUrl } from "../lib/api";
+import { insertUserBeforeRunningReply, placeQueuedFollowup, placeSteeredUser } from "../lib/chatOrder";
 import type { AgentCapabilities, AttachmentAsset, ChatEvent, ChatMessage, ChatPanelState, ChatSettings } from "../types";
 import { makeId } from "../lib/format";
 
@@ -27,6 +28,10 @@ const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_ATTACHMENTS_PER_MESSAGE = 10;
 const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024;
 const ACCEPTED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
+type SocketOptions = {
+  followup?: boolean;
+  userMessageId?: string;
+};
 
 type PanelId = ChatPanelState["id"];
 
@@ -191,6 +196,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const [capabilities, setCapabilities] = useState<AgentCapabilities>(DEFAULT_CAPABILITIES);
   const [currentTurnId, setCurrentTurnId] = useState<string | null>(null);
   const socketsRef = useRef<Record<string, WebSocket>>({});
+  const sendingRef = useRef(false);
+  const turnIdRef = useRef<string | null>(null);
 
   const patchPanel = useCallback((panelId: PanelId, updater: (panel: ChatPanelState) => ChatPanelState) => {
     void panelId;
@@ -350,7 +357,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     [patchPanel],
   );
 
-  const runSocket = useCallback((panelId: PanelId, payload: Record<string, unknown>, assistantId: string) => {
+  const runSocket = useCallback((panelId: PanelId, payload: Record<string, unknown>, assistantId: string, options?: SocketOptions) => {
     return new Promise<void>((resolve, reject) => {
       const socketKey = `${panelId}-${assistantId}`;
       const socket = new WebSocket(webSocketUrl("/ws/chat"));
@@ -361,6 +368,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       const localMessageIds = new Set<string>([assistantId]);
       const remoteToLocalMessageId = new Map<string, string>();
       let claimedPlaceholder = false;
+      let steeredStream = false;
+      const followup = Boolean(options?.followup);
+      const followupUserId = options?.userMessageId;
 
       const ensureAssistantMessage = (event: ChatEvent): string => {
         const remoteMessageId = event.message_id;
@@ -373,12 +383,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           remoteToLocalMessageId.set(remoteMessageId, localId);
           localMessageIds.add(localId);
 
-          if (localId !== assistantId) {
-            patchPanel(panelId, (panel) => ({
+          patchPanel(panelId, (panel) => {
+            if (panel.messages.some((message) => message.id === localId)) return panel;
+            return {
               ...panel,
               messages: [...panel.messages, { id: localId, role: "assistant", content: "", pending: true }],
-            }));
-          }
+            };
+          });
 
           return localId;
         }
@@ -391,24 +402,39 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         if (settled) return;
         settled = true;
         delete socketsRef.current[socketKey];
-        setCurrentTurnId(null);
+        if (!followup) {
+          turnIdRef.current = null;
+          sendingRef.current = false;
+          setCurrentTurnId(null);
+        }
         if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
           socket.close(1000);
         }
-        patchPanel(panelId, (panel) => ({
-          ...panel,
-          sending: false,
-          messages: panel.messages.flatMap((message) => {
-            if (!localMessageIds.has(message.id) || !message.pending) return [message];
-            if (aborted && !message.content) return [];
-            return [{
-              ...message,
-              pending: false,
-              error: Boolean(error),
-              content: error && !message.content ? `Error: ${error.message}` : message.content,
-            }];
-          }),
-        }));
+        patchPanel(panelId, (panel) => {
+          let messages = panel.messages;
+          if (followup && error && !steeredStream && followupUserId) {
+            messages = placeQueuedFollowup(messages, followupUserId, {
+              id: assistantId,
+              role: "assistant",
+              content: "",
+              pending: true,
+            });
+          }
+          return {
+            ...panel,
+            sending: followup ? panel.sending : false,
+            messages: messages.flatMap((message) => {
+              if (!localMessageIds.has(message.id) || !message.pending) return [message];
+              if ((aborted || steeredStream) && !message.content) return [];
+              return [{
+                ...message,
+                pending: false,
+                error: Boolean(error),
+                content: error && !message.content ? `Error: ${error.message}` : message.content,
+              }];
+            }),
+          };
+        });
         if (error) reject(error);
         else resolve();
       };
@@ -427,7 +453,31 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         }
 
         if (parsed.type === "accepted") {
-          setCurrentTurnId(parsed.turn_id || null);
+          if (!followup) {
+            turnIdRef.current = parsed.turn_id || null;
+            setCurrentTurnId(parsed.turn_id || null);
+          } else if (followupUserId) {
+            const queuedAssistant: ChatMessage = {
+              id: assistantId,
+              role: "assistant",
+              content: "",
+              pending: true,
+            };
+            patchPanel(panelId, (panel) => ({
+              ...panel,
+              messages: placeQueuedFollowup(panel.messages, followupUserId, queuedAssistant),
+            }));
+          }
+          return;
+        }
+        if (parsed.type === "steered") {
+          steeredStream = true;
+          if (followupUserId) {
+            patchPanel(panelId, (panel) => ({
+              ...panel,
+              messages: placeSteeredUser(panel.messages, followupUserId),
+            }));
+          }
           return;
         }
         if (parsed.type === "aborted") {
@@ -499,7 +549,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           return;
         }
 
-        if (parsed.type === "done") finish();
+        if (parsed.type === "done") {
+          if (parsed.steered && !followup) return;
+          finish();
+        }
       });
 
       socket.addEventListener("error", () => finish(new Error("WebSocket connection failed.")));
@@ -512,7 +565,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const sendMessage = useCallback(
     async (panelId: PanelId, rawText: string) => {
       const text = rawText.trim();
-      if (panel.sending) return;
       const currentPanel = panel;
       const attachments = [...currentPanel.pendingAttachments];
       const images = attachmentImageUrls(attachments);
@@ -526,24 +578,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         attachments,
         attachmentCount: attachments.length || undefined,
       };
-      const assistantMessage: ChatMessage = {
-        id: makeId("assistant"),
-        role: "assistant",
-        content: "",
-        pending: true,
-      };
-
-      patchPanel(panelId, (current) => ({
-        ...current,
-        pendingAttachments: [],
-        sending: true,
-        messages: [...current.messages, userMessage, assistantMessage],
-      }));
-
       const payload: Record<string, unknown> = {
-        user_id: panel.settings.userId,
+        user_id: currentPanel.settings.userId,
         user_message: text,
-        stream: panel.settings.stream,
+        stream: currentPanel.settings.stream,
         event_id: userMessage.id,
       };
       if (attachments.length) payload.attachments = attachments;
@@ -553,15 +591,48 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       }
       persistSettings(currentPanel);
 
+      if (sendingRef.current) {
+        const assistantMessage: ChatMessage = {
+          id: makeId("assistant"),
+          role: "assistant",
+          content: "",
+          pending: true,
+        };
+        patchPanel(panelId, (current) => ({
+          ...current,
+          pendingAttachments: [],
+          messages: insertUserBeforeRunningReply(current.messages, userMessage),
+        }));
+        await runSocket(panelId, payload, assistantMessage.id, {
+          followup: true,
+          userMessageId: userMessage.id,
+        }).catch(() => undefined);
+        return;
+      }
+
+      const assistantMessage: ChatMessage = {
+        id: makeId("assistant"),
+        role: "assistant",
+        content: "",
+        pending: true,
+      };
+      sendingRef.current = true;
+      patchPanel(panelId, (current) => ({
+        ...current,
+        pendingAttachments: [],
+        sending: true,
+        messages: [...current.messages, userMessage, assistantMessage],
+      }));
       await runSocket(panelId, payload, assistantMessage.id).catch(() => undefined);
     },
     [capabilities, panel, patchPanel, runSocket],
   );
 
   const stopTurn = useCallback(async () => {
-    if (!panel.sending || !currentTurnId) return;
-    await stopChat(currentTurnId).catch(() => undefined);
-  }, [panel.sending, currentTurnId]);
+    const turnId = turnIdRef.current;
+    if (!sendingRef.current || !turnId) return;
+    await stopChat(turnId).catch(() => undefined);
+  }, []);
 
   const sendObservation = useCallback(
     async (panelId: PanelId, rawText: string) => {
