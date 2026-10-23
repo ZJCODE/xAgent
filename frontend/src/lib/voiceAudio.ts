@@ -42,19 +42,24 @@ export class PcmStreamPlayer {
 
   push(pcm: ArrayBuffer): void {
     if (!this.active || pcm.byteLength < 2) return;
-    const floats = pcm16ToMonoFloat(pcm, this.channels);
-    if (!floats.length) return;
-    const buffer = this.ctx.createBuffer(1, floats.length, this.sampleRate);
-    const channel = buffer.getChannelData(0);
-    for (let index = 0; index < floats.length; index += 1) channel[index] = floats[index];
-    const node = this.ctx.createBufferSource();
-    node.buffer = buffer;
-    node.connect(this.ctx.destination);
-    const start = Math.max(this.nextTime, this.ctx.currentTime);
-    node.start(start);
-    const duration = buffer.duration;
-    this.nextTime = start + duration;
-    this.segments.push({ start, duration, bytes: pcm.byteLength - (pcm.byteLength % 2), node });
+    if (this.ctx.state === "suspended") void this.ctx.resume();
+    try {
+      const floats = pcm16ToMonoFloat(pcm, this.channels);
+      if (!floats.length) return;
+      const buffer = this.ctx.createBuffer(1, floats.length, this.sampleRate);
+      const channel = buffer.getChannelData(0);
+      for (let index = 0; index < floats.length; index += 1) channel[index] = floats[index];
+      const node = this.ctx.createBufferSource();
+      node.buffer = buffer;
+      node.connect(this.ctx.destination);
+      const start = Math.max(this.nextTime, this.ctx.currentTime);
+      node.start(start);
+      const duration = buffer.duration;
+      this.nextTime = start + duration;
+      this.segments.push({ start, duration, bytes: pcm.byteLength - (pcm.byteLength % 2), node });
+    } catch {
+      /* a bad chunk must not tear down the voice socket */
+    }
   }
 
   clear(): void {

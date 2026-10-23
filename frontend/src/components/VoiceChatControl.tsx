@@ -39,11 +39,13 @@ export function VoiceChatControl({
 
   const pressTalk = () => {
     pressAt.current = performance.now();
+    voice.setHolding(true);
     if (voice.talking) voice.endTalk();
     else voice.beginTalk();
   };
 
   const releaseTalk = () => {
+    voice.setHolding(false);
     if (performance.now() - pressAt.current >= HOLD_MS) voice.endTalk();
   };
 

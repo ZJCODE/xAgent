@@ -196,6 +196,18 @@ def create_websocket_voice_runtime(
     device_id: str = "",
 ) -> tuple[VoiceRuntime, WebSocketMicrophone, WebSocketPlayer]:
     """Construct a VoiceRuntime backed by a paired device WebSocket audio stream."""
+    runtime_holder: list[VoiceRuntime | None] = [None]
+
+    def _on_stt_reconnecting() -> None:
+        runtime = runtime_holder[0]
+        if runtime is not None:
+            runtime._schedule_notice("ears_offline")
+
+    def _on_stt_recovered() -> None:
+        runtime = runtime_holder[0]
+        if runtime is not None:
+            runtime._schedule_notice("back_online")
+
     runtime_profile = VoiceRuntimeProfile(
         name=bridge.hello.profile,
         echo_managed=bridge.hello.echo_managed,
@@ -219,7 +231,10 @@ def create_websocket_voice_runtime(
     lifecycle = SttLifecycleController(presence_cfg)
     recognizer, synthesizer = create_soniox_adapters(
         config,
-        stt_callbacks=SonioxSTTCallbacks(),
+        stt_callbacks=SonioxSTTCallbacks(
+            on_reconnecting=_on_stt_reconnecting,
+            on_recovered=_on_stt_recovered,
+        ),
         lifecycle=lifecycle,
     )
     extra_terms = startup_context_terms(agent)
@@ -257,4 +272,5 @@ def create_websocket_voice_runtime(
         attention_gate=attention_gate,
         stt_lifecycle=lifecycle,
     )
+    runtime_holder[0] = runtime
     return runtime, microphone, player

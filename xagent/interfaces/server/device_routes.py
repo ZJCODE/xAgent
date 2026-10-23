@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 import sqlite3
 import threading
@@ -32,6 +33,8 @@ from ..voice.ws import (
     WebSocketVoiceBridge,
     parse_voice_control_frame,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def register_device_routes(
@@ -261,6 +264,7 @@ def register_device_routes(
             except RuntimeError:
                 pass
         except Exception:
+            logger.exception("Device voice session failed id=%s", device_id)
             try:
                 await websocket.close(code=1011, reason="Voice runtime error")
             except RuntimeError:

@@ -197,6 +197,19 @@ test("a pause after speech ends the turn and flushes silence", async () => {
   assert.ok(silenceTimers(box.timers).length >= 1);
 });
 
+test("idle listening sends silence so recognition stays connected", () => {
+  const box = harness();
+  box.connection.connect({ deviceId: "webvoice1", token: "dvc_saved", userId: "web_user" });
+  box.socket.open();
+  box.socket.serverText({ type: "ready", device_id: "webvoice1", room_name: "browser" });
+  const before = box.socket.sent.length;
+  for (const tick of box.timers.fns.values()) tick();
+  const silence = box.socket.sent.slice(before).find((frame) => frame instanceof ArrayBuffer);
+  assert.ok(silence);
+  assert.equal(silence.byteLength, 6400);
+  assert.ok(new Uint8Array(silence).every((byte) => byte === 0));
+});
+
 test("clear_playback stops audio and a later chunk is not played", () => {
   const box = harness();
   box.connection.connect({ deviceId: "webvoice1", token: "dvc_saved", userId: "web_user" });

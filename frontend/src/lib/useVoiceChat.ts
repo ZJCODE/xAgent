@@ -201,6 +201,10 @@ export function useVoiceChat(userId: string) {
     connectSaved();
   }, [connectSaved, open, phase, record]);
 
+  const setHolding = useCallback((holding: boolean) => {
+    connectionRef.current?.setHolding(holding);
+  }, []);
+
   const beginTalk = useCallback(() => {
     setError("");
     setSending(false);
@@ -229,6 +233,7 @@ export function useVoiceChat(userId: string) {
     pairBrowser,
     disconnect,
     unpair,
+    setHolding,
     beginTalk,
     endTalk,
   };

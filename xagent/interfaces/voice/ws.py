@@ -24,6 +24,9 @@ logger = logging.getLogger(__name__)
 
 MAX_VOICE_CONTROL_BYTES = 16 * 1024
 MAX_VOICE_AUDIO_CHUNK_BYTES = 256 * 1024
+# Soniox closes an active STT session that receives no audio for about 20s.
+# Push-to-talk sends nothing between utterances, so idle gaps must be silence.
+_IDLE_SILENCE_SECONDS = 0.2
 
 
 class VoiceSessionHello(BaseModel):
@@ -175,15 +178,22 @@ class WebSocketMicrophone:
         )
         while not stop_event.is_set() and not self.bridge.closed.is_set():
             try:
-                raw_chunk = self._chunks.get(timeout=0.2)
+                raw_chunk = self._chunks.get(timeout=_IDLE_SILENCE_SECONDS)
             except queue.Empty:
-                yield b""
+                if pause_event.is_set() or stop_event.is_set():
+                    yield b""
+                    continue
+                yield converter.convert(self._idle_silence())
                 continue
             if raw_chunk is None:
                 return
             if pause_event.is_set() or stop_event.is_set():
                 continue
             yield converter.convert(raw_chunk)
+
+    def _idle_silence(self) -> bytes:
+        frames = max(1, int(self.stream_sample_rate * _IDLE_SILENCE_SECONDS))
+        return b"\x00\x00" * frames * max(1, self.stream_channels)
 
 
 class WebSocketPlayer:

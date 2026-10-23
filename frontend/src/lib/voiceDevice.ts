@@ -255,6 +255,8 @@ export class VoiceDeviceConnection {
   private pingTimer = 0;
   private silenceTimer = 0;
   private silenceFramesLeft = 0;
+  private idleTimer = 0;
+  private holding = false;
   private heardSpeech = false;
   private quietMs = 0;
   private draining = false;
@@ -317,6 +319,7 @@ export class VoiceDeviceConnection {
     this.stopCapture();
     this.stopPing();
     this.stopEndpointSilence();
+    this.stopIdleSilence();
     this.acceptingAudio = false;
     this.reportingProgress = false;
     this.deps.player.clear();
@@ -380,6 +383,10 @@ export class VoiceDeviceConnection {
     } finally {
       this.endingTalk = false;
     }
+  }
+
+  setHolding(holding: boolean): void {
+    this.holding = holding;
   }
 
   notePlaybackProgress(playedBytes: number): void {
@@ -506,6 +513,7 @@ export class VoiceDeviceConnection {
         this.deps.listener.onTranscript({ role: message.role, text: message.text, final: message.final });
         return;
       case "playback_start":
+        if (this.talking && !this.holding) this.stopCapture();
         this.lastProgress = 0;
         this.acceptingAudio = true;
         this.reportingProgress = true;
@@ -531,6 +539,23 @@ export class VoiceDeviceConnection {
     this.pingTimer = timers.setInterval(() => {
       this.sendControl({ type: "ping" });
     }, 15_000);
+    this.startIdleSilence();
+  }
+
+  private startIdleSilence(): void {
+    this.stopIdleSilence();
+    const timers = this.deps.timers ?? defaultTimers();
+    const frameSamples = Math.floor(VOICE_INPUT_RATE * 0.2);
+    this.idleTimer = timers.setInterval(() => {
+      if (this.talking || this.silenceFramesLeft > 0 || this.socket?.readyState !== SOCKET_OPEN) return;
+      this.socket.send(new ArrayBuffer(frameSamples * 2));
+    }, 200);
+  }
+
+  private stopIdleSilence(): void {
+    if (!this.idleTimer) return;
+    (this.deps.timers ?? defaultTimers()).clearInterval(this.idleTimer);
+    this.idleTimer = 0;
   }
 
   private stopPing(): void {
@@ -544,6 +569,7 @@ export class VoiceDeviceConnection {
     this.stopCapture();
     this.stopPing();
     this.stopEndpointSilence();
+    this.stopIdleSilence();
     this.acceptingAudio = false;
     this.reportingProgress = false;
     this.deps.player.clear();
