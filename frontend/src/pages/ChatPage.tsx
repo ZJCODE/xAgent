@@ -2,6 +2,7 @@ import { Activity, Eye, FileIcon, Paperclip, Play, RadioTower, RefreshCw, Send, 
 import { FormEvent, useEffect, useRef, useState, type ReactNode } from "react";
 import { Markdown } from "../components/Markdown";
 import { Button, EmptyState, IconButton, StatusBadge } from "../components/ui";
+import { VoiceChatControl } from "../components/VoiceChatControl";
 import { useAgentSession } from "../context/AgentSessionContext";
 import { DEFAULT_WEB_USER_ID, useChat } from "../context/ChatContext";
 import { useApiChannel } from "../lib/useApiChannel";
@@ -214,7 +215,7 @@ function ChatPanel({
 
   return (
     <section className="chat-panel">
-      <div className="chat-toolbar">
+      <VoiceChatControl userId={panel.settings.userId} enabled={statusReady && chatEnabled}>
         <div className="panel-settings-right chat-status-cluster">
           {customUserId ? (
             <StatusBadge tone="info" className="chat-status-badge" title="Non-default API user ID">
@@ -241,7 +242,7 @@ function ChatPanel({
             <span className="status-badge-label">{chatStatus === "sending" ? "Chat running" : "Chat idle"}</span>
           </StatusBadge>
         </div>
-      </div>
+      </VoiceChatControl>
 
       <div ref={scrollRef} className={classNames("chat-message-list fade-mask flex-1 min-h-0 overflow-y-auto px-3 sm:px-6 py-4 sm:py-6 space-y-4", !panel.messages.length && "is-empty")}>
         {panel.messages.length ? (

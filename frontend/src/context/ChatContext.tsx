@@ -12,6 +12,7 @@ import { getAgentInfo, stopChat, uploadWorkspaceFile, workspaceBlobUrl } from ".
 import { insertUserBeforeRunningReply, placeQueuedFollowup, placeSteeredUser } from "../lib/chatOrder";
 import type { AgentCapabilities, AttachmentAsset, ChatEvent, ChatMessage, ChatPanelState, ChatSettings } from "../types";
 import { makeId } from "../lib/format";
+import { webSocketUrl } from "../lib/webSocketUrl";
 
 export const DEFAULT_WEB_USER_ID = "web_user";
 
@@ -173,12 +174,6 @@ function createPanel(panelId: PanelId): ChatPanelState {
     },
     sending: false,
   };
-}
-
-function webSocketUrl(path: string): string {
-  const url = new URL(path, window.location.origin);
-  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  return url.toString();
 }
 
 function persistSettings(panel: ChatPanelState) {

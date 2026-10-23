@@ -1308,7 +1308,101 @@ input::placeholder {
 
 .chat-toolbar {
   background: var(--bg-app);
-  justify-content: flex-end;
+  justify-content: space-between;
+}
+
+.chat-voice-slot {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+}
+
+.voice-toggle.is-active {
+  border-color: var(--accent);
+}
+
+.voice-chat-panel {
+  display: grid;
+  gap: 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-surface-subtle);
+  padding: 12px 14px;
+}
+
+.voice-chat-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.voice-chat-summary strong {
+  font-size: 13px;
+}
+
+.voice-chat-summary span {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.voice-actions,
+.voice-pair,
+.voice-pair-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.voice-pair {
+  display: grid;
+}
+
+.voice-pair-row {
+  width: 100%;
+}
+
+.voice-pair-row input {
+  min-width: 0;
+  flex: 1;
+  height: 36px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-surface);
+  color: var(--text);
+  padding: 0 10px;
+}
+
+.voice-hold {
+  justify-content: center;
+  min-height: 46px;
+  touch-action: none;
+  user-select: none;
+}
+
+.voice-hold.is-talking {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--danger) 40%, transparent);
+}
+
+.voice-transcript {
+  display: grid;
+  gap: 6px;
+  max-height: 148px;
+  overflow: auto;
+}
+
+.voice-transcript p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.voice-transcript span {
+  display: inline-block;
+  margin-right: 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 650;
 }
 
 .chat-status-cluster {
@@ -3258,6 +3352,10 @@ input::placeholder {
     gap: 8px;
     padding: 8px 10px;
     justify-content: stretch;
+  }
+
+  .chat-voice-slot {
+    grid-column: 1 / -1;
   }
 
   .panel-settings-right {

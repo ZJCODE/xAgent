@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import json
+import re
 from pathlib import Path
 from typing import Callable
 from urllib.parse import urljoin
@@ -14,6 +15,12 @@ from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from starlette.responses import JSONResponse, Response
 
 from ..cli.web_client import api_url_to_ws_url
+
+# Browsers cannot set an Authorization header on WebSocket, so the web client
+# reads a one-shot auth frame and opens the existing device voice socket with
+# Bearer auth. The agent protocol itself is unchanged.
+_DEVICE_VOICE_PATH = re.compile(r"^devices/([A-Za-z0-9][A-Za-z0-9_.:-]{0,127})/voice$")
+_MAX_DEVICE_TOKEN_LENGTH = 256
 
 _HOP_BY_HOP_HEADERS = {
     "connection",
@@ -71,6 +78,9 @@ def register_api_proxy(
 
     @app.websocket("/ws/{path:path}")
     async def proxy_websocket(websocket: WebSocket, path: str):
+        if _DEVICE_VOICE_PATH.fullmatch(path):
+            await _proxy_device_voice_socket(websocket, path, resolve_api_url, logger)
+            return
         await websocket.accept()
         root = resolve_runtime_root() if resolve_runtime_root is not None else None
         if root is not None:
@@ -104,6 +114,128 @@ def register_api_proxy(
                 await websocket.close(code=1011, reason=str(exc))
 
     logger.info("Proxying chat/observe traffic to the currently selected agent's api channel")
+
+
+def _device_voice_token(raw: object) -> str:
+    if not isinstance(raw, str):
+        raise ValueError("Device credential is required")
+    token = raw.strip()
+    if not token or len(token) > _MAX_DEVICE_TOKEN_LENGTH:
+        raise ValueError("Device credential is required")
+    if any(ord(ch) < 33 or ord(ch) > 126 for ch in token):
+        raise ValueError("Device credential is required")
+    return token
+
+
+def _close_reason(text: str) -> str:
+    cleaned = "".join(ch if 32 <= ord(ch) <= 126 else " " for ch in text).strip()
+    return (cleaned[:120] or "Device voice connection closed")
+
+
+def _safe_close_code(code: int | None) -> int:
+    if code is None or code in {1004, 1005, 1006, 1015} or not 1000 <= code <= 4999:
+        return 1000
+    return int(code)
+
+
+def _is_voice_connection_closed(exc: BaseException) -> bool:
+    return exc.__class__.__name__ in {"ConnectionClosed", "ConnectionClosedOK", "ConnectionClosedError"}
+
+
+def _closed_voice_socket(exc: BaseException) -> tuple[int | None, str]:
+    received = getattr(exc, "rcvd", None)
+    code = getattr(received, "code", None)
+    reason = getattr(received, "reason", None)
+    return (code if isinstance(code, int) else None), str(reason or "")
+
+
+def _voice_handshake_failure(exc: BaseException) -> tuple[int, str]:
+    response = getattr(exc, "response", None)
+    status = getattr(response, "status_code", None)
+    if status in {401, 403}:
+        return 1008, "Device voice authentication failed"
+    return 1013, "Device voice API is unavailable"
+
+
+async def _proxy_device_voice_socket(
+    websocket: WebSocket,
+    path: str,
+    resolve_api_url: Callable[[], str],
+    logger: logging.Logger,
+) -> None:
+    """Relay a browser voice client to ``/ws/devices/{id}/voice``.
+
+    The first text frame is ``{"type":"auth","token":"..."}`` and is consumed
+    here. Later frames, including PCM and ``hello``, are forwarded unchanged.
+    """
+    await websocket.accept()
+    try:
+        raw = await asyncio.wait_for(websocket.receive_text(), timeout=5)
+        payload = json.loads(raw)
+        if not isinstance(payload, dict) or payload.get("type") != "auth":
+            raise ValueError("Device credential is required")
+        token = _device_voice_token(payload.get("token"))
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        if websocket.client_state.name == "CONNECTED":
+            await websocket.close(code=1008, reason="Device credential is required")
+        return
+
+    upstream = resolve_api_url().rstrip("/")
+    if not upstream:
+        await websocket.close(code=1013, reason="Device voice API is unavailable")
+        return
+    target = urljoin(f"{api_url_to_ws_url(upstream)}/", f"ws/{path}")
+    try:
+        import websockets
+    except ImportError as exc:  # pragma: no cover - dependency guard
+        await websocket.close(code=1011, reason="websockets package is required for web client proxy")
+        raise RuntimeError("websockets package is required") from exc
+
+    headers = {"Authorization": f"Bearer {token}"}
+    connected = False
+    try:
+        try:
+            upstream_connection = websockets.connect(
+                target,
+                additional_headers=headers,
+                proxy=None,
+                open_timeout=5,
+                max_size=8 * 1024 * 1024,
+            )
+        except TypeError:
+            upstream_connection = websockets.connect(
+                target,
+                additional_headers=headers,
+                open_timeout=5,
+                max_size=8 * 1024 * 1024,
+            )
+        async with upstream_connection as upstream_ws:
+            connected = True
+            await _relay_websockets(websocket, upstream_ws)
+            if websocket.client_state.name == "CONNECTED":
+                await websocket.close(
+                    code=_safe_close_code(getattr(upstream_ws, "close_code", None)),
+                    reason=_close_reason(str(getattr(upstream_ws, "close_reason", None) or "")),
+                )
+    except WebSocketDisconnect:
+        logger.debug("Web voice client disconnected")
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        if _is_voice_connection_closed(exc):
+            if websocket.client_state.name == "CONNECTED":
+                code, reason = _closed_voice_socket(exc)
+                await websocket.close(code=_safe_close_code(code), reason=_close_reason(reason))
+            return
+        logger.warning("Web voice proxy error: %s", type(exc).__name__)
+        if websocket.client_state.name == "CONNECTED":
+            if connected:
+                code, reason = 1011, "Voice connection closed"
+            else:
+                code, reason = _voice_handshake_failure(exc)
+            await websocket.close(code=code, reason=reason)
 
 
 def _chat_kwargs(payload: dict) -> dict:
