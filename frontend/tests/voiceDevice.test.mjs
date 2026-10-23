@@ -51,9 +51,20 @@ function harness() {
   const socket = fakeSocket();
   const urls = [];
   const player = { began: [], pushed: 0, cleared: 0, resumed: 0, begin(rate, channels) { this.began.push([rate, channels]); }, push() { this.pushed += 1; }, clear() { this.cleared += 1; }, resume() { this.resumed += 1; } };
-  const events = { phase: [], floor: [], transcript: [], ready: [], closed: [], errors: [], talking: [] };
+  const events = { phase: [], floor: [], transcript: [], ready: [], closed: [], errors: [], talking: [], speech: [] };
   let capture;
-  const timers = { fns: [], setInterval(fn) { this.fns.push(fn); return this.fns.length; }, clearInterval() {} };
+  const timers = {
+    fns: new Map(),
+    next: 1,
+    setInterval(fn) {
+      const id = this.next++;
+      this.fns.set(id, fn);
+      return id;
+    },
+    clearInterval(id) {
+      this.fns.delete(id);
+    },
+  };
   const connection = new voice.VoiceDeviceConnection({
     socketUrl(path) {
       urls.push(path);
@@ -75,6 +86,7 @@ function harness() {
       onReady: (info) => events.ready.push(info),
       onClose: (info) => events.closed.push(info),
       onTalking: (talking) => events.talking.push(talking),
+      onSpeech: (heard) => events.speech.push(heard),
       onError: (message) => events.errors.push(message),
     },
   });
@@ -139,20 +151,50 @@ test("playback progress is reported and audio is ignored until playback starts",
   assert.deepEqual(JSON.parse(box.socket.sent.at(-1)), { type: "playback_progress", played_bytes: 4 });
 });
 
-test("microphone frames are sent only while the talk button is held", async () => {
+function pcm16(values) {
+  const samples = new Int16Array(values);
+  return samples.buffer;
+}
+
+function silenceTimers(timers) {
+  return [...timers.fns.values()];
+}
+
+test("microphone frames are sent only while talking, then trailing silence is flushed", async () => {
   const box = harness();
   box.connection.connect({ deviceId: "webvoice1", token: "dvc_saved", userId: "web_user" });
   box.socket.open();
   box.socket.serverText({ type: "ready", device_id: "webvoice1", room_name: "browser" });
-  const pcm = new Uint8Array([8, 0]).buffer;
+  const pcm = pcm16([8]);
   await box.connection.beginTalk();
   box.capture(pcm);
   assert.equal(box.socket.sent.at(-1), pcm);
   box.connection.endTalk();
   const count = box.socket.sent.length;
-  box.capture(new Uint8Array([1, 0]).buffer);
+  box.capture(pcm16([1]));
   assert.equal(box.socket.sent.length, count);
   assert.equal(box.events.talking.at(-1), false);
+  const flush = silenceTimers(box.timers).at(-1);
+  flush();
+  const silence = box.socket.sent.at(-1);
+  assert.equal(silence.byteLength, 640);
+  assert.ok(new Uint8Array(silence).every((byte) => byte === 0));
+});
+
+test("a pause after speech ends the turn and flushes silence", async () => {
+  const box = harness();
+  box.connection.connect({ deviceId: "webvoice1", token: "dvc_saved", userId: "web_user" });
+  box.socket.open();
+  box.socket.serverText({ type: "ready", device_id: "webvoice1", room_name: "browser" });
+  await box.connection.beginTalk();
+  box.capture(pcm16(Array(320).fill(4000)));
+  assert.equal(box.events.speech.at(-1), true);
+  const quiet = pcm16(Array(320).fill(0));
+  for (let frame = 0; frame < 69; frame += 1) box.capture(quiet);
+  assert.equal(box.events.talking.at(-1), true);
+  box.capture(quiet);
+  assert.equal(box.events.talking.at(-1), false);
+  assert.ok(silenceTimers(box.timers).length >= 1);
 });
 
 test("clear_playback stops audio and a later chunk is not played", () => {

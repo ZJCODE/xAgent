@@ -1345,32 +1345,11 @@ input::placeholder {
   font-size: 12px;
 }
 
-.voice-actions,
-.voice-pair,
-.voice-pair-row {
+.voice-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
-}
-
-.voice-pair {
-  display: grid;
-}
-
-.voice-pair-row {
-  width: 100%;
-}
-
-.voice-pair-row input {
-  min-width: 0;
-  flex: 1;
-  height: 36px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--bg-surface);
-  color: var(--text);
-  padding: 0 10px;
 }
 
 .voice-hold {

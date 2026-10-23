@@ -33,6 +33,8 @@ export function useVoiceChat(userId: string) {
   const [lines, setLines] = useState<VoiceTranscriptLine[]>([]);
   const [error, setError] = useState("");
   const [talking, setTalking] = useState(false);
+  const [heard, setHeard] = useState(false);
+  const [sending, setSending] = useState(false);
   const [busy, setBusy] = useState(false);
   const [record, setRecord] = useState<StoredWebVoiceDevice | null>(null);
   const connectionRef = useRef<VoiceDeviceConnection | null>(null);
@@ -43,6 +45,7 @@ export function useVoiceChat(userId: string) {
   const recordRef = useRef<StoredWebVoiceDevice | null>(null);
   const pendingIdRef = useRef("");
   const tokenRef = useRef("");
+  const autoConnectRef = useRef(false);
   userIdRef.current = userId;
   agentRef.current = selectedAgent;
   recordRef.current = record;
@@ -59,6 +62,7 @@ export function useVoiceChat(userId: string) {
   }, []);
 
   useEffect(() => {
+    autoConnectRef.current = false;
     setRecord(loadWebVoiceDevice(localStorage, selectedAgent));
     pendingIdRef.current = "";
     const connection = new VoiceDeviceConnection({
@@ -74,10 +78,15 @@ export function useVoiceChat(userId: string) {
       listener: {
         onPhase: (next) => {
           setPhase(next);
-          if (next !== "live") setTalking(false);
+          if (next !== "live") {
+            setTalking(false);
+            setHeard(false);
+            setSending(false);
+          }
         },
         onFloor: setFloor,
         onTranscript: (event) => {
+          if (event.role === "user" && event.text) setSending(false);
           setLines((current) => applyVoiceTranscript(current, event, () => makeId("voice")));
         },
         onReady: (info) => {
@@ -105,6 +114,8 @@ export function useVoiceChat(userId: string) {
           setFloor("");
         },
         onTalking: setTalking,
+        onSpeech: setHeard,
+        onTurn: () => setSending(true),
         onError: setError,
       },
     });
@@ -154,19 +165,10 @@ export function useVoiceChat(userId: string) {
       const pairing = await createDevicePairing();
       connectToken(deviceIdForNewPair(), pairing.pairing_code);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not create a pairing code.");
+      setError(err instanceof Error ? err.message : "Could not start voice.");
     } finally {
       setBusy(false);
     }
-  }, [connectToken, deviceIdForNewPair]);
-
-  const connectCode = useCallback((code: string) => {
-    const token = normalizeDeviceToken(code);
-    if (!token) {
-      setError("Enter a pairing code.");
-      return;
-    }
-    connectToken(deviceIdForNewPair(), token);
   }, [connectToken, deviceIdForNewPair]);
 
   const disconnect = useCallback(() => {
@@ -189,8 +191,19 @@ export function useVoiceChat(userId: string) {
     }
   }, [disconnect]);
 
+  useEffect(() => {
+    if (!open) {
+      autoConnectRef.current = false;
+      return;
+    }
+    if (autoConnectRef.current || phase !== "idle" || !record) return;
+    autoConnectRef.current = true;
+    connectSaved();
+  }, [connectSaved, open, phase, record]);
+
   const beginTalk = useCallback(() => {
     setError("");
+    setSending(false);
     void connectionRef.current?.beginTalk();
   }, []);
 
@@ -207,12 +220,13 @@ export function useVoiceChat(userId: string) {
     lines,
     error,
     talking,
+    heard,
+    sending,
     busy,
     paired: Boolean(record?.credential),
     deviceId: record?.deviceId || "",
     connectSaved,
     pairBrowser,
-    connectCode,
     disconnect,
     unpair,
     beginTalk,

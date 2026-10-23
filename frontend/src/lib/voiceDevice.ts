@@ -10,6 +10,9 @@
 export const VOICE_INPUT_RATE = 16_000;
 export const VOICE_OUTPUT_RATE = 24_000;
 export const VOICE_FRAME_SAMPLES = 320;
+const SPEECH_RMS = 800;
+const QUIET_AFTER_SPEECH_MS = 1_400;
+const ENDPOINT_SILENCE_MS = 1_500;
 
 const STORAGE_KEY = "xagent_web_voice_devices";
 const DEVICE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/;
@@ -81,6 +84,8 @@ export interface VoiceConnectionListener {
   onReady(info: { deviceId: string; roomName: string; credential?: string }): void;
   onClose(info: { code: number; reason: string }): void;
   onTalking(talking: boolean): void;
+  onSpeech(heard: boolean): void;
+  onTurn?(): void;
   onError(message: string): void;
 }
 
@@ -241,12 +246,18 @@ export class VoiceDeviceConnection {
   private socket: VoiceSocket | null = null;
   private phase: "idle" | "connecting" | "live" = "idle";
   private talking = false;
+  private endingTalk = false;
   private talkGeneration = 0;
   private captureStop: (() => void) | null = null;
   private acceptingAudio = false;
   private reportingProgress = false;
   private lastProgress = 0;
   private pingTimer = 0;
+  private silenceTimer = 0;
+  private silenceFramesLeft = 0;
+  private heardSpeech = false;
+  private quietMs = 0;
+  private draining = false;
   private intentional = false;
 
   constructor(
@@ -305,6 +316,7 @@ export class VoiceDeviceConnection {
     this.socket = null;
     this.stopCapture();
     this.stopPing();
+    this.stopEndpointSilence();
     this.acceptingAudio = false;
     this.reportingProgress = false;
     this.deps.player.clear();
@@ -328,6 +340,10 @@ export class VoiceDeviceConnection {
 
   async beginTalk(): Promise<void> {
     if (this.phase !== "live" || this.talking) return;
+    this.stopEndpointSilence();
+    this.heardSpeech = false;
+    this.quietMs = 0;
+    this.deps.listener.onSpeech(false);
     this.talking = true;
     this.deps.listener.onTalking(true);
     const generation = ++this.talkGeneration;
@@ -347,8 +363,23 @@ export class VoiceDeviceConnection {
   }
 
   endTalk(): void {
+    if (this.endingTalk) return;
+    const wasCapturing = this.talking;
+    const heard = this.heardSpeech;
+    this.endingTalk = true;
     this.talkGeneration += 1;
-    this.stopCapture();
+    this.heardSpeech = false;
+    this.quietMs = 0;
+    this.deps.listener.onSpeech(false);
+    try {
+      this.stopCapture();
+      if (wasCapturing) {
+        this.flushEndpointSilence();
+        if (heard) this.deps.listener.onTurn?.();
+      }
+    } finally {
+      this.endingTalk = false;
+    }
   }
 
   notePlaybackProgress(playedBytes: number): void {
@@ -361,16 +392,65 @@ export class VoiceDeviceConnection {
   private stopCapture(): void {
     const stop = this.captureStop;
     this.captureStop = null;
-    stop?.();
     if (this.talking) {
       this.talking = false;
       this.deps.listener.onTalking(false);
     }
+    this.draining = true;
+    try {
+      stop?.();
+    } finally {
+      this.draining = false;
+    }
   }
 
   private sendPcm(pcm: ArrayBuffer): void {
-    if (!this.talking || !pcm.byteLength || this.socket?.readyState !== SOCKET_OPEN) return;
+    if ((!this.talking && !this.draining) || !pcm.byteLength || this.socket?.readyState !== SOCKET_OPEN) return;
     this.socket.send(pcm);
+    if (this.talking) this.observeUtterance(pcm);
+  }
+
+  private observeUtterance(pcm: ArrayBuffer): void {
+    const samples = new Int16Array(pcm);
+    if (!samples.length) return;
+    let energy = 0;
+    for (let index = 0; index < samples.length; index += 1) energy += samples[index] * samples[index];
+    const rms = Math.sqrt(energy / samples.length);
+    const durationMs = (samples.length / VOICE_INPUT_RATE) * 1000;
+    if (rms >= SPEECH_RMS) {
+      this.quietMs = 0;
+      if (!this.heardSpeech) {
+        this.heardSpeech = true;
+        this.deps.listener.onSpeech(true);
+      }
+      return;
+    }
+    if (!this.heardSpeech) return;
+    this.quietMs += durationMs;
+    if (this.quietMs >= QUIET_AFTER_SPEECH_MS) this.endTalk();
+  }
+
+  private flushEndpointSilence(): void {
+    this.stopEndpointSilence();
+    const frameBytes = VOICE_FRAME_SAMPLES * 2;
+    this.silenceFramesLeft = Math.ceil(ENDPOINT_SILENCE_MS / ((VOICE_FRAME_SAMPLES / VOICE_INPUT_RATE) * 1000));
+    const timers = this.deps.timers ?? defaultTimers();
+    this.silenceTimer = timers.setInterval(() => {
+      if (this.talking || this.silenceFramesLeft <= 0 || this.socket?.readyState !== SOCKET_OPEN) {
+        this.stopEndpointSilence();
+        return;
+      }
+      this.silenceFramesLeft -= 1;
+      this.socket.send(new ArrayBuffer(frameBytes));
+      if (this.silenceFramesLeft <= 0) this.stopEndpointSilence();
+    }, (VOICE_FRAME_SAMPLES / VOICE_INPUT_RATE) * 1000);
+  }
+
+  private stopEndpointSilence(): void {
+    if (!this.silenceTimer) return;
+    (this.deps.timers ?? defaultTimers()).clearInterval(this.silenceTimer);
+    this.silenceTimer = 0;
+    this.silenceFramesLeft = 0;
   }
 
   private sendControl(payload: { type: string; played_bytes?: number }): void {
@@ -463,6 +543,7 @@ export class VoiceDeviceConnection {
     this.socket = null;
     this.stopCapture();
     this.stopPing();
+    this.stopEndpointSilence();
     this.acceptingAudio = false;
     this.reportingProgress = false;
     this.deps.player.clear();
