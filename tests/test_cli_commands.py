@@ -626,7 +626,7 @@ class CLICommandTests(unittest.TestCase):
                 verbose_mode=False,
             ))
 
-        fake_ui.input.assert_called_once_with("[bold cyan]You:[/bold cyan] ")
+        fake_ui.input.assert_called_once_with("[grey70]You:[/grey70] ")
 
     def test_interactive_chat_defaults_to_stable_cli_user_id(self):
         cli = AgentCLI.__new__(AgentCLI)

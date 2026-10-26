@@ -226,7 +226,7 @@ class AgentCLI:
 
         while True:
             try:
-                user_input = ui.input("[bold cyan]You:[/bold cyan] ").strip()
+                user_input = ui.input("[grey70]You:[/grey70] ").strip()
 
                 if user_input.lower() in ["exit", "quit", "bye"]:
                     ui.print_panel(
@@ -307,6 +307,8 @@ class AgentCLI:
         try:
             while True:
                 try:
+                    if ui.console is not None:
+                        ui.console.print("[grey70]You:[/grey70] ", end="")
                     user_input = await lines.get()
                     if user_input is None:
                         ui.print_panel("Session interrupted by user.", title="Session Ended")
