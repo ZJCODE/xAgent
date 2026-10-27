@@ -568,6 +568,9 @@ class CLICommandTests(unittest.TestCase):
             model = "gpt-test"
             tools = {}
 
+            async def _client(self):
+                pass
+
             def __init__(self):
                 self.flush_count = 0
 
@@ -608,6 +611,9 @@ class CLICommandTests(unittest.TestCase):
             model = "gpt-test"
             tools = {}
 
+            async def _client(self):
+                pass
+
         cli = AgentCLI.__new__(AgentCLI)
         cli.agent = FakeAgent()
         cli.message_storage = SimpleNamespace()
@@ -627,6 +633,58 @@ class CLICommandTests(unittest.TestCase):
             ))
 
         fake_ui.input.assert_called_once_with("[grey70]You:[/grey70] ")
+
+    def test_interactive_chat_banner_uses_runtime_model_and_tools_before_input(self):
+        for is_tty in (False, True):
+            with self.subTest(is_tty=is_tty), tempfile.TemporaryDirectory() as tmpdir:
+                cli = AgentCLI(config_dir=tmpdir)
+                client = SimpleNamespace(status=AsyncMock(return_value={
+                    "model": "deepseek-flash",
+                    "tools": ["web_search", "web_fetch"],
+                }))
+                fake_ui = MagicMock()
+                fake_ui.input.return_value = "bye"
+
+                def check_banner(content, **kwargs):
+                    if kwargs.get("title") == "xAgent Chat":
+                        client.status.assert_awaited_once()
+                        self.assertIn("Model: deepseek-flash", content)
+                        self.assertIn("Tools: 2 loaded", content)
+                        self.assertNotIn("Model: gpt-5.6-terra", content)
+
+                fake_ui.print_panel.side_effect = check_banner
+                with patch("xagent.interfaces.cli.TerminalUI", return_value=fake_ui), patch(
+                    "xagent.interfaces.cli.chat.sys.stdin.isatty", return_value=is_tty,
+                ), patch(
+                    "xagent.interfaces.cli.agent_runtime.ensure_runtime", new_callable=AsyncMock,
+                    return_value=client,
+                ) as ensure_runtime, patch.object(
+                    cli, "_chat_interactive_tty", new_callable=AsyncMock,
+                ) as tty_chat:
+                    asyncio.run(cli._chat_interactive_terminal_ui(
+                        user_id="alice", stream=True, verbose_mode=False,
+                    ))
+
+                ensure_runtime.assert_awaited_once_with(Path(tmpdir).resolve())
+                self.assertEqual(tty_chat.await_count, int(is_tty))
+                banner = fake_ui.print_panel.call_args_list[0]
+                self.assertEqual(banner.kwargs["title"], "xAgent Chat")
+                self.assertIn("Model: deepseek-flash", banner.args[0])
+
+    def test_interactive_chat_does_not_print_default_banner_when_runtime_fails(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = AgentCLI(config_dir=tmpdir)
+            fake_ui = MagicMock()
+            with patch("xagent.interfaces.cli.TerminalUI", return_value=fake_ui), patch(
+                "xagent.interfaces.cli.agent_runtime.ensure_runtime", new_callable=AsyncMock,
+                side_effect=RuntimeError("Runtime startup failed"),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "Runtime startup failed"):
+                    asyncio.run(cli._chat_interactive_terminal_ui(
+                        user_id="alice", stream=True, verbose_mode=False,
+                    ))
+            fake_ui.print_panel.assert_not_called()
+            fake_ui.input.assert_not_called()
 
     def test_interactive_chat_defaults_to_stable_cli_user_id(self):
         cli = AgentCLI.__new__(AgentCLI)

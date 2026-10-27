@@ -210,6 +210,8 @@ class AgentCLI:
         verbose_mode: bool,
     ) -> None:
         ui = _terminal_ui_class()()
+        # Populate the banner from the authoritative runtime before rendering it.
+        await self.agent._client()
         self._print_terminal_banner(
             ui,
             stream=stream,
