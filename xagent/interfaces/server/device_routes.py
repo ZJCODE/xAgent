@@ -33,6 +33,39 @@ from ..voice.ws import (
     parse_voice_control_frame,
 )
 
+# Browser WebSockets cannot set Authorization. pair_ / dvc_ tokens are short;
+# reject anything that cannot be a credential so a huge query string is not hashed.
+_MAX_DEVICE_QUERY_TOKEN_LENGTH = 512
+
+
+def resolve_device_credential(*, authorization: str = "", token: str = "") -> str:
+    """Credential string for a device socket.
+
+    ESP and other native clients send ``Authorization: Bearer <token>``.
+    Browsers cannot set that header, so they may pass the same pairing code
+    (``pair_…``) or device credential (``dvc_…``) as ``?token=``. A non-empty
+    Authorization header is returned unchanged and the query value is ignored.
+    """
+    if authorization.strip():
+        return authorization
+    raw = token.strip()
+    if len(raw) > _MAX_DEVICE_QUERY_TOKEN_LENGTH:
+        return ""
+    if raw[:7].lower() == "bearer ":
+        raw = raw[7:].strip()
+    if not raw or len(raw) > _MAX_DEVICE_QUERY_TOKEN_LENGTH:
+        return ""
+    if any(ord(ch) < 33 or ord(ch) > 126 for ch in raw):
+        return ""
+    return "Bearer " + raw
+
+
+def websocket_device_credential(websocket: WebSocket) -> str:
+    return resolve_device_credential(
+        authorization=websocket.headers.get("authorization", ""),
+        token=websocket.query_params.get("token", ""),
+    )
+
 
 def register_device_routes(
     app: FastAPI,
@@ -77,7 +110,7 @@ def register_device_routes(
 
     @app.websocket("/ws/devices/{device_id}")
     async def device_socket(websocket: WebSocket, device_id: str):
-        credential = websocket.headers.get("authorization", "")
+        credential = websocket_device_credential(websocket)
         if not service.authenticate(device_id, credential):
             await websocket.close(code=1008)
             return
@@ -143,7 +176,7 @@ def register_device_routes(
 
     @app.websocket("/ws/devices/{device_id}/voice")
     async def device_voice_socket(websocket: WebSocket, device_id: str):
-        credential = websocket.headers.get("authorization", "")
+        credential = websocket_device_credential(websocket)
         if not service.authenticate(device_id, credential):
             await websocket.close(code=1008)
             return

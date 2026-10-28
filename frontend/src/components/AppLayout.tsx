@@ -7,6 +7,7 @@ import {
   Files,
   ListTodo,
   MessageSquareText,
+  Mic,
   Moon,
   Package,
   RadioTower,
@@ -38,6 +39,7 @@ const navItems: Array<{ route: RoutePath; label: string; icon: ReactNode }> = [
   { route: "/tasks", label: "Tasks", icon: <ListTodo size={15} /> },
   { route: "/channels", label: "Channels", icon: <RadioTower size={15} /> },
   { route: "/devices", label: "Devices", icon: <Cpu size={15} /> },
+  { route: "/voice", label: "Voice", icon: <Mic size={15} /> },
   { route: "/agent", label: "Agent", icon: <Bot size={15} /> },
 ];
 

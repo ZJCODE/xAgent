@@ -106,7 +106,7 @@ The Agent receives stored attachment metadata and can choose to inspect images w
 
 ### 6. Stream real-time voice (optional)
 
-Devices with a microphone and speaker (smart speakers, voice satellites, companions) can open \`${base}/ws/devices/{device_id}/voice\` with \`Authorization: Bearer <DEVICE_CREDENTIAL>\` (or a one-time \`<PAIRING_CODE>\` for voice-only devices). Send a \`hello\` JSON frame first:
+Devices with a microphone and speaker (smart speakers, voice satellites, companions) can open \`${base}/ws/devices/{device_id}/voice\` with \`Authorization: Bearer <DEVICE_CREDENTIAL>\` (or a one-time \`<PAIRING_CODE>\` for voice-only devices). Browsers cannot set that header, so they may pass the same value as \`?token=\` on the voice or control WebSocket; when both are present, the header wins. The admin Voice page uses the query form for push-to-talk as device \`phone-web\`. Send a \`hello\` JSON frame first:
 \`\`\`json
 {"type":"hello","name":"Living Room Speaker","location":"living_room","input_sample_rate":16000,"input_channels":1,"output_sample_rate":24000,"output_channels":1,"profile":"room","echo_managed":false}
 \`\`\`

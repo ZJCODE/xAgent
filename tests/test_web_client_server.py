@@ -38,7 +38,7 @@ class WebClientServerTests(unittest.IsolatedAsyncioTestCase):
         )
         client = TestClient(server.app)
 
-        for path in ("/", "/chat", "/memory", "/workspace", "/message", "/agent", "/skills", "/tasks", "/channels", "/devices"):
+        for path in ("/", "/chat", "/memory", "/workspace", "/message", "/agent", "/skills", "/tasks", "/channels", "/devices", "/voice"):
             response = client.get(path)
             self.assertEqual(response.status_code, 200, path)
             self.assertIn("text/html", response.headers.get("content-type", ""))

@@ -11,6 +11,7 @@ import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from urllib.parse import quote
 
 import websockets
 import yaml
@@ -474,4 +475,78 @@ class DeviceVoiceWebSocketTests(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaises(websockets.exceptions.ConnectionClosed):
                     while True:
                         await asyncio.wait_for(voice_ws.recv(), timeout=2)
+
+    async def test_browser_query_token_pairs_phone_and_header_auth_still_connects(self):
+        host, _, _, url = await self.start_host([], seed_credentials=False)
+        with self.assertRaises(Exception):
+            async with websockets.connect(
+                url + "/ws/devices/phone-web/voice?token=not-a-credential",
+                **self.connection_options,
+            ) as rejected:
+                await rejected.recv()
+
+        code = host.device_service.create_pairing()["pairing_code"]
+        hello = {
+            "type": "hello",
+            "name": "Phone mic",
+            "input_sample_rate": 16000,
+            "input_channels": 1,
+            "output_sample_rate": 24000,
+            "output_channels": 1,
+            "profile": "headset",
+            "echo_managed": True,
+        }
+        fake_recognizer = _FakeWSRecognizer("你好")
+        fake_synth = _FakeWSSynthesizer()
+        with patch(
+            "xagent.interfaces.voice.factory.create_soniox_adapters",
+            return_value=(fake_recognizer, fake_synth),
+        ):
+            async with websockets.connect(
+                url + "/ws/devices/phone-web/voice?token=" + quote(code, safe=""),
+                **self.connection_options,
+            ) as phone:
+                await phone.send(json.dumps(hello))
+                ready = json.loads(await asyncio.wait_for(phone.recv(), timeout=3))
+                self.assertEqual(ready["type"], "ready")
+                self.assertEqual(ready["device_id"], "phone-web")
+                self.assertEqual(ready["room_name"], "Phone mic")
+                issued = ready["credential"]
+                self.assertTrue(issued.startswith("dvc_"))
+                listed = host.device_service.list_devices()["devices"]
+                row = next(item for item in listed if item["device_id"] == "phone-web")
+                self.assertTrue(row["voice_online"])
+                self.assertEqual(row["name"], "Phone mic")
+                await phone.send(json.dumps({"type": "stop"}))
+
+            async with websockets.connect(
+                url + "/ws/devices/phone-web/voice",
+                additional_headers={"Authorization": "Bearer " + issued},
+                **self.connection_options,
+            ) as phone:
+                await phone.send(json.dumps(hello))
+                ready = json.loads(await asyncio.wait_for(phone.recv(), timeout=3))
+                self.assertEqual(ready["type"], "ready")
+                self.assertNotIn("credential", ready)
+                await phone.send(json.dumps({"type": "stop"}))
+
+            async with websockets.connect(
+                url + "/ws/devices/phone-web/voice?token=not-a-credential",
+                additional_headers={"Authorization": "Bearer " + issued},
+                **self.connection_options,
+            ) as phone:
+                await phone.send(json.dumps(hello))
+                ready = json.loads(await asyncio.wait_for(phone.recv(), timeout=3))
+                self.assertEqual(ready["device_id"], "phone-web")
+                await phone.send(json.dumps({"type": "stop"}))
+
+            async with websockets.connect(
+                url + "/ws/devices/phone-web/voice?token=" + quote(issued, safe=""),
+                **self.connection_options,
+            ) as phone:
+                await phone.send(json.dumps(hello))
+                ready = json.loads(await asyncio.wait_for(phone.recv(), timeout=3))
+                self.assertEqual(ready["type"], "ready")
+                self.assertNotIn("credential", ready)
+                await phone.send(json.dumps({"type": "stop"}))
 

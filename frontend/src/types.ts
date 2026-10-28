@@ -1,4 +1,4 @@
-export type RoutePath = "/" | "/memory" | "/message" | "/workspace" | "/skills" | "/tasks" | "/channels" | "/devices" | "/agent";
+export type RoutePath = "/" | "/memory" | "/message" | "/workspace" | "/skills" | "/tasks" | "/channels" | "/devices" | "/voice" | "/agent";
 
 export interface DeviceProfileInput { name: string; location: string; description?: string }
 export interface DeviceInfo {

@@ -3122,7 +3122,7 @@ input::placeholder {
     grid-column: 1 / -1;
     grid-row: 2;
     flex: none;
-    grid-template-columns: repeat(8, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
     gap: 2px;
     overflow: visible;
     padding: 0;
@@ -3467,4 +3467,45 @@ body { -webkit-font-smoothing: antialiased; }
 .device-details-form { display: grid; gap: 12px; margin-top: 12px; padding: 16px; background: var(--bg-surface-subtle); border: 1px solid var(--border); border-radius: 10px; }
 .device-details-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .device-description { white-space: pre-wrap; }
+.voice-content { display: grid; gap: 16px; align-content: start; }
+.voice-panel { display: grid; gap: 14px; border: 1px solid var(--border); background: var(--bg-surface); border-radius: 14px; padding: 22px 24px; }
+.voice-endpoint { margin: 0; color: var(--text-muted); font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
+.voice-endpoint code { color: var(--text); }
+.voice-meta { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
+.voice-meta .wizard-hint { margin: 0; }
+.talk-wrap { display: grid; justify-items: center; gap: 14px; padding: 8px 0 4px; }
+.talk-button {
+  width: min(220px, 68vw);
+  height: min(220px, 68vw);
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-surface-muted);
+  color: var(--text);
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: pointer;
+}
+.talk-button:disabled { opacity: 0.45; cursor: default; }
+.talk-button.holding { background: var(--text); color: var(--bg-surface); border-color: transparent; }
+.talk-button.playing:not(.holding) { border-color: var(--info); }
+.talk-level { width: min(220px, 68vw); height: 6px; border-radius: 999px; background: var(--bg-surface-muted); overflow: hidden; }
+.talk-level > span { display: block; height: 100%; background: var(--text); border-radius: inherit; }
+.voice-transcript { display: grid; gap: 8px; max-height: 240px; overflow: auto; margin: 0; padding: 0; list-style: none; }
+.voice-transcript li { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; background: var(--bg-surface-subtle); }
+.voice-transcript .role { display: block; margin-bottom: 3px; color: var(--text-muted); font-size: 11px; }
+.voice-transcript-empty { color: var(--text-muted); }
+@media (max-width: 760px) {
+  .voice-content { display: flex; flex-direction: column; gap: 12px; }
+  .voice-content .voice-panel:last-child { order: -1; }
+  .voice-panel { padding: 16px; }
+  .talk-button { width: min(180px, 52vw); height: min(180px, 52vw); }
+}
 @media (max-width: 600px) { .device-details-fields { grid-template-columns: 1fr; } }
