@@ -110,3 +110,11 @@ test("converting another schedule to an interval preserves seconds in the time w
     end_at: "2099-06-01 10:01:15",
   }]);
 });
+
+
+test("editing an aware one-shot uses the frozen task timezone", () => {
+  const task = { task_id: "zoned", title: "Call", task_type: "message", content: "Hello",
+    next_run_at: "2099-06-01T02:00:00+00:00", timezone: "Asia/Shanghai", status: "active" };
+  assert.equal(taskToFormState(task).runAt, "2099-06-01T10:00:00");
+  assert.deepEqual(formStateToUpdateInput(taskToFormState(task), task), { title: "Call", task_type: "message", content: "Hello" });
+});

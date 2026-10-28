@@ -289,8 +289,10 @@ class ChannelLifecycleTests(unittest.IsolatedAsyncioTestCase):
         delivered = []
         async def dispatch(record):
             delivered.append(record.task_id)
+            return {"content": record.content}
         scheduler = AsyncTaskScheduler(self.host.runner.tasks_dir,
-            can_handle=self.host._can_handle_task, dispatch=dispatch)
+            can_handle=self.host._can_handle_task, execute=dispatch,
+            deliver=AsyncMock(return_value={"accepted": True}))
         self.host.scheduler = scheduler
         await scheduler.tick()
         self.assertEqual(delivered, [])
@@ -307,6 +309,8 @@ class ChannelLifecycleTests(unittest.IsolatedAsyncioTestCase):
         await self.connect()
         started = asyncio.Event()
         async def execute(record):
+            from xagent.core.runtime.task_receipts import note_task_tool
+            note_task_tool("external_operation", "external")
             started.set()
             await asyncio.Event().wait()
         scheduler = AsyncTaskScheduler(self.host.runner.tasks_dir,
@@ -317,7 +321,7 @@ class ChannelLifecycleTests(unittest.IsolatedAsyncioTestCase):
         await scheduler.tick(wait_for_dispatches=False)
         await started.wait()
         await self.host.disconnect_channel("weixin")
-        records = list_task_records(self.host.runner.tasks_dir, include_running=True)
+        records = list_task_records(self.host.runner.tasks_dir)
         self.assertEqual(records[0].status, "needs_review")
         await self.connect()
         await scheduler.tick()

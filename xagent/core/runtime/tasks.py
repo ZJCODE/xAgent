@@ -1,36 +1,26 @@
-"""Structured file-backed tasks for scheduled runtime delivery."""
+"""Scheduled task API and a small transactional occurrence worker."""
 from __future__ import annotations
 
 import asyncio
 import contextlib
 import contextvars
-import json
 import logging
-import os
 import re
 import uuid
+from zoneinfo import ZoneInfo
+from datetime import timezone
+from .task_store import TaskStore, aware, stamp, system_timezone, validate_timezone
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Iterator, Optional
+from typing import Any, Iterator, Optional
 
-from .task_receipts import (
-    DeliveryUncertainError, TaskReceiptStore, ensure_durable_task_directory,
-    occurrence_run_id, strict_task_delivery, sync_task_directory as _fsync_directory,
-)
+from .task_receipts import DeliveryUncertainError, strict_task_delivery
+
 
 from .scheduler import (
-    ARCHIVE_DIRNAME,
-    FAILED_DIRNAME,
-    RUNNING_MARKER,
-    TASK_TIMESTAMP_FORMAT,
-    _unique_failed_path,
     align_interval_next_run,
-    align_overdue_interval_run_at,
-    calculate_next_recurrence_run_at,
-    format_task_timestamp,
     is_interval_recurrence,
-    is_interval_window_closed,
     materialize_interval_recurrence_rules,
     parse_run_at,
     normalize_recurrence_rules,
@@ -47,36 +37,13 @@ TASK_STATUS_PAUSED = "paused"
 TASK_STATUS_COMPLETED = "completed"
 TASK_STATUS_FAILED = "failed"
 TASK_STATUS_NEEDS_REVIEW = "needs_review"
-TASK_PAYLOAD_VERSION = 6
-TASK_JSON_SUFFIX = ".json"
 TASK_STATE_PENDING = "pending"
 TASK_STATE_FAILED = "failed"
 TASK_STATE_RUNNING = "running"
 TASK_STATE_COMPLETED = "completed"
-COMPLETION_REASON_INTERVAL_WINDOW_ENDED = "interval_window_ended"
-COMPLETION_REASON_RECURRENCE_EXHAUSTED = "recurrence_exhausted"
-COMPLETION_REASON_ONE_SHOT_SUCCEEDED = "one_shot_succeeded"
 DEFAULT_RUNTIME_POLL_INTERVAL_SECONDS = 1.0
 DEFAULT_MAX_CONCURRENT_TASK_DISPATCHES = 4
 SUPPORTED_TASK_TYPES = {TASK_TYPE_MESSAGE, TASK_TYPE_AGENT}
-SUPPORTED_LIFECYCLE_STATUSES = {
-    TASK_STATUS_ACTIVE,
-    TASK_STATUS_PAUSED,
-    TASK_STATUS_COMPLETED,
-    TASK_STATUS_FAILED,
-    TASK_STATUS_NEEDS_REVIEW,
-}
-
-
-def ensure_scheduler_dirs(tasks_dir: Path | str) -> tuple[Path, Path]:
-    """Persist newly created task directories before relying on their files."""
-    root = Path(tasks_dir).expanduser().resolve()
-    failed = root / FAILED_DIRNAME
-    ensure_durable_task_directory(root)
-    ensure_durable_task_directory(failed)
-    return root, failed
-
-
 @dataclass(frozen=True)
 class ScheduledDeliveryContext:
     """Current conversation target used by scheduling tools."""
@@ -89,7 +56,7 @@ class ScheduledDeliveryContext:
 
 @dataclass(frozen=True)
 class ScheduledTaskRecord:
-    """A structured view of a task file."""
+    """A task definition with its latest execution summary."""
 
     path: Path
     run_at: datetime
@@ -100,7 +67,7 @@ class ScheduledTaskRecord:
 
     @property
     def name(self) -> str:
-        return self.path.name
+        return str(self.payload.get("id") or self.path.name)
 
     @property
     def task_id(self) -> str:
@@ -118,7 +85,14 @@ class ScheduledTaskRecord:
 
     @property
     def content(self) -> str:
-        return str(self.task.get("content") or "")
+        content = str(self.task.get("content") or "")
+        due = self.payload.get("scheduled_at")
+        if due and self.task_type == "agent":
+            local = aware(due).astimezone(ZoneInfo(self.payload["timezone"]))
+            content += (f"\n\nSchedule context: this occurrence was scheduled for {local.isoformat()} "
+                        f"({self.payload['timezone']}). Interpret relative dates such as yesterday using "
+                        "that scheduled date, including when querying tools. Return only the requested content.")
+        return content
 
     @property
     def title(self) -> str:
@@ -161,18 +135,7 @@ class ScheduledTaskRecord:
 
     @property
     def status(self) -> str:
-        if self.payload.get("status") == TASK_STATUS_NEEDS_REVIEW:
-            return TASK_STATUS_NEEDS_REVIEW
-        if self.state == TASK_STATE_FAILED:
-            return TASK_STATE_FAILED
-        if self.state == TASK_STATE_COMPLETED:
-            return TASK_STATE_COMPLETED
-        raw = str(self.payload.get("status") or "").strip().lower() if isinstance(self.payload, dict) else ""
-        if raw == TASK_STATUS_PAUSED:
-            return TASK_STATUS_PAUSED
-        if self.state in {TASK_STATE_PENDING, TASK_STATE_RUNNING}:
-            return TASK_STATUS_ACTIVE
-        return raw or TASK_STATUS_ACTIVE
+        return str(self.payload.get("status") or "active")
 
     @property
     def is_paused(self) -> bool:
@@ -198,7 +161,11 @@ class ScheduledTaskRecord:
             "title": self.title or "Reminder",
             "task_type": self.task_type,
             "content": self.content,
-            "next_run_at": None if is_terminal else self.run_at.isoformat(sep=" "),
+            "next_run_at": None if is_terminal else self.payload.get("next_due"),
+            "timezone": self.payload.get("timezone"),
+            "execution": self.execution,
+            "next_retry_at": self.payload.get("next_retry_at"),
+            "blocked_on_review": self.payload.get("blocked_on_review", False),
             "recurrence": self.recurrence or None,
             "status": self.status,
             "state": self.state,
@@ -218,6 +185,10 @@ class ScheduledTaskRecord:
             "run_id": run.get("run_id"),
             "attempt_id": run.get("attempt_id"),
             "run_stage": run.get("stage"),
+            "failure_stage": run.get("failure_stage"),
+            "scheduled_run_at": run.get("due_at"),
+            "unresolved_runs": self.payload.get("unresolved_runs", []),
+            "last_review_error": self.payload.get("last_error"),
         }
 
 
@@ -242,16 +213,41 @@ def scheduled_delivery_context(context: ScheduledDeliveryContext) -> Iterator[No
         _delivery_context_var.reset(token)
 
 
+def _local_datetime(value, tz):
+    try:
+        parsed = datetime.fromisoformat(value) if isinstance(value, str) else value
+    except ValueError:
+        parsed = parse_run_at(value)
+    return aware(parsed, tz).astimezone(ZoneInfo(tz)).replace(tzinfo=None)
+
+
+def _recurrence_in_timezone(value, tz):
+    if value is None:
+        return None
+    rules = [value] if isinstance(value, dict) else value
+    converted = []
+    for rule in rules:
+        if isinstance(rule, dict) and str(rule.get("kind") or "").strip().lower() == "interval":
+            rule = dict(rule)
+            for key in ("start_at", "end_at"):
+                if rule.get(key):
+                    rule[key] = _local_datetime(rule[key], tz).isoformat(sep=" ")
+        converted.append(rule)
+    return converted
+
+
 def resolve_scheduled_task_run_at(
     *,
     run_at: Optional[str | datetime] = None,
     delay_seconds: Optional[int] = None,
     recurrence: Any = None,
     now: datetime | None = None,
+    timezone_name: str | None = None,
 ) -> tuple[datetime, list[dict[str, Any]]]:
     """Resolve creation-time schedule parameters into a concrete next run datetime."""
-    current = (now or datetime.now()).replace(microsecond=0)
-    normalized_recurrence = materialize_interval_recurrence_rules(recurrence, now=current)
+    tz = validate_timezone(timezone_name or system_timezone())
+    current = _local_datetime(now, tz) if now is not None else datetime.now(ZoneInfo(tz)).replace(tzinfo=None, microsecond=0)
+    normalized_recurrence = materialize_interval_recurrence_rules(_recurrence_in_timezone(recurrence, tz), now=current)
     if normalized_recurrence:
         if run_at is not None:
             raise ValueError("run_at is only supported for one-time tasks; recurring tasks must define time inside recurrence")
@@ -262,7 +258,10 @@ def resolve_scheduled_task_run_at(
             )
         if delay_seconds is not None:
             raise ValueError("delay_seconds is not supported for recurring tasks")
-        return resolve_recurrence_run_at(normalized_recurrence, now=current), normalized_recurrence
+        candidate = resolve_recurrence_run_at(normalized_recurrence, now=current)
+        while _local_datetime(candidate, tz) != candidate:
+            candidate = resolve_recurrence_run_at(normalized_recurrence, now=candidate)
+        return candidate, normalized_recurrence
 
     if delay_seconds is None and run_at is None:
         raise ValueError("Provide either run_at or delay_seconds.")
@@ -270,6 +269,12 @@ def resolve_scheduled_task_run_at(
         if delay_seconds < 0:
             raise ValueError("delay_seconds must be zero or positive.")
         return current + timedelta(seconds=delay_seconds), []
+    if run_at:
+        try:
+            parsed = datetime.fromisoformat(run_at) if isinstance(run_at, str) else run_at
+            return aware(parsed, tz).astimezone(ZoneInfo(tz)).replace(tzinfo=None), []
+        except ValueError:
+            pass
     return parse_run_at(run_at or ""), []
 
 
@@ -286,23 +291,29 @@ def enqueue_scheduled_task(
     recurrence: Any = None,
     source: Optional[dict[str, Any]] = None,
     execution: Optional[dict[str, Any]] = None,
+    timezone_name: str | None = None,
 ) -> ScheduledTaskRecord:
-    """Atomically enqueue a scheduled task as JSON."""
+    """Persist a scheduled task before acknowledging its creation."""
     normalized_type = str(task_type or "").strip().lower()
     if normalized_type not in SUPPORTED_TASK_TYPES:
         raise ValueError(f"task_type must be one of: {', '.join(sorted(SUPPORTED_TASK_TYPES))}")
     normalized_content = content.strip()
     if not normalized_content:
         raise ValueError("scheduled task content must not be empty")
+    tz = validate_timezone(timezone_name or system_timezone())
     normalized_recurrence = materialize_interval_recurrence_rules(
-        recurrence,
-        now=datetime.now().replace(microsecond=0),
+        _recurrence_in_timezone(recurrence, tz), now=datetime.now(ZoneInfo(tz)).replace(tzinfo=None, microsecond=0),
     )
-    parsed_run_at = parse_run_at(run_at)
-    root, _failed = ensure_scheduler_dirs(tasks_dir)
+    try:
+        parsed_run_at = datetime.fromisoformat(run_at) if isinstance(run_at, str) else run_at
+    except ValueError:
+        parsed_run_at = parse_run_at(run_at)
+    if parsed_run_at.tzinfo is None and _local_datetime(parsed_run_at, tz) != parsed_run_at.replace(microsecond=0):
+        raise ValueError("Scheduled wall time does not exist in this timezone")
+    root = Path(tasks_dir).expanduser().resolve()
     task_id = uuid.uuid4().hex
     payload = {
-        "version": TASK_PAYLOAD_VERSION,
+        "timezone": tz,
         "id": task_id,
         "kind": TASK_KIND_TASK,
         "title": title.strip() if title else "",
@@ -318,110 +329,69 @@ def enqueue_scheduled_task(
         },
         "execution": dict(execution or {}),
         "source": dict(source or {}),
-        "created_at": datetime.now().replace(microsecond=0).isoformat(sep=" "),
-        "updated_at": datetime.now().replace(microsecond=0).isoformat(sep=" "),
-        "run_at": parsed_run_at.isoformat(sep=" "),
+        "created_at": stamp(datetime.now(timezone.utc)),
+        "updated_at": stamp(datetime.now(timezone.utc)),
+        "run_at": aware(parsed_run_at, tz).isoformat(),
     }
     if normalized_recurrence:
         payload["recurrence"] = normalized_recurrence
-    path = _enqueue_json_payload(payload, parsed_run_at, root, task_id=task_id)
-    return ScheduledTaskRecord(path=path, run_at=parsed_run_at, kind=TASK_KIND_TASK, payload=payload)
+    _validate_execution(payload["execution"])
+    TaskStore(root).insert_task(payload)
+    return get_scheduled_task(root, task_id)
 
 
-def list_active_task_records(tasks_dir: Path | str) -> list[ScheduledTaskRecord]:
-    """Return active scheduled tasks only."""
-    return list_task_records(tasks_dir, include_failed=False)
+def _validate_execution(execution: dict) -> None:
+    allowed = {"max_lateness_seconds", "block_on_uncertain"}
+    if set(execution) - allowed:
+        raise ValueError("Unsupported execution settings")
+    value = execution.get("max_lateness_seconds", 86400)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError("max_lateness_seconds must be a positive integer")
+    if not isinstance(execution.get("block_on_uncertain", False), bool):
+        raise ValueError("block_on_uncertain must be a boolean")
 
 
-def list_active_task_views(tasks_dir: Path | str) -> list[dict[str, Any]]:
-    """Return active scheduled tasks in the user-facing tool/API shape."""
-    return [record.to_task_view() for record in list_active_task_records(tasks_dir)]
+def _record(tasks_dir, payload):
+    tz = payload.get("timezone") or system_timezone()
+    when = aware(payload.get("next_due") or payload["run_at"], tz).astimezone(ZoneInfo(tz)).replace(tzinfo=None)
+    status = payload.get("status", "active")
+    state = "running" if payload.get("running") else "completed" if status == "completed" else "failed" if status in {"failed", "needs_review"} else "pending"
+    path = Path(tasks_dir) / "tasks.sqlite3"
+    return ScheduledTaskRecord(path=path, run_at=when, kind="task", state=state, payload=payload)
 
 
-def list_task_records(
-    tasks_dir: Path | str,
-    *,
-    include_failed: bool = True,
-    include_archived: bool = False,
-    include_running: bool = False,
-) -> list[ScheduledTaskRecord]:
-    """Return current tasks, optionally including failed, archived, and running records.
-
-    ``include_running`` is opt-in because the scheduler's ``tick()`` and the task
-    mutation helpers must not see files claimed for dispatch (they would try to
-    re-claim or operate on a renamed running file). Display callers (the HTTP API,
-    CLI listings) pass ``True`` so an interval task remains visible while it is
-    dispatching instead of blinking out of the list.
-    """
-    root, failed = ensure_scheduler_dirs(tasks_dir)
-    records: list[ScheduledTaskRecord] = []
-
-    for path in sorted(root.glob(f"*{TASK_JSON_SUFFIX}"), key=lambda item: item.name):
-        record = _record_from_json_file(path, state=TASK_STATE_PENDING)
-        if record is not None:
-            records.append(record)
-
-    if include_running:
-        for path in sorted(root.glob(f"*{TASK_JSON_SUFFIX}{RUNNING_MARKER}*"), key=lambda item: item.name):
-            record = _record_from_json_file(path, state=TASK_STATE_RUNNING)
-            if record is not None:
-                records.append(record)
-
-    if include_failed and failed.is_dir():
-        for path in sorted(failed.iterdir(), key=lambda item: item.name):
-            if TASK_JSON_SUFFIX not in path.name:
-                continue
-            record = _record_from_failed_file(path)
-            if record is not None:
-                records.append(record)
-
-    if include_archived:
-        records.extend(list_archived_task_records(tasks_dir))
-
-    return sorted(records, key=lambda item: (item.run_at, item.name))
+def list_active_task_records(tasks_dir):
+    return [r for r in list_task_records(tasks_dir) if r.status in {"active", "paused"}]
 
 
-def list_archived_task_records(tasks_dir: Path | str) -> list[ScheduledTaskRecord]:
-    """Return completed task records, newest completion first."""
-    root, _failed = ensure_scheduler_dirs(tasks_dir)
-    archive = root / ARCHIVE_DIRNAME
-    records: list[ScheduledTaskRecord] = []
-    if archive.is_dir():
-        for path in archive.rglob(f"*{TASK_JSON_SUFFIX}"):
-            record = _record_from_json_file(path, state=TASK_STATE_COMPLETED)
-            if record is not None:
-                records.append(record)
-    return sorted(
-        records,
-        key=lambda item: (str(item.payload.get("completed_at") or ""), item.name),
-        reverse=True,
-    )
+def list_active_task_views(tasks_dir):
+    return [r.to_task_view() for r in list_active_task_records(tasks_dir)]
 
 
-def count_archived_task_records(tasks_dir: Path | str) -> int:
-    """Count archived task files without parsing their payloads."""
-    root, _failed = ensure_scheduler_dirs(tasks_dir)
-    archive = root / ARCHIVE_DIRNAME
-    if not archive.is_dir():
-        return 0
-    return sum(1 for path in archive.rglob(f"*{TASK_JSON_SUFFIX}") if path.is_file())
+def list_task_records(tasks_dir, *, include_failed=True, include_archived=False):
+    records = [_record(tasks_dir, p) for p in TaskStore(tasks_dir).tasks(include_completed=include_archived)]
+    return sorted([r for r in records if (include_failed or r.status in {"active", "paused"})], key=lambda r: (r.run_at, r.task_id))
 
 
-def get_scheduled_task(tasks_dir: Path | str, task_id: str) -> ScheduledTaskRecord:
-    """Return a task by id across pending, failed, and archived storage."""
-    normalized_task_id = str(task_id or "").strip()
-    if not normalized_task_id:
+def list_archived_task_records(tasks_dir):
+    return sorted([r for r in list_task_records(tasks_dir, include_archived=True) if r.status == "completed"],
+                  key=lambda r: str(r.payload.get("completed_at") or r.payload.get("last_run_at") or ""), reverse=True)
+
+
+def count_archived_task_records(tasks_dir):
+    with TaskStore(tasks_dir).connect() as connection:
+        return connection.execute("SELECT COUNT(*) FROM tasks WHERE status='completed'").fetchone()[0]
+
+
+def get_scheduled_task(tasks_dir, task_id):
+    if not str(task_id).strip():
         raise ValueError("task_id is required")
-    for record in list_task_records(tasks_dir, include_archived=True):
-        if record.task_id == normalized_task_id:
-            return record
-    raise FileNotFoundError(f"task not found: {normalized_task_id}")
+    return _record(tasks_dir, TaskStore(tasks_dir).task(str(task_id)))
 
 
-def delete_scheduled_task(tasks_dir: Path | str, task_id: str) -> ScheduledTaskRecord:
-    """Permanently delete a task by stable id from any lifecycle location."""
+def delete_scheduled_task(tasks_dir, task_id):
     record = get_scheduled_task(tasks_dir, task_id)
-    record.path.unlink()
+    TaskStore(tasks_dir).delete_task(task_id)
     return record
 
 
@@ -434,13 +404,19 @@ def duplicate_archived_task(
     title: Optional[str] = None,
     content: Optional[str] = None,
     task_type: Optional[str] = None,
+    timezone_name: str | None = None,
+    execution: dict | None = None,
 ) -> ScheduledTaskRecord:
     """Create a fresh task from a completed record while preserving delivery authority."""
     original = get_scheduled_task(tasks_dir, task_id)
     if original.state != TASK_STATE_COMPLETED:
         raise ValueError("only completed archived tasks can be duplicated")
-    parsed_run_at = parse_run_at(run_at)
-    if parsed_run_at <= datetime.now().replace(microsecond=0):
+    tz = validate_timezone(timezone_name or original.payload["timezone"])
+    try:
+        parsed_run_at = datetime.fromisoformat(run_at) if isinstance(run_at, str) else run_at
+    except ValueError:
+        parsed_run_at = parse_run_at(run_at)
+    if aware(parsed_run_at, tz) <= datetime.now(timezone.utc):
         raise ValueError("duplicated task must be scheduled in the future")
     delivery = original.delivery
     raw_target = delivery.get("target")
@@ -456,39 +432,27 @@ def duplicate_archived_task(
         title=title if title is not None else original.title,
         recurrence=recurrence,
         source={"source": "task_duplicate", "source_task_id": original.task_id},
-        execution=original.execution,
+        execution=original.execution if execution is None else execution,
+        timezone_name=timezone_name or original.payload["timezone"],
     )
 
 
-def get_pending_scheduled_task(tasks_dir: Path | str, task_id: str) -> ScheduledTaskRecord:
-    """Return a pending (non-failed) scheduled task by id."""
-    normalized_task_id = str(task_id or "").strip()
-    if not normalized_task_id:
-        raise ValueError("task_id is required")
-    for record in list_task_records(tasks_dir, include_failed=False):
-        if record.task_id == normalized_task_id:
-            return record
-    raise FileNotFoundError(f"task not found: {normalized_task_id}")
-
-
-def retry_scheduled_task(tasks_dir: Path | str, task_id: str) -> ScheduledTaskRecord:
-    """Explicitly authorize a fresh attempt, including an uncertain delivery.
-
-    A prepared result is reused; generation is repeated only when no result was
-    durably recorded. The occurrence id remains stable and the attempt id changes.
-    """
+def get_pending_scheduled_task(tasks_dir, task_id):
     record = get_scheduled_task(tasks_dir, task_id)
-    if record.status not in {TASK_STATUS_FAILED, TASK_STATUS_NEEDS_REVIEW}:
-        raise ValueError("only failed or needs_review tasks can be retried")
-    root, _ = ensure_scheduler_dirs(tasks_dir)
-    payload = dict(record.payload)
-    payload.update(status=TASK_STATUS_ACTIVE, retry_requested=True,
-                   updated_at=datetime.now().replace(microsecond=0).isoformat(sep=" "))
-    payload.pop("failed_at", None)
-    payload.pop("last_error", None)
-    _replace_json_payload(record.path, payload)
-    new_path = _move_running_task(record.path, root, record.run_at, task_id=record.task_id)
-    return ScheduledTaskRecord(path=new_path, run_at=record.run_at, kind=record.kind, payload=payload)
+    if record.status not in {"active", "paused"} or record.state == "running":
+        raise ValueError("Task is not editable while running or after completion")
+    return record
+
+
+def retry_scheduled_task(tasks_dir, task_id):
+    record = get_scheduled_task(tasks_dir, task_id)
+    run_id = (record.payload.get("last_run") or {}).get("run_id")
+    if not run_id:
+        raise ValueError("No failed execution to retry")
+    store = TaskStore(tasks_dir)
+    run = store.get_run(task_id, run_id)
+    store.act_on_run(task_id, run_id, "deliver" if run.get("result") else "prepare", datetime.now(timezone.utc))
+    return get_scheduled_task(tasks_dir, task_id)
 
 
 def pause_scheduled_task(tasks_dir: Path | str, task_id: str) -> ScheduledTaskRecord:
@@ -496,21 +460,13 @@ def pause_scheduled_task(tasks_dir: Path | str, task_id: str) -> ScheduledTaskRe
     record = get_pending_scheduled_task(tasks_dir, task_id)
     if record.is_paused:
         return record
-    now = datetime.now().replace(microsecond=0)
+    now = datetime.now(timezone.utc).replace(microsecond=0)
     payload = dict(record.payload)
-    payload["version"] = TASK_PAYLOAD_VERSION
     payload["status"] = TASK_STATUS_PAUSED
     payload["paused_at"] = now.isoformat(sep=" ")
     payload["updated_at"] = now.isoformat(sep=" ")
-    _replace_json_payload(record.path, payload)
-    return ScheduledTaskRecord(
-        path=record.path,
-        run_at=record.run_at,
-        kind=record.kind,
-        state=record.state,
-        payload=payload,
-        reason=record.reason,
-    )
+    TaskStore(tasks_dir).update_task(task_id, payload, record.payload["revision"])
+    return get_scheduled_task(tasks_dir, task_id)
 
 
 def resume_scheduled_task(
@@ -519,17 +475,14 @@ def resume_scheduled_task(
     *,
     now: datetime | None = None,
 ) -> ScheduledTaskRecord:
-    """Resume a paused task and advance overdue run_at when needed."""
+    """Resume; the scheduler records and coalesces missed occurrences."""
     record = get_pending_scheduled_task(tasks_dir, task_id)
-    current = (now or datetime.now()).replace(microsecond=0)
+    current = aware(now or datetime.now(timezone.utc), record.payload["timezone"]).astimezone(ZoneInfo(record.payload["timezone"])).replace(tzinfo=None)
     payload = dict(record.payload)
     next_run_at = record.run_at
-    if record.is_paused or next_run_at <= current:
-        next_run_at = _next_run_at_after_resume(record, now=current)
-    payload["version"] = TASK_PAYLOAD_VERSION
     payload["status"] = TASK_STATUS_ACTIVE
     payload.pop("paused_at", None)
-    payload["updated_at"] = current.isoformat(sep=" ")
+    payload["updated_at"] = stamp(aware(current, payload["timezone"]))
     payload["run_at"] = next_run_at.isoformat(sep=" ")
     return _rewrite_pending_task(tasks_dir, record, payload, next_run_at)
 
@@ -549,12 +502,21 @@ def update_scheduled_task(
     start_at: Optional[str] = None,
     end_at: Optional[str] = None,
     now: datetime | None = None,
+    timezone_name: str | None = None,
+    execution: dict | None = None,
 ) -> ScheduledTaskRecord:
     """Patch mutable fields on a pending scheduled task."""
     record = get_pending_scheduled_task(tasks_dir, task_id)
-    current = (now or datetime.now()).replace(microsecond=0)
+    if timezone_name is not None:
+        validate_timezone(timezone_name)
+    current = aware(now or datetime.now(timezone.utc), timezone_name or record.payload["timezone"]).astimezone(ZoneInfo(timezone_name or record.payload["timezone"])).replace(tzinfo=None)
     payload = dict(record.payload)
     task_body = dict(record.task)
+    if timezone_name is not None:
+        payload["timezone"] = timezone_name
+    if execution is not None:
+        _validate_execution(execution)
+        payload["execution"] = dict(execution)
 
     if title is not None:
         payload["title"] = str(title).strip()
@@ -592,17 +554,17 @@ def update_scheduled_task(
                     "interval tasks require a user-provided duration_seconds or end_at; "
                     "ask the user how long to continue or when to stop before creating"
                 )
-            resolved_end = parse_run_at(str(existing_end))
+            resolved_end = _local_datetime(str(existing_end), payload["timezone"])
         elif duration_seconds is not None and end_at is not None:
             raise ValueError("interval recurrence requires exactly one user-provided end_at or duration_seconds")
         elif duration_seconds is not None:
             resolved_end = current + timedelta(seconds=int(duration_seconds))
         else:
-            resolved_end = parse_run_at(str(end_at or ""))
+            resolved_end = _local_datetime(str(end_at or ""), payload["timezone"])
         if start_at is not None:
-            resolved_start = parse_run_at(str(start_at))
+            resolved_start = _local_datetime(str(start_at), payload["timezone"])
         elif existing_start:
-            resolved_start = parse_run_at(str(existing_start))
+            resolved_start = _local_datetime(str(existing_start), payload["timezone"])
         else:
             resolved_start = None
         interval_rule: dict[str, Any] = {
@@ -639,6 +601,7 @@ def update_scheduled_task(
                 delay_seconds=delay_seconds if is_interval_recurrence(recurrence) else None,
                 recurrence=recurrence,
                 now=current,
+                timezone_name=payload["timezone"],
             )
             next_run_at = resolved_run_at
             if normalized_recurrence:
@@ -651,806 +614,20 @@ def update_scheduled_task(
                 delay_seconds=delay_seconds,
                 recurrence=None,
                 now=current,
+                timezone_name=payload["timezone"],
             )
             next_run_at = resolved_run_at
             payload.pop("recurrence", None)
 
-    payload["version"] = TASK_PAYLOAD_VERSION
-    payload["updated_at"] = current.isoformat(sep=" ")
+    payload["updated_at"] = stamp(aware(current, payload["timezone"]))
     payload["run_at"] = next_run_at.isoformat(sep=" ")
     if "status" not in payload:
         payload["status"] = TASK_STATUS_PAUSED if record.is_paused else TASK_STATUS_ACTIVE
     return _rewrite_pending_task(tasks_dir, record, payload, next_run_at)
 
-def _next_run_at_after_resume(record: ScheduledTaskRecord, *, now: datetime) -> datetime:
-    if record.run_at > now:
-        return record.run_at
-    recurrence = record.recurrence
-    if not recurrence:
-        return now
-    if is_interval_recurrence(recurrence):
-        rule = recurrence[0]
-        start_at_text = str(rule.get("start_at") or "").strip()
-        if start_at_text:
-            aligned = align_interval_next_run(
-                now=now,
-                start_at=parse_run_at(start_at_text),
-                every_seconds=int(rule.get("every_seconds") or 0),
-                end_at=parse_run_at(str(rule.get("end_at") or "")),
-            )
-            if aligned is None:
-                raise ValueError("interval window has already ended")
-            return aligned
-        return resolve_interval_first_run_at(rule, now=now)
-    return resolve_recurrence_run_at(recurrence, now=now)
-
-
-def _rewrite_pending_task(
-    tasks_dir: Path | str,
-    record: ScheduledTaskRecord,
-    payload: dict[str, Any],
-    next_run_at: datetime,
-) -> ScheduledTaskRecord:
-    root, _failed = ensure_scheduler_dirs(tasks_dir)
-    if next_run_at == record.run_at and record.path.parent == root:
-        _replace_json_payload(record.path, payload)
-        return ScheduledTaskRecord(
-            path=record.path,
-            run_at=next_run_at,
-            kind=record.kind,
-            state=record.state,
-            payload=payload,
-            reason=record.reason,
-        )
-    _replace_json_payload(record.path, payload)
-    new_path = _move_running_task(record.path, root, next_run_at, task_id=record.task_id)
-    return ScheduledTaskRecord(
-        path=new_path,
-        run_at=next_run_at,
-        kind=record.kind,
-        state=record.state,
-        payload=payload,
-        reason=record.reason,
-    )
-
-
-class AsyncTaskScheduler:
-    """Consume structured JSON tasks that the current channel can deliver."""
-
-    def __init__(
-        self,
-        tasks_dir: Path | str,
-        *,
-        can_handle: Callable[[ScheduledTaskRecord], bool],
-        dispatch: Callable[[ScheduledTaskRecord], Awaitable[None]] | None = None,
-        execute: Callable[[ScheduledTaskRecord], Awaitable[dict[str, Any]]] | None = None,
-        deliver: Callable[[ScheduledTaskRecord, dict[str, Any], str], Awaitable[dict[str, Any]]] | None = None,
-        receipts_dir: Path | str | None = None,
-        shutdown_timeout_seconds: float = 10.0,
-        poll_interval_seconds: float = DEFAULT_RUNTIME_POLL_INTERVAL_SECONDS,
-        max_concurrent_dispatches: int = DEFAULT_MAX_CONCURRENT_TASK_DISPATCHES,
-        logger_: Optional[logging.Logger] = None,
-        now_provider: Callable[[], datetime] | None = None,
-    ):
-        if poll_interval_seconds <= 0:
-            raise ValueError("poll_interval_seconds must be positive")
-        if max_concurrent_dispatches <= 0:
-            raise ValueError("max_concurrent_dispatches must be positive")
-        self.tasks_dir, self.failed_dir = ensure_scheduler_dirs(tasks_dir)
-        self.can_handle = can_handle
-        self.dispatch = dispatch
-        if dispatch is None and (execute is None or deliver is None):
-            raise ValueError("provide execute and deliver, or dispatch")
-        self.execute = execute
-        self.deliver = deliver
-        self.receipts = TaskReceiptStore(receipts_dir or self.tasks_dir.parent / ".runtime" / "task_runs")
-        self.shutdown_timeout_seconds = max(0.0, float(shutdown_timeout_seconds))
-        self.poll_interval_seconds = float(poll_interval_seconds)
-        self.max_concurrent_dispatches = int(max_concurrent_dispatches)
-        self.logger = logger_ or logging.getLogger(__name__)
-        self.now_provider = now_provider or datetime.now
-        self._stop_event = asyncio.Event()
-        self._wake_event = asyncio.Event()
-        self._task: Optional[asyncio.Task[None]] = None
-        self._inflight: set[asyncio.Task[None]] = set()
-        self._inflight_records: dict[asyncio.Task[None], tuple[Path, ScheduledTaskRecord]] = {}
-        self._dispatch_semaphore = asyncio.Semaphore(self.max_concurrent_dispatches)
-
-    @property
-    def is_running(self) -> bool:
-        return self._task is not None and not self._task.done()
-
-    def wake(self) -> None:
-        self._wake_event.set()
-
-    def channel_tasks(self, channel: str) -> set[asyncio.Task]:
-        return {task for task, (_, record) in self._inflight_records.items()
-                if record.delivery_channel == channel and not task.done()}
-
-    def status_snapshot(self) -> dict[str, Any]:
-        records = list_task_records(self.tasks_dir, include_running=True)
-        return {"running": self.is_running, "inflight": len(self._inflight),
-                "pending": sum(record.state == TASK_STATE_PENDING for record in records),
-                "failed": sum(record.status == TASK_STATUS_FAILED for record in records),
-                "needs_review": sum(record.status == TASK_STATUS_NEEDS_REVIEW for record in records)}
-
-    async def get_status(self) -> dict[str, Any]:
-        return self.status_snapshot()
-
-    async def start(self) -> None:
-        if self._task is not None and not self._task.done():
-            return
-        self._stop_event.clear()
-        self.recover_running_tasks()
-        self.expire_closed_interval_tasks()
-        self._task = asyncio.create_task(self.run_forever())
-
-    async def stop(self) -> None:
-        self._stop_event.set()
-        self._wake_event.set()
-        task = self._task
-        if task is not None:
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
-        self._task = None
-        if self._inflight:
-            inflight = list(self._inflight)
-            _, pending = await asyncio.wait(inflight, timeout=self.shutdown_timeout_seconds)
-            for dispatch_task in pending:
-                dispatch_task.cancel()
-            if pending:
-                _, unfinished = await asyncio.wait(pending, timeout=1.0)
-                for dispatch_task in unfinished:
-                    path, record = self._inflight_records[dispatch_task]
-                    run_id = occurrence_run_id(record.task_id, record.run_at)
-                    self._mark_needs_review(path, record, self.receipts.read(run_id),
-                                            "execution did not stop within shutdown deadline")
-        self._inflight.clear()
-
-    def recover_running_tasks(self) -> int:
-        """Reconcile receipts after exclusive ownership has been acquired."""
-        recovered = 0
-        for path in sorted(self.tasks_dir.glob(f"*{TASK_JSON_SUFFIX}{RUNNING_MARKER}*"), key=lambda item: item.name):
-            original_name = path.name.split(RUNNING_MARKER, 1)[0]
-            if _parse_task_time_from_json_name(original_name) is None:
-                self._quarantine(path, original_name, "invalid")
-                continue
-            record = _record_from_json_file(path, state=TASK_STATE_RUNNING)
-            if record is None or not record.kind:
-                self._quarantine(path, original_name, "invalid")
-                continue
-            run_id = str((record.payload.get("last_run") or {}).get("run_id") or
-                         occurrence_run_id(record.task_id, record.run_at))
-            try:
-                receipt = self.receipts.read(run_id)
-            except (OSError, ValueError) as exc:
-                self._mark_needs_review(path, record, None, f"execution receipt cannot be read: {exc}")
-                continue
-            if receipt is not None and receipt.get("stage") == "succeeded":
-                try:
-                    if record.payload.get("status") == TASK_STATUS_COMPLETED:
-                        completed_at = parse_run_at(str(record.payload.get("completed_at") or self.now_provider().isoformat()))
-                        _move_task_to_archive(path, self.tasks_dir, completed_at, task_id=record.task_id)
-                    elif str(receipt.get("due_at")) != record.run_at.isoformat(sep=" "):
-                        _move_running_task(path, self.tasks_dir, record.run_at, task_id=record.task_id)
-                    else:
-                        self._complete_record(path, record)
-                except Exception as exc:
-                    self.logger.exception("scheduled task completion recovery failed -> %s: %s", record.name, exc)
-                    self._fail_record(path, self._current_record(path, record), "completion_error", exc)
-                recovered += 1
-                continue
-            if receipt is None and record.payload.get("status") == TASK_STATUS_COMPLETED:
-                try:
-                    completed_at = parse_run_at(str(record.payload.get("completed_at") or self.now_provider().isoformat()))
-                    _move_task_to_archive(path, self.tasks_dir, completed_at, task_id=record.task_id)
-                except Exception as exc:
-                    self._mark_needs_review(path, record, None, f"archive recovery failed: {exc}")
-                recovered += 1
-                continue
-            if receipt is None or receipt.get("stage") not in {"result_ready"}:
-                self._mark_needs_review(path, record, receipt,
-                                        "previous execution or delivery has an unknown outcome")
-                continue
-            destination = self.tasks_dir / original_name
-            if destination.exists():
-                if path.samefile(destination):
-                    path.unlink()
-                    _fsync_directory(path.parent)
-                    recovered += 1
-                    continue
-                self._quarantine(path, original_name, "orphaned")
-                continue
-            try:
-                path.rename(destination)
-                _fsync_directory(destination.parent)
-            except OSError as exc:
-                self.logger.error("failed to recover running task %s: %s", path.name, exc)
-                continue
-            recovered += 1
-        return recovered
-
-    def expire_closed_interval_tasks(self) -> int:
-        """Archive interval tasks whose end_at is strictly in the past.
-
-        Ignores ``can_handle``: window close is a lifecycle transition, not delivery.
-        Skips already-claimed running files to avoid racing in-flight dispatches.
-        """
-        now = self.now_provider().replace(microsecond=0)
-        expired = 0
-        for record in list_active_task_records(self.tasks_dir):
-            if record.kind != TASK_KIND_TASK:
-                continue
-            if record.status == TASK_STATUS_NEEDS_REVIEW:
-                continue
-            if record.payload.get("retry_requested"):
-                continue
-            if not is_interval_window_closed(record.recurrence, now=now):
-                continue
-            claimed_path = self._claim(record.path)
-            if claimed_path is None:
-                continue
-            claimed = _record_from_json_file(claimed_path, state=TASK_STATE_RUNNING) or record
-            try:
-                self._archive_record(
-                    claimed_path,
-                    claimed,
-                    now=now,
-                    reason=COMPLETION_REASON_INTERVAL_WINDOW_ENDED,
-                )
-                expired += 1
-            except Exception as exc:
-                self.logger.exception("failed to expire closed interval task %s: %s", record.name, exc)
-                self._fail_record(claimed_path, claimed, "expire_error", exc)
-        return expired
-
-    async def run_forever(self) -> None:
-        self.logger.info("structured task scheduler started: tasks=%s", self.tasks_dir)
-        while not self._stop_event.is_set():
-            try:
-                next_run_at = await self.tick(wait_for_dispatches=False)
-                await self._wait_for_next_cycle(next_run_at)
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                self.logger.exception("structured scheduler loop error: %s", exc)
-                try:
-                    await asyncio.wait_for(self._stop_event.wait(), timeout=self.poll_interval_seconds)
-                except asyncio.TimeoutError:
-                    pass
-        self.logger.info("structured task scheduler stopped")
-
-    async def _wait_for_next_cycle(self, next_run_at: Optional[datetime]) -> None:
-        timeout = self._sleep_duration(next_run_at)
-        self._wake_event.clear()
-        stop_wait = asyncio.create_task(self._stop_event.wait())
-        wake_wait = asyncio.create_task(self._wake_event.wait())
-        try:
-            done, pending = await asyncio.wait(
-                {stop_wait, wake_wait},
-                timeout=timeout,
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-            for task in pending:
-                task.cancel()
-            if pending:
-                await asyncio.gather(*pending, return_exceptions=True)
-            _ = done
-        except asyncio.CancelledError:
-            stop_wait.cancel()
-            wake_wait.cancel()
-            await asyncio.gather(stop_wait, wake_wait, return_exceptions=True)
-            raise
-
-    async def tick(self, *, wait_for_dispatches: bool = True) -> Optional[datetime]:
-        self.expire_closed_interval_tasks()
-        now = self.now_provider()
-        next_run_at: Optional[datetime] = None
-        started: list[asyncio.Task[None]] = []
-
-        for record in list_active_task_records(self.tasks_dir):
-            if record.kind != TASK_KIND_TASK:
-                continue
-            if record.status == TASK_STATUS_NEEDS_REVIEW:
-                continue
-            if record.is_paused:
-                continue
-            if not self.can_handle(record):
-                continue
-            if not record.payload.get("retry_requested"):
-                record = self._skip_missed_interval_ticks(record, now=now)
-            if record is None:
-                continue
-            if record.run_at > now:
-                if next_run_at is None or record.run_at < next_run_at:
-                    next_run_at = record.run_at
-                continue
-            if len(self._inflight) >= self.max_concurrent_dispatches:
-                # More due work remains; wake ASAP once a slot frees.
-                if next_run_at is None or now < next_run_at:
-                    next_run_at = now
-                break
-
-            claimed_path = self._claim(record.path)
-            if claimed_path is None:
-                continue
-            claimed = _record_from_json_file(claimed_path, state=TASK_STATE_RUNNING) or record
-            task = asyncio.create_task(self._run_claimed(claimed_path, claimed))
-            self._inflight.add(task)
-            self._inflight_records[task] = (claimed_path, claimed)
-            task.add_done_callback(self._on_dispatch_done)
-            started.append(task)
-
-        if wait_for_dispatches and started:
-            await asyncio.gather(*started, return_exceptions=True)
-        return next_run_at
-
-    def _skip_missed_interval_ticks(
-        self,
-        record: ScheduledTaskRecord,
-        *,
-        now: datetime,
-    ) -> ScheduledTaskRecord | None:
-        """Realign overdue interval tasks without catching up missed ticks.
-
-        Returns the (possibly rewritten) pending record, or ``None`` when the
-        remaining window has no further runnable tick and the task was archived.
-        """
-        if not is_interval_recurrence(record.recurrence):
-            return record
-        if record.run_at > now:
-            return record
-        aligned = align_overdue_interval_run_at(record.run_at, record.recurrence[0], now=now)
-        if aligned is None:
-            claimed_path = self._claim(record.path)
-            if claimed_path is None:
-                return None
-            claimed = _record_from_json_file(claimed_path, state=TASK_STATE_RUNNING) or record
-            try:
-                self._archive_record(
-                    claimed_path,
-                    claimed,
-                    now=now,
-                    reason=COMPLETION_REASON_INTERVAL_WINDOW_ENDED,
-                )
-            except Exception as exc:
-                self.logger.exception("failed to archive exhausted interval task %s: %s", record.name, exc)
-                self._fail_record(claimed_path, claimed, "expire_error", exc)
-            return None
-        if aligned == record.run_at:
-            return record
-        payload = dict(record.payload)
-        payload["run_at"] = aligned.isoformat(sep=" ")
-        payload["updated_at"] = now.isoformat(sep=" ")
-        return _rewrite_pending_task(self.tasks_dir, record, payload, aligned)
-
-    def _on_dispatch_done(self, task: asyncio.Task[None]) -> None:
-        self._inflight.discard(task)
-        self._inflight_records.pop(task, None)
-        self._wake_event.set()
-
-    async def _run_claimed(self, claimed_path: Path, claimed: ScheduledTaskRecord) -> None:
-        async with self._dispatch_semaphore:
-            run_id = occurrence_run_id(claimed.task_id, claimed.run_at)
-            receipt: dict[str, Any] | None = None
-            dispatch_error: Exception | None = None
-            try:
-                receipt = self.receipts.read(run_id)
-                if claimed.payload.get("retry_requested") and not (
-                    receipt and receipt.get("stage") == "succeeded"
-                ):
-                    previous = receipt
-                    receipt = self._new_receipt(claimed, run_id)
-                    if previous:
-                        receipt["attempts"] = [*previous.get("attempts", []), {
-                            "attempt_id": previous.get("attempt_id"), "stage": previous.get("stage"),
-                            "error": previous.get("error"), "updated_at": previous.get("updated_at"),
-                        }]
-                        if isinstance(previous.get("result"), dict):
-                            receipt.update(result=previous["result"], stage="result_ready")
-                if receipt is None:
-                    receipt = self._new_receipt(claimed, run_id)
-                if receipt.get("stage") == "succeeded":
-                    try:
-                        self._persist_receipt(claimed_path, claimed, receipt)
-                        self._complete_record(claimed_path, self._current_record(claimed_path, claimed))
-                    except Exception as exc:
-                        self.logger.exception("scheduled task completion retry failed -> %s: %s", claimed.name, exc)
-                        self._fail_record(claimed_path, self._current_record(claimed_path, claimed), "completion_error", exc)
-                    return
-                if receipt.get("stage") in {"needs_review", "failed", "delivering"}:
-                    self._mark_needs_review(claimed_path, claimed, receipt,
-                                            "execution requires explicit retry")
-                    return
-                self._persist_receipt(claimed_path, claimed, receipt)
-                if self.execute is None:
-                    receipt["stage"] = "delivering"
-                    self._persist_receipt(claimed_path, claimed, receipt)
-                    assert self.dispatch is not None
-                    await self.dispatch(claimed)
-                else:
-                    if receipt.get("stage") != "result_ready":
-                        receipt["stage"] = "executing"
-                        self._persist_receipt(claimed_path, claimed, receipt)
-                        with scheduled_delivery_context(ScheduledDeliveryContext(
-                            channel=claimed.delivery_channel,
-                            user_id=claimed.delivery_user_id,
-                            target=claimed.target,
-                            metadata={"source": "scheduled_task", "task_id": claimed.task_id,
-                                      "run_id": run_id, "scheduled_run_id": run_id,
-                                      "attempt_id": receipt["attempt_id"]},
-                        )):
-                            result = await self.execute(claimed)
-                        if self._stop_event.is_set():
-                            raise asyncio.CancelledError()
-                        if not isinstance(result, dict) or not (result.get("content") or result.get("attachments")):
-                            raise ValueError("scheduled task produced no final result")
-                        receipt.update(stage="result_ready", result=result)
-                        self._persist_receipt(claimed_path, claimed, receipt)
-                    receipt["stage"] = "delivering"
-                    self._persist_receipt(claimed_path, claimed, receipt)
-                    assert self.deliver is not None
-                    with strict_task_delivery():
-                        delivery_receipt = await self.deliver(claimed, receipt["result"], run_id)
-                    if self._stop_event.is_set():
-                        raise asyncio.CancelledError()
-                    if not isinstance(delivery_receipt, dict) or not delivery_receipt.get("accepted"):
-                        raise DeliveryUncertainError("delivery did not return a positive receipt")
-                    receipt["delivery_receipt"] = delivery_receipt
-                receipt["stage"] = "succeeded"
-                self._persist_receipt(claimed_path, claimed, receipt)
-            except asyncio.CancelledError:
-                self._mark_needs_review(claimed_path, claimed, receipt,
-                                        "runtime stopped before execution or delivery outcome was confirmed")
-                raise
-            except Exception as exc:
-                dispatch_error = exc
-                self.logger.exception("scheduled task failed -> %s: %s", claimed.name, exc)
-                if isinstance(exc, (DeliveryUncertainError, TimeoutError)) or (
-                    self.execute is not None and receipt and receipt.get("stage") == "delivering"
-                    and not isinstance(exc, ValueError)
-                ):
-                    self._mark_needs_review(claimed_path, claimed, receipt, _safe_error_summary(exc))
-                    return
-                if receipt is not None:
-                    receipt.update(stage="failed", error=_safe_error_summary(exc))
-                    self._persist_receipt(claimed_path, claimed, receipt)
-                if not claimed.recurrence:
-                    self._fail_record(claimed_path, self._current_record(claimed_path, claimed), "failed", exc)
-                    return
-            try:
-                self._complete_record(claimed_path, self._current_record(claimed_path, claimed), dispatch_error=dispatch_error)
-            except Exception as exc:
-                self.logger.exception("scheduled task completion failed -> %s: %s", claimed.name, exc)
-                self._fail_record(claimed_path, self._current_record(claimed_path, claimed), "completion_error", exc)
-
-    @staticmethod
-    def _current_record(path: Path, fallback: ScheduledTaskRecord) -> ScheduledTaskRecord:
-        return _record_from_json_file(path, state=TASK_STATE_RUNNING) or fallback
-
-    def _new_receipt(self, record: ScheduledTaskRecord, run_id: str) -> dict[str, Any]:
-        return {"version": 1, "run_id": run_id, "attempt_id": uuid.uuid4().hex,
-                "task_id": record.task_id, "due_at": record.run_at.isoformat(sep=" "),
-                "stage": "executing", "channel": record.delivery_channel,
-                "target": record.target}
-
-    def _persist_receipt(self, path: Path, record: ScheduledTaskRecord, receipt: dict[str, Any]) -> None:
-        if not path.exists():
-            raise asyncio.CancelledError("task was already moved out of execution")
-        receipt["updated_at"] = self.now_provider().replace(microsecond=0).isoformat(sep=" ")
-        self.receipts.write(receipt)
-        self.logger.info("Task state task_id=%s run_id=%s attempt_id=%s stage=%s",
-                         receipt.get("task_id"), receipt.get("run_id"),
-                         receipt.get("attempt_id"), receipt.get("stage"))
-        current = self._current_record(path, record)
-        payload = dict(current.payload)
-        payload.pop("retry_requested", None)
-        payload["last_run"] = {key: receipt.get(key) for key in ("run_id", "attempt_id", "stage", "due_at")}
-        _replace_json_payload(path, payload)
-
-    def _mark_needs_review(self, path: Path, record: ScheduledTaskRecord,
-                           receipt: dict[str, Any] | None, reason: str) -> None:
-        if not path.exists():
-            return
-        if receipt is None:
-            receipt = self._new_receipt(record, occurrence_run_id(record.task_id, record.run_at))
-        receipt.update(stage="needs_review", error=reason)
-        self._persist_receipt(path, record, receipt)
-        current = self._current_record(path, record)
-        payload = dict(current.payload)
-        payload.update(status=TASK_STATUS_NEEDS_REVIEW, last_run_status=TASK_STATUS_NEEDS_REVIEW,
-                       last_error=reason, updated_at=receipt["updated_at"])
-        _replace_json_payload(path, payload)
-        self._quarantine(path, _original_task_name(path), "needs_review")
-
-    def _sleep_duration(self, next_run_at: Optional[datetime]) -> float:
-        if next_run_at is None:
-            return self.poll_interval_seconds
-        delay = (next_run_at - self.now_provider()).total_seconds()
-        if delay <= 0:
-            return 0.0
-        return min(delay, self.poll_interval_seconds)
-
-    def _claim(self, path: Path) -> Optional[Path]:
-        for _attempt in range(8):
-            claimed_path = path.with_name(f"{path.name}{RUNNING_MARKER}{uuid.uuid4().hex[:8]}")
-            if claimed_path.exists():
-                continue
-            try:
-                path.rename(claimed_path)
-                _fsync_directory(path.parent)
-                return claimed_path
-            except FileNotFoundError:
-                return None
-            except OSError as exc:
-                self.logger.error("failed to claim structured task %s: %s", path.name, exc)
-                return None
-        self.logger.error("failed to claim structured task %s: could not reserve running name", path.name)
-        return None
-
-    def _quarantine(self, path: Path, original_name: str, reason: str) -> None:
-        ensure_durable_task_directory(self.failed_dir)
-        destination = _unique_failed_path(self.failed_dir, original_name, reason)
-        try:
-            path.rename(destination)
-            _fsync_directory(destination.parent)
-            _fsync_directory(path.parent)
-        except FileNotFoundError:
-            return
-        except OSError as exc:
-            self.logger.error("failed to quarantine structured task %s: %s", original_name, exc)
-
-    def _fail_record(
-        self,
-        path: Path,
-        record: ScheduledTaskRecord,
-        reason: str,
-        error: Exception,
-    ) -> None:
-        now = self.now_provider().replace(microsecond=0)
-        payload = dict(record.payload)
-        payload.update(
-            {
-                "version": TASK_PAYLOAD_VERSION,
-                "status": TASK_STATUS_FAILED,
-                "failed_at": now.isoformat(sep=" "),
-                "last_run_at": now.isoformat(sep=" "),
-                "last_run_status": "failed",
-                "last_error": _safe_error_summary(error),
-                "updated_at": now.isoformat(sep=" "),
-            }
-        )
-        try:
-            _replace_json_payload(path, payload)
-        except OSError as exc:
-            self.logger.error("failed to persist task failure metadata for %s: %s", record.name, exc)
-        self._quarantine(path, _original_task_name(path), reason)
-
-    def _complete_record(
-        self,
-        path: Path,
-        record: ScheduledTaskRecord,
-        *,
-        dispatch_error: Exception | None = None,
-    ) -> None:
-        recurrence = record.recurrence
-        now = self.now_provider().replace(microsecond=0)
-        if not recurrence:
-            self._archive_record(path, record, now=now, reason=COMPLETION_REASON_ONE_SHOT_SUCCEEDED)
-            return
-        if is_interval_window_closed(recurrence, now=now):
-            if dispatch_error is not None:
-                self._fail_record(path, record, "failed", dispatch_error)
-            else:
-                self._archive_record(path, record, now=now, reason=COMPLETION_REASON_INTERVAL_WINDOW_ENDED)
-            return
-        next_run_at = calculate_next_recurrence_run_at(
-            recurrence,
-            now=now,
-            current_run_at=record.run_at,
-        )
-        if next_run_at is None:
-            if dispatch_error is not None:
-                self._fail_record(path, record, "failed", dispatch_error)
-            else:
-                self._archive_record(path, record, now=now, reason=COMPLETION_REASON_RECURRENCE_EXHAUSTED)
-            return
-        self._reschedule_record(path, record, next_run_at, now=now, dispatch_error=dispatch_error)
-
-    def _archive_record(
-        self,
-        path: Path,
-        record: ScheduledTaskRecord,
-        *,
-        now: datetime,
-        reason: str,
-    ) -> None:
-        payload = dict(record.payload)
-        payload.update(
-            {
-                "version": TASK_PAYLOAD_VERSION,
-                "status": TASK_STATUS_COMPLETED,
-                "completed_at": now.isoformat(sep=" "),
-                "last_run_at": now.isoformat(sep=" "),
-                "last_run_status": "succeeded",
-                "completion_reason": reason,
-                "updated_at": now.isoformat(sep=" "),
-            }
-        )
-        payload.pop("last_error", None)
-        _replace_json_payload(path, payload)
-        _move_task_to_archive(path, self.tasks_dir, now, task_id=record.task_id)
-
-    def _reschedule_record(
-        self,
-        path: Path,
-        record: ScheduledTaskRecord,
-        next_run_at: datetime,
-        *,
-        now: datetime,
-        dispatch_error: Exception | None,
-    ) -> None:
-        payload = dict(record.payload)
-        payload["run_at"] = next_run_at.isoformat(sep=" ")
-        payload["updated_at"] = now.isoformat(sep=" ")
-        payload["last_run_at"] = now.isoformat(sep=" ")
-        if dispatch_error is None:
-            payload["last_run_status"] = "succeeded"
-            payload.pop("last_error", None)
-        else:
-            payload["last_run_status"] = "failed"
-            payload["last_error"] = _safe_error_summary(dispatch_error)
-        _replace_json_payload(path, payload)
-        _move_running_task(path, self.tasks_dir, next_run_at, task_id=record.task_id)
-
-
-def _enqueue_json_payload(payload: dict[str, Any], run_at: datetime, root: Path, *, task_id: str) -> Path:
-    stamp = format_task_timestamp(run_at)
-    temp_path = root / f".{stamp}-{uuid.uuid4().hex}.tmp"
-
-    with temp_path.open("w", encoding="utf-8") as handle:
-        json.dump(payload, handle, ensure_ascii=False, sort_keys=True, indent=2)
-        handle.write("\n")
-        handle.flush()
-        os.fsync(handle.fileno())
-
-    try:
-        for final_path in _task_file_candidates(root, run_at, task_id=task_id):
-            try:
-                os.link(temp_path, final_path)
-            except FileExistsError:
-                continue
-            _fsync_directory(root)
-            return final_path
-        raise FileExistsError(f"could not reserve a unique task filename for {stamp}")
-    finally:
-        temp_path.unlink(missing_ok=True)
-
-
-def _replace_json_payload(path: Path, payload: dict[str, Any]) -> None:
-    temp_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-    with temp_path.open("w", encoding="utf-8") as handle:
-        json.dump(payload, handle, ensure_ascii=False, sort_keys=True, indent=2)
-        handle.write("\n")
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.replace(temp_path, path)
-    _fsync_directory(path.parent)
-
-
-def _task_file_candidates(root: Path, run_at: datetime, *, task_id: str) -> Iterator[Path]:
-    stamp = format_task_timestamp(run_at)
-    yield root / f"{stamp}-{task_id[:8]}{TASK_JSON_SUFFIX}"
-    for _ in range(32):
-        yield root / f"{stamp}-{uuid.uuid4().hex[:8]}{TASK_JSON_SUFFIX}"
-
-
-def _move_running_task(path: Path, root: Path, run_at: datetime, *, task_id: str) -> Path:
-    for candidate in _task_file_candidates(root, run_at, task_id=task_id):
-        try:
-            os.link(path, candidate)
-        except FileExistsError:
-            if path.samefile(candidate):
-                _fsync_directory(candidate.parent)
-                path.unlink(missing_ok=True)
-                _fsync_directory(path.parent)
-                return candidate
-            continue
-        _fsync_directory(root)
-        path.unlink(missing_ok=True)
-        _fsync_directory(path.parent)
-        return candidate
-    raise FileExistsError(f"could not reserve a unique task filename for {format_task_timestamp(run_at)}")
-
-
-def _move_task_to_archive(path: Path, root: Path, completed_at: datetime, *, task_id: str) -> Path:
-    archive_dir = root / ARCHIVE_DIRNAME / completed_at.strftime("%Y-%m")
-    ensure_durable_task_directory(archive_dir)
-    for candidate in _task_file_candidates(archive_dir, completed_at, task_id=task_id):
-        try:
-            os.link(path, candidate)
-        except FileExistsError:
-            if path.samefile(candidate):
-                _fsync_directory(candidate.parent)
-                path.unlink(missing_ok=True)
-                _fsync_directory(path.parent)
-                return candidate
-            continue
-        _fsync_directory(archive_dir)
-        path.unlink(missing_ok=True)
-        _fsync_directory(path.parent)
-        return candidate
-    raise FileExistsError(f"could not reserve archive filename for {format_task_timestamp(completed_at)}")
-
-
-def _original_task_name(path: Path) -> str:
-    return path.name.split(RUNNING_MARKER, 1)[0]
-
-
-def _safe_error_summary(error: Exception) -> str:
-    text = " ".join(str(error).split()).strip()
-    if not text:
-        text = error.__class__.__name__
-    text = re.sub(
-        r"(?i)\b(api[_-]?key|access[_-]?token|token|secret|password)\b\s*[:=]\s*[^\s,;]+",
-        r"\1=[redacted]",
-        text,
-    )
-    return text[:500]
-
-
-def _record_from_failed_file(path: Path) -> Optional[ScheduledTaskRecord]:
-    reason = "failed"
-    original_name = path.name
-    for candidate_reason in ("needs_review", "completion_error", "timeout", "failed", "error", "invalid", "orphaned"):
-        marker = f".{candidate_reason}"
-        if marker in path.name:
-            reason = candidate_reason
-            original_name = path.name.split(marker, 1)[0]
-            break
-    if not original_name.endswith(TASK_JSON_SUFFIX):
-        return None
-    record = _record_from_json_file(path, state=TASK_STATE_FAILED, original_name=original_name, reason=reason)
-    return record
-
-
-def _record_from_json_file(
-    path: Path,
-    *,
-    state: str = TASK_STATE_PENDING,
-    original_name: Optional[str] = None,
-    reason: str = "",
-) -> Optional[ScheduledTaskRecord]:
-    run_at = _parse_task_time_from_json_name(original_name or path.name)
-    if run_at is None:
-        return None
-    try:
-        raw_payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        raw_payload = {}
-    payload = raw_payload if isinstance(raw_payload, dict) else {}
-    payload_run_at = payload.get("run_at")
-    if payload_run_at:
-        try:
-            run_at = parse_run_at(str(payload_run_at))
-        except ValueError:
-            pass
-    kind = str(payload.get("kind") or "")
-    return ScheduledTaskRecord(path=path, run_at=run_at, kind=kind, state=state, payload=payload, reason=reason)
-
-
-def _parse_task_time_from_json_name(name: str) -> Optional[datetime]:
-    base_name = name.split(RUNNING_MARKER, 1)[0]
-    if not base_name.endswith(TASK_JSON_SUFFIX):
-        return None
-    stamp = base_name[:len(datetime.now().strftime(TASK_TIMESTAMP_FORMAT))]
-    try:
-        return datetime.strptime(stamp, TASK_TIMESTAMP_FORMAT)
-    except ValueError:
-        return None
+def _rewrite_pending_task(tasks_dir, record, payload, next_run_at):
+    TaskStore(tasks_dir).update_task(record.task_id, payload, record.payload["revision"])
+    return get_scheduled_task(tasks_dir, record.task_id)
 
 
 async def collect_scheduled_turn_events(
@@ -1471,9 +648,192 @@ async def collect_scheduled_turn_events(
                 if isinstance(attachments, list):
                     raw_attachments.extend(item for item in attachments if isinstance(item, dict))
             elif event_type == "error" and not final_content:
-                last_error = str(event.get("error") or "Agent processing error.").strip()
+                from .task_receipts import PreparationError
+                raise PreparationError(str(event.get("error") or "Agent processing error.").strip(),
+                    retryable=event.get("error_code") in {"network_error", "model_unavailable", "empty_response", "timeout", "capacity"})
     finally:
         close = getattr(event_stream, "aclose", None)
         if callable(close):
             await close()
     return final_content, raw_attachments, last_error
+
+
+class AsyncTaskScheduler:
+    """One local worker: persist first, claim atomically, recover conservatively."""
+
+    def __init__(self, tasks_dir, *, can_handle, execute, deliver,
+                 shutdown_timeout_seconds=10.0, poll_interval_seconds=1.0,
+                 max_concurrent_dispatches=4, logger_=None, now_provider=None):
+        if poll_interval_seconds <= 0 or max_concurrent_dispatches <= 0:
+            raise ValueError("poll interval and concurrency must be positive")
+        self.tasks_dir = Path(tasks_dir).expanduser().resolve()
+        self.store = TaskStore(self.tasks_dir)
+        self.can_handle, self.execute, self.deliver = can_handle, execute, deliver
+        self.shutdown_timeout_seconds = shutdown_timeout_seconds
+        self.poll_interval_seconds, self.max_concurrent_dispatches = poll_interval_seconds, max_concurrent_dispatches
+        self.logger = logger_ or logging.getLogger(__name__)
+        self.now_provider = now_provider or (lambda: datetime.now(timezone.utc))
+        self._task = None
+        self._stop_event, self._wake_event = asyncio.Event(), asyncio.Event()
+        self._inflight = set()
+        self._inflight_records = {}
+        self._orphaned_runs = set()
+
+    def _now(self):
+        return aware(self.now_provider(), system_timezone())
+
+    @property
+    def is_running(self):
+        return self._task is not None and not self._task.done()
+
+    def wake(self):
+        self._wake_event.set()
+
+    def channel_tasks(self, channel):
+        return {t for t, (r, _) in self._inflight_records.items() if r.delivery_channel == channel and not t.done()}
+
+    def status_snapshot(self):
+        records = list_task_records(self.tasks_dir)
+        return {"running": self.is_running, "inflight": len(self._inflight),
+                "pending": sum(r.status in {"active", "paused"} for r in records),
+                "failed": sum(r.status == "failed" or (r.payload.get("last_run_status") == "failed" and not r.payload.get("last_run_resolved")) for r in records),
+                "needs_review": sum(bool(r.payload.get("unresolved_runs")) for r in records)}
+
+    async def get_status(self):
+        return self.status_snapshot()
+
+    async def start(self):
+        if self.is_running:
+            return
+        self._stop_event.clear()
+        self.recover_running_tasks()
+        self._task = asyncio.create_task(self.run_forever())
+
+    def recover_running_tasks(self):
+        return self.store.recover(self._now())
+
+    async def stop(self):
+        self._stop_event.set()
+        self.wake()
+        if self._task:
+            self._task.cancel()
+            await asyncio.gather(self._task, return_exceptions=True)
+            self._task = None
+        if self._inflight:
+            _, pending = await asyncio.wait(self._inflight, timeout=self.shutdown_timeout_seconds)
+            for task in pending:
+                task.cancel()
+            if pending:
+                await asyncio.wait(pending, timeout=1)
+        # Ownership is retained by RuntimeHost while any tool writer is alive.
+        if not any(not t.done() for t in self._inflight):
+            self.store.recover(self._now())
+
+    async def run_forever(self):
+        while not self._stop_event.is_set():
+            try:
+                self._wake_event.clear()
+                await self.tick(wait_for_dispatches=False)
+                await asyncio.wait_for(self._wake_event.wait(), timeout=self.poll_interval_seconds)
+            except asyncio.TimeoutError:
+                pass
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                self.logger.exception("Task scheduler cycle failed; persisted work remains queued")
+                try:
+                    await asyncio.wait_for(self._stop_event.wait(), timeout=self.poll_interval_seconds)
+                except asyncio.TimeoutError:
+                    pass
+
+    async def tick(self, *, wait_for_dispatches=True):
+        now = self._now()
+        for run_id in list(self._orphaned_runs):
+            self.store.recover(now, run_id)
+            self._orphaned_runs.discard(run_id)
+        self.store.materialize(now)
+        started = []
+        while len(self._inflight) < self.max_concurrent_dispatches:
+            run = self.store.claim(now, lambda payload: self.can_handle(_record(self.tasks_dir, dict(payload, status="active"))))
+            if run is None:
+                break
+            payload = dict(run["snapshot"], status="active", next_due=run["due_at"], scheduled_at=run["due_at"])
+            record = _record(self.tasks_dir, payload)
+            task = asyncio.create_task(self._run(run, record))
+            self._inflight.add(task)
+            self._inflight_records[task] = (record, run["id"])
+            task.add_done_callback(self._done)
+            started.append(task)
+        if wait_for_dispatches and started:
+            await asyncio.gather(*started, return_exceptions=False)
+        return min((aware(p["next_due"]) for p in self.store.tasks() if p.get("next_due")), default=None)
+
+    def _done(self, task):
+        self._inflight.discard(task)
+        entry = self._inflight_records.pop(task, None)
+        if entry and (task.cancelled() or task.exception()):
+            self._orphaned_runs.add(entry[1])
+            try:
+                self.store.recover(self._now(), entry[1])
+                self._orphaned_runs.discard(entry[1])
+            except Exception:
+                self.logger.exception("Task recovery deferred until storage is available")
+        self.wake()
+        if not task.cancelled() and task.exception():
+            self.logger.error("Task worker stopped; persisted state will be recovered", exc_info=task.exception())
+
+    async def _run(self, run, record):
+        from .task_receipts import PreparationError, task_run_context
+        try:
+            with task_run_context(self.store, run, self._now):
+                with scheduled_delivery_context(ScheduledDeliveryContext(
+                    channel=record.delivery_channel, user_id=record.delivery_user_id, target=record.target,
+                    metadata={"source": "scheduled_task", "task_id": record.task_id, "run_id": run["id"],
+                              "scheduled_run_id": run["id"], "attempt_id": run["attempt_id"], "scheduled_at": run["due_at"]},
+                )):
+                    if not run.get("result"):
+                        result = await self.execute(record)
+                        if not isinstance(result, dict) or not (result.get("content") or result.get("attachments")):
+                            raise ValueError("Scheduled task produced no final result")
+                        run.update(status="result_ready", phase="deliver", result=result)
+                        self.store.save_run(run)
+                    run.update(status="delivering", phase="deliver")
+                    self.store.save_run(run)
+                    with strict_task_delivery():
+                        receipt = await self.deliver(record, run["result"], run["id"])
+                    if not isinstance(receipt, dict) or not receipt.get("accepted"):
+                        raise DeliveryUncertainError("Delivery returned no positive acknowledgement")
+                    run["delivery_receipt"] = receipt
+            run.update(status="succeeded", phase="completed", error=None, finished_at=stamp(self._now()), attempt_finished_at=stamp(self._now()))
+            self.store.save_run(run)
+        except asyncio.CancelledError:
+            # The persisted executing/delivering boundary is reconciled once the
+            # handler has stopped. Do not overwrite accepted per-part receipts.
+            raise
+        except Exception as exc:
+            phase = run["phase"]
+            parts = self.store.get_run(record.task_id, run["id"])["deliveries"]
+            uncertain = isinstance(exc, DeliveryUncertainError) or (phase == "prepare" and run.get("unsafe_tools_started"))
+            if phase == "deliver":
+                uncertain = uncertain or any(p["status"] in {"sending", "needs_review"} and p.get("uncertain_on_error", True) for p in parts)
+                if not parts and not isinstance(exc, ValueError):
+                    uncertain = True
+            transient = isinstance(exc, (ConnectionError, TimeoutError)) or isinstance(exc, PreparationError) and exc.retryable
+            # A failed upload is known unsent and may be retried. A network send
+            # with an unknown acknowledgement always requires review instead.
+            transient = transient or phase == "deliver" and bool(parts) and not uncertain and not isinstance(exc, (ValueError, FileNotFoundError))
+            retry = transient and not uncertain and run["attempt_count"] < 3
+            delay = (30, 120)[min(run["attempt_count"] - 1, 1)]
+            retry_at = self._now() + timedelta(seconds=delay)
+            retry = retry and retry_at <= aware(run["expires_at"])
+            run.update(status="needs_review" if uncertain else "retry_wait" if retry else "failed",
+                       failure_stage=phase, error=_safe_error_summary(exc), error_type=type(exc).__name__,
+                       retry_at=stamp(retry_at) if retry else None,
+                       attempt_finished_at=stamp(self._now()), finished_at=None if retry else stamp(self._now()))
+            self.store.save_run(run)
+            self.logger.warning("Task execution %s failed in %s: %s", run["id"], phase, run["error"])
+
+
+def _safe_error_summary(error):
+    text = " ".join(str(error).split()) or type(error).__name__
+    return re.sub(r"(?i)\b(api[_-]?key|access[_-]?token|token|secret|password)\b\s*[:=]\s*[^\s,;]+", r"\1=[redacted]", text)[:500]

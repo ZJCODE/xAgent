@@ -36,6 +36,7 @@ import type {
   SkillStateResponse,
   SkillsInfo,
   SkillsTreeResponse,
+  TaskRun,
   TaskCreateInput,
   TaskDuplicateInput,
   TaskScope,
@@ -468,4 +469,16 @@ export async function cancelChannelQr(
 
 export function workspaceBlobUrl(path: string): string {
   return `/api/workspace/blob?path=${encodeURIComponent(path)}`;
+}
+
+export async function getTaskRuns(taskId: string, offset = 0): Promise<{ runs: TaskRun[]; has_more: boolean }> {
+  return requestJson(`/api/tasks/${encodeURIComponent(taskId)}/runs?offset=${offset}`);
+}
+
+export async function getTaskRun(taskId: string, runId: string): Promise<{ run: TaskRun }> {
+  return requestJson(`/api/tasks/${encodeURIComponent(taskId)}/runs/${encodeURIComponent(runId)}`);
+}
+
+export async function taskRunAction(taskId: string, runId: string, action: "prepare" | "deliver" | "resolve"): Promise<{ run: TaskRun }> {
+  return requestJson(`/api/tasks/${encodeURIComponent(taskId)}/runs/${encodeURIComponent(runId)}/${action}`, { method: "POST" });
 }

@@ -80,10 +80,14 @@ def function_tool(
     name: Optional[str] = None,
     description: Optional[str] = None,
     strict: bool = False,
-    param_descriptions: Optional[Dict[str, str]] = None
+    param_descriptions: Optional[Dict[str, str]] = None,
+    retry_safety: Literal["read_only", "idempotent", "external"] = "external",
 ) -> Callable[[Callable], Callable]:
     """Decorator to convert Python functions into OpenAI function call tools."""
     
+    if retry_safety not in {"read_only", "idempotent", "external"}:
+        raise ValueError("Invalid tool retry safety")
+
     def decorator(func: Callable) -> Callable:
         # Generate tool spec
         signature = inspect.signature(func)
@@ -132,6 +136,7 @@ def function_tool(
 
         # Attach metadata
         async_func.tool_spec = tool_spec
+        async_func.retry_safety = retry_safety
         async_func.__name__ = func.__name__
         async_func.__doc__ = func.__doc__
         async_func.__module__ = func.__module__

@@ -22,6 +22,7 @@ def create_see_image_tool(*, workspace_dir: str):
     workspace_root = Path(workspace_dir).expanduser().resolve()
 
     @function_tool(
+        retry_safety="read_only",
         name="see_image",
         description=(
             "Open an existing workspace image so you can see it on this turn. "

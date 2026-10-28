@@ -18,7 +18,6 @@ from ...core.runtime import (
 from ...schemas.attachment import dedupe_attachments
 from ...schemas.attachment import ATTACHMENT_METADATA_KEY
 from ...schemas import Message, RoleType
-from ...core.runtime.task_receipts import occurrence_run_id
 from .chat_service import ChatService
 from .constants import CHANNEL_API
 from .delivery import DeliveryBus
@@ -52,10 +51,6 @@ class TaskDispatchService:
         # ``local`` records predate channel-scoped delivery; the api channel is
         # the default home surface, so it adopts them instead of leaving them undeliverable.
         return task.delivery_channel in (CHANNEL_API, "", "local")
-
-    async def dispatch(self, task) -> None:
-        result = await self.execute(task)
-        await self.deliver(task, result, occurrence_run_id(task.task_id, task.run_at))
 
     async def execute(self, task) -> dict[str, Any]:
         result = await self._scheduled_task_result(task)

@@ -10,7 +10,7 @@ from typing import Any, Optional
 from fastapi import FastAPI
 
 from ...core.agent import Agent
-from ...core.runtime import AsyncTaskScheduler, SubconsciousDelivery
+from ...core.runtime import SubconsciousDelivery
 from ...interfaces.server.runtime_routes import register_runtime_routes
 from ...interfaces.server.device_routes import register_device_routes
 from ...integrations.devices.service import DeviceEvent, DeviceService
@@ -59,7 +59,6 @@ class ApiChannelAdapter:
             delivery=self.delivery,
             logger=self.logger,
         )
-        self._task_scheduler: Optional[AsyncTaskScheduler] = None
 
     async def start(self) -> None:
         """Transport setup only; the RuntimeHost owns scheduled work."""

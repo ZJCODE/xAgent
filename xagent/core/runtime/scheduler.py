@@ -1,18 +1,12 @@
-"""Shared helpers for file-backed scheduled tasks."""
+"""Calendar and interval schedule calculations."""
 from __future__ import annotations
 
 import calendar
-import os
-import uuid
 from datetime import datetime, time, timedelta
-from pathlib import Path
 from typing import Any, Mapping
 
 
 TASK_TIMESTAMP_FORMAT = "%Y%m%d-%H%M%S"
-RUNNING_MARKER = ".running-"
-FAILED_DIRNAME = "failed"
-ARCHIVE_DIRNAME = "archive"
 WEEKDAY_NAMES = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 WEEKDAY_INDEX_BY_NAME = {name: index for index, name in enumerate(WEEKDAY_NAMES)}
 WEEKDAY_ALIASES = {
@@ -47,11 +41,6 @@ SUPPORTED_RECURRENCE_KINDS = {
     RECURRENCE_KIND_MONTHLY,
     RECURRENCE_KIND_INTERVAL,
 }
-
-
-def format_task_timestamp(run_at: datetime) -> str:
-    """Format a datetime as the scheduler filename timestamp prefix."""
-    return run_at.replace(microsecond=0).strftime(TASK_TIMESTAMP_FORMAT)
 
 
 def parse_run_at(value: str | datetime) -> datetime:
@@ -636,14 +625,3 @@ def _validate_recurrence_rule_mix(rules: list[dict[str, Any]]) -> None:
     interval_count = sum(1 for rule in rules if rule.get("kind") == RECURRENCE_KIND_INTERVAL)
     if interval_count and len(rules) != 1:
         raise ValueError("interval recurrence cannot be combined with other recurrence rules")
-
-
-def _unique_failed_path(failed_dir: Path, name: str, reason: str) -> Path:
-    destination = failed_dir / f"{name}.{reason}"
-    if not destination.exists():
-        return destination
-    for index in range(1, 1000):
-        candidate = failed_dir / f"{name}.{reason}.{index}"
-        if not candidate.exists():
-            return candidate
-    return failed_dir / f"{name}.{reason}.{uuid.uuid4().hex[:8]}"

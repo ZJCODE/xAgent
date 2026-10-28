@@ -52,7 +52,10 @@ export function TaskEditorModal({
 }: TaskEditorModalProps) {
   const [form, setForm] = useState<TaskFormState>(() => createDefaultTaskFormState());
   const [localError, setLocalError] = useState("");
-  const validationError = useMemo(() => validateTaskForm(form), [form]);
+  const [zone, setZone] = useState("");
+  const [latenessMinutes, setLatenessMinutes] = useState(1440);
+  const [blockOnUncertain, setBlockOnUncertain] = useState(false);
+  const validationError = useMemo(() => validateTaskForm(form, zone), [form, zone]);
   const isEdit = mode === "edit";
   const isDuplicate = mode === "duplicate";
   const isNonApiTask = isEdit && task && String(task.channel || "api").toLowerCase() !== "api";
@@ -60,6 +63,9 @@ export function TaskEditorModal({
   useEffect(() => {
     if (!open) return;
     setLocalError("");
+    setZone(task?.timezone || "");
+    setLatenessMinutes((task?.execution?.max_lateness_seconds || 86400) / 60);
+    setBlockOnUncertain(task?.execution?.block_on_uncertain || false);
     setForm(task ? (isDuplicate ? taskToDuplicateFormState(task) : taskToFormState(task)) : createDefaultTaskFormState());
   }, [isDuplicate, open, task]);
 
@@ -80,22 +86,29 @@ export function TaskEditorModal({
   };
 
   const save = () => {
-    const message = validateTaskForm(form);
+    const message = validateTaskForm(form, zone);
     if (message) {
       setLocalError(message);
       return;
     }
+    if (!Number.isFinite(latenessMinutes) || latenessMinutes <= 0 || !Number.isInteger(latenessMinutes * 60)) {
+      setLocalError("Recovery window must be positive, in whole seconds."); return;
+    }
+    const settings = {
+      ...(zone.trim() ? { timezone: zone.trim() } : {}),
+      execution: { ...task?.execution, max_lateness_seconds: Math.round(latenessMinutes * 60), block_on_uncertain: blockOnUncertain },
+    };
     if (isEdit) {
       if (!task) return;
-      onSave({ mode: "edit", taskId: task.task_id, patch: formStateToUpdateInput(form, task) });
+      onSave({ mode: "edit", taskId: task.task_id, patch: { ...formStateToUpdateInput(form, task), ...settings } });
       return;
     }
     if (isDuplicate) {
       if (!task) return;
-      onSave({ mode: "duplicate", taskId: task.task_id, input: formStateToDuplicateInput(form) });
+      onSave({ mode: "duplicate", taskId: task.task_id, input: { ...formStateToDuplicateInput(form), ...settings } });
       return;
     }
-    onSave({ mode: "create", input: formStateToCreateInput(form) });
+    onSave({ mode: "create", input: { ...formStateToCreateInput(form), ...settings } });
   };
 
   const toggleWeekday = (weekday: WeekdayOption) => {
@@ -179,7 +192,7 @@ export function TaskEditorModal({
 
             {form.scheduleKind === "oneshot" && <OneShotFields form={form} updateForm={updateForm} />}
             {form.scheduleKind === "daily" && (
-              <WizardField label="Daily time" hint="Local wall-clock time.">
+              <WizardField label="Daily time" hint="Wall-clock time in the task timezone.">
                 <input type="time" value={form.dailyTime} onChange={(event) => updateForm({ dailyTime: event.target.value })} />
               </WizardField>
             )}
@@ -188,6 +201,16 @@ export function TaskEditorModal({
             )}
             {form.scheduleKind === "monthly" && <MonthlyFields form={form} updateForm={updateForm} />}
             {form.scheduleKind === "interval" && <IntervalFields form={form} updateForm={updateForm} />}
+            <details>
+              <summary>Recovery settings</summary>
+              <WizardField label="Timezone" hint="IANA name, such as Asia/Shanghai. Empty uses the Agent timezone when created.">
+                <input value={zone} onChange={(event) => setZone(event.target.value)} />
+              </WizardField>
+              <WizardField label="Recovery window (minutes)" hint="Only the latest missed occurrence is recovered within this window. Older ones are recorded as skipped.">
+                <input type="number" min="1" value={latenessMinutes} onChange={(event) => setLatenessMinutes(Number(event.target.value))} />
+              </WizardField>
+              <label><input type="checkbox" checked={blockOnUncertain} onChange={(event) => setBlockOnUncertain(event.target.checked)} /> Wait for review before future runs when an external operation is uncertain</label>
+            </details>
           </form>
         </div>
 
@@ -249,7 +272,7 @@ function WeeklyFields({
 }) {
   return (
     <div className="task-editor-section">
-      <WizardField label="Weekly time" hint="Local wall-clock time.">
+      <WizardField label="Weekly time" hint="Wall-clock time in the task timezone.">
         <input type="time" value={form.weeklyTime} onChange={(event) => updateForm({ weeklyTime: event.target.value })} />
       </WizardField>
       <div className="task-editor-field-block">
@@ -280,7 +303,7 @@ function MonthlyFields({
 }) {
   return (
     <div className="task-editor-section">
-      <WizardField label="Monthly time" hint="Local wall-clock time.">
+      <WizardField label="Monthly time" hint="Wall-clock time in the task timezone.">
         <input type="time" value={form.monthlyTime} onChange={(event) => updateForm({ monthlyTime: event.target.value })} />
       </WizardField>
       <RadioGroup

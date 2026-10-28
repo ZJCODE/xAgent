@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from unittest.mock import AsyncMock
 from datetime import datetime
 from pathlib import Path
 
@@ -67,6 +68,86 @@ class _AttachmentTaskAgent(_TaskAgent):
 
 
 class TaskApiTests(unittest.TestCase):
+    def test_recurring_task_with_uncertain_run_is_scheduled_and_visible_for_review(self):
+        async def run_test(root):
+            now = datetime(2026, 6, 1, 10)
+            task = enqueue_scheduled_task(task_type="agent", content="check", run_at=now,
+                tasks_dir=root / "tasks", channel="api", target={"user_id": "alice"},
+                recurrence=[{"kind": "daily", "time": "10:00:00"}])
+            async def execute(record):
+                return {"content": "result"}
+            async def deliver(record, result, run_id):
+                raise TimeoutError("delivery unknown")
+            scheduler = AsyncTaskScheduler(root / "tasks", can_handle=lambda record: True,
+                execute=execute, deliver=deliver, now_provider=lambda: now)
+            await scheduler.tick()
+            return task.task_id
+
+        import asyncio
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            server = AgentHTTPServer(agent=_TaskAgent(root))
+            task_id = asyncio.run(run_test(root))
+            with TestClient(server.app) as client:
+                scheduled = client.get("/api/tasks?scope=scheduled").json()
+                attention = client.get("/api/tasks?scope=attention").json()
+                current = client.get("/api/tasks?scope=current").json()
+            self.assertEqual([row["task_id"] for row in scheduled["tasks"]], [task_id])
+            self.assertEqual([row["task_id"] for row in attention["tasks"]], [task_id])
+            self.assertEqual(len(current["tasks"]), 1)
+            self.assertEqual(datetime.fromisoformat(attention["tasks"][0]["next_run_at"]).astimezone().replace(tzinfo=None), datetime(2026, 6, 2, 10))
+            self.assertEqual(len(attention["tasks"][0]["unresolved_runs"]), 1)
+
+    def test_execution_history_actions_and_delivery_receipt_redaction(self):
+        import asyncio
+        from datetime import timezone
+        async def create_failure(server):
+            now = datetime.now(timezone.utc).replace(microsecond=0)
+            task = enqueue_scheduled_task(task_type="agent", content="check", run_at=now,
+                tasks_dir=server.tasks_dir, channel="api", target={"user_id": "alice"})
+            async def execute(record):
+                return {"content": "prepared"}
+            async def deliver(*args):
+                raise ValueError("recipient is not configured")
+            scheduler = AsyncTaskScheduler(server.tasks_dir, can_handle=lambda record: True,
+                execute=execute, deliver=deliver, now_provider=lambda: now)
+            await scheduler.tick()
+            run = scheduler.store.list_runs(task.task_id)[0]
+            scheduler.store.save_delivery(run["id"], {"id": "upload", "status": "accepted", "receipt": {"secret": "hidden"}})
+            return task, run
+        with tempfile.TemporaryDirectory() as tmp:
+            server = AgentHTTPServer(agent=_TaskAgent(Path(tmp)))
+            task, run = asyncio.run(create_failure(server))
+            url = f"/api/tasks/{task.task_id}/runs/{run['id']}"
+            with TestClient(server.app) as client:
+                self.assertEqual(len(client.get(f"/api/tasks/{task.task_id}/runs").json()["runs"]), 1)
+                detail = client.get(url).json()["run"]
+                self.assertTrue(detail["can_retry_deliver"])
+                self.assertFalse(detail["can_retry_prepare"])
+                self.assertNotIn("secret", str(detail))
+                self.assertEqual(len(detail["attempts"]), 1)
+                self.assertEqual(client.post(url + "/deliver").status_code, 200)
+                self.assertEqual(client.post(url + "/resolve").status_code, 409)
+                self.assertEqual(client.get("/api/tasks/other/runs/" + run["id"]).status_code, 404)
+
+    def test_task_storage_failure_is_visible_and_never_acknowledged(self):
+        from unittest.mock import patch
+        import sqlite3
+        with tempfile.TemporaryDirectory() as tmp:
+            server = AgentHTTPServer(agent=_TaskAgent(Path(tmp)))
+            with TestClient(server.app) as client, patch("xagent.core.runtime.task_store.TaskStore.insert_task", side_effect=sqlite3.OperationalError("disk full")):
+                response = client.post("/api/tasks", json={"task_type": "message", "content": "hello", "delay_seconds": 60})
+            self.assertEqual(response.status_code, 503)
+            self.assertIn("not been acknowledged", response.json()["detail"])
+
+    def test_invalid_timezone_and_execution_settings_are_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            server = AgentHTTPServer(agent=_TaskAgent(Path(tmp)))
+            with TestClient(server.app) as client:
+                for extra in ({"timezone": "Not/AZone"}, {"execution": {"max_lateness_seconds": 0}}, {"execution": {"unknown": True}}):
+                    response = client.post("/api/tasks", json={"task_type": "message", "content": "hello", "delay_seconds": 60, **extra})
+                    self.assertEqual(response.status_code, 400, response.text)
+
     def test_scheduled_delivery_cannot_acknowledge_missing_durable_history(self):
         async def run_test():
             from types import SimpleNamespace
@@ -248,12 +329,13 @@ class TaskApiTests(unittest.TestCase):
             )
 
             async def delivered(task):
-                del task
+                return {"content": task.content}
 
             scheduler = AsyncTaskScheduler(
                 server.tasks_dir,
                 can_handle=lambda task: True,
-                dispatch=delivered,
+                execute=delivered,
+                deliver=AsyncMock(return_value={"accepted": True}),
                 now_provider=lambda: run_at,
             )
             await scheduler.tick()
@@ -426,7 +508,7 @@ class TaskApiTests(unittest.TestCase):
                 task = created.json()["task"]
                 self.assertEqual(task["recurrence"][0]["start_at"], "2099-07-11 10:00:00")
                 self.assertEqual(task["recurrence"][0]["end_at"], "2099-07-11 12:00:00")
-                self.assertEqual(task["next_run_at"], "2099-07-11 10:00:00")
+                self.assertEqual(datetime.fromisoformat(task["next_run_at"]).astimezone().replace(tzinfo=None), datetime(2099, 7, 11, 10))
 
     def test_tasks_api_surfaces_running_task_during_dispatch(self):
         import asyncio
@@ -455,11 +537,13 @@ class TaskApiTests(unittest.TestCase):
                     transport = httpx.ASGITransport(app=server.app)
                     async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
                         snapshot["response"] = await ac.get("/api/tasks")
+                    return {"content": task.content}
 
                 scheduler = AsyncTaskScheduler(
                     server.tasks_dir,
                     can_handle=lambda task: task.delivery_channel == "api",
-                    dispatch=dispatch,
+                    execute=dispatch,
+                    deliver=AsyncMock(return_value={"accepted": True}),
                     now_provider=lambda: datetime(2026, 6, 1, 10, 0, 0),
                 )
                 await scheduler.tick()
@@ -497,7 +581,7 @@ class TaskApiTests(unittest.TestCase):
                     delivered.append((task_record.task_type, content, stored_message, attachments))
 
                 server.api.delivery.broadcast_scheduled_message = capture_broadcast
-                await server.api.tasks.dispatch(record)
+                await server.api.tasks.deliver(record, await server.api.tasks.execute(record), record.task_id)
 
             self.assertEqual(len(delivered), 1)
             self.assertEqual(delivered[0][:2], ("agent", "agent scheduled result"))
@@ -533,7 +617,7 @@ class TaskApiTests(unittest.TestCase):
                     delivered.append((task_record.task_type, content, stored_message, attachments))
 
                 server.api.delivery.broadcast_scheduled_message = capture_broadcast
-                await server.api.tasks.dispatch(record)
+                await server.api.tasks.deliver(record, await server.api.tasks.execute(record), record.task_id)
 
             self.assertEqual(len(delivered), 1)
             self.assertEqual(delivered[0][:2], ("agent", ""))

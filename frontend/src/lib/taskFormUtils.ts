@@ -127,7 +127,7 @@ export function taskToFormState(task: ScheduledTaskItem): TaskFormState {
   }
 
   state.oneShotMode = "absolute";
-  state.runAt = fromApiDateTime(task.next_run_at || "");
+  state.runAt = fromApiDateTime(task.next_run_at || "", task.timezone);
   return state;
 }
 
@@ -148,7 +148,7 @@ export function taskToDuplicateFormState(task: ScheduledTaskItem): TaskFormState
   return state;
 }
 
-export function validateTaskForm(state: TaskFormState): string | null {
+export function validateTaskForm(state: TaskFormState, timezone?: string): string | null {
   if (!state.content.trim()) return "Content is required.";
 
   if (state.scheduleKind === "oneshot") {
@@ -157,7 +157,7 @@ export function validateTaskForm(state: TaskFormState): string | null {
       if (delay == null || delay < 0) return "Delay must be zero or positive.";
       return null;
     }
-    return validateFutureDateTime(state.runAt, "Run at");
+    return validateFutureDateTime(state.runAt, "Run at", timezone);
   }
 
   if (state.scheduleKind === "daily") {
@@ -195,7 +195,7 @@ export function validateTaskForm(state: TaskFormState): string | null {
   if (state.intervalUnit === "seconds" && !Number.isInteger(every)) return "Interval must use whole seconds.";
 
   if (state.intervalStartMode === "at") {
-    const startError = validateFutureDateTime(state.intervalStartAt, "Start at");
+    const startError = validateFutureDateTime(state.intervalStartAt, "Start at", timezone);
     if (startError) return startError;
   }
 
@@ -204,7 +204,7 @@ export function validateTaskForm(state: TaskFormState): string | null {
     if (durationMinutes == null || durationMinutes <= 0) return "Interval duration must be positive.";
     if (durationMinutes > MAX_INTERVAL_DURATION_MINUTES) return "Interval duration cannot exceed 30 days.";
   } else {
-    const endError = validateFutureDateTime(state.intervalEndAt, "Stop at");
+    const endError = validateFutureDateTime(state.intervalEndAt, "Stop at", timezone);
     if (endError) return endError;
   }
 
@@ -262,10 +262,18 @@ export function toApiDateTime(value: string): string {
   return normalized.length === 16 ? `${normalized}:00` : normalized;
 }
 
-export function fromApiDateTime(value: string): string {
+export function fromApiDateTime(value: string, timezone?: string): string {
   const text = String(value || "").trim();
   if (!text) return "";
   const normalized = text.replace(" ", "T");
+  if (timezone && /(?:Z|[+-]\d{2}:\d{2})$/.test(normalized)) {
+    const parts = new Intl.DateTimeFormat("en-GB", {
+      timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23",
+    }).formatToParts(new Date(normalized));
+    const part = (type: string) => parts.find((item) => item.type === type)?.value || "00";
+    return `${part("year")}-${part("month")}-${part("day")}T${part("hour")}:${part("minute")}:${part("second")}`;
+  }
   return normalized.slice(0, 19);
 }
 
@@ -467,11 +475,13 @@ function parseDateTime(value: string): number {
   return new Date(value).getTime();
 }
 
-function validateFutureDateTime(value: string, label: string): string | null {
+function validateFutureDateTime(value: string, label: string, timezone?: string): string | null {
   if (!value.trim()) return `${label} is required.`;
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return `${label} must be a valid date and time.`;
-  if (parsed.getTime() <= Date.now()) return `${label} must be in the future.`;
+  // The server interprets wall times in the task timezone. Avoid rejecting a
+  // valid foreign-zone time by comparing it with the browser clock.
+  if ((!timezone || timezone === Intl.DateTimeFormat().resolvedOptions().timeZone) && parsed.getTime() <= Date.now()) return `${label} must be in the future.`;
   return null;
 }
 

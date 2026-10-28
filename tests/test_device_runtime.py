@@ -14,8 +14,10 @@ import unittest
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 import websockets
+from websockets.legacy.client import WebSocketClientProtocol, connect as legacy_connect
 import yaml
 import httpx
 import uvicorn
@@ -87,6 +89,27 @@ class DeviceRuntimeTests(unittest.IsolatedAsyncioTestCase):
             events.append(event)
             if event["type"] == "done":
                 return events
+
+    async def test_unresponsive_device_is_removed_after_transport_ping_timeout(self):
+        class NoPongClient(WebSocketClientProtocol):
+            async def pong(self, data=b""):
+                pass
+
+        with patch("xagent.core.runtime.host.API_WS_PING_INTERVAL", 0.1), patch(
+            "xagent.core.runtime.host.API_WS_PING_TIMEOUT", 0.1
+        ):
+            host, _, _, url = await self.start_host([])
+        async with legacy_connect(
+            url + "/ws/devices/desk",
+            extra_headers={"Authorization": "Bearer desk-secret"},
+            create_protocol=NoPongClient,
+            ping_interval=None,
+        ) as device:
+            await self.register(device, host)
+            await self.wait_for(lambda: "desk" not in host.device_service.devices)
+            async with httpx.AsyncClient(base_url=url.replace("ws://", "http://"), trust_env=False) as client:
+                response = await client.get("/api/devices")
+                self.assertFalse(response.json()["devices"][0]["online"])
 
     async def test_real_agent_chat_tool_call_receives_result_over_separate_device_socket(self):
         call = chat_test.FakeToolCall("device", json.dumps({

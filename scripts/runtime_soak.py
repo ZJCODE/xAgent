@@ -68,6 +68,9 @@ class Channel:
         self.host._channel_connection(self.name, "connected")
         await self.stopping.wait()
 
+    def quiesce(self):
+        self.stopping.set()
+
     async def stop(self):
         self.stopping.set()
 
@@ -119,7 +122,7 @@ async def soak(args):
         runner.agent.model_client = model
         runner.agent.working_context_compactor = None
         runner.agent.memory_handler.llm_service = Journal()
-        runner.agent.memory_handler.relationship_store = None
+        runner.agent.memory_handler.projector.llm = runner.agent.memory_handler.llm_service
         return runner
     host = Host(root, channels=["api", "weixin", "voice"])
     clock = datetime(2026, 10, 10)
@@ -179,6 +182,8 @@ async def soak(args):
                         updated_at=datetime.now().isoformat())
                     write_report(root, report)
                 await host.scheduler.tick()
+                if host.scheduler._inflight:
+                    await asyncio.gather(*list(host.scheduler._inflight))
                 await host.agent.memory_handler.run_maintenance(force=True, trigger="simulation-hour")
                 assert (await host.agent.memory_handler.get_maintenance_status())["backlog"] == 0
                 report["checks"] += 1
@@ -202,10 +207,12 @@ async def soak(args):
                     report["checks"] += 2
                 clock += timedelta(hours=1)
             report["simulated_hours"] = args.simulated_hours
-            receipts = [json.loads(path.read_text()) for path in (root / ".runtime" / "task_runs").glob("*.json")]
+            from xagent.core.runtime.task_store import TaskStore
+            with TaskStore(root / "tasks").connect() as database:
+                receipts = [json.loads(row[0]) for row in database.execute("SELECT data FROM runs WHERE status='succeeded'")]
             report["recurring_deliveries"] = len(receipts)
             assert report["recurring_deliveries"] == args.simulated_hours, report
-            assert all(receipt["stage"] == "succeeded" for receipt in receipts), receipts
+            assert all(receipt["status"] == "succeeded" for receipt in receipts), receipts
             report["stored_messages"] = await host.agent.message_storage.get_message_count()
             assert report["stored_messages"] == report["cycles"] * 7 + args.simulated_hours, report
             report["final_fd_count"] = len(list(Path("/dev/fd").iterdir()))

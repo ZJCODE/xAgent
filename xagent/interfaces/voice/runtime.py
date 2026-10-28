@@ -15,7 +15,6 @@ from typing import Any, AsyncIterator, Iterable, Iterator, Optional, Protocol
 from xagent.core.config import AgentConfig
 from xagent.core.formatters.context import RoomContextEntry, format_room_context
 from xagent.core.runtime import (
-    AsyncTaskScheduler,
     ScheduledDeliveryContext,
     ScheduledTaskRecord,
     collect_scheduled_turn_events,
@@ -199,7 +198,6 @@ class VoiceRuntime:
         self._active_voice_turn_id: str | None = None
         self._active_voice_user_id: str | None = None
         self._preemptive_turn_id: str | None = None
-        self.task_scheduler: AsyncTaskScheduler | None = None
         self._allow_proactive_output = bool(self.options.allow_proactive_output)
         self._contacts_file: Optional[Path] = None
         if self._allow_proactive_output and self.options.tasks_dir is not None:
@@ -1195,11 +1193,6 @@ class VoiceRuntime:
 
     def _can_handle_scheduled_task(self, task: ScheduledTaskRecord) -> bool:
         return self._allow_proactive_output and task.kind == "task" and task.delivery_channel == "voice"
-
-    async def _dispatch_scheduled_task(self, task: ScheduledTaskRecord) -> None:
-        from xagent.core.runtime.task_receipts import occurrence_run_id
-        result = await self.execute_scheduled_task(task)
-        await self.deliver_scheduled_task(task, result, occurrence_run_id(task.task_id, task.run_at))
 
     async def execute_scheduled_task(self, task: ScheduledTaskRecord) -> dict[str, Any]:
         text = await self._scheduled_task_text(task)

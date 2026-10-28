@@ -835,7 +835,7 @@ class Agent:
                 except StopAsyncIteration:
                     break
                 event = {**event, "turn_id": ticket.turn_id, "event_id": event_id, "request_id": request_id}
-                if event.get("type") == "tool_call" and not side_effect_started:
+                if event.get("type") == "tool_call" and event.get("retry_safety") not in {"read_only", "idempotent"} and not side_effect_started:
                     side_effect_started = True
                     await self.turn_store.update(ticket.turn_id, side_effect_started=True)
                 if event.get("type") == "error":
@@ -1143,7 +1143,9 @@ class Agent:
                         )
 
                     for tool_call in tool_calls:
-                        yield self._tool_event("tool_call", tool_call)
+                        tool_event = self._tool_event("tool_call", tool_call)
+                        tool_event["retry_safety"] = getattr(self.tool_manager.get_tool(tool_event["name"]), "retry_safety", "external")
+                        yield tool_event
 
                     tool_result = await self.tool_executor.handle_tool_calls(
                         tool_calls,

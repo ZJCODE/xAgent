@@ -875,7 +875,6 @@ class VoiceRuntimeTests(unittest.TestCase):
     def test_voice_mode_does_not_start_autonomous_output_by_default(self):
         runtime = self.make_runtime()
 
-        self.assertIsNone(runtime.task_scheduler)
         self.assertFalse(runtime._proactive_speech_allowed())
 
     def test_configured_interruptions_control_microphone_during_reply(self):
@@ -1075,10 +1074,9 @@ class VoiceRuntimeTests(unittest.TestCase):
                 runtime = self.make_runtime(tasks_dir=tmpdir, allow_proactive_output=True)
                 runtime._speak = AsyncMock()
                 from xagent.core.runtime import AsyncTaskScheduler
-                self.assertIsNone(runtime.task_scheduler)
                 scheduler = AsyncTaskScheduler(tmpdir,
                     can_handle=runtime._can_handle_scheduled_task,
-                    dispatch=runtime._dispatch_scheduled_task)
+                    execute=runtime.execute_scheduled_task, deliver=runtime.deliver_scheduled_task)
                 await scheduler.tick()
                 self.assertEqual(runtime._speak.await_count, 1)
                 self.assertEqual(list_active_task_records(tmpdir), [])

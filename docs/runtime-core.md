@@ -65,17 +65,15 @@ Send that body to `POST /chat/stop`. Voice steering also identifies its turn and
 
 ## Task recovery
 
-Task files and atomic claims remain in use. Operational receipts are under `.runtime/task_runs/`; they are not another memory store.
+`tasks/tasks.sqlite3` is the only task data source. The local runtime owns execution; SQLite transactions serialize the scheduler and management API. Definitions, scheduled occurrences, attempts and individual delivery parts have separate records. Creating an occurrence and advancing its next scheduled time happen in one transaction, with a unique occurrence key preventing duplicate claims. There is no JSON-file scheduler or old-data migration.
 
-| Persisted stage | Startup action |
-| --- | --- |
-| `result_ready` | Reuse the prepared result and begin delivery |
-| `succeeded` | Complete archival or schedule reconciliation only |
-| `executing` or `delivering` without confirmation | Mark `needs_review`; do not repeat execution or sending |
-| Legacy `.running` without sufficient evidence | Mark `needs_review` |
-| `failed` / `needs_review` | Wait for explicit review and retry |
+Calendar tasks retain an IANA timezone. Intervals use elapsed time. After downtime, only the latest missed occurrence is eligible; older occurrences are recorded as a skipped range with a count. The default recovery window is 24 hours, configurable through `execution.max_lateness_seconds`; bounded intervals also expire at their window end. Tasks execute serially per definition, with four concurrent definitions by default.
 
-Unresolved recurring occurrences block subsequent execution. Retry creates a new attempt and preserves the previous receipt. Model errors are failures; success requires a final response or a valid attachment. API delivery succeeds only after session history is persisted. WebSocket events notify subscribers. Weixin retains its send acknowledgements; uncertain external sending requires review and is not promised to execute exactly once.
+Preparation with only declared read-only or idempotent tools can be retried after transient network/model failures: three total automatic attempts, with 30-second and 120-second delays. Unknown tools default to external side effects. Starting such a tool is recorded before invocation. Interrupted or failed work with an unknown external outcome stays available for review, while independent future occurrences continue. `execution.block_on_uncertain` explicitly blocks dependent future runs until review.
+
+Prepared results are persisted before delivery. Weixin records each text chunk, upload and media send independently; confirmed parts are reused, failed uploads can be retried, and unacknowledged sends are never automatically repeated. A stable client message ID is not treated as a server-side deduplication guarantee. API delivery is successful only after durable session history is written. Voice and other transports without sufficient delivery evidence recover conservatively to review.
+
+`GET /api/tasks/{task_id}/runs` lists execution history and `GET /api/tasks/{task_id}/runs/{run_id}` returns attempts and delivery parts. The corresponding `POST .../{prepare|deliver|resolve}` actions retry safe preparation, reuse prepared results for known-unsent delivery, or mark an occurrence reviewed without sending. Confirmed success cannot be replayed; unsafe preparation and unknown sends cannot be retried through these actions. The Tasks page exposes history, retry times, failure stages and review actions. Store failures return a visible error and never acknowledge an unpersisted task.
 
 ## Diary recovery
 

@@ -167,7 +167,7 @@ def _channel_state(runtime: dict[str, Any], channel: str) -> tuple[str, str, str
 def _task_item(config_dir: Path) -> OverviewItem:
     root = config_dir / BaseAgentConfig.TASKS_DIRNAME
     try:
-        records = list_task_records(root, include_running=True) if root.exists() else []
+        records = list_task_records(root) if root.exists() else []
     except (OSError, ValueError):
         return OverviewItem("Tasks", "unavailable", STATUS_WARNING, "Check task storage")
     review = sum(record.status == "needs_review" for record in records)

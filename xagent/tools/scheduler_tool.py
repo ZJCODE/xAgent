@@ -9,6 +9,7 @@ from xagent.core.runtime import (
     delete_scheduled_task,
     duplicate_archived_task,
     enqueue_scheduled_task,
+    get_scheduled_task,
     list_archived_task_records,
     list_task_records,
     pause_scheduled_task,
@@ -45,7 +46,10 @@ def create_schedule_task_tool(*, tasks_dir: str):
             "Prefer pause over delete for temporary stops; use update to extend end_at or change content."
         ),
         param_descriptions={
-            "action": "'create', 'list', 'duplicate', 'update', 'pause', 'resume', or 'delete'.",
+            "action": "Create/list/update/pause/resume/delete/duplicate a task, inspect history, resolve a run without resending, or retry safe preparation/delivery.",
+            "run_id": "Execution ID from history, required for resolve/retry_prepare/retry_delivery.",
+            "timezone": "Optional IANA timezone, e.g. Asia/Shanghai; defaults to the Agent timezone at creation.",
+            "execution": "Optional settings: max_lateness_seconds (default 86400), block_on_uncertain (default false).",
             "task_type": "'message' for fixed text, or 'agent' for a due-time agent turn.",
             "content": "Text to send or instruction to execute when due.",
             "run_at": "One-time local datetime, e.g. 20260601-143000 or 2026-06-01 14:30:00.",
@@ -76,7 +80,7 @@ def create_schedule_task_tool(*, tasks_dir: str):
         },
     )
     def manage_scheduled_tasks(
-        action: Literal["create", "list", "duplicate", "update", "pause", "resume", "delete"],
+        action: Literal["create", "list", "duplicate", "update", "pause", "resume", "delete", "history", "resolve", "retry_prepare", "retry_delivery"],
         task_type: Optional[Literal["message", "agent"]] = None,
         content: Optional[str] = None,
         run_at: Optional[str] = None,
@@ -91,7 +95,23 @@ def create_schedule_task_tool(*, tasks_dir: str):
         scope: Optional[Literal["current", "scheduled", "attention", "archive"]] = None,
         query: Optional[str] = None,
         limit: Optional[int] = None,
+        run_id: Optional[str] = None,
+        timezone: Optional[str] = None,
+        execution: Optional[dict] = None,
     ) -> dict:
+        if action in {"history", "resolve", "retry_prepare", "retry_delivery"}:
+            from xagent.core.runtime.task_store import TaskStore
+            from datetime import datetime, timezone as dt_timezone
+            store = TaskStore(task_root)
+            try:
+                store.task(task_id or "")
+                if action == "history":
+                    return {"ok": True, "runs": [{k: v for k, v in run.items() if k != "snapshot"} for run in store.list_runs(task_id, max(1, min(limit or 20, 100)))]}
+                operation = {"resolve": "resolve", "retry_prepare": "prepare", "retry_delivery": "deliver"}[action]
+                run = store.act_on_run(task_id, run_id or "", operation, datetime.now(dt_timezone.utc))
+                return {"ok": True, "run_id": run["id"], "status": run["status"]}
+            except (ValueError, FileNotFoundError) as exc:
+                return {"ok": False, "error": str(exc)}
         if action == "list":
             selected_scope = scope or "current"
             current_records = list_task_records(task_root)
@@ -100,7 +120,7 @@ def create_schedule_task_tool(*, tasks_dir: str):
             elif selected_scope == "scheduled":
                 records = [record for record in current_records if record.status in {"active", "paused"}]
             elif selected_scope == "attention":
-                records = [record for record in current_records if record.status == "failed"]
+                records = [record for record in current_records if record.status in {"failed", "needs_review"} or record.payload.get("unresolved_runs") or (record.payload.get("last_run_status") == "failed" and not record.payload.get("last_run_resolved"))]
             else:
                 records = current_records
             needle = str(query or "").strip().lower()
@@ -165,6 +185,7 @@ def create_schedule_task_tool(*, tasks_dir: str):
                     duration_seconds=duration_seconds,
                     start_at=start_at,
                     end_at=end_at,
+                    timezone_name=timezone, execution=execution,
                 )
             except Exception as exc:
                 return {"ok": False, "action": "update", "error": str(exc)}
@@ -172,6 +193,7 @@ def create_schedule_task_tool(*, tasks_dir: str):
 
         if action == "duplicate":
             try:
+                timezone = timezone or get_scheduled_task(task_root, task_id or "").payload["timezone"]
                 recurrence_for_duplicate = recurrence
                 interval_fields_provided = any(
                     value is not None for value in (interval_seconds, duration_seconds, start_at, end_at)
@@ -195,6 +217,7 @@ def create_schedule_task_tool(*, tasks_dir: str):
                     run_at=run_at,
                     delay_seconds=delay_seconds,
                     recurrence=recurrence_for_duplicate,
+                    timezone_name=timezone,
                 )
                 task = duplicate_archived_task(
                     task_root,
@@ -204,6 +227,7 @@ def create_schedule_task_tool(*, tasks_dir: str):
                     title=title,
                     content=content,
                     task_type=task_type,
+                    timezone_name=timezone, execution=execution,
                 )
             except Exception as exc:
                 return {"ok": False, "action": "duplicate", "error": str(exc)}
@@ -253,6 +277,7 @@ def create_schedule_task_tool(*, tasks_dir: str):
                 run_at=run_at,
                 delay_seconds=delay_seconds,
                 recurrence=recurrence_for_create,
+                timezone_name=timezone,
             )
         except Exception as exc:
             return {
@@ -296,6 +321,7 @@ def create_schedule_task_tool(*, tasks_dir: str):
                 title=title or "Reminder",
                 recurrence=normalized_recurrence or None,
                 source=source,
+                timezone_name=timezone, execution=execution,
             )
         except Exception as exc:
             return {
