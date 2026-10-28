@@ -956,7 +956,9 @@ class BusyInputRoutingTests(unittest.IsolatedAsyncioTestCase):
         await model.started.wait()
         other_user = asyncio.create_task(self._collect(agent, "from bob", user_id="bob"))
         other_room = asyncio.create_task(self._collect(agent, "other room", room_name="kitchen"))
-        await self._wait_until(lambda: agent.inbox.pending_count == 2 and not other_user.done() and not other_room.done())
+        await self._wait_until(lambda: agent.inbox.pending_count == 2
+            and len([message for message in storage.messages if message.role == RoleType.USER]) == 3
+            and not other_user.done() and not other_room.done())
 
         self.assertFalse(other_user.done())
         self.assertFalse(other_room.done())

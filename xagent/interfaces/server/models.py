@@ -173,6 +173,8 @@ class TaskUpdateInput(BaseModel):
     duration_seconds: Optional[int] = None
     start_at: Optional[str] = None
     end_at: Optional[str] = None
+    timezone: Optional[str] = None
+    execution: Optional[Dict[str, Any]] = None
 
 
 class TaskCreateInput(BaseModel):
@@ -190,6 +192,8 @@ class TaskCreateInput(BaseModel):
     duration_seconds: Optional[int] = None
     start_at: Optional[str] = None
     end_at: Optional[str] = None
+    timezone: Optional[str] = None
+    execution: Optional[Dict[str, Any]] = None
     channel: Optional[str] = "api"
     user_id: Optional[str] = None
     target: Optional[Dict[str, Any]] = None
@@ -210,3 +214,5 @@ class TaskDuplicateInput(BaseModel):
     duration_seconds: Optional[int] = None
     start_at: Optional[str] = None
     end_at: Optional[str] = None
+    timezone: Optional[str] = None
+    execution: Optional[Dict[str, Any]] = None

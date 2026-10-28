@@ -110,12 +110,45 @@ export interface ScheduledTaskRecurrenceRule {
   end_at?: string;
 }
 
+export interface TaskExecutionSettings {
+  max_lateness_seconds?: number;
+  block_on_uncertain?: boolean;
+}
+
+export interface TaskRun {
+  id: string;
+  task_id: string;
+  due_at: string;
+  status: string;
+  phase: string;
+  error?: string;
+  error_type?: string;
+  failure_stage?: string;
+  retry_at?: string;
+  started_at?: string;
+  finished_at?: string;
+  resolved_at?: string;
+  attempt_count?: number;
+  skip_count?: number;
+  unsafe_tools_started?: boolean;
+  tools?: Array<{ name: string; safety: string; started_at: string }>;
+  can_retry_prepare?: boolean;
+  can_retry_deliver?: boolean;
+  can_resolve?: boolean;
+  attempts?: Array<{ id: string; status: string; started_at?: string; error?: string }>;
+  deliveries?: Array<{ id: string; status: string; description?: string; error?: string }>;
+}
+
 export interface ScheduledTaskItem {
+  timezone?: string;
+  execution?: TaskExecutionSettings;
   task_id: string;
   title: string;
   task_type: "message" | "agent" | string;
   content: string;
   next_run_at: string | null;
+  next_retry_at?: string | null;
+  blocked_on_review?: boolean;
   recurrence?: ScheduledTaskRecurrenceRule[] | null;
   status: "active" | "paused" | "completed" | "failed" | "needs_review" | string;
   reason?: string;
@@ -131,10 +164,19 @@ export interface ScheduledTaskItem {
   last_run_status?: "succeeded" | "failed" | string | null;
   completion_reason?: string | null;
   last_error?: string | null;
+  run_stage?: string | null;
+  failure_stage?: string | null;
+  scheduled_run_at?: string | null;
+  run_id?: string | null;
+  attempt_id?: string | null;
+  unresolved_runs?: string[];
+  last_review_error?: string | null;
   state?: "pending" | "running" | "failed" | "completed" | string;
 }
 
 export interface TaskCreateInput {
+  timezone?: string;
+  execution?: TaskExecutionSettings;
   task_type: "message" | "agent" | string;
   content: string;
   title?: string;
@@ -151,6 +193,8 @@ export interface TaskCreateInput {
 }
 
 export interface TaskUpdateInput {
+  timezone?: string;
+  execution?: TaskExecutionSettings;
   title?: string;
   content?: string;
   task_type?: string;

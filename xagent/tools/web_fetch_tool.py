@@ -197,6 +197,7 @@ def create_web_fetch_tool(fetch_config: Optional[dict] = None):
     deepseek_base_url = _normalize_deepseek_base_url(cfg.get("base_url"))
 
     @function_tool(
+        retry_safety="read_only",
         name="web_fetch",
         description=(
             "Fetch a known web page URL and extract readable main text. "

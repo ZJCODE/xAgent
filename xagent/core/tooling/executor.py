@@ -223,6 +223,8 @@ class ToolExecutor:
         if denied is not None:
             return self._tool_result_message(call_id, denied), None
 
+        from ..runtime.task_receipts import note_task_tool
+        note_task_tool(name, getattr(func, "retry_safety", "external"))
         logger.info("Calling tool: %s with args: %s", name, args)
 
         tool_ctx = self._tool_observation(name=name, call_id=call_id, arguments=args)

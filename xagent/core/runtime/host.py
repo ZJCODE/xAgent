@@ -25,6 +25,11 @@ from .ownership import RuntimeOwnership, canonical_root, prepare_socket_director
 
 logger = logging.getLogger(__name__)
 
+# Detect vanished devices without waiting for TCP to time out. This applies to
+# all public API WebSockets, including voice and chat connections.
+API_WS_PING_INTERVAL = 10.0
+API_WS_PING_TIMEOUT = 10.0
+
 
 class RuntimeChatInput(ChatInput):
     stream: bool = True
@@ -574,6 +579,7 @@ class RuntimeHost:
                     await self.app(scope, receive, send)
             server = _HostedServer(uvicorn.Config(PublicAdmission(service.app),
                 host=cfg.get("host", "127.0.0.1"), port=int(cfg.get("port", 8010)),
+                ws_ping_interval=API_WS_PING_INTERVAL, ws_ping_timeout=API_WS_PING_TIMEOUT,
                 lifespan="off", access_log=False, timeout_graceful_shutdown=10))
             self._servers["api"] = server
             run = server.serve()

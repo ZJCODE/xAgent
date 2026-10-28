@@ -344,6 +344,7 @@ def create_web_search_tool(
     )
 
     @function_tool(
+        retry_safety="read_only",
         name="web_search",
         description=(
             "Search current or external web information and return concise source-backed results. "

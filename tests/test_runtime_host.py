@@ -361,7 +361,7 @@ class RuntimeTransportTests(unittest.IsolatedAsyncioTestCase):
                 record = enqueue_scheduled_task(task_type="message", content="local notification",
                     run_at="2099-01-01 00:00:00", tasks_dir=host.runner.tasks_dir,
                     channel="api", target={"user_id": "alice"})
-                await host.api.tasks.dispatch(record)
+                await host.api.tasks.deliver(record, await host.api.tasks.execute(record), record.task_id)
                 self.assertTrue(notifications)
                 await host.api.delivery.unregister_subscriber("alice", subscriber)
                 await client.connect_channel("api")

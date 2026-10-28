@@ -14,9 +14,8 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from ...core.agent import Agent
 from ...core.config import AgentConfig
-from ...core.runtime.task_receipts import DeliveryUncertainError, is_strict_task_delivery
+from ...core.runtime.task_receipts import is_strict_task_delivery, journal_delivery
 from ...core.runtime import (
-    AsyncTaskScheduler,
     ScheduledDeliveryContext,
     collect_scheduled_turn_events,
     current_delivery_context,
@@ -148,7 +147,6 @@ class WeixinAdapter:
         self._dedup = _MessageDeduplicator()
         self._stop_event = asyncio.Event()
         self._tasks_dir = self.runtime_dir / AgentConfig.TASKS_DIRNAME
-        self._task_scheduler: Optional[AsyncTaskScheduler] = None
         self._contacts_file = resolve_contacts_path(self.runtime_dir)
         self._accepting = True
         self._client_closed = False
@@ -646,7 +644,7 @@ class WeixinAdapter:
         chunks = split_text(self._format_message(text), self.config.text_max_chars)
         for index, chunk in enumerate(chunks, start=1):
             client_id = make_client_id(stable_key=f"{stable_key}:text:{index}")
-            await self._call_send_with_retries(
+            await journal_delivery(f"{stable_key}:text:{index}", lambda: self._call_send_with_retries(
                 lambda cid=client_id, body=chunk: self.client.send_text_message(
                     to_user_id=user_id,
                     text=body,
@@ -655,7 +653,7 @@ class WeixinAdapter:
                     timeout_ms=self.config.api_timeout_ms,
                 ),
                 label=f"text:{index}",
-            )
+            ), description=f"Text part {index}", payload=chunk)
             if index < len(chunks) and self.config.send_chunk_delay_seconds > 0:
                 await asyncio.sleep(self.config.send_chunk_delay_seconds)
 
@@ -664,14 +662,18 @@ class WeixinAdapter:
         if attachment.caption.strip():
             await self._send_text(user_id=user_id, context_token=context_token, text=attachment.caption.strip(), stable_key=f"{stable_key}:caption")
         try:
-            outbound = await upload_outbound_media(
-                self.client,
-                to_user_id=user_id,
-                path=attachment.path,
-                force_file_attachment=attachment.kind != "image" and attachment.path.suffix.lower() in {".ogg", ".opus", ".mp3", ".wav", ".m4a", ".flac", ".aac"},
-            )
+            async def upload():
+                outbound = await upload_outbound_media(
+                    self.client, to_user_id=user_id, path=attachment.path,
+                    force_file_attachment=attachment.kind != "image" and attachment.path.suffix.lower() in {".ogg", ".opus", ".mp3", ".wav", ".m4a", ".flac", ".aac"},
+                )
+                return {"item": outbound.item, "client_id_suffix": outbound.client_id_suffix}
+            uploaded = await journal_delivery(f"{stable_key}:upload", upload,
+                description=f"Upload {attachment.path.name}", uncertain_on_error=False, payload=str(attachment.path))
+            from .media import OutboundMedia
+            outbound = OutboundMedia(**uploaded)
             client_id = make_client_id(stable_key=f"{stable_key}:{outbound.client_id_suffix}")
-            await self._call_send_with_retries(
+            await journal_delivery(f"{stable_key}:send", lambda: self._call_send_with_retries(
                 lambda: self.client.send_message_item(
                     to_user_id=user_id,
                     item=outbound.item,
@@ -680,11 +682,11 @@ class WeixinAdapter:
                     timeout_ms=self.config.api_timeout_ms,
                 ),
                 label=f"attachment:{attachment.path.name}",
-            )
+            ), description=f"Send {attachment.path.name}", payload=str(attachment.path))
         except Exception as exc:
             self.logger.warning("Weixin attachment send failed path=%s: %s", attachment.path, exc)
             if is_strict_task_delivery():
-                raise DeliveryUncertainError(f"Weixin attachment delivery was not confirmed: {exc}") from exc
+                raise
             await self._send_text(
                 user_id=user_id,
                 context_token=context_token,
@@ -739,11 +741,6 @@ class WeixinAdapter:
     def _can_handle_scheduled_task(self, task) -> bool:
         return task.kind == "task" and task.delivery_channel == "weixin" and self.client is not None
 
-    async def _dispatch_scheduled_task(self, task) -> None:
-        from ...core.runtime.task_receipts import occurrence_run_id
-        result = await self.execute_scheduled_task(task)
-        await self.deliver_scheduled_task(task, result, occurrence_run_id(task.task_id, task.run_at))
-
     async def execute_scheduled_task(self, task) -> dict[str, Any]:
         user_id = str(task.target.get("user_id") or task.delivery_user_id or "").strip()
         result = await self._scheduled_task_result(task, user_id=user_id)
@@ -773,7 +770,7 @@ class WeixinAdapter:
             context_token=context_token,
             content=result.content,
             attachments=result.attachments,
-            stable_key=f"scheduled:{task.task_id}:{task.run_at.isoformat(sep=' ')}",
+            stable_key=f"scheduled:{run_id}",
         )
         return {"accepted": True, "transport": "weixin", "request_id": run_id}
 

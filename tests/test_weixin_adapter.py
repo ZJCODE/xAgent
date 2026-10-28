@@ -223,7 +223,7 @@ def _process_until_idle(adapter, message):
                     user_id="owner@im.wechat",
                 )
                 task = list_task_records(tmpdir)[0]
-                await adapter._dispatch_scheduled_task(task)
+                await adapter.deliver_scheduled_task(task, await adapter.execute_scheduled_task(task), task.task_id)
                 return client.sent_text
 
         sent_text = asyncio.run(run_test())

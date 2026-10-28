@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, patch
 import yaml
 
 from xagent.core.runtime.ownership import RuntimeOwnership, runtime_paths, write_runtime_status
-from xagent.core.runtime.tasks import AsyncTaskScheduler, enqueue_scheduled_task
+from xagent.core.runtime.tasks import enqueue_scheduled_task
 from xagent.interfaces.cli.launcher import (
     _channel_runtime_snapshot,
     _launcher_channel_options,
@@ -62,10 +62,14 @@ class LauncherRuntimeTests(unittest.TestCase):
             self.prepare(root)
             task = enqueue_scheduled_task(task_type="agent", content="check", run_at="2026-06-01 10:00:00",
                                           tasks_dir=root / "tasks", channel="api", target={"user_id": "alice"})
-            task.path.rename(task.path.with_name(task.path.name + ".running-old"))
-            scheduler = AsyncTaskScheduler(root / "tasks", can_handle=lambda _: True,
-                                           dispatch=lambda _: None)
-            scheduler.recover_running_tasks()
+            from xagent.core.runtime.task_store import TaskStore, aware
+            store = TaskStore(root / "tasks")
+            due = aware(store.task(task.task_id)["next_due"])
+            store.materialize(due)
+            run = store.claim(due)
+            run["unsafe_tools_started"] = True
+            store.save_run(run)
+            store.recover(due)
             with RuntimeOwnership(root):
                 write_runtime_status(runtime_paths(root), {"state": "degraded", "runtime_ready": True,
                     "channels": {"api": {"state": "running"}, "weixin": {"state": "failed", "error": "check log"}}})

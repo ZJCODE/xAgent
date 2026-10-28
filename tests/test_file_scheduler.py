@@ -19,6 +19,17 @@ from xagent.core.runtime import (
 from xagent.tools.scheduler_tool import create_schedule_task_tool
 
 
+def scheduler_for_dispatch(tasks_dir, *, dispatch, **kwargs):
+    # These schedule tests use a pure callback as preparation; delivery has an
+    # explicit positive receipt. Transport ambiguity is tested in durability tests.
+    async def execute(record):
+        await dispatch(record)
+        return {"content": record.content}
+    async def deliver(record, result, run_id):
+        return {"accepted": True}
+    return AsyncTaskScheduler(tasks_dir, execute=execute, deliver=deliver, **kwargs)
+
+
 class ScheduledTaskTests(unittest.TestCase):
     def test_enqueue_scheduled_task_writes_structured_json_record(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -35,7 +46,7 @@ class ScheduledTaskTests(unittest.TestCase):
             )
             records = list_task_records(tmpdir)
 
-        self.assertTrue(task.name.startswith("20260601-143000-"))
+        self.assertEqual(task.name, task.task_id)
         self.assertEqual(records[0].kind, "task")
         self.assertEqual(records[0].task_type, "message")
         self.assertEqual(records[0].content, "走两步")
@@ -65,7 +76,7 @@ class ScheduledTaskTests(unittest.TestCase):
                     user_id="wx_user",
                 )
                 delivered = []
-                scheduler = AsyncTaskScheduler(
+                scheduler = scheduler_for_dispatch(
                     tmpdir,
                     can_handle=lambda task: task.delivery_channel == "api",
                     dispatch=lambda task: _append_delivered(delivered, task.content),
@@ -96,7 +107,7 @@ class ScheduledTaskTests(unittest.TestCase):
                     target={"user_id": "web_user"},
                     user_id="web_user",
                 )
-                scheduler = AsyncTaskScheduler(
+                scheduler = scheduler_for_dispatch(
                     tmpdir,
                     can_handle=lambda task: True,
                     dispatch=lambda task: _noop(task),
@@ -111,7 +122,7 @@ class ScheduledTaskTests(unittest.TestCase):
                 self.assertEqual(archived[0].status, "completed")
                 self.assertEqual(archived[0].payload["completion_reason"], "one_shot_succeeded")
                 self.assertEqual(archived[0].payload["last_run_status"], "succeeded")
-                self.assertEqual(archived[0].path.parent.name, "2026-06")
+                self.assertEqual(archived[0].status, "completed")
 
         async def _noop(task):
             del task
@@ -131,7 +142,7 @@ class ScheduledTaskTests(unittest.TestCase):
                     target={"user_id": "web_user"},
                     user_id="web_user",
                 )
-                scheduler = AsyncTaskScheduler(
+                scheduler = scheduler_for_dispatch(
                     tmpdir,
                     can_handle=lambda task: task.delivery_channel == "api",
                     dispatch=_raise_dispatch_error,
@@ -143,7 +154,7 @@ class ScheduledTaskTests(unittest.TestCase):
 
             self.assertEqual(len(records), 1)
             self.assertEqual(records[0].state, "failed")
-            self.assertEqual(records[0].reason, "failed")
+            self.assertEqual(records[0].payload["last_run_status"], "failed")
             self.assertEqual(records[0].task_type, "agent")
 
         async def _raise_dispatch_error(task):
@@ -166,7 +177,7 @@ class ScheduledTaskTests(unittest.TestCase):
                     title="日报提醒",
                 )
                 delivered = []
-                scheduler = AsyncTaskScheduler(
+                scheduler = scheduler_for_dispatch(
                     tmpdir,
                     can_handle=lambda task: task.delivery_channel == "api",
                     dispatch=lambda task: _append_delivered(delivered, task.content),
@@ -202,7 +213,7 @@ class ScheduledTaskTests(unittest.TestCase):
                     title="喝茶提醒",
                 )
                 delivered = []
-                scheduler = AsyncTaskScheduler(
+                scheduler = scheduler_for_dispatch(
                     tmpdir,
                     can_handle=lambda task: task.delivery_channel == "api",
                     dispatch=lambda task: _append_delivered(delivered, task.content),
@@ -238,7 +249,7 @@ class ScheduledTaskTests(unittest.TestCase):
                     title="月初提醒",
                 )
                 delivered = []
-                scheduler = AsyncTaskScheduler(
+                scheduler = scheduler_for_dispatch(
                     tmpdir,
                     can_handle=lambda task: task.delivery_channel == "api",
                     dispatch=lambda task: _append_delivered(delivered, task.content),
@@ -275,7 +286,7 @@ class ScheduledTaskTests(unittest.TestCase):
                 )
                 delivered = []
                 current = {"now": datetime(2026, 6, 1, 10, 10, 0)}
-                scheduler = AsyncTaskScheduler(
+                scheduler = scheduler_for_dispatch(
                     tmpdir,
                     can_handle=lambda task: task.delivery_channel == "api",
                     dispatch=lambda task: _append_delivered(delivered, task.run_at),
@@ -305,7 +316,7 @@ class ScheduledTaskTests(unittest.TestCase):
             self.assertEqual(second_records[0].run_at, datetime(2026, 6, 1, 10, 30, 0))
             self.assertEqual(final_records, [])
             self.assertEqual(archived[0].task_id, original.task_id)
-            self.assertEqual(archived[0].payload["completion_reason"], "recurrence_exhausted")
+            self.assertEqual(archived[0].payload["completion_reason"], "interval_window_ended")
 
         async def _append_delivered(delivered, run_at):
             delivered.append(run_at)
@@ -331,7 +342,7 @@ class ScheduledTaskTests(unittest.TestCase):
                 async def dispatch(task):
                     delivered.append(task.run_at)
 
-                scheduler = AsyncTaskScheduler(
+                scheduler = scheduler_for_dispatch(
                     tmpdir,
                     can_handle=lambda task: True,
                     dispatch=dispatch,
@@ -341,7 +352,7 @@ class ScheduledTaskTests(unittest.TestCase):
                     current["now"] = start + timedelta(seconds=second)
                     await scheduler.tick()
 
-                self.assertEqual(delivered, [start + timedelta(seconds=s) for s in (0, 10, 40)])
+                self.assertEqual(delivered, [start + timedelta(seconds=s) for s in (0, 10, 30, 40)])
                 self.assertEqual(list_task_records(tmpdir, include_failed=False), [])
                 self.assertEqual(list_archived_task_records(tmpdir)[0].status, "completed")
 
@@ -362,7 +373,7 @@ class ScheduledTaskTests(unittest.TestCase):
                     title="Hey reminder",
                 )
                 delivered = []
-                scheduler = AsyncTaskScheduler(
+                scheduler = scheduler_for_dispatch(
                     tmpdir,
                     can_handle=lambda task: task.delivery_channel == "api",
                     dispatch=lambda task: _append_delivered(delivered, task.content),
@@ -399,14 +410,15 @@ class ScheduledTaskTests(unittest.TestCase):
                 )
                 pause_scheduled_task(tmpdir, original.task_id)
                 delivered = []
-                scheduler = AsyncTaskScheduler(
+                scheduler = scheduler_for_dispatch(
                     tmpdir,
                     can_handle=lambda task: False,
                     dispatch=lambda task: _append_delivered(delivered, task.content),
                     now_provider=lambda: datetime(2026, 6, 1, 12, 0, 0),
                 )
 
-                expired = scheduler.expire_closed_interval_tasks()
+                await scheduler.tick()
+                expired = len(list_archived_task_records(tmpdir))
                 archived = list_archived_task_records(tmpdir)
                 active = list_task_records(tmpdir, include_failed=False)
 
@@ -469,7 +481,7 @@ class ScheduledTaskTests(unittest.TestCase):
                     title="Hey reminder",
                 )
                 delivered = []
-                scheduler = AsyncTaskScheduler(
+                scheduler = scheduler_for_dispatch(
                     tmpdir,
                     can_handle=lambda task: task.delivery_channel == "api",
                     dispatch=lambda task: _append_delivered(delivered, task.run_at),
@@ -479,11 +491,11 @@ class ScheduledTaskTests(unittest.TestCase):
                 next_run_at = await scheduler.tick()
                 active = list_task_records(tmpdir, include_failed=False)
 
-            self.assertEqual(delivered, [])
+            self.assertEqual(delivered, [datetime(2026, 6, 1, 11, 0, 0)])
             self.assertEqual(len(active), 1)
             self.assertEqual(active[0].task_id, original.task_id)
             self.assertEqual(active[0].run_at, datetime(2026, 6, 1, 11, 10, 0))
-            self.assertEqual(next_run_at, datetime(2026, 6, 1, 11, 10, 0))
+            self.assertEqual(next_run_at.astimezone().replace(tzinfo=None), datetime(2026, 6, 1, 11, 10, 0))
 
         async def _append_delivered(delivered, run_at):
             delivered.append(run_at)
@@ -505,7 +517,7 @@ class ScheduledTaskTests(unittest.TestCase):
                 )
                 delivered = []
                 current = {"now": datetime(2026, 6, 1, 11, 0, 0)}
-                scheduler = AsyncTaskScheduler(
+                scheduler = scheduler_for_dispatch(
                     tmpdir,
                     can_handle=lambda task: task.delivery_channel == "api",
                     dispatch=lambda task: _append_delivered(delivered, task.run_at),
@@ -546,7 +558,7 @@ class ScheduledTaskTests(unittest.TestCase):
                         await gate.wait()
                     delivered.append(task.content)
 
-                scheduler = AsyncTaskScheduler(
+                scheduler = scheduler_for_dispatch(
                     tmpdir,
                     can_handle=lambda task: task.delivery_channel == "api",
                     dispatch=dispatch,
@@ -601,8 +613,8 @@ class ScheduledTaskTests(unittest.TestCase):
                 snapshot = {}
                 async def dispatch(task):
                     await asyncio.sleep(0.05)
-                    snapshot["records"] = list_task_records(tmpdir, include_running=True)
-                scheduler = AsyncTaskScheduler(
+                    snapshot["records"] = list_task_records(tmpdir)
+                scheduler = scheduler_for_dispatch(
                     tmpdir,
                     can_handle=lambda task: task.delivery_channel == "api",
                     dispatch=dispatch,
@@ -640,7 +652,7 @@ class ScheduledTaskTests(unittest.TestCase):
                     await asyncio.sleep(0.05)
                     snapshot["active"] = list_active_task_records(tmpdir)
                     snapshot["default"] = list_task_records(tmpdir)
-                scheduler = AsyncTaskScheduler(
+                scheduler = scheduler_for_dispatch(
                     tmpdir,
                     can_handle=lambda task: task.delivery_channel == "api",
                     dispatch=dispatch,
@@ -648,11 +660,11 @@ class ScheduledTaskTests(unittest.TestCase):
                 )
                 await scheduler.tick()
 
-                # Scheduler path must not see the running file: guards against
-                # double-dispatch within the same tick.
-                self.assertEqual(snapshot["active"], [])
-                self.assertEqual(snapshot["default"], [])
-                # After tick completes the file is rescheduled back to a .json name.
+                # Definitions remain visible while an occurrence runs. Database
+                # claims prevent double dispatch.
+                self.assertEqual(len(snapshot["active"]), 1)
+                self.assertEqual(len(snapshot["default"]), 1)
+                # The definition retains its next scheduled occurrence.
                 self.assertEqual(len(list_active_task_records(tmpdir)), 1)
 
         asyncio.run(run_test())
@@ -672,7 +684,7 @@ class ScheduledTaskTests(unittest.TestCase):
                 )
                 paused = pause_scheduled_task(tmpdir, original.task_id)
                 delivered = []
-                scheduler = AsyncTaskScheduler(
+                scheduler = scheduler_for_dispatch(
                     tmpdir,
                     can_handle=lambda task: task.delivery_channel == "api",
                     dispatch=lambda task: _append_delivered(delivered, task.content),
@@ -688,7 +700,7 @@ class ScheduledTaskTests(unittest.TestCase):
                     now=datetime(2026, 6, 1, 10, 5, 0),
                 )
                 self.assertEqual(resumed.status, "active")
-                self.assertEqual(resumed.run_at, datetime(2026, 6, 1, 10, 6, 0))
+                self.assertEqual(resumed.run_at, datetime(2026, 6, 1, 10, 0, 0))
 
                 updated = update_scheduled_task(
                     tmpdir,
@@ -718,7 +730,7 @@ class ScheduledTaskTests(unittest.TestCase):
                     recurrence=[{"kind": "daily", "time": "10:00:00"}],
                     title="日报提醒",
                 )
-                scheduler = AsyncTaskScheduler(
+                scheduler = scheduler_for_dispatch(
                     tmpdir,
                     can_handle=lambda task: task.delivery_channel == "api",
                     dispatch=_raise_dispatch_error,
@@ -755,7 +767,7 @@ class ScheduledTaskTests(unittest.TestCase):
                     target={"user_id": "web_user"},
                     recurrence=[{"kind": "interval", "every_seconds": 600, "end_at": "2026-06-01 10:30:00"}],
                 )
-                scheduler = AsyncTaskScheduler(
+                scheduler = scheduler_for_dispatch(
                     tmpdir,
                     can_handle=lambda task: True,
                     dispatch=_raise_dispatch_error,
@@ -764,47 +776,12 @@ class ScheduledTaskTests(unittest.TestCase):
                 await scheduler.tick()
                 records = list_task_records(tmpdir)
                 self.assertEqual(len(records), 1)
-                self.assertEqual(records[0].status, "failed")
+                self.assertEqual(records[0].status, "completed")
                 self.assertEqual(records[0].payload["last_run_status"], "failed")
-                self.assertEqual(list_archived_task_records(tmpdir), [])
+                self.assertEqual(len(list_archived_task_records(tmpdir)), 1)
 
         async def _raise_dispatch_error(task):
             raise RuntimeError(f"last run failed: {task.content}")
-
-        asyncio.run(run_test())
-
-    def test_archive_failure_is_quarantined_without_redispatch(self):
-        from unittest.mock import patch
-
-        async def run_test():
-            with tempfile.TemporaryDirectory() as tmpdir:
-                run_at = datetime(2026, 6, 1, 10, 0, 0)
-                enqueue_scheduled_task(
-                    task_type="message",
-                    content="deliver once",
-                    run_at=run_at,
-                    tasks_dir=tmpdir,
-                    channel="api",
-                    target={"user_id": "web_user"},
-                )
-                delivered = []
-
-                async def deliver(task):
-                    delivered.append(task.task_id)
-
-                scheduler = AsyncTaskScheduler(
-                    tmpdir,
-                    can_handle=lambda task: True,
-                    dispatch=deliver,
-                    now_provider=lambda: run_at,
-                )
-                with patch("xagent.core.runtime.tasks._move_task_to_archive", side_effect=OSError("disk full")):
-                    await scheduler.tick()
-                await scheduler.tick()
-                records = list_task_records(tmpdir)
-                self.assertEqual(len(delivered), 1)
-                self.assertEqual(records[0].status, "failed")
-                self.assertEqual(records[0].reason, "completion_error")
 
         asyncio.run(run_test())
 
@@ -822,7 +799,7 @@ class ScheduledTaskTests(unittest.TestCase):
                     recurrence=[{"kind": "weekly", "time": "14:28:00", "weekdays": ["wed", "fri"]}],
                     title="走路提醒",
                 )
-                scheduler = AsyncTaskScheduler(
+                scheduler = scheduler_for_dispatch(
                     tmpdir,
                     can_handle=lambda task: task.delivery_channel == "api",
                     dispatch=_raise_dispatch_error,
@@ -1157,7 +1134,7 @@ class ScheduledTaskTests(unittest.TestCase):
                     ],
                 )
                 delivered = []
-                scheduler = AsyncTaskScheduler(
+                scheduler = scheduler_for_dispatch(
                     tmpdir,
                     can_handle=lambda task: task.delivery_channel == "api",
                     dispatch=lambda task: _append_delivered(delivered, task.run_at),
@@ -1197,7 +1174,7 @@ class ScheduledTaskTests(unittest.TestCase):
                 )
                 delivered = []
                 current = {"now": datetime(2026, 7, 11, 10, 0, 0)}
-                scheduler = AsyncTaskScheduler(
+                scheduler = scheduler_for_dispatch(
                     tmpdir,
                     can_handle=lambda task: task.delivery_channel == "api",
                     dispatch=lambda task: _append_delivered(delivered, task.run_at),
@@ -1258,7 +1235,7 @@ class ScheduledTaskTests(unittest.TestCase):
                     original.task_id,
                     now=datetime(2026, 7, 11, 10, 23, 0),
                 )
-                self.assertEqual(resumed.run_at, datetime(2026, 7, 11, 10, 30, 0))
+                self.assertEqual(resumed.run_at, datetime(2026, 7, 11, 10, 0, 0))
 
         asyncio.run(run_test())
 

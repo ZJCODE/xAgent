@@ -18,7 +18,7 @@ class TaskRuntimeManagementTests(unittest.IsolatedAsyncioTestCase):
             root = Path(tmpdir)
             adapter = ApiChannelAdapter(SimpleNamespace(), contacts_file=root / "contacts.json",
                                         tasks_dir=root / "tasks")
-            with patch("xagent.integrations.api.adapter.AsyncTaskScheduler") as scheduler:
+            with patch("xagent.core.runtime.AsyncTaskScheduler") as scheduler:
                 await adapter.start()
                 await adapter.stop()
                 await adapter.start()
@@ -97,6 +97,9 @@ class TaskRuntimeManagementTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(view["task_id"], task.task_id)
             self.assertEqual(view["status"], "needs_review")
             self.assertEqual(view["run_stage"], "needs_review")
+            self.assertEqual(view["failure_stage"], "deliver")
+            self.assertEqual(datetime.fromisoformat(view["scheduled_run_at"]).astimezone().replace(tzinfo=None), now)
+            self.assertEqual(datetime.fromisoformat(view["failed_at"]).astimezone().replace(tzinfo=None), now)
             self.assertTrue(view["run_id"])
             self.assertTrue(view["attempt_id"])
             self.assertIn("unknown external outcome", view["last_error"])

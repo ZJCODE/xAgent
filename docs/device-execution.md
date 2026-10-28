@@ -194,6 +194,10 @@ executing. Messages contain JSON only, with a 64 KiB limit. Transport ping and
 pong handle connection health. Device sockets carry commands, results, and
 environmental events, with no chat messages; a terminal
 that also chats opens a separate `/ws/chat` connection on the same API port.
+The public API sends a transport ping every 10 seconds and closes a connection
+if the pong does not arrive within 10 seconds. The Devices page polls every
+5 seconds, so an abrupt network loss normally appears offline within roughly
+25 seconds. Devices must respond to WebSocket transport pings, even when idle.
 
 ### Upload a photo, recording, or file
 

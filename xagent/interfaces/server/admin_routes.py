@@ -7,13 +7,14 @@ import hashlib
 import json
 import mimetypes
 import shutil
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
 import yaml as pyyaml
 import httpx
 from fastapi import Body, FastAPI, File, Form, HTTPException, Query, UploadFile
+from starlette.responses import JSONResponse
 
 from ...interfaces.cli.config_editor import (
     apply_agent_edit_setup,
@@ -99,7 +100,12 @@ def _resolve_task_schedule(input_data: Any):
         if input_data.end_at is not None:
             interval_rule["end_at"] = input_data.end_at
         recurrence = [interval_rule]
+    from ...core.runtime.task_store import system_timezone, validate_timezone
+    from zoneinfo import ZoneInfo
+    local_now = datetime.now(ZoneInfo(validate_timezone(getattr(input_data, "timezone", None) or system_timezone()))).replace(tzinfo=None)
     return resolve_scheduled_task_run_at(
+        now=local_now,
+        timezone_name=getattr(input_data, "timezone", None),
         run_at=input_data.run_at,
         delay_seconds=input_data.delay_seconds,
         recurrence=recurrence,
@@ -151,6 +157,18 @@ def register_admin_routes(
     register_admin_access(app, resolve_admin)
     from .device_admin import register_device_admin_routes
     register_device_admin_routes(app, resolve_admin)
+    @app.middleware("http")
+    async def task_storage_boundary(request, call_next):
+        import sqlite3
+        from ...core.runtime.ownership import RuntimeAlreadyRunning
+        from ...core.runtime.task_store import TaskStorageError
+        try:
+            return await call_next(request)
+        except (sqlite3.Error, OSError, TaskStorageError, RuntimeAlreadyRunning) as exc:
+            if not request.url.path.startswith("/api/tasks"):
+                raise
+            return JSONResponse({"detail": f"Task storage is unavailable; scheduling has not been acknowledged: {exc}"}, status_code=503)
+
     def _notify_config_written() -> None:
         if on_config_written is not None:
             on_config_written()
@@ -179,6 +197,51 @@ def register_admin_routes(
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return {"status": "ok", "task": task.to_task_view()}
+
+    def _public_run(run):
+        from ...core.runtime.tasks import _safe_error_summary
+        result = {key: value for key, value in run.items() if key not in {"snapshot"}}
+        if result.get("error"):
+            result["error"] = _safe_error_summary(RuntimeError(result["error"]))
+        from ...core.runtime.task_store import aware
+        eligible = run["status"] == "failed" and datetime.now(timezone.utc) <= aware(run["expires_at"])
+        result["can_retry_prepare"] = eligible and not run.get("result") and not run.get("unsafe_tools_started")
+        result["can_retry_deliver"] = eligible and bool(run.get("result")) and not any(p["status"] in {"sending", "needs_review"} and p.get("uncertain_on_error", True) for p in run.get("deliveries", []))
+        result["can_resolve"] = run["status"] in {"failed", "needs_review"} and not run.get("resolved_at")
+        if "deliveries" in result:
+            result["deliveries"] = [{key: part.get(key) for key in ("id", "status", "description", "error", "started_at", "finished_at")} for part in result["deliveries"]]
+        return result
+
+    @app.get("/api/tasks/{task_id}/runs", tags=["Monitoring"])
+    async def task_runs(task_id: str, limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0)):
+        from ...core.runtime.task_store import TaskStore
+        store = TaskStore(resolve_admin().tasks_dir)
+        try:
+            store.task(task_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        runs = store.list_runs(task_id, limit + 1, offset)
+        return {"runs": [_public_run(run) for run in runs[:limit]], "has_more": len(runs) > limit}
+
+    @app.get("/api/tasks/{task_id}/runs/{run_id}", tags=["Monitoring"])
+    async def task_run_detail(task_id: str, run_id: str):
+        from ...core.runtime.task_store import TaskStore
+        try:
+            return {"run": _public_run(TaskStore(resolve_admin().tasks_dir).get_run(task_id, run_id))}
+        except FileNotFoundError as exc:
+            raise HTTPException(404, str(exc)) from exc
+
+    @app.post("/api/tasks/{task_id}/runs/{run_id}/{action}", tags=["Monitoring"])
+    async def task_run_action(task_id: str, run_id: str, action: str):
+        from ...core.runtime.task_store import TaskStore
+        try:
+            run = TaskStore(resolve_admin().tasks_dir).act_on_run(task_id, run_id, action, datetime.now(timezone.utc))
+        except FileNotFoundError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return {"status": "ok", "run": _public_run(run)}
+
     @app.get("/api/agent/info", tags=["Monitoring"])
     async def agent_info():
         server = resolve_admin()
@@ -244,13 +307,13 @@ def register_admin_routes(
         offset: int = Query(0, ge=0),
     ):
         server = resolve_admin()
-        current_records = list_task_records(server.tasks_dir, include_running=True)
+        current_records = list_task_records(server.tasks_dir)
         scheduled_records = [record for record in current_records if record.status in {"active", "paused"}]
-        attention_records = [record for record in current_records if record.status in {"failed", "needs_review"}]
+        attention_records = [record for record in current_records if record.status in {"failed", "needs_review"} or record.payload.get("unresolved_runs") or (record.payload.get("last_run_status") == "failed" and not record.payload.get("last_run_resolved"))]
         archive_records = list_archived_task_records(server.tasks_dir) if scope == "archive" else []
         archive_count = len(archive_records) if scope == "archive" else count_archived_task_records(server.tasks_dir)
         selected = {
-            "current": [*scheduled_records, *attention_records],
+            "current": [*scheduled_records, *(record for record in attention_records if record not in scheduled_records)],
             "scheduled": scheduled_records,
             "attention": sorted(
                 attention_records,
@@ -301,6 +364,7 @@ def register_admin_routes(
                 title=input_data.title or "Reminder",
                 recurrence=normalized_recurrence or None,
                 source={"source": "http", "client": "web"},
+                timezone_name=input_data.timezone, execution=input_data.execution,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -358,7 +422,7 @@ def register_admin_routes(
                 duration_seconds=input_data.duration_seconds,
                 start_at=input_data.start_at,
                 end_at=input_data.end_at,
-            )
+                timezone_name=input_data.timezone, execution=input_data.execution,            )
         except HTTPException:
             raise
         except FileNotFoundError as exc:
@@ -371,9 +435,10 @@ def register_admin_routes(
     async def tasks_duplicate(task_id: str, input_data: TaskDuplicateInput):
         server = resolve_admin()
         try:
+            original = get_scheduled_task(server.tasks_dir, task_id)
+            if input_data.timezone is None:
+                input_data = input_data.model_copy(update={"timezone": original.payload["timezone"]})
             scheduled_at, normalized_recurrence = _resolve_task_schedule(input_data)
-            if scheduled_at <= datetime.now().replace(microsecond=0):
-                raise ValueError("duplicated task must be scheduled in the future")
             task = duplicate_archived_task(
                 server.tasks_dir,
                 task_id,
@@ -382,6 +447,7 @@ def register_admin_routes(
                 title=input_data.title,
                 content=input_data.content,
                 task_type=input_data.task_type,
+                timezone_name=input_data.timezone, execution=input_data.execution,
             )
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc

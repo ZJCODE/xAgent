@@ -13,8 +13,8 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { TaskEditorModal, type TaskEditorSave } from "../components/TaskEditorModal";
 import { Button, EmptyState, IconButton, PageShell, PageToolbar, SearchField, StatusBadge } from "../components/ui";
-import { createTask, deleteTask, duplicateTask, getTasks, pauseTask, resumeTask, retryTask, updateTask } from "../lib/api";
-import type { ScheduledTaskItem, TaskScope, TasksResponse } from "../types";
+import { createTask, deleteTask, duplicateTask, getTasks, pauseTask, resumeTask, updateTask, getTaskRuns, getTaskRun, taskRunAction } from "../lib/api";
+import type { ScheduledTaskItem, TaskScope, TasksResponse, TaskRun } from "../types";
 
 const PAGE_SIZE = 50;
 type PageScope = Exclude<TaskScope, "current">;
@@ -108,8 +108,10 @@ function taskRecurrenceChips(task: ScheduledTaskItem): string[] {
 
 function lifecycleTime(task: ScheduledTaskItem): string {
   if (task.state === "running") return "Running now";
+  if (task.blocked_on_review) return "Waiting for review before the next run";
+  if (task.next_retry_at) return `Retry ${formatRunAt(task.next_retry_at)}`;
   if (task.status === "completed") return formatRunAt(task.completed_at || task.last_run_at);
-  if (task.status === "failed") return formatRunAt(task.failed_at || task.last_run_at);
+  if (task.status === "failed" || task.status === "needs_review") return formatRunAt(task.failed_at || task.last_run_at || task.updated_at);
   return formatRunAt(task.next_run_at);
 }
 
@@ -155,7 +157,8 @@ export function TasksPage() {
   useEffect(() => {
     if (scope === "archive") return;
     const timer = window.setInterval(() => {
-      void getTasks(scope, appliedQuery, PAGE_SIZE, 0).then(setData).catch(() => undefined);
+      void getTasks(scope, appliedQuery, PAGE_SIZE, 0).then((response) => { setData(response); setError(""); })
+        .catch((err) => setError(`Could not refresh task status: ${err instanceof Error ? err.message : String(err)}`));
     }, 20000);
     return () => window.clearInterval(timer);
   }, [appliedQuery, scope]);
@@ -240,11 +243,6 @@ export function TasksPage() {
       return (
         <div className="task-row-actions">
           <Button className="task-action-button" onClick={() => setSelectedTask(task)}><Eye size={15} />View</Button>
-          <Button className="task-action-button" onClick={async () => {
-            if (!window.confirm("Retry this task with a new attempt? Check whether the earlier execution or delivery already completed before retrying.")) return;
-            try { await retryTask(task.task_id); await load(false); }
-            catch (err) { setError(err instanceof Error ? err.message : String(err)); }
-          }}><Play size={15} />Retry</Button>
           <IconButton variant="danger" onClick={() => void removeTask(task)} title="Delete permanently"><Trash2 size={15} /></IconButton>
         </div>
       );
@@ -265,7 +263,7 @@ export function TasksPage() {
     <PageShell className="tasks-page">
       <PageToolbar
         title="Tasks"
-        subtitle="Scheduled work and results that need attention."
+        subtitle="The Agent must be running to execute tasks. Missed work is recovered within its recovery window."
         actions={
           <>
             <Button type="button" variant="primary" onClick={() => openEditor("create")}><Plus size={15} />Create task</Button>
@@ -299,10 +297,11 @@ export function TasksPage() {
                   <div className="task-row-main">
                     <div className="task-row-title">
                       <h3>{taskDisplayTitle(task)}</h3>
-                      <div className="task-row-badges">{taskTypeBadge(task)}<StatusBadge tone={taskStatusTone(taskDisplayStatus(task))}>{taskDisplayStatus(task)}</StatusBadge></div>
+                      <div className="task-row-badges">{taskTypeBadge(task)}{task.last_run_status && <StatusBadge tone={task.last_run_status === "succeeded" ? "good" : "muted"}>Last run: {task.last_run_status}</StatusBadge>}<StatusBadge tone={taskStatusTone(taskDisplayStatus(task))}>{taskDisplayStatus(task)}</StatusBadge>{task.unresolved_runs?.length ? <StatusBadge tone="danger">{task.unresolved_runs.length} run(s) need checking</StatusBadge> : null}</div>
                     </div>
                     <p>{taskContent(task) || task.task_id}</p>
                     {task.last_error ? <p className="task-error-copy">{task.last_error}</p> : null}
+                    {task.unresolved_runs?.length ? <p className="task-error-copy">A previous run has an uncertain outcome. It will not be retried automatically. Future runs follow this task's schedule. {task.last_review_error}</p> : null}
                     <div className="chip-list">
                       <span className="data-chip data-chip-wrap">{lifecycleTime(task) || "Unknown time"}</span>
                       <span className="data-chip data-chip-wrap">{taskTarget(task)}</span>
@@ -328,7 +327,7 @@ export function TasksPage() {
         onClose={closeEditor}
         onSave={(payload) => void saveEditor(payload)}
       />
-      <TaskDetailsModal task={selectedTask} onClose={() => setSelectedTask(null)} onDuplicate={(task) => { setSelectedTask(null); openEditor("duplicate", task); }} onDelete={(task) => void removeTask(task)} />
+      <TaskDetailsModal task={selectedTask} onClose={() => setSelectedTask(null)} onDuplicate={(task) => { setSelectedTask(null); openEditor("duplicate", task); }} onDelete={(task) => void removeTask(task)} onUpdated={() => { setSelectedTask(null); void load(false); }} />
     </PageShell>
   );
 }
@@ -338,21 +337,31 @@ function TaskDetailsModal({
   onClose,
   onDuplicate,
   onDelete,
+  onUpdated,
 }: {
   task: ScheduledTaskItem | null;
   onClose: () => void;
   onDuplicate: (task: ScheduledTaskItem) => void;
   onDelete: (task: ScheduledTaskItem) => void;
+  onUpdated: () => void;
 }) {
   if (!task) return null;
   const rows = [
     ["Status", task.status],
     ["Type", task.task_type],
+    ["Timezone", task.timezone || ""],
+    ["Next run", formatRunAt(task.next_run_at)],
     ["Delivery", taskTarget(task)],
     ["Created", formatRunAt(task.created_at)],
     ["Updated", formatRunAt(task.updated_at)],
     [task.status === "completed" ? "Completed" : "Failed", lifecycleTime(task)],
     ["Last run", formatRunAt(task.last_run_at)],
+    ["Scheduled for", formatRunAt(task.scheduled_run_at)],
+    ["Failure stage", task.failure_stage || ""],
+    ["Run ID", task.run_id || ""],
+    ["Attempt ID", task.attempt_id || ""],
+    ["Unresolved runs", task.unresolved_runs?.join(", ") || ""],
+    ["Previous uncertain outcome", task.last_review_error || ""],
     ["Reason", task.completion_reason || task.last_error || task.reason || ""],
   ].filter(([, value]) => value);
   return (
@@ -361,6 +370,7 @@ function TaskDetailsModal({
         <div className="modal-header"><h3>{taskDisplayTitle(task)}</h3><IconButton onClick={onClose} aria-label="Close details"><X size={16} /></IconButton></div>
         <div className="modal-body">
           <p className="task-details-content">{taskContent(task)}</p>
+          <TaskRunHistory taskId={task.task_id} onUpdated={onUpdated} />
           <dl className="task-details-grid">{rows.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>
           {taskRecurrenceChips(task).length ? <div className="chip-list">{taskRecurrenceChips(task).map((label) => <span key={label} className="data-chip">{label}</span>)}</div> : null}
         </div>
@@ -368,4 +378,59 @@ function TaskDetailsModal({
       </div>
     </div>
   );
+}
+
+function TaskRunHistory({ taskId, onUpdated }: { taskId: string; onUpdated: () => void }) {
+  const [runs, setRuns] = useState<TaskRun[]>([]);
+  const [detail, setDetail] = useState<TaskRun | null>(null);
+  const [hasMore, setHasMore] = useState(false);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    setRuns([]); setDetail(null); setError("");
+    void getTaskRuns(taskId).then((data) => { if (!cancelled) { setRuns(data.runs); setHasMore(data.has_more); } })
+      .catch((err) => { if (!cancelled) setError(String(err.message || err)); });
+    return () => { cancelled = true; };
+  }, [taskId]);
+  const inspect = async (run: TaskRun) => {
+    setError("");
+    try { setDetail((await getTaskRun(taskId, run.id)).run); }
+    catch (err) { setError(err instanceof Error ? err.message : String(err)); }
+  };
+  const act = async (action: "prepare" | "deliver" | "resolve") => {
+    if (!detail || busy) return;
+    setBusy(true); setError("");
+    try { await taskRunAction(taskId, detail.id, action); onUpdated(); }
+    catch (err) { setError(err instanceof Error ? err.message : String(err)); }
+    finally { setBusy(false); }
+  };
+  return <section aria-label="Execution history">
+    <h4>Execution history</h4>
+    {error && <p className="error-banner">{error}</p>}
+    {!runs.length && <p>No executions yet.</p>}
+    {runs.map((run) => <div key={run.id} className="task-editor-notice">
+      <Button type="button" variant="ghost" onClick={() => void inspect(run)}>{formatRunAt(run.due_at)} · {run.status}</Button>
+      <p>{run.error}{run.skip_count ? ` (${run.skip_count} occurrences)` : ""}</p>
+      {run.retry_at && <p>Retry at {formatRunAt(run.retry_at)}</p>}
+    </div>)}
+    {hasMore && <Button type="button" onClick={() => {
+      void getTaskRuns(taskId, runs.length).then((data) => { setRuns((old) => [...old, ...data.runs]); setHasMore(data.has_more); })
+        .catch((err) => setError(String(err.message || err)));
+    }}>Load more executions</Button>}
+    {detail && <div className="task-editor-section">
+      <p>{formatRunAt(detail.due_at)} · {detail.status} · {detail.failure_stage || detail.phase}</p>
+      {detail.error && <p>{detail.error_type}: {detail.error}</p>}
+      {detail.resolved_at && <p>Reviewed at {formatRunAt(detail.resolved_at)}</p>}
+      {detail.tools?.map((tool, index) => <p key={`${tool.name}-${index}`}>Started {tool.name} · {formatRunAt(tool.started_at)} · {tool.safety === "read_only" ? "read only" : tool.safety === "idempotent" ? "safe to repeat" : "may change external state"}</p>)}
+      {detail.attempts?.map((attempt) => <p key={attempt.id}>Attempt {attempt.id.slice(0, 8)} · {formatRunAt(attempt.started_at)} · {attempt.status}{attempt.error ? ` · ${attempt.error}` : ""}</p>)}
+      {detail.deliveries?.map((part) => <p key={part.id}>{part.description || part.id} · {part.status}{part.error ? ` · ${part.error}` : ""}</p>)}
+      {detail.status === "needs_review" && <p>The earlier operation may have completed. This occurrence will not be resent automatically.</p>}
+      <div className="toolbar-actions">
+        {detail.can_retry_prepare && <Button disabled={busy} onClick={() => void act("prepare")}>Retry preparation</Button>}
+        {detail.can_retry_deliver && <Button disabled={busy} onClick={() => void act("deliver")}>Retry unsent parts</Button>}
+        {detail.can_resolve && <Button disabled={busy} onClick={() => void act("resolve")}>Mark reviewed without resending</Button>}
+      </div>
+    </div>}
+  </section>;
 }
