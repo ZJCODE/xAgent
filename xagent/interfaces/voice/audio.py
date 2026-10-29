@@ -720,6 +720,17 @@ class _PCMOutputConverter:
         converted = _convert_channels(converted, self.source_channels, self.target_channels)
         return converted
 
+    def flush(self) -> bytes:
+        """Release interpolation lookahead at the end of one finite output stream."""
+        if self.source_rate == self.target_rate or self._resampler._last_frame is None:
+            return b""
+        tail = self._resampler.resample(
+            _samples_to_bytes(self._resampler._last_frame),
+            source_rate=self.source_rate, target_rate=self.target_rate,
+        )
+        self._resampler = _PCMResampler(channels=self.source_channels)
+        return _convert_channels(tail, self.source_channels, self.target_channels)
+
 
 class _PCMResampler:
     def __init__(self, *, channels: int) -> None:

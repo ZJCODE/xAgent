@@ -207,7 +207,7 @@ def register_device_routes(
                 location=hello.location,
             )
             room_name = "Browser voice" if browser else service.resolve_room_name(device_id)
-            bridge = WebSocketVoiceBridge(
+            bridge = await asyncio.to_thread(WebSocketVoiceBridge,
                 websocket=websocket,
                 loop=asyncio.get_running_loop(),
                 hello=hello,
@@ -248,6 +248,8 @@ def register_device_routes(
                 "output_sample_rate": hello.output_sample_rate or SONIOX_TTS_SAMPLE_RATE,
                 "output_channels": hello.output_channels or SONIOX_TTS_CHANNELS,
             }
+            if hello.audio_protocol == 2:
+                ready_frame.update(audio_protocol=2, input_codec=bridge.input_codec, output_codec=bridge.output_codec)
             if issued is not None:
                 ready_frame["credential"] = issued
             await asyncio.wait_for(
@@ -281,9 +283,21 @@ def register_device_routes(
                     control = VoiceClientControl.model_validate(parse_voice_control_frame(raw_text))
                     if control.type == "playback_progress":
                         if player.accepts_playback(control.playback_id):
-                            runtime.note_remote_playback_progress(control.played_bytes)
+                            if hello.audio_protocol == 2:
+                                if control.sample_rate != player.stream_sample_rate:
+                                    raise ValueError('Playback sample rate does not match negotiated rate')
+                                runtime.note_remote_playback_samples(min(control.played_samples, player.sent_samples), control.sample_rate)
+                            else:
+                                runtime.note_remote_playback_progress(control.played_bytes)
                     elif control.type == "playback_finished":
                         player.note_playback_finished(control.playback_id)
+                    elif control.type in {"input_start", "input_end"}:
+                        if hello.audio_protocol != 2:
+                            raise ValueError('Input controls require audio protocol 2')
+                        if control.type == 'input_start':
+                            microphone.start_input(control.stream_id)
+                        else:
+                            microphone.end_input(control.stream_id)
                     elif control.type == "ping":
                         await websocket.send_json({"type": "pong"})
                     elif control.type == "stop":

@@ -427,6 +427,13 @@ class VoiceRuntime:
             self._current_remote_played_bytes = int(played_bytes)
             ledger.note_playback_bytes(delta)
 
+    def note_remote_playback_samples(self, played_samples: int, sample_rate: int) -> None:
+        """Convert media time to the canonical PCM ledger; compressed bytes have no fixed duration."""
+        ledger = self._active_spoken_ledger()
+        if ledger is not None and sample_rate > 0:
+            canonical_frames = played_samples * ledger.sample_rate // sample_rate
+            self.note_remote_playback_progress(canonical_frames * ledger.channels * ledger.bytes_per_sample)
+
     @property
     def _duplex_capture_enabled(self) -> bool:
         return bool(self.config.enable_interruptions) and not self._self_interruption.tripped

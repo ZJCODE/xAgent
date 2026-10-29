@@ -329,3 +329,18 @@ test("ending continuous conversation cancels a pending ticket and a late permiss
   await h.update();
   assert.ok(!h.states.includes('Old permission error'));
 });
+
+test("a codec failure reconnects with PCM and remembers that choice across mode changes", async (t) => {
+  const h = await harness(t);
+  await h.selectContinuous();
+  h.find((p) => p['aria-label'] === 'Start conversation').onClick();
+  await h.update();
+  h.clients.at(-1).listener.onClose({code: 1011, reason: 'Codec failed', codecFailure: true});
+  await h.fireNextTimer();
+  await h.update();
+  assert.equal(h.connections.at(-1).forcePcm, true);
+  assert.equal(h.clients.at(-1).capturing, true);
+  h.find((p) => p.children === 'Hold to talk').onClick();
+  await h.update();
+  assert.equal(h.connections.at(-1).forcePcm, true);
+});

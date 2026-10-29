@@ -264,3 +264,11 @@ disabled, recognition is paused during thinking and playback, including the remo
 browser playback buffer and the existing echo cooldown. With interruptions enabled,
 the existing barge-in and echo safeguards apply. Browser sessions bypass room
 participation decisions; Host voice retains its room attention policy.
+
+
+Browser audio compression is negotiated automatically per direction over the
+existing WS/WSS transport. Standard installations include the server's Opus codec;
+unsupported browsers or unavailable runtime codecs fall back to PCM.
+No Agent configuration fields or restart-sensitive voice preferences are added.
+Both Hold to talk and Continuous conversation share this transport. Connection
+details on the Voice page displays the selected microphone/playback codecs.

@@ -52,6 +52,9 @@ test("browser hello is a headset profile with echo managed by the page", () => {
     profile: "headset",
     echo_managed: true,
     playback_ack: true,
+    audio_protocol: 2,
+    input_codecs: ["pcm_s16le"],
+    output_codecs: ["pcm_s16le"],
   });
   assert.equal(voice.voiceHello(96000).input_sample_rate, 48000);
   assert.equal(voice.clampSampleRate(Number.NaN), 16000);

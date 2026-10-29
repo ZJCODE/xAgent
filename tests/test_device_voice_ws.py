@@ -639,3 +639,56 @@ class DeviceVoiceWebSocketTests(unittest.IsolatedAsyncioTestCase):
                 self.assertNotIn("credential", ready)
                 await phone.send(json.dumps({"type": "stop"}))
 
+
+    async def test_v2_pcm_and_opus_use_media_time_and_input_stream_boundaries(self):
+        from dataclasses import replace
+        from xagent.core.runtime.client import RuntimeClient
+        from xagent.interfaces.voice.transport_audio import AudioPacket, OpusEncoder, OpusDecoder, opus_available
+
+        for use_opus in (False, True):
+            if use_opus and not opus_available():
+                continue
+            with self.subTest(opus=use_opus):
+                host, _, root, url = await self.start_host([(ReplyType.SIMPLE_REPLY, "你好。")], seed_credentials=False)
+                ticket = (await RuntimeClient(root).request('POST', '/api/devices/voice-session')).json()
+                recognizer = _FakeWSRecognizer(continuous=True)
+                with patch('xagent.interfaces.voice.factory.create_soniox_adapters', return_value=(recognizer, _FakeWSSynthesizer())):
+                    async with websockets.connect(url + '/ws/voice/' + ticket['session_id'] + '?token=' + quote(ticket['token'], safe=''), **self.connection_options) as ws:
+                        codecs = ['opus', 'pcm_s16le'] if use_opus else ['pcm_s16le']
+                        await ws.send(json.dumps({'type': 'hello', 'audio_protocol': 2, 'playback_ack': True,
+                                                  'profile': 'headset', 'input_codecs': codecs, 'output_codecs': codecs}))
+                        ready = json.loads(await asyncio.wait_for(ws.recv(), 3))
+                        self.assertEqual(ready['audio_protocol'], 2)
+                        self.assertEqual(ready['input_codec'], 'opus' if use_opus else 'pcm_s16le')
+                        rate = ready['input_sample_rate']
+                        await ws.send(json.dumps({'type': 'input_start', 'stream_id': 1}))
+                        if use_opus:
+                            encoder = OpusEncoder(24000)
+                            packets = list(encoder.push(b'\x10\0' * (rate // 50))) + list(encoder.finish())
+                        else:
+                            packets = [AudioPacket(1, 0, 0, rate // 50, 0, b'\x10\0' * (rate // 50))]
+                        for packet in packets:
+                            await ws.send(replace(packet, stream=1).pack())
+                        await ws.send(json.dumps({'type': 'input_end', 'stream_id': 1}))
+                        output_samples = 0
+                        decoder = OpusDecoder() if use_opus else None
+                        while True:
+                            message = await asyncio.wait_for(ws.recv(), 3)
+                            if isinstance(message, bytes):
+                                packet = AudioPacket.unpack(message)
+                                self.assertEqual(len(decoder.decode(packet) if decoder else packet.payload), packet.samples * 2)
+                                output_samples += packet.samples
+                            else:
+                                control = json.loads(message)
+                                if control['type'] == 'playback_done':
+                                    break
+                        self.assertGreater(output_samples, 0)
+                        runtime = host.device_service.voice_sessions[ticket['session_id']].runtime
+                        self.assertTrue(runtime.pause_event.is_set())
+                        await ws.send(json.dumps({'type': 'playback_progress', 'playback_id': control['playback_id'],
+                                                  'played_samples': output_samples, 'sample_rate': ready['output_sample_rate']}))
+                        await self.wait_for(lambda: runtime._current_remote_played_bytes > 0)
+                        self.assertLessEqual(runtime._current_remote_played_bytes, output_samples * 24000 // ready['output_sample_rate'] * 2)
+                        await ws.send(json.dumps({'type': 'playback_finished', 'playback_id': control['playback_id']}))
+                        await self.wait_for(lambda: not runtime.pause_event.is_set())
+                        await ws.send(json.dumps({'type': 'stop'}))

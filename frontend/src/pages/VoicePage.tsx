@@ -34,6 +34,7 @@ function VoiceSession({ configuredApiUrl, refreshAgents }: {
   const [started, setStarted] = useState(false);
   const [muted, setMuted] = useState(false);
   const [capturing, setCapturing] = useState(false);
+  const [transport, setTransport] = useState({input: "PCM16", output: "PCM16"});
   const [phase, setPhase] = useState<Phase>("connecting");
   const [error, setError] = useState("");
   const [attempt, setAttempt] = useState(0);
@@ -48,6 +49,7 @@ function VoiceSession({ configuredApiUrl, refreshAgents }: {
   const startedRef = useRef(false);
   const mutedRef = useRef(false);
   const modeRef = useRef<Mode>("hold");
+  const pcmOnly = useRef(false);
   const startSession = useRef<() => void>(() => {});
   const stopSession = useRef<() => void>(() => {});
 
@@ -108,9 +110,10 @@ function VoiceSession({ configuredApiUrl, refreshAgents }: {
       retryTimer = window.setTimeout(() => void connect(), RETRY_DELAYS[failures++]);
     };
     const client = new PhoneVoiceClient({
-      onLive: () => {
+      onLive: (ready) => {
         if (!active()) return;
         stableTimer = window.setTimeout(() => { failures = 0; }, 10000);
+        setTransport({input: ready.input_codec === "opus" ? "Opus" : "PCM16", output: ready.output_codec === "opus" ? "Opus" : "PCM16"});
         setPhase("live");
         setError("");
         syncCapture();
@@ -122,7 +125,15 @@ function VoiceSession({ configuredApiUrl, refreshAgents }: {
       onTranscript: (frame) => {
         if (active()) setLines((previous) => applyTranscript(previous, frame, () => transcriptId.current++));
       },
-      onClose: ({ reason }) => retry(reason || "The voice connection closed. Please try again."),
+      onClose: ({ reason, codecFailure }) => {
+        if (!active()) return;
+        if (codecFailure) {
+          if (pcmOnly.current) { stop(); setPhase("failed"); setError(reason); return; }
+          pcmOnly.current = true;
+          failures = 0;
+        }
+        retry(reason || "The voice connection closed. Please try again.");
+      },
       onNotice: (message) => {
         if (!active()) return;
         stop();
@@ -159,6 +170,7 @@ function VoiceSession({ configuredApiUrl, refreshAgents }: {
         await client.connect({
           socketUrl: browserVoiceSocketUrl(apiUrl, session.session_id, session.token),
           pageProtocol: window.location.protocol,
+          forcePcm: pcmOnly.current,
         });
       } catch (err) {
         if (!current(ownGeneration) || err instanceof VoiceConnectionSuperseded) return;
@@ -329,6 +341,10 @@ function VoiceSession({ configuredApiUrl, refreshAgents }: {
           <p className="wizard-hint">{continuous
             ? "Start once to talk continuously. Conversation pauses when this page is hidden."
             : "Hold to talk; release to stop recording."}</p>
+          {live ? <details className="voice-connection-details">
+            <summary>Connection details</summary>
+            <p className="wizard-hint">Microphone: {transport.input} · Playback: {transport.output} · WebSocket</p>
+          </details> : null}
           <ul className="voice-transcript">
             {lines.length === 0 ? <li className="voice-transcript-empty">Transcripts appear here after you speak.</li> : null}
             {lines.map((line) => <li key={line.id}><span className="role">{line.role === "user" ? "You" : "Agent"}</span>{line.text}</li>)}

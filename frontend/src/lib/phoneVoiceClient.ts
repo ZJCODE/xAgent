@@ -5,10 +5,11 @@ import {
   floatToPcm16,
   pcm16ToChannelPlanes,
   pcmRms,
-  resampleLinear,
   voiceHello,
   type VoiceReadyFrame,
 } from "./deviceVoice";
+
+import { OpusInput, OpusOutput, PcmResampler, VoiceCodecFailure, VoiceAudioBackpressure, packAudio, unpackAudio, supportedCodecs, type AudioCodec } from "./voiceAudio";
 
 export class VoiceConnectionSuperseded extends Error {
   constructor() {
@@ -23,7 +24,7 @@ export interface PhoneVoiceListener {
   onPlaying: (playing: boolean) => void;
   onLevel: (level: number) => void;
   onTranscript: (frame: { role?: unknown; text?: unknown; delta?: unknown; final?: unknown }) => void;
-  onClose: (info: { code: number; reason: string }) => void;
+  onClose: (info: { code: number; reason: string; codecFailure?: boolean }) => void;
   onNotice: (message: string) => void;
   onCapture?: (capturing: boolean) => void;
 }
@@ -44,8 +45,10 @@ export class PhoneVoiceClient {
   private ready = false;
   private attempt = 0;
   private captureToken = 0;
-  private captureStop: (() => void) | null = null;
+  private captureStop: ((flush: boolean) => Promise<void>) | null = null;
   private captureRequested = false;
+  private captureFinishing: Promise<void> | null = null;
+  private captureAbort: (() => void) | null = null;
   private pingTimer = 0;
   private progressTimer = 0;
   private handshakeTimer = 0;
@@ -58,6 +61,19 @@ export class PhoneVoiceClient {
   private playChannels = 1;
   private acceptingAudio = false;
   private playbackId: string | null = null;
+  private protocol = 1;
+  private inputCodec: AudioCodec = "pcm_s16le";
+  private outputCodec: AudioCodec = "pcm_s16le";
+  private inputStream = 0;
+  private outputStream = 0;
+  private outputSequence = 0;
+  private outputSamples = 0;
+  private decoder: OpusOutput | null = null;
+  private wireDone = false;
+  private workletContext: AudioContext | null = null;
+  private failedWorkletContext: AudioContext | null = null;
+  private offeredInput: AudioCodec[] = ["pcm_s16le"];
+  private offeredOutput: AudioCodec[] = ["pcm_s16le"];
 
   constructor(listener: PhoneVoiceListener) {
     this.listener = listener;
@@ -73,7 +89,7 @@ export class PhoneVoiceClient {
     this.declaredRate = clampSampleRate(this.audio.sampleRate);
   }
 
-  async connect(options: { socketUrl: string; pageProtocol: string }): Promise<VoiceReadyFrame> {
+  async connect(options: { socketUrl: string; pageProtocol: string; forcePcm?: boolean }): Promise<VoiceReadyFrame> {
     const attempt = ++this.attempt;
     this.closeSocket();
     this.prime();
@@ -94,10 +110,15 @@ export class PhoneVoiceClient {
           socket.close();
           reject(new Error("Voice handshake timed out."));
         }, 8000);
-        socket.onopen = () => {
+        socket.onopen = async () => {
           if (attempt !== this.attempt || this.socket !== socket) return;
           settle(audio.resume());
-          socket.send(JSON.stringify(voiceHello(audio.sampleRate)));
+          const worklet = Boolean(audio.audioWorklet && typeof AudioWorkletNode !== "undefined");
+          const codecs = await supportedCodecs(worklet, Boolean(options.forcePcm));
+          if (attempt !== this.attempt || this.socket !== socket) return;
+          this.offeredInput = codecs.input;
+          this.offeredOutput = codecs.output;
+          socket.send(JSON.stringify(voiceHello(audio.sampleRate, codecs)));
         };
         socket.onmessage = (event) => {
           if (attempt !== this.attempt || this.socket !== socket) return;
@@ -121,6 +142,12 @@ export class PhoneVoiceClient {
         };
       });
       if (attempt !== this.attempt) throw new VoiceConnectionSuperseded();
+      this.protocol = readyFrame.audio_protocol ?? 1;
+      this.inputCodec = readyFrame.input_codec ?? "pcm_s16le";
+      this.outputCodec = readyFrame.output_codec ?? "pcm_s16le";
+      if (!this.offeredInput.includes(this.inputCodec) || !this.offeredOutput.includes(this.outputCodec)) throw new Error("Unsupported negotiated audio codec.");
+      this.declaredRate = this.protocol === 2 ? (this.inputCodec === "opus" ? 48000 : 16000) : clampSampleRate(audio.sampleRate);
+      this.outputStream = 0;
       this.ready = true;
       socket.onmessage = (event) => {
         if (this.socket === socket && attempt === this.attempt) this.handleFrame(event);
@@ -162,67 +189,147 @@ export class PhoneVoiceClient {
   async setCapture(enabled: boolean): Promise<void> {
     if (!enabled) {
       this.captureRequested = false;
-      this.captureToken += 1;
-      this.stopCapture();
-      this.listener.onLevel(0);
+      const stop = this.captureStop;
+      this.captureStop = null;
+      const finishing = stop ? stop(true) : this.captureFinishing;
+      this.captureFinishing = finishing;
+      if (finishing) await finishing;
+      else this.captureToken += 1;
+      if (this.captureFinishing === finishing) this.captureFinishing = null;
+      if (!this.captureRequested) { this.listener.onCapture?.(false); this.listener.onLevel(0); }
       return;
     }
     if (!this.live || this.captureRequested) return;
+    this.captureAbort?.();
+    this.captureAbort = null;
+    this.captureFinishing = null;
     this.captureRequested = true;
     this.prime();
-    const audio = this.audio;
-    if (!audio) { this.captureRequested = false; return; }
-    const token = this.captureToken + 1;
-    this.captureToken = token;
+    // prime resumes audio; the negotiated transport rate is independent of the device clock.
+    this.declaredRate = this.protocol === 2 ? (this.inputCodec === "opus" ? 48000 : 16000) : clampSampleRate(this.audio!.sampleRate);
+    const audio = this.audio!;
+    const token = ++this.captureToken;
     let stream: MediaStream | null = null;
+    let source: MediaStreamAudioSourceNode | null = null;
+    let processor: AudioWorkletNode | ScriptProcessorNode | null = null;
+    let mute: GainNode | null = null;
+    let encoder: OpusInput | null = null;
+    let resolveFlush: (() => void) | null = null;
+    const resampler = new PcmResampler(audio.sampleRate, this.declaredRate);
+    const current = () => token === this.captureToken && this.live && this.audio === audio;
+    const cleanup = () => {
+      if (processor instanceof AudioWorkletNodeSafe()) processor.port.onmessage = null;
+      else if (processor) (processor as ScriptProcessorNode).onaudioprocess = null;
+      source?.disconnect(); processor?.disconnect(); mute?.disconnect();
+      stream?.getTracks().forEach((track) => track.stop());
+    };
     try {
-      // Start inside the pointer gesture. prime() already resumed audio there;
-      // a suspended AudioContext must not delay handling the permission result.
       stream = await navigator.mediaDevices.getUserMedia({
-        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-        video: false,
+        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false,
       });
-      if (token !== this.captureToken || !this.live) {
-        stream.getTracks().forEach((track) => track.stop());
-        return;
-      }
-      const source = audio.createMediaStreamSource(stream);
-      const processor = audio.createScriptProcessor(2048, 1, 1);
-      const mute = audio.createGain();
+      if (!current()) { cleanup(); return; }
+      source = audio.createMediaStreamSource(stream);
+      mute = audio.createGain();
       mute.gain.value = 0;
-      processor.onaudioprocess = (event) => {
-        if (token !== this.captureToken || !this.socket || this.socket.readyState !== WebSocket.OPEN) return;
-        const native = event.inputBuffer.getChannelData(0);
-        const samples = event.inputBuffer.sampleRate === this.declaredRate
-          ? native
-          : resampleLinear(native, event.inputBuffer.sampleRate, this.declaredRate);
-        if (this.socket.bufferedAmount < MAX_BUFFERED_BYTES) this.socket.send(floatToPcm16(samples));
-        this.listener.onLevel(Math.min(1, pcmRms(samples) * 4));
+      if (audio.audioWorklet && this.failedWorkletContext !== audio && typeof AudioWorkletNode !== "undefined") {
+        try {
+          if (this.workletContext !== audio) {
+            await audio.audioWorklet.addModule(new URL("./voiceCapture.worklet.js", import.meta.url).href);
+            this.workletContext = audio;
+          }
+          processor = new AudioWorkletNode(audio, "voice-capture", {numberOfInputs: 1, numberOfOutputs: 1,
+            outputChannelCount: [1], processorOptions: {rate: this.declaredRate}});
+        } catch (error) {
+          this.failedWorkletContext = audio;
+          if (this.inputCodec === "opus") throw new VoiceCodecFailure(String(error));
+          // Older/embedded browsers retain the existing PCM capture path.
+        }
+      }
+      if (!current()) { cleanup(); return; }
+      const inputId = ++this.inputStream;
+      let sequence = 0, samplesSent = 0;
+      const send = (packet: Parameters<typeof packAudio>[0]) => {
+        if (!current() || !this.socket) return;
+        const bytesPerSecond = this.inputCodec === "opus" ? 24000 / 8 : this.declaredRate * 2;
+        if (this.socket.bufferedAmount > bytesPerSecond / 2 + 1024) throw new VoiceAudioBackpressure("Audio upload is falling behind. Please try again.");
+        this.socket.send(packAudio(packet));
       };
-      source.connect(processor);
-      processor.connect(mute);
-      mute.connect(audio.destination);
-      const activeStream = stream;
-      this.captureStop = () => {
-        processor.onaudioprocess = null;
-        source.disconnect();
-        processor.disconnect();
-        mute.disconnect();
-        activeStream.getTracks().forEach((track) => track.stop());
+      if (this.inputCodec === "opus") encoder = new OpusInput(inputId, send, (error) => { if (current()) this.audioFailed(error); });
+      if (this.protocol === 2) this.socket!.send(JSON.stringify({type: "input_start", stream_id: inputId}));
+      const write = (samples: Float32Array) => {
+        if (!current() || !samples.length) return;
+        try {
+          if (encoder) encoder.write(samples);
+          else if (this.protocol === 2) {
+            send({stream: inputId, sequence: sequence++, timestamp: Math.floor(samplesSent * 1e6 / this.declaredRate),
+              samples: samples.length, discard: 0, payload: floatToPcm16(samples)});
+            samplesSent += samples.length;
+          } else if (this.socket!.bufferedAmount < MAX_BUFFERED_BYTES) this.socket!.send(floatToPcm16(samples));
+          this.listener.onLevel(Math.min(1, pcmRms(samples) * 4));
+        } catch (error) { this.audioFailed(error); }
+      };
+      if (processor instanceof AudioWorkletNodeSafe()) {
+        processor.port.onmessage = ({data}) => {
+          if (data === "flushed") resolveFlush?.();
+          else if (data instanceof Float32Array) write(data);
+        };
+        processor.onprocessorerror = () => { if (current()) this.audioFailed(this.inputCodec === "opus" ? new VoiceCodecFailure("Audio capture failed.") : new Error("Audio capture failed.")); };
+      } else {
+        processor = audio.createScriptProcessor(2048, 1, 1);
+        processor.onaudioprocess = (event) => write(resampler.push(event.inputBuffer.getChannelData(0)));
+      }
+      source.connect(processor); processor.connect(mute); mute.connect(audio.destination);
+      const abort = () => { resolveFlush?.(); cleanup(); encoder?.close(); };
+      this.captureAbort = abort;
+      this.captureStop = async (flush) => {
+        source?.disconnect();
+        stream?.getTracks().forEach((track) => track.stop());
+        let timer = 0;
+        try {
+          if (flush && current()) {
+            const finish = async () => {
+              if (processor instanceof AudioWorkletNodeSafe()) {
+                await new Promise<void>((resolve) => { resolveFlush = resolve; (processor as AudioWorkletNode).port.postMessage("flush"); });
+              }
+              if (!(processor instanceof AudioWorkletNodeSafe())) write(resampler.finish());
+              await encoder?.finish();
+              if (current() && this.protocol === 2) this.socket!.send(JSON.stringify({type: "input_end", stream_id: inputId}));
+            };
+            await Promise.race([finish(), new Promise<never>((_, reject) => {
+              timer = window.setTimeout(() => reject(new VoiceAudioBackpressure("Audio capture did not finish in time.")), 1000);
+            })]);
+          }
+        } catch (error) { if (current()) this.audioFailed(error); }
+        finally {
+          window.clearTimeout(timer);
+          resolveFlush?.();
+          cleanup();
+          encoder?.close();
+          if (this.captureAbort === abort) this.captureAbort = null;
+          if (token === this.captureToken) this.captureToken += 1;
+        }
       };
       this.listener.onCapture?.(true);
     } catch (error) {
-      stream?.getTracks().forEach((track) => track.stop());
-      if (token !== this.captureToken || !this.live) return;
-      if (token === this.captureToken) this.captureToken += 1;
+      cleanup(); encoder?.close();
+      if (!current()) return;
       this.captureRequested = false;
+      if (error instanceof VoiceCodecFailure) { this.audioFailed(error); return; }
+      this.captureToken += 1;
       const name = error instanceof DOMException ? error.name : "";
-      this.listener.onNotice(
-        name === "NotAllowedError" || name === "PermissionDeniedError"
-          ? "Microphone permission was denied. Allow the mic for this page and try again."
-          : "This browser could not open the microphone. Use HTTPS or localhost.",
-      );
+      this.listener.onNotice(name === "NotAllowedError" || name === "PermissionDeniedError"
+        ? "Microphone permission was denied. Allow the mic for this page and try again."
+        : "This browser could not open the microphone. Use HTTPS or localhost.");
     }
+  }
+
+  private audioFailed(error: unknown): void {
+    if (!this.live) return;
+    const codecFailure = error instanceof VoiceCodecFailure;
+    const reason = codecFailure ? "Audio codec failed. Reconnecting with PCM." : error instanceof Error ? error.message : "Audio transport failed.";
+    this.closeSocket(); this.stopPlayback();
+    this.listener.onLevel(0);
+    this.listener.onClose({code: 1011, reason, codecFailure});
   }
 
   private closeSocket(): void {
@@ -258,7 +365,10 @@ export class PhoneVoiceClient {
 
   private handleFrame(event: MessageEvent): void {
     if (event.data instanceof ArrayBuffer) {
-      this.enqueuePcm(event.data);
+      try {
+        if (this.protocol === 2) this.receiveAudio(event.data);
+        else this.enqueuePcm(event.data);
+      } catch (error) { this.audioFailed(error); }
       return;
     }
     if (typeof event.data !== "string") return;
@@ -270,17 +380,37 @@ export class PhoneVoiceClient {
     } catch {
       return;
     }
+    if (frame.type === "codec_error") { this.audioFailed(new VoiceCodecFailure(String(frame.message))); return; }
     if (frame.type === "playback_start") {
       const rate = typeof frame.sample_rate === "number" ? frame.sample_rate : PHONE_OUTPUT_SAMPLE_RATE;
       const channels = frame.channels === 2 ? 2 : 1;
       this.beginPlayback(rate, channels, typeof frame.playback_id === "string" ? frame.playback_id : null);
+      if (this.protocol === 2) {
+        if (rate !== (this.outputCodec === "opus" ? 48000 : 24000) || channels !== 1) { this.audioFailed(new Error("Invalid playback format.")); return; }
+        if (typeof frame.stream_id !== "number" || !Number.isSafeInteger(frame.stream_id) || frame.stream_id > 0xffffffff || frame.stream_id <= this.outputStream) { this.audioFailed(new Error("Invalid playback stream.")); return; }
+        this.outputStream = frame.stream_id;
+        this.outputSequence = this.outputSamples = 0;
+        const stream = this.outputStream;
+        if (this.outputCodec === "opus") {
+          try {
+            this.decoder = new OpusOutput((samples) => {
+              if (this.outputStream === stream && this.acceptingAudio) this.enqueueSamples([samples]);
+            }, (error) => { if (this.outputStream === stream && this.acceptingAudio) this.audioFailed(error); });
+          } catch (error) { this.audioFailed(error); return; }
+        }
+      }
       this.listener.onPlaying(true);
       return;
     }
     if (frame.type === "playback_done") {
       if ((frame.playback_id ?? null) !== this.playbackId) return;
-      this.acceptingAudio = false;
-      this.reportProgress();
+      this.wireDone = true;
+      const id = this.playbackId;
+      if (this.decoder) {
+        void this.decoder.finish().then(() => {
+          if (this.playbackId === id) { this.acceptingAudio = false; this.reportProgress(); }
+        }).catch((error) => { if (this.playbackId === id) this.audioFailed(error); });
+      } else { this.acceptingAudio = false; this.reportProgress(); }
       return;
     }
     if (frame.type === "clear_playback") {
@@ -300,6 +430,7 @@ export class PhoneVoiceClient {
     settle(this.audio?.resume());
     this.stopPlaybackSources();
     this.acceptingAudio = true;
+    this.wireDone = false;
     this.playbackId = playbackId;
     this.playRate = sampleRate > 0 ? sampleRate : PHONE_OUTPUT_SAMPLE_RATE;
     this.playChannels = channels;
@@ -307,19 +438,30 @@ export class PhoneVoiceClient {
     this.lastReportedBytes = 0;
   }
 
-  private enqueuePcm(bytes: ArrayBuffer): void {
-    const audio = this.audio;
-    if (!this.acceptingAudio || !audio) return;
-    const frameBytes = 2 * this.playChannels;
-    const frames = Math.floor(bytes.byteLength / frameBytes);
-    if (frames <= 0) return;
-    const buffer = audio.createBuffer(this.playChannels, frames, this.playRate);
-    const planes = pcm16ToChannelPlanes(bytes, this.playChannels);
-    for (let channel = 0; channel < this.playChannels; channel += 1) {
-      const samples = new Float32Array(planes[channel].length);
-      samples.set(planes[channel]);
-      buffer.copyToChannel(samples, channel);
+  private receiveAudio(bytes: ArrayBuffer): void {
+    const packet = unpackAudio(bytes);
+    if (packet.stream !== this.outputStream || !this.acceptingAudio || this.wireDone) return;
+    if (packet.sequence !== this.outputSequence++ || Math.abs(packet.timestamp - Math.floor(this.outputSamples * 1e6 / this.playRate)) > 1) throw new Error("Discontinuous playback audio.");
+    this.outputSamples += packet.samples;
+    if (this.decoder) this.decoder.write(packet);
+    else {
+      if (packet.discard || packet.payload.byteLength !== packet.samples * 2) throw new Error("Invalid PCM audio length.");
+      this.enqueuePcm(packet.payload);
     }
+  }
+
+  private enqueuePcm(bytes: ArrayBuffer): void {
+    if (this.acceptingAudio) this.enqueueSamples(pcm16ToChannelPlanes(bytes, this.playChannels));
+  }
+
+  private enqueueSamples(planes: Float32Array[]): void {
+    const audio = this.audio;
+    const frames = planes[0]?.length ?? 0;
+    if (!this.acceptingAudio || !audio || !frames) return;
+    if (this.nextTime - audio.currentTime > 1) { this.audioFailed(new VoiceAudioBackpressure("Audio playback is falling behind. Please try again.")); return; }
+    const frameBytes = 2 * this.playChannels;
+    const buffer = audio.createBuffer(this.playChannels, frames, this.playRate);
+    for (let channel = 0; channel < this.playChannels; channel += 1) buffer.copyToChannel(Float32Array.from(planes[channel]), channel);
     const source = audio.createBufferSource();
     const playbackId = this.playbackId;
     source.buffer = buffer;
@@ -345,7 +487,8 @@ export class PhoneVoiceClient {
     const played = this.playedBytes(audio.currentTime);
     if (played > this.lastReportedBytes) {
       this.lastReportedBytes = played;
-      socket.send(JSON.stringify({ type: "playback_progress", played_bytes: played, playback_id: this.playbackId }));
+      const progress = this.protocol === 2 ? {played_samples: played / (2 * this.playChannels), sample_rate: this.playRate} : {played_bytes: played};
+      socket.send(JSON.stringify({ type: "playback_progress", ...progress, playback_id: this.playbackId }));
     }
     if (this.playbackId && !this.acceptingAudio && this.sources.length === 0 && !this.pending(audio.currentTime)) {
       socket.send(JSON.stringify({ type: "playback_finished", playback_id: this.playbackId }));
@@ -373,8 +516,11 @@ export class PhoneVoiceClient {
   }
 
   private stopCapture(): void {
-    this.captureStop?.();
+    this.captureAbort?.();
+    this.captureAbort = null;
+    void this.captureStop?.(false);
     this.captureStop = null;
+    this.captureFinishing = null;
     this.listener.onCapture?.(false);
   }
 
@@ -384,6 +530,8 @@ export class PhoneVoiceClient {
   }
 
   private stopPlaybackSources(): void {
+    this.decoder?.close();
+    this.decoder = null;
     this.playbackId = null;
     for (const source of this.sources) {
       source.onended = null;
@@ -409,7 +557,7 @@ function createAudioContext(): AudioContext {
     || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
   if (!Ctor) throw new Error("This browser cannot capture or play audio.");
   try {
-    return new Ctor({ sampleRate: 16000 });
+    return new Ctor({ sampleRate: 48000 });
   } catch {
     return new Ctor();
   }
@@ -420,4 +568,9 @@ function closeMessage(code: number, reason: string): string {
   if (code === 1008) return "The voice session could not be started. Please try again.";
   if (code === 1013) return "Voice is temporarily unavailable. Please try again.";
   return "The voice connection closed.";
+}
+
+// Safe instanceof check in browsers without AudioWorklet support.
+function AudioWorkletNodeSafe(): typeof AudioWorkletNode {
+  return typeof AudioWorkletNode !== "undefined" ? AudioWorkletNode : class {} as typeof AudioWorkletNode;
 }

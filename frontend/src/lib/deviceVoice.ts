@@ -11,10 +11,16 @@ export interface VoiceHello {
   profile: "headset";
   echo_managed: true;
   playback_ack: true;
+  audio_protocol: 2;
+  input_codecs: ("opus" | "pcm_s16le")[];
+  output_codecs: ("opus" | "pcm_s16le")[];
 }
 
 export interface VoiceReadyFrame {
   type: "ready";
+  audio_protocol?: 1 | 2;
+  input_codec?: "opus" | "pcm_s16le";
+  output_codec?: "opus" | "pcm_s16le";
   device_id?: string;
   room_name?: string;
   credential?: string;
@@ -45,7 +51,7 @@ export function clampSampleRate(rate: number): number {
   return rounded;
 }
 
-export function voiceHello(inputSampleRate: number): VoiceHello {
+export function voiceHello(inputSampleRate: number, codecs = {input: ["pcm_s16le"], output: ["pcm_s16le"]} as {input: ("opus" | "pcm_s16le")[]; output: ("opus" | "pcm_s16le")[]}): VoiceHello {
   return {
     type: "hello",
     name: "Browser microphone",
@@ -57,6 +63,9 @@ export function voiceHello(inputSampleRate: number): VoiceHello {
     profile: "headset",
     echo_managed: true,
     playback_ack: true,
+    audio_protocol: 2,
+    input_codecs: codecs.input,
+    output_codecs: codecs.output,
   };
 }
 

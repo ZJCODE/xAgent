@@ -33,6 +33,8 @@ curl -fsSL https://raw.githubusercontent.com/ZJCODE/xagent/main/install.sh | bas
 pip install myxagent
 ```
 
+Browser voice includes Opus support by default. Voice automatically uses Opus when both ends support it, otherwise PCM remains available.
+
 ## Getting Started
 
 After installation, launch xAgent with:

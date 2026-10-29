@@ -7,7 +7,8 @@ const moduleUrl = (source) => `data:text/javascript;base64,${Buffer.from(ts.tran
   compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
 }).outputText).toString("base64")}`;
 const helpersUrl = moduleUrl(readFileSync(new URL("../src/lib/deviceVoice.ts", import.meta.url), "utf8"));
-const clientSource = readFileSync(new URL("../src/lib/phoneVoiceClient.ts", import.meta.url), "utf8").replace('"./deviceVoice"', JSON.stringify(helpersUrl));
+const audioUrl = moduleUrl(readFileSync(new URL("../src/lib/voiceAudio.ts", import.meta.url), "utf8"));
+const clientSource = readFileSync(new URL("../src/lib/phoneVoiceClient.ts", import.meta.url), "utf8").replace('"./deviceVoice"', JSON.stringify(helpersUrl)).replace('"./voiceAudio"', JSON.stringify(audioUrl));
 const { PhoneVoiceClient, VoiceConnectionSuperseded } = await import(moduleUrl(clientSource));
 
 function harness(t) {
@@ -18,10 +19,11 @@ function harness(t) {
   const notices = [];
   const playing = [];
   const sources = [];
+  const processors = [];
   let timerId = 0;
   let micRequests = 0;
   let captureNodes = 0;
-  const fake = { timers, sockets, audio, tracks, notices, playing, sources, suspendAudio: false, onMedia: null, closed: 0 };
+  const fake = { timers, sockets, audio, tracks, notices, playing, sources, processors, suspendAudio: false, onMedia: null, closed: 0 };
   class Socket {
     static OPEN = 1;
     static CLOSING = 2;
@@ -48,7 +50,7 @@ function harness(t) {
       return source;
     }
     createMediaStreamSource() { captureNodes++; return node(); }
-    createScriptProcessor() { return node(); }
+    createScriptProcessor() { const processor = node(); processors.push(processor); return processor; }
     createGain() { return { ...node(), gain: { value: 0 } }; }
   }
   const globals = {
@@ -81,11 +83,12 @@ function harness(t) {
   t.after(() => { client.disconnect(); restore.forEach((undo) => undo()); });
   return Object.assign(fake, {
     client, requests: () => micRequests, captureNodes: () => captureNodes,
-    async connect() {
+    async connect(ready = { type: "ready" }) {
       const promise = client.connect({ socketUrl: "ws://localhost/ws/voice/session?token=voice_once", pageProtocol: "http:" });
       const socket = sockets.at(-1);
       socket.open();
-      socket.frame({ type: "ready" });
+      await new Promise((resolve) => setImmediate(resolve));
+      socket.frame(ready);
       await promise;
       return socket;
     },
@@ -199,4 +202,40 @@ test("duplicate capture requests share a pending permission and late grants stop
   await pending;
   assert.equal(track.stopped, true);
   assert.equal(h.captureNodes(), 0);
+});
+
+test("v2 PCM capture carries stream boundaries and duplicate release emits one end", async (t) => {
+  const h = harness(t);
+  const socket = await h.connect({type:'ready', audio_protocol:2, input_codec:'pcm_s16le', output_codec:'pcm_s16le'});
+  const messages = () => socket.sent.filter((value) => typeof value === 'string').map(JSON.parse);
+  await h.client.setCapture(true);
+  h.processors[0].onaudioprocess({inputBuffer:{sampleRate:16000,getChannelData:()=>new Float32Array(320)}});
+  const packets = socket.sent.filter((value) => value instanceof ArrayBuffer);
+  const header = new DataView(packets[0]);
+  assert.equal(header.getUint32(0),0x58415632);
+  assert.equal(header.getUint32(4),1);
+  assert.equal(header.getUint32(20),320);
+  await Promise.all([h.client.setCapture(false),h.client.setCapture(false)]);
+  assert.equal(messages().filter((m)=>m.type==='input_end').length,1);
+  await h.client.setCapture(true);
+  assert.deepEqual(messages().filter((m)=>m.type==='input_start').map((m)=>m.stream_id),[1,2]);
+});
+
+test("v2 playback reports samples instead of compressed bytes and rejects stale binary streams", async (t) => {
+  const h = harness(t);
+  const socket = await h.connect({type:'ready', audio_protocol:2, input_codec:'pcm_s16le', output_codec:'pcm_s16le'});
+  const {packAudio} = await import(audioUrl);
+  socket.frame({type:'playback_start',playback_id:'one',stream_id:1,sample_rate:24000});
+  socket.frame(packAudio({stream:1,sequence:0,timestamp:0,samples:480,discard:0,payload:new ArrayBuffer(960)}));
+  socket.frame({type:'playback_done',playback_id:'one'});
+  h.audio[0].currentTime=.1;
+  h.sources[0].end();
+  const progress = socket.sent.filter((v)=>typeof v==='string').map(JSON.parse).find((m)=>m.type==='playback_progress');
+  assert.equal(progress.played_samples,480);
+  assert.equal(progress.sample_rate,24000);
+  assert.equal(progress.played_bytes,undefined);
+  socket.frame({type:'playback_start',playback_id:'two',stream_id:2,sample_rate:24000});
+  const count=h.sources.length;
+  socket.frame(packAudio({stream:1,sequence:1,timestamp:20000,samples:480,discard:0,payload:new ArrayBuffer(960)}));
+  assert.equal(h.sources.length,count);
 });
