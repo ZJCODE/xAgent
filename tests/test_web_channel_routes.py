@@ -335,7 +335,7 @@ class WebChannelRouteTests(unittest.IsolatedAsyncioTestCase):
                 with self.subTest(selection=selection):
                     response = await client.post(
                         "/api/channels/voice/setup",
-                        json={"force": True, "selection": {"voice_api_key": "", **selection}},
+                        json={"force": True, "selection": {"voice_api_key": "", "speed": 1.0, **selection}},
                     )
                     self.assertEqual(response.status_code, 200)
                     self.assertTrue(response.json()["channel"]["ready"])
@@ -343,7 +343,7 @@ class WebChannelRouteTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(schema_response.status_code, 200)
                     schema = schema_response.json()
                     self.assertTrue(schema["configured"])
-                    self.assertEqual(schema["defaults"], {"voice_api_key": "", **selection})
+                    self.assertEqual(schema["defaults"], {"voice_api_key": "", "speed": 1.0, **selection})
                     self.assertEqual(
                         [option["id"] for option in schema["voice_options"]],
                         ["Maya", "Daniel", "Adrian", "Claire", "Oliver", "Isla"],

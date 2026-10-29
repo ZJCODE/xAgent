@@ -32,6 +32,7 @@ interface AppLayoutProps {
 
 const navItems: Array<{ route: RoutePath; label: string; icon: ReactNode }> = [
   { route: "/", label: "Chat", icon: <MessageSquareText size={15} /> },
+  { route: "/voice", label: "Voice", icon: <Mic size={15} /> },
   { route: "/message", label: "Messages", icon: <Activity size={15} /> },
   { route: "/workspace", label: "Workspace", icon: <Files size={15} /> },
   { route: "/memory", label: "Memory", icon: <Database size={15} /> },
@@ -39,7 +40,6 @@ const navItems: Array<{ route: RoutePath; label: string; icon: ReactNode }> = [
   { route: "/tasks", label: "Tasks", icon: <ListTodo size={15} /> },
   { route: "/channels", label: "Channels", icon: <RadioTower size={15} /> },
   { route: "/devices", label: "Devices", icon: <Cpu size={15} /> },
-  { route: "/voice", label: "Voice", icon: <Mic size={15} /> },
   { route: "/agent", label: "Agent", icon: <Bot size={15} /> },
 ];
 
@@ -56,7 +56,7 @@ export function AppLayout({ route, onNavigate, children }: AppLayoutProps) {
       <aside className="app-sidebar">
         <AgentSwitcher />
         <nav className="app-nav" aria-label="Primary">
-          {navItems.map((item) => (
+          {navItems.filter((item) => item.route !== "/voice" || (selectedAgent && currentAgent?.voice_configured)).map((item) => (
             <button
               key={item.route}
               type="button"

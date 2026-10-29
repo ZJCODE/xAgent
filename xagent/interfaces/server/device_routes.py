@@ -176,8 +176,17 @@ def register_device_routes(
 
     @app.websocket("/ws/devices/{device_id}/voice")
     async def device_voice_socket(websocket: WebSocket, device_id: str):
+        await voice_socket(websocket, device_id, browser=False)
+
+    @app.websocket("/ws/voice/{session_id}")
+    async def browser_voice_socket(websocket: WebSocket, session_id: str):
+        await voice_socket(websocket, session_id, browser=True)
+
+    async def voice_socket(websocket: WebSocket, device_id: str, *, browser: bool):
         credential = websocket_device_credential(websocket)
-        if not service.authenticate(device_id, credential):
+        authenticated = (service.consume_browser_voice_ticket(device_id, credential) if browser
+                         else service.authenticate(device_id, credential))
+        if not authenticated:
             await websocket.close(code=1008)
             return
         await websocket.accept()
@@ -191,13 +200,13 @@ def register_device_routes(
             raw_voice_cfg = voice_config_provider() if callable(voice_config_provider) else {}
             voice_cfg = VoiceChannelConfig.from_dict(raw_voice_cfg)
             voice_cfg.resolved_api_key()
-            issued = service.complete_pairing_for_voice(
+            issued = None if browser else service.complete_pairing_for_voice(
                 device_id,
                 credential,
                 name=hello.name,
                 location=hello.location,
             )
-            room_name = service.resolve_room_name(device_id)
+            room_name = "Browser voice" if browser else service.resolve_room_name(device_id)
             bridge = WebSocketVoiceBridge(
                 websocket=websocket,
                 loop=asyncio.get_running_loop(),
@@ -207,7 +216,7 @@ def register_device_routes(
                 closed=threading.Event(),
             )
             options = VoiceRuntimeOptions(
-                user_id=(hello.user_id or "").strip() or f"device:{device_id}",
+                user_id=(hello.user_id or "").strip() or ("web_user" if browser else f"device:{device_id}"),
                 tasks_dir=tasks_dir,
                 allow_proactive_output=True,
                 device_id=device_id,
@@ -226,6 +235,7 @@ def register_device_routes(
                 microphone=microphone,
                 player=player,
                 room_name=room_name,
+                browser=browser,
             )
             await service.register_voice(session)
             ready_frame: dict[str, Any] = {

@@ -26,6 +26,8 @@ logger = logging.getLogger(__name__)
 MAX_MESSAGE_BYTES = 64 * 1024
 MAX_PENDING_COMMANDS = 256
 PAIRING_SECONDS = 300
+BROWSER_VOICE_TICKET_SECONDS = 60
+MAX_BROWSER_VOICE_TICKETS = 128
 
 
 class Capability(BaseModel):
@@ -102,6 +104,7 @@ class VoiceDeviceSession:
     runtime_task: asyncio.Task | None = None
     room_name: str = "local_room"
     closed: bool = False
+    browser: bool = False
 
 
 def outcome(status: str, code: str, message: str, **details) -> dict:
@@ -129,6 +132,7 @@ class DeviceService:
         self._media_prepare: asyncio.Task | None = None
         self._pairing_code = ""
         self._pairing_deadline = 0.0
+        self._browser_voice_tickets: dict[str, tuple[str, float]] = {}
         self.devices: dict[str, Connection] = {}
         self.voice_sessions: dict[str, VoiceDeviceSession] = {}
         self.on_voice_sessions_changed: Any = None
@@ -168,6 +172,35 @@ class DeviceService:
     def quiesce(self) -> None:
         self.accepting = False
         self.cancel_pairing()
+        self._browser_voice_tickets.clear()
+
+    def create_browser_voice_session(self) -> dict:
+        """Issue an ephemeral, voice-only ticket through trusted administration."""
+        if not self.accepting:
+            raise RuntimeError("Connect the Agent API before using voice")
+        now = time.monotonic()
+        self._browser_voice_tickets = {
+            key: value for key, value in self._browser_voice_tickets.items() if value[1] > now
+        }
+        if len(self._browser_voice_tickets) >= MAX_BROWSER_VOICE_TICKETS:
+            raise RuntimeError("Too many pending voice connections; try again shortly")
+        session_id = "web-voice-" + uuid.uuid4().hex
+        token = "voice_" + secrets.token_urlsafe(32)
+        self._browser_voice_tickets[session_id] = (token, now + BROWSER_VOICE_TICKET_SECONDS)
+        return {"session_id": session_id, "token": token, "expires_in": BROWSER_VOICE_TICKET_SECONDS}
+
+    def consume_browser_voice_ticket(self, session_id: str, credential: str) -> bool:
+        ticket = self._browser_voice_tickets.get(session_id)
+        if not self.accepting or ticket is None or not credential.startswith("Bearer "):
+            return False
+        token, deadline = ticket
+        if time.monotonic() >= deadline:
+            self._browser_voice_tickets.pop(session_id, None)
+            return False
+        if not secrets.compare_digest(credential[7:].encode("utf-8"), token.encode("utf-8")):
+            return False
+        self._browser_voice_tickets.pop(session_id, None)
+        return True
 
     def cancel_pairing(self) -> None:
         self._pairing_code = ""
@@ -331,7 +364,7 @@ class DeviceService:
     async def register_voice(self, session: VoiceDeviceSession) -> VoiceDeviceSession:
         if not self.accepting:
             raise RuntimeError("Device service is unavailable")
-        if session.device_id not in self.credentials.digests:
+        if not session.browser and session.device_id not in self.credentials.digests:
             raise ValueError("Device is not paired with this Agent")
         previous = self.voice_sessions.get(session.device_id)
         self.voice_sessions[session.device_id] = session
@@ -451,6 +484,8 @@ class DeviceService:
         rows = []
         all_keys = list(dict.fromkeys(list(self.devices) + list(self.voice_sessions)))
         for key in all_keys:
+            if key in self.voice_sessions and self.voice_sessions[key].browser:
+                continue
             if device_id and key != device_id:
                 continue
             connection = self.devices.get(key)

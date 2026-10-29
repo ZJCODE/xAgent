@@ -3,6 +3,9 @@ import type {
   AgentEditSetupResponse,
   AgentEditSetupSchema,
   AgentIdentity,
+  AgentVoiceSettings,
+  VoicePreferences,
+  VoiceAudioDevices,
   AgentInfo,
   AgentNameAvailability,
   AgentSetupSchema,
@@ -18,8 +21,6 @@ import type {
   ChannelsResponse,
   QrSessionResponse,
   SetupChannelId,
-  VoiceSetupSchema,
-  WeixinSetupSchema,
   FileReadResult,
   FileNode,
   MessageSearchResponse,
@@ -51,6 +52,24 @@ import type {
 
 export function getDevices(): Promise<DeviceStatus> {
   return requestJson("/api/devices");
+}
+
+export function createBrowserVoiceSession(): Promise<{ session_id: string; token: string; expires_in: number }> {
+  return requestJson("/api/devices/voice-session", { method: "POST" });
+}
+
+export function getAgentVoiceSettings(): Promise<AgentVoiceSettings> {
+  return requestJson("/api/agent/voice");
+}
+
+export function getVoiceAudioDevices(): Promise<VoiceAudioDevices> {
+  return requestJson("/api/agent/voice/devices", { signal: AbortSignal.timeout(5000) });
+}
+
+export function updateAgentVoiceSettings(selection: Partial<VoicePreferences> & { voice_api_key?: string }): Promise<AgentEditSetupResponse> {
+  return requestJson("/api/agent/voice", {
+    method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(selection),
+  });
 }
 
 export function updateDevice(deviceId: string, details: DeviceProfileInput): Promise<{ status: string }> {
@@ -90,10 +109,17 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
     const rawDetail = data?.detail;
-    const detail = rawDetail && typeof rawDetail === "object" ? rawDetail as SkillApiErrorDetail : undefined;
+    const detail = rawDetail && typeof rawDetail === "object" && !Array.isArray(rawDetail) ? rawDetail as SkillApiErrorDetail : undefined;
+    const validationMessage = Array.isArray(rawDetail) ? rawDetail.map((issue: unknown) => {
+      if (!issue || typeof issue !== "object") return "";
+      const { loc, msg } = issue as { loc?: unknown; msg?: unknown };
+      if (typeof msg !== "string") return "";
+      const field = Array.isArray(loc) ? loc.filter((part) => typeof part === "string" && part !== "body").join(".") : "";
+      return field ? `${field}: ${msg}` : msg;
+    }).filter(Boolean).join("; ") : "";
     const message = typeof rawDetail === "string"
       ? rawDetail
-      : detail?.message || `HTTP ${response.status}`;
+      : detail?.message || validationMessage || `Request failed (${response.status}). Please try again.`;
     throw new ApiError(response.status, message, detail);
   }
   return data as T;

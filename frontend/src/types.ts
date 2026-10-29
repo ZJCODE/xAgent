@@ -286,35 +286,27 @@ export interface ChannelLogsResponse {
   lines: number;
 }
 
-export type SetupChannelId = Extract<ChannelId, "voice" | "weixin">;
+export type SetupChannelId = Extract<ChannelId, "weixin">;
 
-export interface VoiceSelectionInput {
-  voice_api_key: string;
+export interface VoicePreferences {
   voice: string;
+  speed: number;
   interruptions: boolean;
   audio_input: string | number | null;
   audio_output: string | number | null;
 }
 
-export interface VoiceSetupSchema {
-  defaults: {
-    voice_api_key: string;
-    voice: string;
-    interruptions: boolean;
-    audio_input: string | number | null;
-    audio_output: string | number | null;
-  };
-  voice_options: SetupOption[];
-  audio_devices: {
-    input: SetupOption[];
-    output: SetupOption[];
-    error?: string;
-  };
-  placeholders: {
-    soniox_api_key: string;
-  };
+export interface AgentVoiceSettings extends VoicePreferences {
   configured: boolean;
-  can_force: boolean;
+  has_api_key: boolean;
+  voice_options: SetupOption[];
+  restart_required: boolean;
+}
+
+export interface VoiceAudioDevices {
+  input: SetupOption[];
+  output: SetupOption[];
+  error?: string;
 }
 
 export interface WeixinSetupSchema {
@@ -329,7 +321,7 @@ export interface WeixinSetupSchema {
   can_force: boolean;
 }
 
-export type ChannelSetupSchema = VoiceSetupSchema | WeixinSetupSchema;
+export type ChannelSetupSchema = WeixinSetupSchema;
 
 export interface ChannelSetupInput {
   force: boolean;
@@ -384,6 +376,7 @@ export interface AgentSummary {
   initialized: boolean;
   channel_running: boolean;
   runtime_running?: boolean;
+  voice_configured?: boolean;
 }
 
 export interface AgentsResponse {

@@ -25,6 +25,7 @@ from .config import (
     SONIOX_TTS_MAX_TEXT_CHARS,
     SONIOX_TTS_MODEL,
     SONIOX_TTS_SAMPLE_RATE,
+    clamp_soniox_tts_speed,
     VoiceChannelConfig,
 )
 from .partials import PartialTranscriptRelay
@@ -511,7 +512,7 @@ class SonioxRealtimeTTS:
                 voice=self.config.voice,
                 audio_format=SONIOX_AUDIO_FORMAT,
                 sample_rate=SONIOX_TTS_SAMPLE_RATE,
-                speed=self.config.speed,
+                speed=clamp_soniox_tts_speed(self.config.speed),
                 return_timestamps=self.config.return_timestamps,
             )
             send_errors: queue.Queue[BaseException] = queue.Queue()

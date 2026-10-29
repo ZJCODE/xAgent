@@ -476,6 +476,69 @@ class DeviceVoiceWebSocketTests(unittest.IsolatedAsyncioTestCase):
                     while True:
                         await asyncio.wait_for(voice_ws.recv(), timeout=2)
 
+    async def test_browser_voice_uses_temporary_sessions_without_pairing(self):
+        from xagent.core.runtime.client import RuntimeClient
+
+        host, _, root, url = await self.start_host([(ReplyType.SIMPLE_REPLY, "你好。")], seed_credentials=False)
+        # A legacy browser device must not prevent a new browser from talking.
+        host.device_service.credentials.add("phone-web", "old-browser-secret")
+        pairing = host.device_service.create_pairing()["pairing_code"]
+        client = RuntimeClient(root)
+        first = (await client.request("POST", "/api/devices/voice-session")).json()
+        second = (await client.request("POST", "/api/devices/voice-session")).json()
+        self.assertNotEqual(first["session_id"], second["session_id"])
+        hello = {"type": "hello", "input_sample_rate": 16000, "input_channels": 1,
+                 "profile": "headset", "echo_managed": True}
+
+        def target(session):
+            return url + "/ws/voice/" + session["session_id"] + "?token=" + quote(session["token"], safe="")
+
+        with patch("xagent.interfaces.voice.factory.create_soniox_adapters",
+                   side_effect=lambda *args, **kwargs: (_FakeWSRecognizer(), _FakeWSSynthesizer())):
+            async with websockets.connect(target(first), **self.connection_options) as browser:
+                await browser.send(json.dumps(hello))
+                ready = json.loads(await asyncio.wait_for(browser.recv(), timeout=3))
+                self.assertEqual(ready["type"], "ready")
+                self.assertNotIn("credential", ready)
+                self.assertEqual(ready["room_name"], "Browser voice")
+                self.assertTrue(host.device_service.voice_sessions[first["session_id"]].browser)
+                self.assertEqual(host.device_service.list_devices()["devices"], [])
+                admin = (await client.request("GET", "/api/devices")).json()
+                self.assertEqual([row["device_id"] for row in admin["devices"]], ["phone-web"])
+                self.assertFalse(admin["devices"][0]["online"])
+                await browser.send(b"\x10\x00" * 320)
+                audio = []
+                transcripts = []
+                while True:
+                    frame = await asyncio.wait_for(browser.recv(), timeout=3)
+                    if isinstance(frame, bytes):
+                        audio.append(frame)
+                    else:
+                        message = json.loads(frame)
+                        if message.get("type") == "transcript":
+                            transcripts.append(message)
+                        if message.get("type") == "playback_done":
+                            break
+                self.assertTrue(audio)
+                self.assertTrue(any(line.get("role") == "user" for line in transcripts))
+                self.assertTrue(any(line.get("role") == "assistant" and line.get("final") for line in transcripts))
+                stored = await host.agent.message_storage.get_messages(10)
+                self.assertTrue(any(message.sender_id == "web_user" and message.channel == "voice" for message in stored))
+                async with websockets.connect(target(second), **self.connection_options) as other:
+                    await other.send(json.dumps(hello))
+                    self.assertEqual(json.loads(await asyncio.wait_for(other.recv(), timeout=3))["type"], "ready")
+                    self.assertEqual(len(host.device_service.voice_sessions), 2)
+                await self.wait_for(lambda: len(host.device_service.voice_sessions) == 1)
+            await self.wait_for(lambda: not host.device_service.voice_sessions)
+
+        with self.assertRaises(Exception):
+            async with websockets.connect(target(first), **self.connection_options):
+                pass  # A consumed ticket cannot be replayed.
+        self.assertTrue(host.device_service.authenticate("phone-web", "Bearer old-browser-secret"))
+        self.assertTrue(host.device_service.authenticate("another-device", "Bearer " + pairing))
+        self.assertEqual(list(host.device_service.credentials.digests), ["phone-web"])
+        self.assertFalse((root / ".device_profiles.json").exists())
+
     async def test_browser_query_token_pairs_phone_and_header_auth_still_connects(self):
         host, _, _, url = await self.start_host([], seed_credentials=False)
         with self.assertRaises(Exception):

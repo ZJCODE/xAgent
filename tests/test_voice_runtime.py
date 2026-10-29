@@ -135,21 +135,22 @@ class VoiceConfigTests(unittest.TestCase):
         self.assertEqual(config.speed, 1.0)
         self.assertEqual(config.audio.input, "auto")
 
-    def test_speech_style_comes_from_the_agent_not_the_channel(self):
+    def test_session_can_override_shared_speech_style(self):
         config = VoiceChannelConfig.from_dict({"api_key": "key"})
         config.apply_speech_style(VoiceSpeechStyle(voice="Ava", speed=1.2))
 
         self.assertEqual(config.voice, "Ava")
         self.assertEqual(config.speed, 1.2)
 
-    def test_accepts_voice_name_rejects_speed_key(self):
+    def test_accepts_shared_voice_name_and_speed(self):
         config = VoiceChannelConfig.from_dict({"api_key": "key", "voice": "Daniel"})
         self.assertEqual(config.speaking_voice, "Daniel")
         self.assertEqual(config.to_public_dict()["voice"], "Daniel")
         with self.assertRaisesRegex(ValueError, "non-empty"):
             VoiceChannelConfig.from_dict({"api_key": "key", "voice": "  "})
-        with self.assertRaisesRegex(ValueError, "Unknown voice setting"):
-            VoiceChannelConfig.from_dict({"api_key": "key", "speed": 1.2})
+        configured = VoiceChannelConfig.from_dict({"api_key": "key", "speed": 1.2})
+        self.assertEqual(configured.speaking_speed, 1.2)
+        self.assertEqual(configured.to_public_dict()["speed"], 1.2)
 
     def test_full_flat_configuration(self):
         config = VoiceChannelConfig.from_dict(

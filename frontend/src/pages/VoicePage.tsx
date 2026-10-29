@@ -1,20 +1,13 @@
-import { Mic, Plug, Play } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Mic, Play } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Button, PageShell, PageToolbar, Panel, StatusBadge } from "../components/ui";
 import { useAgentSession } from "../context/AgentSessionContext";
-import {
-  PHONE_DEVICE_ID,
-  applyTranscript,
-  describeVoiceSocket,
-  readStoredCredential,
-  writeStoredCredential,
-  type TranscriptLine,
-} from "../lib/deviceVoice";
+import { applyTranscript, browserVoiceSocketUrl, type TranscriptLine } from "../lib/deviceVoice";
 import { PhoneVoiceClient, VoiceConnectionSuperseded } from "../lib/phoneVoiceClient";
-import { cancelDevicePairing, connectChannel, createDevicePairing, getDevices, startRuntime } from "../lib/api";
-import type { DeviceStatus } from "../types";
+import { connectChannel, createBrowserVoiceSession, getAgentVoiceSettings, getDevices, restartRuntime, startRuntime } from "../lib/api";
 
-type Phase = "idle" | "connecting" | "live";
+type Phase = "connecting" | "live" | "stopped" | "failed" | "unconfigured" | "restart";
+const RETRY_DELAYS = [1000, 2000, 4000];
 
 export function VoicePage() {
   const { agents, selectedAgent, refresh } = useAgentSession();
@@ -22,61 +15,31 @@ export function VoicePage() {
   if (!selectedAgent) {
     return (
       <PageShell className="channels-page voice-page">
-        <PageToolbar title="Voice" subtitle="Hold to talk from this browser when no speaker is nearby." />
+        <PageToolbar title="Voice" subtitle="Hold to talk with your Agent." />
         <div className="channels-content voice-content">
-          <p className="wizard-hint">Create an agent before pairing this browser as a microphone.</p>
+          <p className="wizard-hint">Create an agent to use voice.</p>
         </div>
       </PageShell>
     );
   }
-  return (
-    <VoiceSession
-      key={selectedAgent}
-      agentName={selectedAgent}
-      configuredApiUrl={configuredApiUrl}
-      refreshAgents={refresh}
-    />
-  );
+  return <VoiceSession key={selectedAgent} configuredApiUrl={configuredApiUrl} refreshAgents={refresh} />;
 }
 
-function VoiceSession({
-  agentName,
-  configuredApiUrl,
-  refreshAgents,
-}: {
-  agentName: string;
+function VoiceSession({ configuredApiUrl, refreshAgents }: {
   configuredApiUrl: string;
   refreshAgents: () => Promise<void>;
 }) {
-  const [status, setStatus] = useState<DeviceStatus | null>(null);
-  const [phase, setPhase] = useState<Phase>("idle");
+  const [phase, setPhase] = useState<Phase>("connecting");
   const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
-  const [revision, setRevision] = useState(0);
+  const [attempt, setAttempt] = useState(0);
   const [holding, setHolding] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [floor, setFloor] = useState("idle");
   const [level, setLevel] = useState(0);
   const [lines, setLines] = useState<TranscriptLine[]>([]);
-  const [roomName, setRoomName] = useState("");
   const clientRef = useRef<PhoneVoiceClient | null>(null);
   const transcriptId = useRef(1);
-  const autoConnectRef = useRef(false);
-  const userStoppedRef = useRef(false);
   const holdingRef = useRef(false);
-  const saved = useMemo(
-    () => readStoredCredential(localStorage, agentName),
-    [agentName, revision],
-  );
-  const apiUrl = configuredApiUrl || status?.api_url || "";
-  const endpoint = useMemo(() => {
-    if (!apiUrl) return "";
-    try {
-      return describeVoiceSocket(apiUrl, PHONE_DEVICE_ID);
-    } catch {
-      return "";
-    }
-  }, [apiUrl]);
 
   const releaseHold = useCallback(() => {
     holdingRef.current = false;
@@ -85,89 +48,120 @@ function VoiceSession({
     void clientRef.current?.setHolding(false);
   }, []);
 
-  const showError = useCallback((err: unknown) => {
-    if (err instanceof VoiceConnectionSuperseded) return;
-    setPhase("idle");
-    setError(err instanceof Error ? err.message : String(err));
-  }, []);
-
   useEffect(() => {
+    let disposed = false;
+    let suspended = false;
+    let retryTimer = 0;
+    let stableTimer = 0;
+    let failures = 0;
+    let generation = 0;
+    const current = (value: number) => !disposed && !suspended && generation === value;
+    const retry = (reason: string) => {
+      if (disposed || suspended) return;
+      window.clearTimeout(stableTimer);
+      releaseHold();
+      setPlaying(false);
+      if (failures >= RETRY_DELAYS.length) {
+        setPhase("failed");
+        setError(reason || "Unable to connect. Please try again.");
+        return;
+      }
+      setPhase("connecting");
+      window.clearTimeout(retryTimer);
+      retryTimer = window.setTimeout(() => void connect(), RETRY_DELAYS[failures++]);
+    };
     const client = new PhoneVoiceClient({
-      onLive: (frame) => {
+      onLive: () => {
+        stableTimer = window.setTimeout(() => { failures = 0; }, 10000);
         setPhase("live");
         setError("");
-        setRoomName(frame.room_name || PHONE_DEVICE_ID);
-        if (typeof frame.credential === "string" && frame.credential.startsWith("dvc_")) {
-          writeStoredCredential(localStorage, agentName, frame.credential);
-          setRevision((value) => value + 1);
-        }
       },
       onFloor: setFloor,
       onPlaying: setPlaying,
       onLevel: setLevel,
       onTranscript: (frame) => {
-        setLines((current) => applyTranscript(current, frame, () => transcriptId.current++));
+        setLines((previous) => applyTranscript(previous, frame, () => transcriptId.current++));
       },
-      onClose: ({ code, reason }) => {
-        releaseHold();
-        setPhase("idle");
-        setPlaying(false);
-        if (code === 1000 || code === 1001) return;
-        setError(reason || (code === 1008 ? "The Agent rejected this phone credential." : "The voice connection closed."));
-      },
-      onNotice: setError,
+      onClose: () => retry("The voice connection closed. Please try again."),
+      onNotice: (message) => { releaseHold(); setError(message); },
     });
     clientRef.current = client;
+    const connect = async () => {
+      const ownGeneration = ++generation;
+      setPhase("connecting");
+      setError("");
+      setFloor("idle");
+      try {
+        const [voice, initialStatus] = await Promise.all([getAgentVoiceSettings(), getDevices()]);
+        if (!current(ownGeneration)) return;
+        let status = initialStatus;
+        if (!voice.configured) {
+          setPhase("unconfigured");
+          return;
+        }
+        if (!status.runtime_available) {
+          setPhase("stopped");
+          return;
+        }
+        if (voice.restart_required) {
+          setPhase("restart");
+          return;
+        }
+        if (!status.api_available) {
+          await connectChannel("api");
+          if (!current(ownGeneration)) return;
+          status = await getDevices();
+          if (!current(ownGeneration)) return;
+          if (!status.api_available) throw new Error("Voice is still starting. Please try again shortly.");
+        }
+        const apiUrl = configuredApiUrl || status.api_url;
+        if (!apiUrl) throw new Error("The Agent connection is not configured.");
+        const session = await createBrowserVoiceSession();
+        if (!current(ownGeneration)) return;
+        await client.connect({
+          socketUrl: browserVoiceSocketUrl(apiUrl, session.session_id, session.token),
+          pageProtocol: window.location.protocol,
+        });
+      } catch (err) {
+        if (!current(ownGeneration) || err instanceof VoiceConnectionSuperseded) return;
+        retry(err instanceof Error ? err.message : String(err));
+      }
+    };
+    const suspend = () => {
+      suspended = true;
+      generation += 1;
+      window.clearTimeout(retryTimer);
+      window.clearTimeout(stableTimer);
+      releaseHold();
+      client.disconnect();
+    };
+    const resume = () => {
+      if (!suspended || disposed) return;
+      suspended = false;
+      failures = 0;
+      void connect();
+    };
+    window.addEventListener("pagehide", suspend);
+    window.addEventListener("pageshow", resume);
+    void connect();
     return () => {
+      disposed = true;
+      generation += 1;
+      window.clearTimeout(retryTimer);
+      window.clearTimeout(stableTimer);
+      window.removeEventListener("pagehide", suspend);
+      window.removeEventListener("pageshow", resume);
       client.disconnect();
       if (clientRef.current === client) clientRef.current = null;
     };
-  }, [agentName, releaseHold]);
-
-  const loadDevices = useCallback(async () => {
-    const data = await getDevices();
-    setStatus(data);
-    return data;
-  }, []);
+  }, [configuredApiUrl, attempt, releaseHold]);
 
   useEffect(() => {
-    let cancelled = false;
-    void loadDevices().catch((err: unknown) => {
-      if (!cancelled) showError(err);
-    });
-    const interval = window.setInterval(() => {
-      void loadDevices().catch(() => undefined);
-    }, 5000);
+    window.addEventListener("blur", releaseHold);
+    document.addEventListener("visibilitychange", releaseHold);
     return () => {
-      cancelled = true;
-      window.clearInterval(interval);
-    };
-  }, [loadDevices, showError]);
-
-  const connectWith = useCallback(async (token: string) => {
-    if (!apiUrl) throw new Error("This agent has no API URL. Set web.api_url to the devices host.");
-    const client = clientRef.current;
-    if (!client) throw new Error("Voice client is not ready.");
-    setPhase("connecting");
-    setError("");
-    setNotice("");
-    await client.connect({ apiUrl, token, pageProtocol: window.location.protocol });
-  }, [apiUrl]);
-
-  useEffect(() => {
-    if (autoConnectRef.current || userStoppedRef.current) return;
-    if (!saved || !apiUrl || !status?.api_available || phase === "live" || phase === "connecting") return;
-    autoConnectRef.current = true;
-    void connectWith(saved).catch(showError);
-  }, [apiUrl, connectWith, phase, saved, showError, status]);
-
-  useEffect(() => {
-    const stop = () => releaseHold();
-    window.addEventListener("blur", stop);
-    document.addEventListener("visibilitychange", stop);
-    return () => {
-      window.removeEventListener("blur", stop);
-      document.removeEventListener("visibilitychange", stop);
+      window.removeEventListener("blur", releaseHold);
+      document.removeEventListener("visibilitychange", releaseHold);
     };
   }, [releaseHold]);
 
@@ -175,179 +169,66 @@ function VoiceSession({
     if (phase !== "live" || holdingRef.current) return;
     holdingRef.current = true;
     setHolding(true);
+    setError("");
     void clientRef.current?.setHolding(true);
   };
-
-  const pair = async () => {
-    userStoppedRef.current = false;
-    setPhase("connecting");
-    setError("");
-    setNotice("");
-    try {
-      const pairing = await createDevicePairing();
-      await connectWith(pairing.pairing_code);
-      setNotice("Phone paired. Hold the button to talk. Devices will show phone-web online for voice.");
-      void loadDevices().catch(() => undefined);
-    } catch (err) {
-      await cancelDevicePairing().catch(() => undefined);
-      if (err instanceof VoiceConnectionSuperseded) return;
-      clientRef.current?.disconnect();
-      setPhase("idle");
-      const message = err instanceof Error ? err.message : String(err);
-      setError(
-        /reject|1008|already paired|invalid pairing/i.test(message)
-          ? `${message} If phone-web is already listed on Devices, remove it and pair this browser again.`
-          : message,
-      );
-    }
-  };
-
-  const forget = () => {
-    userStoppedRef.current = true;
-    autoConnectRef.current = true;
-    writeStoredCredential(localStorage, agentName, "");
-    setRevision((value) => value + 1);
-    clientRef.current?.disconnect();
-    releaseHold();
-    setPhase("idle");
-    setNotice("Saved credential removed from this browser. Remove phone-web on Devices to revoke it on the Agent.");
-  };
-
-  const disconnect = () => {
-    userStoppedRef.current = true;
-    clientRef.current?.disconnect();
-    releaseHold();
-    setPhase("idle");
-    setPlaying(false);
-    setNotice("Disconnected. The saved credential is still in this browser.");
-  };
-
   const live = phase === "live";
-  const badgeTone = live ? "good" : phase === "connecting" ? "info" : error ? "danger" : "muted";
-  const badgeLabel = live ? "Live" : phase === "connecting" ? "Connecting" : !status && !error ? "Loading" : "Offline";
   const talkLabel = holding ? "Release to send" : playing ? "Speaking" : "Hold to talk";
-  const activity = !live ? "Idle" : holding ? "Mic open" : playing ? "Playing" : floor === "thinking" ? "Thinking" : "Listening";
+  const activity = holding ? "Mic open" : playing ? "Speaking" : floor === "thinking" ? "Thinking" : "Ready";
 
   return (
     <PageShell className="channels-page voice-page">
-      <PageToolbar
-        title="Voice"
-        subtitle="Hold to talk from this browser when no speaker is nearby."
-        actions={<StatusBadge tone={badgeTone}>{badgeLabel}</StatusBadge>}
-      />
+      <PageToolbar title="Voice" subtitle="Hold to talk with your Agent." actions={
+        <StatusBadge tone={live ? "good" : phase === "connecting" ? "info" : phase === "failed" ? "danger" : "muted"}>
+          {live ? "Ready" : phase === "connecting" ? "Connecting…" : phase === "failed" ? "Disconnected" : phase === "unconfigured" ? "Needs setup" : phase === "restart" ? "Restart required" : "Agent offline"}
+        </StatusBadge>
+      } />
       <div className="channels-content voice-content">
-        {error ? <div className="error-strip">{error}</div> : null}
-        {notice ? <div className="success-strip">{notice}</div> : null}
-        {status && !status.runtime_available ? (
+        {error ? <div className="error-strip" role="alert">{error}</div> : null}
+        {phase === "failed" ? <Button type="button" onClick={() => setAttempt((value) => value + 1)}>Retry</Button> : null}
+        {phase === "unconfigured" ? (
           <div className="device-readiness-banner">
-            <p className="wizard-hint">Start the Agent runtime before pairing this phone.</p>
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={() => {
-                void (async () => {
-                  setError("");
-                  try {
-                    await startRuntime();
-                    await refreshAgents();
-                    await loadDevices();
-                    setNotice("Agent started.");
-                  } catch (err) {
-                    showError(err);
-                  }
-                })();
-              }}
-            >
-              <Play size={13} /> Start Agent
-            </Button>
+            <p className="wizard-hint">Configure your Agent’s voice once to start talking.</p>
+            <a className="ui-button ui-button-primary" href="/agent#voice">Configure voice in Agent</a>
           </div>
         ) : null}
-        {status?.runtime_available && !status.api_available ? (
+        {phase === "stopped" || phase === "restart" ? (
           <div className="device-readiness-banner">
-            <p className="wizard-hint">Connect the API channel before opening the voice socket.</p>
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={() => {
-                void (async () => {
-                  setError("");
-                  try {
-                    await connectChannel("api");
-                    await loadDevices();
-                    setNotice("API channel connected.");
-                  } catch (err) {
-                    showError(err);
-                  }
-                })();
-              }}
-            >
-              <Plug size={13} /> Connect API
-            </Button>
+            <p className="wizard-hint">{phase === "restart" ? "Restart your Agent to apply the saved settings." : "Start your Agent to use voice."}</p>
+            <Button type="button" onClick={() => {
+              const requiresRestart = phase === "restart";
+              setPhase("connecting");
+              setError("");
+              void (async () => {
+                try {
+                  if (requiresRestart) await restartRuntime();
+                  else await startRuntime();
+                  await refreshAgents();
+                  setAttempt((value) => value + 1);
+                } catch (err) {
+                  setPhase(requiresRestart ? "restart" : "stopped");
+                  setError(err instanceof Error ? err.message : String(err));
+                }
+              })();
+            }}><Play size={13} />{phase === "restart" ? "Restart Agent" : "Start Agent"}</Button>
           </div>
         ) : null}
-        <Panel className="voice-panel">
-          <p className="voice-endpoint">
-            Device <code>{PHONE_DEVICE_ID}</code>
-            {roomName && live ? ` · ${roomName}` : ""}
-            {endpoint ? <> · <code>{endpoint}</code></> : null}
-          </p>
-          <p className="wizard-hint">
-            The socket opens on the Agent API from web.api_url and authenticates with ?token=.
-            The credential stays in this browser. ESP devices keep using Authorization: Bearer.
-            While connected, Devices lists phone-web as online for voice.
-          </p>
-          <div className="toolbar-actions">
-            {!saved && !live ? (
-              <Button
-                type="button"
-                variant="primary"
-                disabled={phase === "connecting" || !status?.api_available || !apiUrl}
-                onClick={() => {
-                  clientRef.current?.prime();
-                  void pair();
-                }}
-              >
-                Pair this phone
-              </Button>
-            ) : null}
-            {saved && !live ? (
-              <Button
-                type="button"
-                variant="primary"
-                disabled={phase === "connecting" || !status?.api_available || !apiUrl}
-                onClick={() => {
-                  userStoppedRef.current = false;
-                  clientRef.current?.prime();
-                  void connectWith(saved).catch(showError);
-                }}
-              >
-                Connect
-              </Button>
-            ) : null}
-            {live ? <Button type="button" onClick={disconnect}>Disconnect</Button> : null}
-            {saved ? <Button type="button" variant="ghost" onClick={forget}>Forget saved credential</Button> : null}
-          </div>
-        </Panel>
         <Panel className="voice-panel">
           <div className="voice-meta">
-            <StatusBadge tone={holding ? "good" : playing ? "info" : "muted"}>{activity}</StatusBadge>
+            {live ? <StatusBadge tone={holding ? "good" : playing ? "info" : "muted"}>{activity}</StatusBadge> : null}
             <span className="wizard-hint">Use headphones if the speaker feeds back into the mic.</span>
           </div>
           <div className="talk-wrap">
-            <button
-              type="button"
+            <button type="button"
               className={holding ? "talk-button holding" : playing ? "talk-button playing" : "talk-button"}
-              disabled={!live}
-              aria-pressed={holding}
-              aria-label={talkLabel}
+              disabled={!live} aria-pressed={holding} aria-label={talkLabel}
               onPointerDown={(event) => {
                 if (event.button !== 0) return;
                 event.preventDefault();
                 event.currentTarget.setPointerCapture(event.pointerId);
                 beginHold();
               }}
-              onPointerUp={releaseHold}
-              onPointerCancel={releaseHold}
+              onPointerUp={releaseHold} onPointerCancel={releaseHold} onLostPointerCapture={releaseHold}
               onContextMenu={(event) => event.preventDefault()}
               onKeyDown={(event) => {
                 if (event.repeat) return;
@@ -363,22 +244,12 @@ function VoiceSession({
                 }
               }}
               onBlur={releaseHold}
-            >
-              <Mic size={28} />
-              <span>{talkLabel}</span>
-            </button>
-            <div className="talk-level" aria-hidden="true">
-              <span style={{ width: `${Math.round(level * 100)}%` }} />
-            </div>
+            ><Mic size={28} /><span>{talkLabel}</span></button>
+            <div className="talk-level" aria-hidden="true"><span style={{ width: `${Math.round(level * 100)}%` }} /></div>
           </div>
           <ul className="voice-transcript">
             {lines.length === 0 ? <li className="voice-transcript-empty">Transcripts appear here after you speak.</li> : null}
-            {lines.map((line) => (
-              <li key={line.id}>
-                <span className="role">{line.role === "user" ? "You" : "Agent"}</span>
-                {line.text}
-              </li>
-            ))}
+            {lines.map((line) => <li key={line.id}><span className="role">{line.role === "user" ? "You" : "Agent"}</span>{line.text}</li>)}
           </ul>
         </Panel>
       </div>

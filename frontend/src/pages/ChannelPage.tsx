@@ -4,17 +4,22 @@ import { ChannelSetupWizard } from "../components/ChannelSetupWizard";
 import { Button, IconButton, PageShell, PageToolbar, Panel, StatusBadge } from "../components/ui";
 import { useAgentSession } from "../context/AgentSessionContext";
 import { connectChannel, disconnectChannel, getRuntimeLogs, getChannels, restartRuntime, startRuntime, stopRuntime } from "../lib/api";
-import type { AgentRuntimeStatus, ChannelId, ChannelStatus, ChannelsResponse, SetupChannelId } from "../types";
+import type { AgentRuntimeStatus, ChannelId, ChannelStatus, ChannelsResponse } from "../types";
 
 type ConnectionAction = "connect" | "disconnect";
 type RuntimeAction = "start" | "stop" | "restart";
-const SETUP_CHANNELS = new Set<ChannelId>(["voice", "weixin"]);
-
-function isSetupChannel(channel: ChannelId): channel is SetupChannelId {
-  return SETUP_CHANNELS.has(channel);
+function isSetupChannel(channel: ChannelId): channel is "weixin" {
+  return channel === "weixin";
 }
 
 function channelLabel(channel: ChannelStatus): string {
+  if (channel.id === "voice") {
+    if (["running", "connected"].includes(channel.status)) return "Running";
+    if (["starting", "connecting", "reconnecting"].includes(channel.status)) return "Starting";
+    if (channel.status === "disconnecting") return "Stopping";
+    if (["error", "failed"].includes(channel.status)) return "Needs attention";
+    return "Stopped";
+  }
   if (channel.status === "running" || channel.status === "connected") return "Connected";
   if (["starting", "connecting"].includes(channel.status)) return "Connecting";
   if (channel.status === "disconnecting") return "Disconnecting";
@@ -28,13 +33,13 @@ function channelLabel(channel: ChannelStatus): string {
 const CHANNEL_ICONS = { api: Globe2, voice: Mic, weixin: MessageCircle };
 const CHANNEL_DESCRIPTIONS = {
   api: "Connect your apps over HTTP and WebSocket",
-  voice: "Listen and speak on this device",
+  voice: "Use the microphone and speaker on the computer running your Agent",
   weixin: "Conversations through your WeChat account",
 };
 
 function ChannelRow({ channel, onSetup, onConnection, pending, disabled }: {
   channel: ChannelStatus;
-  onSetup: (channel: SetupChannelId) => void;
+  onSetup: (channel: "weixin") => void;
   onConnection: (channel: ChannelId, action: ConnectionAction) => void;
   pending?: ConnectionAction;
   disabled: boolean;
@@ -42,12 +47,13 @@ function ChannelRow({ channel, onSetup, onConnection, pending, disabled }: {
   const failed = channel.status === "error" || channel.status === "failed";
   const connected = channel.status === "running" || channel.status === "connected";
   const Icon = CHANNEL_ICONS[channel.id];
+  const hostVoice = channel.id === "voice";
   return (
     <div className={`connection-row connection-row-${channel.status}`}>
       <span className="connection-icon" aria-hidden="true"><Icon size={19} strokeWidth={1.65} /></span>
       <div className="connection-copy">
-        <h3>{channel.label}</h3>
-        <p>{(failed || !channel.ready) && channel.detail ? channel.detail : CHANNEL_DESCRIPTIONS[channel.id]}</p>
+        <h3>{hostVoice ? "Host voice" : channel.label}</h3>
+        <p>{hostVoice && !channel.ready ? "Configure shared voice settings in Agent." : (failed || !channel.ready) && channel.detail ? channel.detail : CHANNEL_DESCRIPTIONS[channel.id]}</p>
       </div>
       <span className={`connection-state ${failed ? "is-failed" : connected ? "is-connected" : ""}`}>
         <span aria-hidden="true" />{channel.ready ? channelLabel(channel) : channel.configured ? "Check configuration" : "Not configured"}
@@ -56,19 +62,20 @@ function ChannelRow({ channel, onSetup, onConnection, pending, disabled }: {
         {channel.can_disconnect || pending === "disconnect" || channel.status === "disconnecting" ? (
           <Button type="button" variant="secondary" disabled={disabled || Boolean(pending) || channel.status === "disconnecting"}
             onClick={() => onConnection(channel.id, "disconnect")}>
-            {pending === "disconnect" || channel.status === "disconnecting" ? "Disconnecting…" : "Disconnect"}
+            {pending === "disconnect" || channel.status === "disconnecting" ? hostVoice ? "Stopping…" : "Disconnecting…" : hostVoice ? "Stop" : "Disconnect"}
           </Button>
         ) : channel.ready ? (
           <Button type="button" variant="secondary" disabled={disabled || Boolean(pending) || !channel.can_connect}
             onClick={() => onConnection(channel.id, "connect")}>
-            {pending === "connect" ? "Connecting…" : "Connect"}
+            {pending === "connect" ? hostVoice ? "Starting…" : "Connecting…" : hostVoice ? "Start" : "Connect"}
           </Button>
         ) : null}
         {isSetupChannel(channel.id) ? (
-          <Button type="button" variant="ghost" onClick={() => onSetup(channel.id as SetupChannelId)}>
+          <Button type="button" variant="ghost" onClick={() => onSetup("weixin")}>
             {channel.ready ? "Configure" : "Set up"}<ArrowUpRight size={14} />
           </Button>
         ) : null}
+        {hostVoice && !channel.ready ? <a className="chat-channel-link" href="/agent#voice">Configure in Agent<ArrowUpRight size={14} /></a> : null}
       </div>
     </div>
   );
@@ -114,7 +121,7 @@ export function ChannelPage() {
   const loadSequence = useRef(0);
   const [logs, setLogs] = useState<string | null>(null);
   const [logsBusy, setLogsBusy] = useState(false);
-  const [setupChannelId, setSetupChannelId] = useState<SetupChannelId | null>(null);
+  const [setupChannelId, setSetupChannelId] = useState<"weixin" | null>(null);
 
   const load = useCallback(async (silent = false) => {
     const agent = currentAgent.current;
@@ -238,7 +245,7 @@ export function ChannelPage() {
       </Panel>
       <div className="connections-heading"><h3>Connections</h3><p>API starts by default. Connect other channels when needed.</p></div>
       <div className="connection-list">{data?.channels.map((channel) => <ChannelRow key={channel.id} channel={channel} onSetup={setSetupChannelId} onConnection={(id, action) => void runConnection(id, action)} pending={connectionPending[channel.id]} disabled={busy || !runtime?.runtime_ready} />)}</div>
-      <p className="connections-footnote">Restart restores active connections, including Voice, unless disabled in the new settings. Stop then Start uses default connections. Local chat also works with the public API disconnected.</p>
+      <p className="connections-footnote">Host voice runs on the Agent’s computer. Browser voice works independently in the Voice tab. Manage all voice settings in Agent.</p>
       </div>
       {setupChannelId ? <ChannelSetupWizard channel={setupChannelId} open onClose={() => setSetupChannelId(null)} onComplete={() => {
         if (renderEpoch !== sessionEpoch.current) return;

@@ -88,6 +88,14 @@ def register_device_admin_routes(app: FastAPI, resolve_admin) -> None:
             raise HTTPException(500, "Device details could not be saved. Please retry.") from exc
         return {"status": "ok", "device_id": device_id, **profiles.fields(device_id, paired.digests[device_id])}
 
+    @app.post("/api/devices/voice-session", tags=["Voice"])
+    async def browser_voice_session():
+        service = live_service(resolve_admin())
+        try:
+            return service.create_browser_voice_session()
+        except RuntimeError as exc:
+            raise HTTPException(409, str(exc)) from exc
+
     @app.post("/api/devices/pairing", tags=["Devices"])
     async def devices_pairing(response: Response):
         response.headers["Cache-Control"] = "no-store"

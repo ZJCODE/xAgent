@@ -8,6 +8,7 @@ from xagent.interfaces.cli.setup import _voice_channel_config, voice_init_select
 from xagent.interfaces.voice.config import (
     VoiceChannelConfig,
     VoiceRuntimeProfile,
+    VoiceSpeechStyle,
 )
 from xagent.interfaces.voice.audio import AudioTopology
 from xagent.interfaces.voice.factory import resolve_runtime_profile
@@ -169,6 +170,20 @@ class VoiceConfigSurfaceTests(unittest.TestCase):
                 self.assertEqual(config.interruptions, expected)
                 restored = VoiceChannelConfig.from_dict(yaml.safe_load(yaml.safe_dump(config.to_public_dict())))
                 self.assertEqual(restored.interruptions, expected)
+
+    def test_legacy_web_speeds_clamp_into_the_soniox_range(self):
+        for saved, expected in ((0.5, 0.7), (1.5, 1.3), (2.0, 1.3), (1.25, 1.25)):
+            with self.subTest(saved=saved):
+                config = VoiceChannelConfig.from_dict({"api_key": "k", "speed": saved})
+                self.assertEqual(config.speaking_speed, expected)
+                config.apply_speech_style(VoiceSpeechStyle(voice="Maya", speed=saved))
+                self.assertEqual(config.speed, expected)
+
+    def test_speeds_outside_the_old_web_range_are_still_rejected(self):
+        for speed in (0.1, 3):
+            with self.subTest(speed=speed):
+                with self.assertRaises(ValueError):
+                    VoiceChannelConfig.from_dict({"api_key": "k", "speed": speed})
 
     def test_invalid_interruption_modes_are_rejected(self):
         for value in ("auto", "on", "off", "true", "false", "", None, 0, 1, {}):

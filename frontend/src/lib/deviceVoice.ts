@@ -1,8 +1,4 @@
-export const PHONE_DEVICE_ID = "phone-web";
-export const PHONE_DEVICE_NAME = "Phone mic";
 export const PHONE_OUTPUT_SAMPLE_RATE = 24000;
-
-const STORAGE_PREFIX = "xagent.phone-voice.v1";
 
 export interface VoiceHello {
   type: "hello";
@@ -40,36 +36,6 @@ export interface TranscriptFrame {
   final?: unknown;
 }
 
-type CredentialStore = Pick<Storage, "getItem" | "setItem" | "removeItem">;
-
-export function credentialStorageKey(agentName: string): string {
-  return `${STORAGE_PREFIX}:${agentName}:${PHONE_DEVICE_ID}`;
-}
-
-export function readStoredCredential(storage: Pick<Storage, "getItem">, agentName: string): string {
-  if (!agentName) return "";
-  try {
-    const raw = storage.getItem(credentialStorageKey(agentName));
-    if (!raw) return "";
-    const parsed = JSON.parse(raw) as { deviceId?: unknown; credential?: unknown };
-    if (parsed.deviceId !== PHONE_DEVICE_ID || typeof parsed.credential !== "string") return "";
-    if (!parsed.credential.startsWith("dvc_")) return "";
-    return parsed.credential;
-  } catch {
-    return "";
-  }
-}
-
-export function writeStoredCredential(storage: CredentialStore, agentName: string, credential: string): void {
-  if (!agentName) return;
-  const key = credentialStorageKey(agentName);
-  if (!credential) {
-    storage.removeItem(key);
-    return;
-  }
-  storage.setItem(key, JSON.stringify({ deviceId: PHONE_DEVICE_ID, credential }));
-}
-
 export function clampSampleRate(rate: number): number {
   if (!Number.isFinite(rate)) return 16000;
   const rounded = Math.round(rate);
@@ -81,7 +47,7 @@ export function clampSampleRate(rate: number): number {
 export function voiceHello(inputSampleRate: number): VoiceHello {
   return {
     type: "hello",
-    name: PHONE_DEVICE_NAME,
+    name: "Browser microphone",
     location: "",
     input_sample_rate: clampSampleRate(inputSampleRate),
     input_channels: 1,
@@ -106,16 +72,11 @@ export function toDeviceWebSocketBase(apiUrl: string): string {
   return url.toString().replace(/\/+$/, "");
 }
 
-export function deviceVoiceSocketUrl(apiUrl: string, deviceId: string, token: string): string {
+export function browserVoiceSocketUrl(apiUrl: string, sessionId: string, token: string): string {
   const base = toDeviceWebSocketBase(apiUrl);
-  const url = new URL(`ws/devices/${encodeURIComponent(deviceId)}/voice`, `${base}/`);
+  const url = new URL(`ws/voice/${encodeURIComponent(sessionId)}`, `${base}/`);
   url.searchParams.set("token", token);
   return url.toString();
-}
-
-export function describeVoiceSocket(apiUrl: string, deviceId: string): string {
-  const base = toDeviceWebSocketBase(apiUrl);
-  return new URL(`ws/devices/${encodeURIComponent(deviceId)}/voice`, `${base}/`).toString();
 }
 
 export function assertSocketAllowedOnPage(socketUrl: string, pageProtocol: string): void {

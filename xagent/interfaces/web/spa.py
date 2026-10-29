@@ -23,7 +23,7 @@ def register_spa_routes(app: FastAPI, *, static_dir: Path | None = None, logger:
     async def serve_spa_index():
         index = static_dir / "index.html"
         if index.exists():
-            return FileResponse(str(index), media_type="text/html")
+            return FileResponse(str(index), media_type="text/html", headers={"Cache-Control": "no-cache"})
         raise HTTPException(status_code=404, detail="Web client UI not found")
 
     for route in ("/", "/chat", "/memory", "/workspace", "/message", "/agent", "/skills", "/tasks", "/channels", "/devices", "/voice"):

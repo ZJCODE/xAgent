@@ -5,6 +5,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import yaml
 
@@ -67,6 +68,24 @@ class WebAgentSessionTests(unittest.TestCase):
         self.assertEqual(session.current_agent_name, "agent_b")
         self.assertEqual(snapshot["selected_agent"], "agent_b")
         self.assertEqual(snapshot["active_agent"], "agent_a")
+
+    def test_voice_availability_tracks_each_agents_configuration_without_a_running_channel(self):
+        session = self._session()
+        with patch.dict("os.environ", {"SONIOX_API_KEY": ""}):
+            initial = {row["name"]: row for row in session.list_agents()}
+            self.assertFalse(initial["agent_a"]["voice_configured"])
+            self.assertFalse(initial["agent_b"]["voice_configured"])
+            config_file = self.agent_a_path / "config.yaml"
+            config = yaml.safe_load(config_file.read_text())
+            config["channels"]["voice"] = {"api_key": "configured-key", "voice": "Maya"}
+            config_file.write_text(yaml.safe_dump(config))
+            updated = {row["name"]: row for row in session.list_agents()}
+            self.assertTrue(updated["agent_a"]["voice_configured"])
+            self.assertFalse(updated["agent_b"]["voice_configured"])
+            self.assertFalse(updated["agent_a"]["runtime_running"])
+            config["channels"]["voice"]["api_key"] = "your_soniox_api_key_here"
+            config_file.write_text(yaml.safe_dump(config))
+            self.assertFalse(session.list_agents()[0]["voice_configured"])
 
     def test_select_unknown_agent_raises(self):
         session = self._session()

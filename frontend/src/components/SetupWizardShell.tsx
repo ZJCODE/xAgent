@@ -12,6 +12,7 @@ export interface SetupWizardStep {
 export interface SetupWizardShellProps {
   open: boolean;
   title: string;
+  className?: string;
   subtitle: string;
   steps: SetupWizardStep[];
   stepIndex: number;
@@ -20,6 +21,7 @@ export interface SetupWizardShellProps {
   isDirty?: boolean;
   error?: string;
   submitLabel?: string;
+  submitDisabled?: boolean;
   onClose: () => void;
   onBack: () => void;
   onNext: () => void;
@@ -30,6 +32,7 @@ export interface SetupWizardShellProps {
 export function SetupWizardShell({
   open,
   title,
+  className,
   subtitle,
   steps,
   stepIndex,
@@ -38,6 +41,7 @@ export function SetupWizardShell({
   isDirty = false,
   error = "",
   submitLabel = "Save",
+  submitDisabled = false,
   onClose,
   onBack,
   onNext,
@@ -74,7 +78,7 @@ export function SetupWizardShell({
   return (
     <div className="modal-overlay" role="presentation">
       <div
-        className="modal-card wizard-modal"
+        className={classNames("modal-card", "wizard-modal", className)}
         role="dialog"
         aria-modal="true"
         aria-labelledby="setup-wizard-title"
@@ -138,7 +142,7 @@ export function SetupWizardShell({
                 type="button"
                 variant="primary"
                 onClick={() => void onSubmit()}
-                disabled={loading || submitting}
+                disabled={loading || submitting || submitDisabled}
               >
                 {submitting ? "Saving..." : submitLabel}
               </Button>

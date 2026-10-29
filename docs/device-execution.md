@@ -143,13 +143,21 @@ both are present, the header is used and the query value is ignored. Native
 clients, including ESP devices, should keep using the header: a query token
 can appear in proxy and server access logs.
 
-The admin web client page at `/voice` uses this query form. It pairs a virtual
-device id `phone-web` and opens the voice socket on the configured Agent API
-(`web.api_url`, the devices host), for example
-`wss://<agent-api>/ws/devices/phone-web/voice?token=…`. That connection does
-not go through the admin origin. The hello profile is `headset` with
-`echo_managed: true`. Hold-to-talk sends PCM16 uplink and plays TTS downlink.
-While that socket is open, the Devices list shows `phone-web` online for voice.
+The admin web client page at `/voice` prepares a browser voice session automatically.
+It requests a short-lived, single-use ticket from `POST /api/devices/voice-session`
+on the trusted management origin, then opens
+`wss://<agent-api>/ws/voice/{session_id}?token=…` on `web.api_url`.
+Tickets expire after 60 seconds and authorize only that voice handshake; they
+cannot enroll or control devices or upload media. Tickets remain in memory,
+are invalidated when the API stops, and are never saved in browser storage.
+Browser sessions do not create credentials or profiles and are excluded from
+device lists. Independent tabs use separate session IDs.
+
+The hello profile is `headset` with `echo_managed: true`. The page requests
+microphone permission only on hold-to-talk, sends PCM16 uplink and plays TTS
+downlink. It retries failed connections three times with increasing delays,
+then offers Retry. Leaving the page closes the session and audio resources.
+If the Agent is stopped, Start Agent prepares it before connecting.
 
 ```json
 {

@@ -2,6 +2,7 @@ import { RefreshCw, Save, RotateCcw, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { FeatureSetupModal } from "../components/FeatureSetupModal";
+import { VoiceSettingsDialog } from "../components/VoiceSettingsDialog";
 import { Button, EmptyState, IconButton, PageShell, PageToolbar, Panel, PanelHeader } from "../components/ui";
 import { useAgentSession } from "../context/AgentSessionContext";
 import { useUnsavedChanges } from "../context/UnsavedChangesContext";
@@ -13,6 +14,7 @@ import {
   getAgentEditSetupSchema,
   getAgentIdentity,
   getAgentInfo,
+  getAgentVoiceSettings,
   restartRuntime,
   updateAgentConfig,
   updateAgentIdentity,
@@ -120,7 +122,7 @@ const MAINTENANCE_COPY: Record<
 };
 
 export function AgentPage() {
-  const { agents, selectedAgent, deleteAgent } = useAgentSession();
+  const { agents, selectedAgent, deleteAgent, refresh: refreshAgents } = useAgentSession();
   const { setDirty, confirmDiscard } = useUnsavedChanges();
   const currentAgent = agents.find((agent) => agent.name === selectedAgent);
   const [info, setInfo] = useState<AgentInfo | null>(null);
@@ -145,6 +147,8 @@ export function AgentPage() {
   const [setupNotice, setSetupNotice] = useState("");
   const [restarting, setRestarting] = useState(false);
   const [restartRequired, setRestartRequired] = useState(false);
+  const [voiceSettingsOpen, setVoiceSettingsOpen] = useState(false);
+  const [voiceConfigured, setVoiceConfigured] = useState<boolean | null>(null);
 
   const dirty = useMemo(() => editorValue !== (identity?.identity || ""), [editorValue, identity]);
   const dirtyConfig = useMemo(
@@ -176,7 +180,9 @@ export function AgentPage() {
 
   const loadSetupSchema = async () => {
     try {
-      setSetupSchema(await getAgentEditSetupSchema());
+      const [schema, voice] = await Promise.all([getAgentEditSetupSchema(), getAgentVoiceSettings()]);
+      setSetupSchema(schema);
+      setVoiceConfigured(voice.configured);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -210,6 +216,8 @@ export function AgentPage() {
   };
 
   useEffect(() => {
+    setVoiceSettingsOpen(window.location.hash === "#voice");
+    setVoiceConfigured(null);
     setConfigData(null);
     setConfigEditorValue("");
     setConfigNotice("");
@@ -480,6 +488,10 @@ export function AgentPage() {
             {(setupSchema?.features || []).map((feature) => (
               <SetupFeatureTile key={feature.id} feature={feature} onEdit={openSetupFeature} />
             ))}
+            <button type="button" className="setup-tile" onClick={() => setVoiceSettingsOpen(true)}>
+              <span className="setup-tile-top"><span className="setup-tile-label">Voice</span><span className="setup-tile-action">Edit</span></span>
+              <span className="setup-tile-value">{voiceConfigured === null ? "Loading…" : voiceConfigured ? "Configured" : "Needs setup"}</span>
+            </button>
           </div>
           {!setupSchema ? <p className="wizard-hint">Loading setup options...</p> : null}
         </Panel>
@@ -601,6 +613,26 @@ export function AgentPage() {
           schema={setupSchema}
           onClose={() => setSetupFeature(null)}
           onSaved={(result) => void onSetupSaved(result)}
+        />
+      ) : null}
+      {voiceSettingsOpen ? (
+        <VoiceSettingsDialog key={`${selectedAgent}:voice`}
+          onClose={() => {
+            setVoiceSettingsOpen(false);
+            if (window.location.hash === "#voice") {
+              window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
+              window.dispatchEvent(new Event("xagent:locationchange"));
+            }
+          }}
+          onSaved={(result) => {
+            setSetupNotice(!result.changed ? "Voice settings are up to date." : result.restart_required
+              ? "Voice settings saved. Restart the Agent to apply them."
+              : "Voice settings saved. They will apply when the Agent starts.");
+            setRestartRequired((previous) => previous || result.restart_required);
+            void loadSetupSchema();
+            void refreshAgents();
+            if (activeTab === "config" && !dirtyConfig) void loadConfig();
+          }}
         />
       ) : null}
     </PageShell>

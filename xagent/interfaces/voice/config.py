@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import difflib
+import math
 import os
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -31,6 +32,19 @@ SONIOX_ENDPOINT_LATENCY_LEVEL = 2
 SONIOX_ENDPOINT_SENSITIVITY = 0.3
 SONIOX_MAX_ENDPOINT_DELAY_MS = 1_500
 SONIOX_TTS_MAX_TEXT_CHARS = 5_000
+# Soniox tts-rt-v2 rejects speeds outside this range. See
+# https://soniox.com/docs/tts/concepts/speech-speed
+SONIOX_TTS_SPEED_MIN = 0.7
+SONIOX_TTS_SPEED_MAX = 1.3
+# Earlier builds let the web UI save 0.5×–2×. Those files still load; the
+# value is brought into the Soniox range instead of failing voice startup.
+_LEGACY_TTS_SPEED_MIN = 0.5
+_LEGACY_TTS_SPEED_MAX = 2.0
+
+
+def clamp_soniox_tts_speed(speed: float) -> float:
+    """Bring a speaking rate into the range Soniox realtime TTS accepts."""
+    return min(SONIOX_TTS_SPEED_MAX, max(SONIOX_TTS_SPEED_MIN, float(speed)))
 
 # Six representative English voices from Soniox's shared catalogue. Keeping a
 # small fixed set makes the first setup decision quick and predictable.
@@ -68,9 +82,7 @@ class VoiceRuntimeProfile:
 
 @dataclass(frozen=True)
 class VoiceSpeechStyle:
-    """How the agent sounds. The voice is configured in the ``channels.voice``
-    block — the channel is the only place the agent is heard — while rate is a
-    listener's preference and stays a per-session override."""
+    """Shared speaking defaults, with optional per-session overrides."""
 
     voice: str = "Daniel"
     speed: float = 1.0
@@ -85,6 +97,7 @@ _VOICE_TOP_LEVEL_KEYS = frozenset(
     {
         "api_key",
         "voice",
+        "speed",
         "interruptions",
         "audio",
     }
@@ -200,11 +213,17 @@ class VoiceChannelConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     api_key: str | None = None
-    # The speaking voice. Not every agent is heard aloud, so the name lives in
-    # the voice channel block rather than on the agent itself. YAML key is
-    # ``voice``; the runtime reads the resolved ``voice`` property instead
-    # (set by ``apply_speech_style``), which may differ per session.
+    # Shared preferences edited in Agent. The persisted channels.voice block
+    # stays compatible with CLI configuration and all voice transports.
     speaking_voice: str = Field(default="Daniel", alias="voice")
+    speaking_speed: float = Field(
+        default=1.0,
+        alias="speed",
+        strict=True,
+        ge=SONIOX_TTS_SPEED_MIN,
+        le=SONIOX_TTS_SPEED_MAX,
+        allow_inf_nan=False,
+    )
     interruptions: StrictBool = False
     audio: VoiceAudioConfig = Field(default_factory=VoiceAudioConfig)
 
@@ -217,6 +236,18 @@ class VoiceChannelConfig(BaseModel):
         if value is None:
             return None
         return value.strip() or None
+
+    @field_validator("speaking_speed", mode="before")
+    @classmethod
+    def _clamp_legacy_speaking_speed(cls, value: Any) -> Any:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return value
+        if isinstance(value, float) and not math.isfinite(value):
+            return value
+        speed = float(value)
+        if _LEGACY_TTS_SPEED_MIN <= speed <= _LEGACY_TTS_SPEED_MAX:
+            return clamp_soniox_tts_speed(speed)
+        return value
 
     @field_validator("speaking_voice")
     @classmethod
@@ -259,6 +290,8 @@ class VoiceChannelConfig(BaseModel):
             "voice": self.speaking_voice,
             "interruptions": self.interruptions,
         }
+        if self.speaking_speed != 1.0:
+            public["speed"] = self.speaking_speed
         audio = {
             key: value
             for key, value in (("input", self.audio.input), ("output", self.audio.output))
@@ -284,7 +317,10 @@ class VoiceChannelConfig(BaseModel):
         self._runtime_profile = profile
 
     def apply_speech_style(self, style: VoiceSpeechStyle) -> None:
-        self._speech_style = style
+        self._speech_style = VoiceSpeechStyle(
+            voice=style.voice,
+            speed=clamp_soniox_tts_speed(style.speed),
+        )
 
     @property
     def voice(self) -> str:
@@ -292,7 +328,7 @@ class VoiceChannelConfig(BaseModel):
 
     @property
     def speed(self) -> float:
-        return self._speech_style.speed
+        return clamp_soniox_tts_speed(self._speech_style.speed)
 
     @property
     def runtime_profile(self) -> VoiceRuntimeProfile:

@@ -108,11 +108,10 @@ def create_local_voice_runtime(
         interruptions_override=interruptions_override,
     )
     config.apply_runtime_profile(runtime_profile)
-    default_style = VoiceSpeechStyle()
     config.apply_speech_style(
         VoiceSpeechStyle(
-            voice=str(getattr(agent, "voice", "") or "").strip() or default_style.voice,
-            speed=default_style.speed if speed_override is None else speed_override,
+            voice=config.speaking_voice,
+            speed=config.speaking_speed if speed_override is None else speed_override,
         )
     )
     logger.info(
@@ -204,11 +203,10 @@ def create_websocket_voice_runtime(
         room_name=bridge.room_name,
     )
     config.apply_runtime_profile(runtime_profile)
-    default_style = VoiceSpeechStyle()
     config.apply_speech_style(
         VoiceSpeechStyle(
-            voice=str(getattr(agent, "voice", "") or "").strip() or default_style.voice,
-            speed=default_style.speed,
+            voice=config.speaking_voice,
+            speed=config.speaking_speed,
         )
     )
     presence_cfg = VoicePresenceConfig(

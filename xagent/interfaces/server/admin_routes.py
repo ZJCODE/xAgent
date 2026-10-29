@@ -173,6 +173,9 @@ def register_admin_routes(
         if on_config_written is not None:
             on_config_written()
 
+    from .voice_settings import register_voice_settings_routes
+    register_voice_settings_routes(app, resolve_admin, _notify_config_written)
+
     @app.post("/api/channels/{channel}/setup", tags=["Setup"])
     async def owned_channel_setup(channel: str, input_data: Dict[str, Any] = Body(default_factory=dict)):
         from ..cli.setup import apply_channel_setup

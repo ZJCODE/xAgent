@@ -91,6 +91,40 @@ class PairingCredentialsTests(unittest.TestCase):
             DeviceCredentials(self.path)
         self.assertIn("not-a-digest", self.path.read_text())
 
+    def test_browser_voice_ticket_is_temporary_single_use_and_voice_only(self):
+        code = self.service.create_pairing()["pairing_code"]
+        session = self.service.create_browser_voice_session()
+        identity, credential = session["session_id"], "Bearer " + session["token"]
+        self.assertFalse(self.service.authenticate(identity, credential))
+        self.assertFalse(self.service.authenticate_media(identity, credential))
+        self.assertFalse(self.service.consume_browser_voice_ticket("other", credential))
+        self.assertFalse(self.service.consume_browser_voice_ticket(identity, "Bearer wrong"))
+        self.assertTrue(self.service.consume_browser_voice_ticket(identity, credential))
+        self.assertFalse(self.service.consume_browser_voice_ticket(identity, credential))
+        self.assertTrue(self.service.authenticate("desk", "Bearer " + code))
+        self.assertFalse(self.service.credentials.digests)
+        self.assertFalse(self.path.exists())
+
+    def test_browser_voice_ticket_expires_and_is_invalidated_on_shutdown(self):
+        session = self.service.create_browser_voice_session()
+        deadline = self.service._browser_voice_tickets[session["session_id"]][1]
+        with patch("xagent.integrations.devices.service.time.monotonic", return_value=deadline):
+            self.assertFalse(self.service.consume_browser_voice_ticket(session["session_id"], "Bearer " + session["token"]))
+        session = self.service.create_browser_voice_session()
+        self.service.quiesce()
+        self.service.start()
+        self.assertFalse(self.service.consume_browser_voice_ticket(session["session_id"], "Bearer " + session["token"]))
+
+    def test_pending_browser_voice_tickets_are_bounded_and_expired_tickets_are_pruned(self):
+        with patch("xagent.integrations.devices.service.MAX_BROWSER_VOICE_TICKETS", 2):
+            self.service.create_browser_voice_session()
+            self.service.create_browser_voice_session()
+            with self.assertRaises(RuntimeError):
+                self.service.create_browser_voice_session()
+            with patch("xagent.integrations.devices.service.time.monotonic", return_value=time.monotonic() + 61):
+                self.service.create_browser_voice_session()
+                self.assertEqual(len(self.service._browser_voice_tickets), 1)
+
 
 class PairingProtocolTests(unittest.TestCase):
     def setUp(self):
@@ -115,6 +149,15 @@ class PairingProtocolTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.headers["cache-control"], "no-store")
         return response.json()["pairing_code"]
+
+    def test_browser_voice_tickets_require_trusted_admin_origin_and_are_not_cached(self):
+        response = self.client.post("/api/devices/voice-session")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["cache-control"], "no-store")
+        self.assertTrue(response.json()["token"].startswith("voice_"))
+        self.assertEqual(self.client.get("/api/devices").json()["devices"], [])
+        denied = self.client.post("/api/devices/voice-session", headers={"Origin": "https://untrusted.example"})
+        self.assertEqual(denied.status_code, 403)
 
     def test_pairing_uses_same_device_socket_and_existing_protocol_on_reconnect(self):
         code = self.pairing_code()

@@ -478,6 +478,11 @@ class DeviceRuntimeTests(unittest.IsolatedAsyncioTestCase):
             created = await client.post("/api/devices/pairing")
             self.assertEqual(created.status_code, 200)
             self.assertEqual(created.headers["cache-control"], "no-store")
+            voice = await client.post("/api/devices/voice-session")
+            self.assertEqual(voice.status_code, 200, voice.text)
+            self.assertEqual(voice.headers["cache-control"], "no-store")
+            ticket = voice.json()
+            self.assertTrue(host.device_service.consume_browser_voice_ticket(ticket["session_id"], "Bearer " + ticket["token"]))
             await host.disconnect_channel("api")
             state = (await client.get("/api/devices")).json()
             self.assertFalse(state["api_available"])
@@ -487,6 +492,7 @@ class DeviceRuntimeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(edited.status_code, 200, edited.text)
             self.assertEqual(host.device_service.profile_fields("desk")["location"], "Study")
             self.assertEqual((await client.post("/api/devices/pairing")).status_code, 409)
+            self.assertEqual((await client.post("/api/devices/voice-session")).status_code, 409)
 
     async def test_quiescing_api_closes_new_device_handshake_as_temporarily_unavailable(self):
         host, _, _, _ = await self.start_host([])

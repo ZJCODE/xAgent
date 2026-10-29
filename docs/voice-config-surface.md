@@ -43,6 +43,7 @@ channels:
   voice:
     api_key: your_soniox_api_key_here
     voice: Daniel               # one of six representative English voices
+    speed: 1.25                 # optional shared default; omitted at 1.0
     interruptions: false        # true | false
 ```
 
@@ -124,9 +125,11 @@ rather than parallel sources of truth; a YAML name list was exactly a parallel
 source. Wake terms stay limited to the agent's own name, so a mention of
 somebody else in the room does not grab the floor.
 
-**`speed`** has no single right answer in a room with more than one listener,
-which is the default assumption for a `room` profile. It is a preference about a
-person, and the agent has per-person memory. `--speed` remains for a session.
+**`speed`** is a shared speaking default edited in Agent. Soniox accepts
+`0.7`–`1.3`; `1.0` is normal speed. Older files that saved `0.5`–`2.0` still
+load, clamped into that range. The default 1.0× is omitted from generated YAML.
+CLI `--speed` can still override it for one session without changing the saved
+preference.
 
 ## 5. Constants, not configuration
 
@@ -155,7 +158,7 @@ person, and the agent has per-person memory. `--speed` remains for a session.
 
 ## 6. Schema shape
 
-`channels.voice` accepts `api_key`, `voice`, `interruptions` and
+`channels.voice` accepts `api_key`, `voice`, `speed`, `interruptions` and
 `audio`; anything else is rejected with a close-match hint. There is no quiet
 hours setting because voice only replies to an explicit user turn.
 `audio` is written only when pinned: on a fixed appliance the selected device is a stable machine-level fact
@@ -203,17 +206,32 @@ who is allowed to receive information.
 
 ## 8. Setup surfaces
 
-The web UI exposes Voice settings only under `Channels → Voice → Set up /
-Configure`. Its single-page form contains the Soniox key, speaking voice,
-interruption policy, and input/output devices, without a step counter or step
-chips. Initial configuration is titled `Voice setup`; subsequent edits are
-titled `Voice settings`. The Agent Preferences tiles contain only Model,
-Search, Image, and Observability.
+The web UI exposes a single Voice settings entry in `Agent → Preferences →
+Voice`. It uses a compact form: voice and speed share a row; a single More
+options disclosure contains the interruption switch and Agent-computer
+microphone/speaker selectors. Service credentials are represented by a
+configured indicator and a Change key action after initial setup.
 
-CLI `xAgent Setup / Edit Setup` and the web channel form edit the persisted
-channel block; they do not write session CLI overrides. API keys remain masked
-and blank means “keep the existing key”. Saving in the web UI reminds the user
-to restart the Agent to apply the settings.
+The dialog reads and patches `/api/agent/voice`, independently of the channel
+setup wizard. It submits only edited fields, preserving the saved key and any
+unmodified preferences. Host audio inventory is fetched lazily from
+`/api/agent/voice/devices` when More options is opened, so readiness and the
+browser Voice page do not require working host audio hardware. Auto and saved
+device selections remain usable when inventory is unavailable. Keys are never
+returned. Save is available only after an edit. The server reports whether a
+running Agent needs a restart; offline saves apply on its next start.
+
+The Voice navigation item appears directly below Chat only when the selected
+Agent has valid voice configuration. Saving voice settings refreshes that
+availability immediately. Each registered Agent reports its own availability;
+starting Host voice is not required for the browser entry to appear.
+
+`Connections → Host voice` only starts or stops audio on the Agent's computer.
+The separate Voice tab uses the current browser's microphone and speaker and
+has no settings form. If shared settings are missing, it links directly to
+Agent's Voice dialog. It does not start Host voice. Saving settings while the
+Agent is running requires an Agent restart; an offline Agent uses them on its
+next start. The existing YAML block and CLI setup remain compatible.
 
 Entering CLI voice setup enables the channel and asks only for the Soniox key;
 there is no separate enable checkbox. Edit Setup exposes speaking voice,
@@ -222,9 +240,9 @@ when they need to be changed.
 The summary shows the saved interruption policy, and the voice startup log
 reports the effective value when a session override is used.
 
-The setup surfaces render `Speaking voice` as a dropdown with six representative
-English voices from Soniox's published shared catalogue. `Input device` and
-`Output device` are populated from the local PortAudio/sounddevice inventory,
+The web voice selector and CLI voice choices use six representative voices
+from Soniox's published shared catalogue. CLI input and output device options
+are populated from the local PortAudio/sounddevice inventory,
 with an `Auto (recommended)` entry always available. If the host cannot
 enumerate audio hardware, the UI keeps the Auto choice and shows the
 enumeration error instead of blocking setup.

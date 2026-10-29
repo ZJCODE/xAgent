@@ -1,9 +1,7 @@
 import {
-  PHONE_DEVICE_ID,
   PHONE_OUTPUT_SAMPLE_RATE,
   assertSocketAllowedOnPage,
   clampSampleRate,
-  deviceVoiceSocketUrl,
   floatToPcm16,
   pcm16ToChannelPlanes,
   pcmRms,
@@ -72,13 +70,13 @@ export class PhoneVoiceClient {
     this.declaredRate = clampSampleRate(this.audio.sampleRate);
   }
 
-  async connect(options: { apiUrl: string; token: string; pageProtocol: string }): Promise<VoiceReadyFrame> {
+  async connect(options: { socketUrl: string; pageProtocol: string }): Promise<VoiceReadyFrame> {
     const attempt = ++this.attempt;
     this.closeSocket();
     this.prime();
     const audio = this.audio;
     if (!audio) throw new Error("This browser cannot capture or play audio.");
-    const socketUrl = deviceVoiceSocketUrl(options.apiUrl, PHONE_DEVICE_ID, options.token);
+    const socketUrl = options.socketUrl;
     assertSocketAllowedOnPage(socketUrl, options.pageProtocol);
     const socket = new WebSocket(socketUrl);
     socket.binaryType = "arraybuffer";
@@ -121,8 +119,7 @@ export class PhoneVoiceClient {
       socket.onmessage = (event) => this.handleFrame(event);
       socket.onclose = (event) => {
         if (!this.ready || this.socket !== socket) return;
-        this.ready = false;
-        this.stopCapture();
+        this.closeSocket();
         this.stopPlayback();
         this.listener.onClose({ code: event.code, reason: event.reason });
       };
@@ -163,14 +160,14 @@ export class PhoneVoiceClient {
     if (!audio) return;
     const token = this.captureToken + 1;
     this.captureToken = token;
-    // Start the mic request inside the pointer gesture, before any await.
-    const streamPromise = navigator.mediaDevices.getUserMedia({
-      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-      video: false,
-    });
+    let stream: MediaStream | null = null;
     try {
-      await audio.resume();
-      const stream = await streamPromise;
+      // Start inside the pointer gesture. prime() already resumed audio there;
+      // a suspended AudioContext must not delay handling the permission result.
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        video: false,
+      });
       if (token !== this.captureToken || !this.live) {
         stream.getTracks().forEach((track) => track.stop());
         return;
@@ -191,14 +188,17 @@ export class PhoneVoiceClient {
       source.connect(processor);
       processor.connect(mute);
       mute.connect(audio.destination);
+      const activeStream = stream;
       this.captureStop = () => {
         processor.onaudioprocess = null;
         source.disconnect();
         processor.disconnect();
         mute.disconnect();
-        stream.getTracks().forEach((track) => track.stop());
+        activeStream.getTracks().forEach((track) => track.stop());
       };
     } catch (error) {
+      stream?.getTracks().forEach((track) => track.stop());
+      if (token !== this.captureToken || !this.live) return;
       if (token === this.captureToken) this.captureToken += 1;
       const name = error instanceof DOMException ? error.name : "";
       this.listener.onNotice(
@@ -210,6 +210,7 @@ export class PhoneVoiceClient {
   }
 
   private closeSocket(): void {
+    this.captureToken += 1;
     window.clearTimeout(this.handshakeTimer);
     window.clearInterval(this.pingTimer);
     window.clearInterval(this.progressTimer);
@@ -384,7 +385,7 @@ function createAudioContext(): AudioContext {
 
 function closeMessage(code: number, reason: string): string {
   if (reason) return reason;
-  if (code === 1008 || code === 1006) return "The Agent rejected this phone credential.";
-  if (code === 1013) return "Device voice is unavailable. Connect the API channel and try again.";
+  if (code === 1008) return "The voice session could not be started. Please try again.";
+  if (code === 1013) return "Voice is temporarily unavailable. Please try again.";
   return "The voice connection closed.";
 }

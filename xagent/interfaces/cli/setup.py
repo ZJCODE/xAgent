@@ -93,6 +93,7 @@ class VoiceInitSelection:
     interruptions: bool = False
     audio_input: str | int | None = "auto"
     audio_output: str | int | None = "auto"
+    speed: float = 1.0
 
 
 OPENAI_BASE_URL = provider_base_url(PROVIDER_OPENAI)
@@ -315,6 +316,7 @@ def build_voice_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
     defaults = {
         "voice_api_key": "",
         "voice": "Daniel",
+        "speed": 1.0,
         "interruptions": False,
         "audio_input": "auto",
         "audio_output": "auto",
@@ -327,6 +329,7 @@ def build_voice_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
                 parsed = VoiceChannelConfig.from_dict(voice_raw)
                 defaults.update({
                     "voice": parsed.speaking_voice,
+                    "speed": parsed.speaking_speed,
                     "interruptions": parsed.interruptions,
                     "audio_input": parsed.audio.input,
                     "audio_output": parsed.audio.output,
@@ -351,12 +354,17 @@ def build_voice_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
                 }
             )
         audio_devices[direction] = options
+    try:
+        VoiceChannelConfig.from_dict((config.get("channels") or {}).get("voice") or {}).resolved_api_key()
+        configured = True
+    except ValueError:
+        configured = False
     return {
         "defaults": defaults,
         "voice_options": voice_options,
         "audio_devices": audio_devices,
         "placeholders": {"soniox_api_key": SONIOX_KEY_PLACEHOLDER},
-        "configured": _channel_configured(config, "voice"),
+        "configured": configured,
         "can_force": True,
     }
 
@@ -401,6 +409,7 @@ def voice_init_selection_from_mapping(
     return VoiceInitSelection(
         voice_api_key=str(data.get("voice_api_key") or "").strip(),
         voice=str(data.get("voice", schema_defaults.get("voice", "Daniel")) or "Daniel").strip(),
+        speed=data.get("speed", schema_defaults.get("speed", 1.0)),
         interruptions=interruption_value,
         audio_input=data.get("audio_input", schema_defaults.get("audio_input", "auto")),
         audio_output=data.get("audio_output", schema_defaults.get("audio_output", "auto")),
@@ -537,6 +546,7 @@ def _voice_channel_config(
     merged.update({
         "api_key": selection.voice_api_key.strip() or existing_key or SONIOX_KEY_PLACEHOLDER,
         "voice": selection.voice,
+        "speed": selection.speed,
         "interruptions": selection.interruptions,
         "audio": {"input": selection.audio_input, "output": selection.audio_output},
     })

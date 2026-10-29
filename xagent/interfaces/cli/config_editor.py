@@ -520,6 +520,7 @@ def prepare_voice_preset_update(
     provider: str,
     api_key: str | None = None,
     voice: str | None = None,
+    speed: float | None = None,
     interruptions: bool | None = None,
     audio_input: str | int | None = None,
     audio_output: str | int | None = None,
@@ -547,6 +548,8 @@ def prepare_voice_preset_update(
                 updated["interruptions"] = False
             if voice is not None:
                 updated["voice"] = voice
+            if speed is not None:
+                updated["speed"] = speed
             if interruptions is not None:
                 updated["interruptions"] = interruptions
             if audio_input is not None or audio_output is not None:
@@ -557,10 +560,14 @@ def prepare_voice_preset_update(
                     audio["output"] = audio_output
                 updated["audio"] = audio
             channels["voice"] = VoiceChannelConfig.from_dict(updated).to_public_dict()
+            if "enabled" in current:
+                channels["voice"]["enabled"] = current["enabled"]
         else:
             payload = VoiceChannelConfig.default_public_dict(api_key=resolved_api_key or SONIOX_KEY_PLACEHOLDER)
             if voice is not None:
                 payload["voice"] = voice
+            if speed is not None:
+                payload["speed"] = speed
             if interruptions is not None:
                 payload["interruptions"] = interruptions
             if audio_input is not None or audio_output is not None:
@@ -573,7 +580,9 @@ def prepare_voice_preset_update(
     return prepare_update(
         config,
         mutate,
-        ("channels.voice",),
+        ("channels.voice.api_key", "channels.voice.voice", "channels.voice.speed",
+         "channels.voice.interruptions", "channels.voice.audio.input", "channels.voice.audio.output",
+         "channels.voice.enabled"),
     )
 
 
@@ -767,14 +776,17 @@ def apply_agent_edit_setup(
     config = load_config(config_dir)
     if normalized == "voice":
         selected_key = str(selection.get("voice_api_key") or "").strip()
-        existing_key = str(_current_voice(config).get("api_key") or "").strip()
-        if not selected_key and (not existing_key or is_placeholder_api_key(existing_key)):
-            raise ValueError("Soniox API key is required to configure voice")
+        if not selected_key:
+            try:
+                VoiceChannelConfig.from_dict({"api_key": _current_voice(config).get("api_key")}).resolved_api_key()
+            except ValueError as exc:
+                raise ValueError("Soniox API key is required to configure voice") from exc
         update = prepare_voice_preset_update(
             config,
             provider="soniox",
             api_key=selection.get("voice_api_key"),
             voice=selection.get("voice"),
+            speed=selection.get("speed"),
             interruptions=selection.get("interruptions"),
             audio_input=selection.get("audio_input"),
             audio_output=selection.get("audio_output"),

@@ -33,7 +33,7 @@ SetupChannelId = Literal["voice", "weixin"]
 
 CHANNEL_LABELS: dict[str, str] = {
     CHANNEL_API: "API",
-    CHANNEL_VOICE: "Voice",
+    CHANNEL_VOICE: "Host voice",
     CHANNEL_WEIXIN: "Weixin",
 }
 MANAGED_CHANNELS: tuple[str, ...] = (CHANNEL_API, CHANNEL_VOICE, CHANNEL_WEIXIN)
