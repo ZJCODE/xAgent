@@ -25,6 +25,7 @@ export interface PhoneVoiceListener {
   onTranscript: (frame: { role?: unknown; text?: unknown; delta?: unknown; final?: unknown }) => void;
   onClose: (info: { code: number; reason: string }) => void;
   onNotice: (message: string) => void;
+  onCapture?: (capturing: boolean) => void;
 }
 
 interface ScheduledChunk {
@@ -44,6 +45,7 @@ export class PhoneVoiceClient {
   private attempt = 0;
   private captureToken = 0;
   private captureStop: (() => void) | null = null;
+  private captureRequested = false;
   private pingTimer = 0;
   private progressTimer = 0;
   private handshakeTimer = 0;
@@ -55,6 +57,7 @@ export class PhoneVoiceClient {
   private playRate = PHONE_OUTPUT_SAMPLE_RATE;
   private playChannels = 1;
   private acceptingAudio = false;
+  private playbackId: string | null = null;
 
   constructor(listener: PhoneVoiceListener) {
     this.listener = listener;
@@ -86,15 +89,18 @@ export class PhoneVoiceClient {
       const readyFrame = await new Promise<VoiceReadyFrame>((resolve, reject) => {
         this.handshakeReject = reject;
         this.handshakeTimer = window.setTimeout(() => {
+          if (attempt !== this.attempt || this.socket !== socket) return;
           this.handshakeReject = null;
           socket.close();
           reject(new Error("Voice handshake timed out."));
         }, 8000);
         socket.onopen = () => {
+          if (attempt !== this.attempt || this.socket !== socket) return;
           settle(audio.resume());
           socket.send(JSON.stringify(voiceHello(audio.sampleRate)));
         };
         socket.onmessage = (event) => {
+          if (attempt !== this.attempt || this.socket !== socket) return;
           if (typeof event.data !== "string") return;
           try {
             const frame = JSON.parse(event.data) as VoiceReadyFrame;
@@ -116,7 +122,9 @@ export class PhoneVoiceClient {
       });
       if (attempt !== this.attempt) throw new VoiceConnectionSuperseded();
       this.ready = true;
-      socket.onmessage = (event) => this.handleFrame(event);
+      socket.onmessage = (event) => {
+        if (this.socket === socket && attempt === this.attempt) this.handleFrame(event);
+      };
       socket.onclose = (event) => {
         if (!this.ready || this.socket !== socket) return;
         this.closeSocket();
@@ -148,16 +156,22 @@ export class PhoneVoiceClient {
   }
 
   async setHolding(holding: boolean): Promise<void> {
-    if (!holding) {
+    return this.setCapture(holding);
+  }
+
+  async setCapture(enabled: boolean): Promise<void> {
+    if (!enabled) {
+      this.captureRequested = false;
       this.captureToken += 1;
       this.stopCapture();
       this.listener.onLevel(0);
       return;
     }
-    if (!this.live || this.captureStop) return;
+    if (!this.live || this.captureRequested) return;
+    this.captureRequested = true;
     this.prime();
     const audio = this.audio;
-    if (!audio) return;
+    if (!audio) { this.captureRequested = false; return; }
     const token = this.captureToken + 1;
     this.captureToken = token;
     let stream: MediaStream | null = null;
@@ -196,14 +210,16 @@ export class PhoneVoiceClient {
         mute.disconnect();
         activeStream.getTracks().forEach((track) => track.stop());
       };
+      this.listener.onCapture?.(true);
     } catch (error) {
       stream?.getTracks().forEach((track) => track.stop());
       if (token !== this.captureToken || !this.live) return;
       if (token === this.captureToken) this.captureToken += 1;
+      this.captureRequested = false;
       const name = error instanceof DOMException ? error.name : "";
       this.listener.onNotice(
         name === "NotAllowedError" || name === "PermissionDeniedError"
-          ? "Microphone permission was denied. Allow the mic for this page and hold to talk again."
+          ? "Microphone permission was denied. Allow the mic for this page and try again."
           : "This browser could not open the microphone. Use HTTPS or localhost.",
       );
     }
@@ -217,6 +233,7 @@ export class PhoneVoiceClient {
     this.pingTimer = 0;
     this.progressTimer = 0;
     this.ready = false;
+    this.captureRequested = false;
     this.stopCapture();
     const reject = this.handshakeReject;
     this.handshakeReject = null;
@@ -256,15 +273,18 @@ export class PhoneVoiceClient {
     if (frame.type === "playback_start") {
       const rate = typeof frame.sample_rate === "number" ? frame.sample_rate : PHONE_OUTPUT_SAMPLE_RATE;
       const channels = frame.channels === 2 ? 2 : 1;
-      this.beginPlayback(rate, channels);
+      this.beginPlayback(rate, channels, typeof frame.playback_id === "string" ? frame.playback_id : null);
       this.listener.onPlaying(true);
       return;
     }
     if (frame.type === "playback_done") {
+      if ((frame.playback_id ?? null) !== this.playbackId) return;
       this.acceptingAudio = false;
+      this.reportProgress();
       return;
     }
     if (frame.type === "clear_playback") {
+      if ((frame.playback_id ?? null) !== this.playbackId) return;
       this.stopPlayback();
       this.listener.onPlaying(false);
       return;
@@ -276,10 +296,11 @@ export class PhoneVoiceClient {
     if (frame.type === "transcript") this.listener.onTranscript(frame);
   }
 
-  private beginPlayback(sampleRate: number, channels: number): void {
+  private beginPlayback(sampleRate: number, channels: number, playbackId: string | null): void {
     settle(this.audio?.resume());
     this.stopPlaybackSources();
     this.acceptingAudio = true;
+    this.playbackId = playbackId;
     this.playRate = sampleRate > 0 ? sampleRate : PHONE_OUTPUT_SAMPLE_RATE;
     this.playChannels = channels;
     this.nextTime = 0;
@@ -300,6 +321,7 @@ export class PhoneVoiceClient {
       buffer.copyToChannel(samples, channel);
     }
     const source = audio.createBufferSource();
+    const playbackId = this.playbackId;
     source.buffer = buffer;
     source.connect(audio.destination);
     const startAt = Math.max(this.nextTime, audio.currentTime + 0.03);
@@ -309,8 +331,10 @@ export class PhoneVoiceClient {
     this.scheduled.push({ startAt, duration, bytes: frames * frameBytes });
     this.nextTime = startAt + duration;
     source.onended = () => {
+      source.disconnect();
+      if (this.playbackId !== playbackId) return;
       this.sources = this.sources.filter((item) => item !== source);
-      if (!this.acceptingAudio && !this.pending(audio.currentTime)) this.listener.onPlaying(false);
+      this.reportProgress();
     };
   }
 
@@ -319,12 +343,17 @@ export class PhoneVoiceClient {
     const socket = this.socket;
     if (!audio || !socket || socket.readyState !== WebSocket.OPEN) return;
     const played = this.playedBytes(audio.currentTime);
-    if (played <= this.lastReportedBytes) {
-      if (!this.acceptingAudio && !this.pending(audio.currentTime)) this.listener.onPlaying(false);
-      return;
+    if (played > this.lastReportedBytes) {
+      this.lastReportedBytes = played;
+      socket.send(JSON.stringify({ type: "playback_progress", played_bytes: played, playback_id: this.playbackId }));
     }
-    this.lastReportedBytes = played;
-    socket.send(JSON.stringify({ type: "playback_progress", played_bytes: played }));
+    if (this.playbackId && !this.acceptingAudio && this.sources.length === 0 && !this.pending(audio.currentTime)) {
+      socket.send(JSON.stringify({ type: "playback_finished", playback_id: this.playbackId }));
+      this.playbackId = null;
+      this.listener.onPlaying(false);
+    } else if (!this.playbackId && !this.acceptingAudio && this.sources.length === 0) {
+      this.listener.onPlaying(false);
+    }
   }
 
   private playedBytes(now: number): number {
@@ -346,6 +375,7 @@ export class PhoneVoiceClient {
   private stopCapture(): void {
     this.captureStop?.();
     this.captureStop = null;
+    this.listener.onCapture?.(false);
   }
 
   private stopPlayback(): void {
@@ -354,7 +384,9 @@ export class PhoneVoiceClient {
   }
 
   private stopPlaybackSources(): void {
+    this.playbackId = null;
     for (const source of this.sources) {
+      source.onended = null;
       try {
         source.stop();
       } catch {

@@ -3469,6 +3469,9 @@ body { -webkit-font-smoothing: antialiased; }
 .device-description { white-space: pre-wrap; }
 .voice-content { display: grid; gap: 16px; align-content: start; }
 .voice-panel { display: grid; gap: 14px; border: 1px solid var(--border); background: var(--bg-surface); border-radius: 14px; padding: 22px 24px; }
+.voice-mode-switch { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-surface-subtle); }
+.voice-mode-switch .ui-button { min-width: 0; white-space: normal; border-radius: 8px; }
+.voice-panel > .wizard-hint { margin: 0; }
 .voice-endpoint { margin: 0; color: var(--text-muted); font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
 .voice-endpoint code { color: var(--text); }
 .voice-meta { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }

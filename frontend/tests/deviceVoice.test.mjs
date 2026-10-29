@@ -51,6 +51,7 @@ test("browser hello is a headset profile with echo managed by the page", () => {
     output_channels: 1,
     profile: "headset",
     echo_managed: true,
+    playback_ack: true,
   });
   assert.equal(voice.voiceHello(96000).input_sample_rate, 48000);
   assert.equal(voice.clampSampleRate(Number.NaN), 16000);

@@ -6,6 +6,8 @@ import json
 import logging
 import queue
 import threading
+import time
+import uuid
 from dataclasses import dataclass
 from typing import Any, Callable, Iterator, Literal
 
@@ -39,6 +41,7 @@ class VoiceSessionHello(BaseModel):
     profile: VoiceProfileName = "room"
     echo_managed: StrictBool = True
     interruptions: StrictBool | None = None
+    playback_ack: StrictBool = False
     user_id: str | None = Field(default=None, max_length=128)
     name: str = Field(default="", max_length=256)
     location: str = Field(default="", max_length=256)
@@ -49,8 +52,9 @@ class VoiceClientControl(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    type: Literal["playback_progress", "ping", "stop"]
+    type: Literal["playback_progress", "playback_finished", "ping", "stop"]
     played_bytes: int = Field(default=0, ge=0)
+    playback_id: str | None = Field(default=None, max_length=64)
 
 
 @dataclass
@@ -209,34 +213,73 @@ class WebSocketPlayer:
             target_channels=self.stream_channels,
             target_rate=self.stream_sample_rate,
         )
+        self._playback_lock = threading.Lock()
+        self._playback_id: str | None = None
+        self._finished = threading.Event()
+
+    def accepts_playback(self, playback_id: str | None) -> bool:
+        with self._playback_lock:
+            return not self.bridge.hello.playback_ack or (
+                playback_id is not None and playback_id == self._playback_id
+            )
+
+    def note_playback_finished(self, playback_id: str | None) -> None:
+        with self._playback_lock:
+            if playback_id is not None and playback_id == self._playback_id:
+                self._finished.set()
 
     def close(self) -> None:
         self.bridge.closed.set()
 
     def play_chunks(self, chunks: Iterator[bytes], *, stop_event: threading.Event) -> None:
-        self.bridge.send_json(
-            {
-                "type": "playback_start",
-                "sample_rate": self.stream_sample_rate,
-                "channels": self.stream_channels,
-            }
-        )
-        interrupted = False
-        for chunk in chunks:
-            if stop_event.is_set() or self.bridge.closed.is_set():
-                interrupted = stop_event.is_set()
-                break
-            if chunk:
-                converted = self._converter.convert(chunk)
-                if converted:
-                    self.bridge.send_bytes(converted)
+        playback_id = uuid.uuid4().hex
+        with self._playback_lock:
+            self._playback_id = playback_id
+            self._finished.clear()
+        identity = {"playback_id": playback_id} if self.bridge.hello.playback_ack else {}
+        try:
+            self.bridge.send_json(
+                {
+                    "type": "playback_start",
+                    **identity,
+                    "sample_rate": self.stream_sample_rate,
+                    "channels": self.stream_channels,
+                }
+            )
+            interrupted = False
+            sent_bytes = 0
+            for chunk in chunks:
                 if stop_event.is_set() or self.bridge.closed.is_set():
                     interrupted = stop_event.is_set()
                     break
-        if interrupted and not self.bridge.closed.is_set():
-            self.bridge.send_json({"type": "clear_playback"})
-        elif not self.bridge.closed.is_set():
-            self.bridge.send_json({"type": "playback_done"})
+                if chunk:
+                    converted = self._converter.convert(chunk)
+                    if converted:
+                        self.bridge.send_bytes(converted)
+                        sent_bytes += len(converted)
+                    if stop_event.is_set() or self.bridge.closed.is_set():
+                        interrupted = stop_event.is_set()
+                        break
+            if not interrupted and not self.bridge.closed.is_set():
+                self.bridge.send_json({"type": "playback_done", **identity})
+                if self.bridge.hello.playback_ack:
+                    duration = sent_bytes / (self.stream_sample_rate * self.stream_channels * 2)
+                    deadline = time.monotonic() + duration + 5.0
+                    while not self._finished.wait(0.05):
+                        if stop_event.is_set() or self.bridge.closed.is_set():
+                            interrupted = stop_event.is_set()
+                            break
+                        if time.monotonic() >= deadline:
+                            async def close_timed_out():
+                                await self.bridge.websocket.close(code=1011, reason="Playback confirmation timed out. Please try again.")
+                            self.bridge._schedule_send(close_timed_out)
+                            self.bridge.closed.set()
+                            raise TimeoutError("Browser playback confirmation timed out")
+            if interrupted and not self.bridge.closed.is_set():
+                self.bridge.send_json({"type": "clear_playback", **identity})
+        finally:
+            with self._playback_lock:
+                self._playback_id = None
 
 
 def make_websocket_output_sink(bridge: WebSocketVoiceBridge) -> Callable[..., None]:

@@ -6,7 +6,8 @@ import { applyTranscript, browserVoiceSocketUrl, type TranscriptLine } from "../
 import { PhoneVoiceClient, VoiceConnectionSuperseded } from "../lib/phoneVoiceClient";
 import { connectChannel, createBrowserVoiceSession, getAgentVoiceSettings, getDevices, restartRuntime, startRuntime } from "../lib/api";
 
-type Phase = "connecting" | "live" | "stopped" | "failed" | "unconfigured" | "restart";
+type Mode = "hold" | "continuous";
+type Phase = "idle" | "paused" | "connecting" | "live" | "stopped" | "failed" | "unconfigured" | "restart";
 const RETRY_DELAYS = [1000, 2000, 4000];
 
 export function VoicePage() {
@@ -15,7 +16,7 @@ export function VoicePage() {
   if (!selectedAgent) {
     return (
       <PageShell className="channels-page voice-page">
-        <PageToolbar title="Voice" subtitle="Hold to talk with your Agent." />
+        <PageToolbar title="Voice" subtitle="Talk with your Agent, your way." />
         <div className="channels-content voice-content">
           <p className="wizard-hint">Create an agent to use voice.</p>
         </div>
@@ -29,6 +30,10 @@ function VoiceSession({ configuredApiUrl, refreshAgents }: {
   configuredApiUrl: string;
   refreshAgents: () => Promise<void>;
 }) {
+  const [mode, setMode] = useState<Mode>("hold");
+  const [started, setStarted] = useState(false);
+  const [muted, setMuted] = useState(false);
+  const [capturing, setCapturing] = useState(false);
   const [phase, setPhase] = useState<Phase>("connecting");
   const [error, setError] = useState("");
   const [attempt, setAttempt] = useState(0);
@@ -40,28 +45,60 @@ function VoiceSession({ configuredApiUrl, refreshAgents }: {
   const clientRef = useRef<PhoneVoiceClient | null>(null);
   const transcriptId = useRef(1);
   const holdingRef = useRef(false);
+  const startedRef = useRef(false);
+  const mutedRef = useRef(false);
+  const modeRef = useRef<Mode>("hold");
+  const startSession = useRef<() => void>(() => {});
+  const stopSession = useRef<() => void>(() => {});
+
+  const syncCapture = useCallback(() => {
+    const enabled = modeRef.current === "hold" ? holdingRef.current : startedRef.current && !mutedRef.current;
+    void clientRef.current?.setCapture(enabled);
+  }, []);
 
   const releaseHold = useCallback(() => {
     holdingRef.current = false;
     setHolding(false);
     setLevel(0);
-    void clientRef.current?.setHolding(false);
+    if (modeRef.current === "hold") void clientRef.current?.setCapture(false);
   }, []);
 
   useEffect(() => {
     let disposed = false;
-    let suspended = false;
+    let suspended = document.visibilityState === "hidden";
     let retryTimer = 0;
     let stableTimer = 0;
     let failures = 0;
     let generation = 0;
     const current = (value: number) => !disposed && !suspended && generation === value;
+    const active = () => !disposed && !suspended && clientRef.current === client;
+    const clearTimers = () => {
+      window.clearTimeout(retryTimer);
+      window.clearTimeout(stableTimer);
+    };
+    const stop = () => {
+      generation += 1;
+      clearTimers();
+      startedRef.current = false;
+      setStarted(false);
+      releaseHold();
+      client.disconnect();
+      setPlaying(false);
+      setCapturing(false);
+      setFloor("idle");
+      setLevel(0);
+      setLines((previous) => previous.filter((line) => !line.pending));
+    };
     const retry = (reason: string) => {
-      if (disposed || suspended) return;
+      if (!active()) return;
       window.clearTimeout(stableTimer);
       releaseHold();
       setPlaying(false);
+      setCapturing(false);
+      setLevel(0);
+      setLines((previous) => previous.filter((line) => !line.pending));
       if (failures >= RETRY_DELAYS.length) {
+        stop();
         setPhase("failed");
         setError(reason || "Unable to connect. Please try again.");
         return;
@@ -72,21 +109,30 @@ function VoiceSession({ configuredApiUrl, refreshAgents }: {
     };
     const client = new PhoneVoiceClient({
       onLive: () => {
+        if (!active()) return;
         stableTimer = window.setTimeout(() => { failures = 0; }, 10000);
         setPhase("live");
         setError("");
+        syncCapture();
       },
-      onFloor: setFloor,
-      onPlaying: setPlaying,
-      onLevel: setLevel,
+      onFloor: (value) => { if (active()) setFloor(value); },
+      onPlaying: (value) => { if (active()) setPlaying(value); },
+      onCapture: (value) => { if (active()) setCapturing(value); },
+      onLevel: (value) => { if (active()) setLevel(value); },
       onTranscript: (frame) => {
-        setLines((previous) => applyTranscript(previous, frame, () => transcriptId.current++));
+        if (active()) setLines((previous) => applyTranscript(previous, frame, () => transcriptId.current++));
       },
-      onClose: () => retry("The voice connection closed. Please try again."),
-      onNotice: (message) => { releaseHold(); setError(message); },
+      onClose: ({ reason }) => retry(reason || "The voice connection closed. Please try again."),
+      onNotice: (message) => {
+        if (!active()) return;
+        stop();
+        setError(message);
+        setPhase("failed");
+      },
     });
     clientRef.current = client;
     const connect = async () => {
+      if (disposed || suspended) return;
       const ownGeneration = ++generation;
       setPhase("connecting");
       setError("");
@@ -95,18 +141,10 @@ function VoiceSession({ configuredApiUrl, refreshAgents }: {
         const [voice, initialStatus] = await Promise.all([getAgentVoiceSettings(), getDevices()]);
         if (!current(ownGeneration)) return;
         let status = initialStatus;
-        if (!voice.configured) {
-          setPhase("unconfigured");
-          return;
-        }
-        if (!status.runtime_available) {
-          setPhase("stopped");
-          return;
-        }
-        if (voice.restart_required) {
-          setPhase("restart");
-          return;
-        }
+        if (!voice.configured) { setPhase("unconfigured"); return; }
+        if (!status.runtime_available) { setPhase("stopped"); return; }
+        if (voice.restart_required) { setPhase("restart"); return; }
+        if (mode === "continuous" && !startedRef.current) { setPhase("idle"); return; }
         if (!status.api_available) {
           await connectChannel("api");
           if (!current(ownGeneration)) return;
@@ -127,65 +165,88 @@ function VoiceSession({ configuredApiUrl, refreshAgents }: {
         retry(err instanceof Error ? err.message : String(err));
       }
     };
-    const suspend = () => {
-      suspended = true;
-      generation += 1;
-      window.clearTimeout(retryTimer);
-      window.clearTimeout(stableTimer);
-      releaseHold();
-      client.disconnect();
-    };
-    const resume = () => {
-      if (!suspended || disposed) return;
-      suspended = false;
+    startSession.current = () => {
+      if (disposed || suspended) return;
+      try { client.prime(); } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+        setPhase("failed");
+        return;
+      }
+      startedRef.current = true;
+      setStarted(true);
       failures = 0;
       void connect();
     };
+    stopSession.current = () => { stop(); setError(""); setPhase("idle"); };
+    const suspend = () => {
+      if (suspended) return;
+      suspended = true;
+      stop();
+      setPhase("paused");
+    };
+    const resume = () => {
+      if (!suspended || disposed || document.visibilityState === "hidden") return;
+      suspended = false;
+      failures = 0;
+      if (mode === "hold") void connect();
+    };
+    const visibility = () => document.visibilityState === "hidden" ? suspend() : resume();
+    const blur = () => { if (mode === "hold") releaseHold(); };
     window.addEventListener("pagehide", suspend);
     window.addEventListener("pageshow", resume);
-    void connect();
+    window.addEventListener("blur", blur);
+    document.addEventListener("visibilitychange", visibility);
+    if (suspended) setPhase("paused");
+    else void connect();
     return () => {
       disposed = true;
       generation += 1;
-      window.clearTimeout(retryTimer);
-      window.clearTimeout(stableTimer);
+      clearTimers();
       window.removeEventListener("pagehide", suspend);
       window.removeEventListener("pageshow", resume);
+      window.removeEventListener("blur", blur);
+      document.removeEventListener("visibilitychange", visibility);
       client.disconnect();
       if (clientRef.current === client) clientRef.current = null;
     };
-  }, [configuredApiUrl, attempt, releaseHold]);
+  }, [configuredApiUrl, attempt, mode, releaseHold, syncCapture]);
 
-  useEffect(() => {
-    window.addEventListener("blur", releaseHold);
-    document.addEventListener("visibilitychange", releaseHold);
-    return () => {
-      window.removeEventListener("blur", releaseHold);
-      document.removeEventListener("visibilitychange", releaseHold);
-    };
-  }, [releaseHold]);
+  const changeMode = (next: Mode) => {
+    if (next === mode) return;
+    stopSession.current();
+    mutedRef.current = false;
+    setMuted(false);
+    modeRef.current = next;
+    setMode(next);
+  };
 
   const beginHold = () => {
     if (phase !== "live" || holdingRef.current) return;
     holdingRef.current = true;
     setHolding(true);
     setError("");
-    void clientRef.current?.setHolding(true);
+    syncCapture();
   };
   const live = phase === "live";
-  const talkLabel = holding ? "Release to send" : playing ? "Speaking" : "Hold to talk";
-  const activity = holding ? "Mic open" : playing ? "Speaking" : floor === "thinking" ? "Thinking" : "Ready";
+  const continuous = mode === "continuous";
+  const talkLabel = continuous
+    ? started ? "End conversation" : phase === "paused" ? "Continue conversation" : "Start conversation"
+    : holding ? "Release to stop recording" : playing ? "Speaking" : "Hold to talk";
+  const activity = phase === "paused" ? "Paused" : phase === "connecting" ? "Connecting…"
+    : continuous && !started ? "Not started" : muted && continuous ? "Muted"
+    : playing ? "Speaking" : floor === "thinking" ? "Thinking" : capturing ? "Listening" : "Ready";
+  const canStart = ["idle", "paused", "live", "failed"].includes(phase);
 
   return (
     <PageShell className="channels-page voice-page">
-      <PageToolbar title="Voice" subtitle="Hold to talk with your Agent." actions={
+      <PageToolbar title="Voice" subtitle="Talk with your Agent, your way." actions={
         <StatusBadge tone={live ? "good" : phase === "connecting" ? "info" : phase === "failed" ? "danger" : "muted"}>
-          {live ? "Ready" : phase === "connecting" ? "Connecting…" : phase === "failed" ? "Disconnected" : phase === "unconfigured" ? "Needs setup" : phase === "restart" ? "Restart required" : "Agent offline"}
+          {live ? "Ready" : phase === "idle" ? "Not started" : phase === "paused" ? "Paused" : phase === "connecting" ? "Connecting…" : phase === "failed" ? "Disconnected" : phase === "unconfigured" ? "Needs setup" : phase === "restart" ? "Restart required" : "Agent offline"}
         </StatusBadge>
       } />
       <div className="channels-content voice-content">
         {error ? <div className="error-strip" role="alert">{error}</div> : null}
-        {phase === "failed" ? <Button type="button" onClick={() => setAttempt((value) => value + 1)}>Retry</Button> : null}
+        {phase === "failed" && !continuous ? <Button type="button" onClick={() => setAttempt((value) => value + 1)}>Retry</Button> : null}
         {phase === "unconfigured" ? (
           <div className="device-readiness-banner">
             <p className="wizard-hint">Configure your Agent’s voice once to start talking.</p>
@@ -214,12 +275,30 @@ function VoiceSession({ configuredApiUrl, refreshAgents }: {
           </div>
         ) : null}
         <Panel className="voice-panel">
+          <div className="voice-mode-switch" role="group" aria-label="Conversation mode">
+            <Button type="button" variant={mode === "hold" ? "primary" : "ghost"} aria-pressed={mode === "hold"}
+              onClick={() => changeMode("hold")}>Hold to talk</Button>
+            <Button type="button" variant={continuous ? "primary" : "ghost"} aria-pressed={continuous}
+              onClick={() => changeMode("continuous")}>Continuous conversation</Button>
+          </div>
+          <p className="wizard-hint">Switching modes ends the current conversation.</p>
           <div className="voice-meta">
-            {live ? <StatusBadge tone={holding ? "good" : playing ? "info" : "muted"}>{activity}</StatusBadge> : null}
+            <StatusBadge tone={capturing ? "good" : playing ? "info" : "muted"}>{activity}</StatusBadge>
             <span className="wizard-hint">Use headphones if the speaker feeds back into the mic.</span>
           </div>
           <div className="talk-wrap">
-            <button type="button"
+            {continuous ? <>
+              <button type="button" className={`talk-button${started ? " holding" : ""}`}
+                disabled={!started && !canStart} aria-label={talkLabel}
+                onClick={() => started ? stopSession.current() : startSession.current()}>
+                <Mic size={28} /><span>{talkLabel}</span>
+              </button>
+              {started ? <Button type="button" variant="secondary" aria-pressed={muted} onClick={() => {
+                mutedRef.current = !mutedRef.current;
+                setMuted(mutedRef.current);
+                syncCapture();
+              }}>{muted ? "Unmute" : "Mute"}</Button> : null}
+            </> : <button type="button"
               className={holding ? "talk-button holding" : playing ? "talk-button playing" : "talk-button"}
               disabled={!live} aria-pressed={holding} aria-label={talkLabel}
               onPointerDown={(event) => {
@@ -244,9 +323,12 @@ function VoiceSession({ configuredApiUrl, refreshAgents }: {
                 }
               }}
               onBlur={releaseHold}
-            ><Mic size={28} /><span>{talkLabel}</span></button>
+            ><Mic size={28} /><span>{talkLabel}</span></button>}
             <div className="talk-level" aria-hidden="true"><span style={{ width: `${Math.round(level * 100)}%` }} /></div>
           </div>
+          <p className="wizard-hint">{continuous
+            ? "Start once to talk continuously. Conversation pauses when this page is hidden."
+            : "Hold to talk; release to stop recording."}</p>
           <ul className="voice-transcript">
             {lines.length === 0 ? <li className="voice-transcript-empty">Transcripts appear here after you speak.</li> : null}
             {lines.map((line) => <li key={line.id}><span className="role">{line.role === "user" ? "You" : "Agent"}</span>{line.text}</li>)}

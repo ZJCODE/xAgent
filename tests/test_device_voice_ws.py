@@ -27,8 +27,9 @@ from xagent.interfaces.voice.types import VoiceUtterance
 class _FakeWSRecognizer:
     """Recognizer that consumes pushed WebSocket PCM chunks and yields a fixed utterance."""
 
-    def __init__(self, utterance_text: str = "打开客厅灯") -> None:
+    def __init__(self, utterance_text: str = "打开客厅灯", *, continuous: bool = False) -> None:
         self.utterance_text = utterance_text
+        self.continuous = continuous
         self.received_chunks: list[bytes] = []
         self.resources_closed = True
 
@@ -49,7 +50,8 @@ class _FakeWSRecognizer:
                 continue
             self.received_chunks.append(chunk)
             yield VoiceUtterance(text=self.utterance_text, language="zh")
-            return
+            if not self.continuous:
+                return
 
     def close(self) -> None:
         self.resources_closed = True
@@ -479,7 +481,7 @@ class DeviceVoiceWebSocketTests(unittest.IsolatedAsyncioTestCase):
     async def test_browser_voice_uses_temporary_sessions_without_pairing(self):
         from xagent.core.runtime.client import RuntimeClient
 
-        host, _, root, url = await self.start_host([(ReplyType.SIMPLE_REPLY, "你好。")], seed_credentials=False)
+        host, _, root, url = await self.start_host([(ReplyType.SIMPLE_REPLY, "你好。") for _ in range(3)], seed_credentials=False)
         # A legacy browser device must not prevent a new browser from talking.
         host.device_service.credentials.add("phone-web", "old-browser-secret")
         pairing = host.device_service.create_pairing()["pairing_code"]
@@ -488,19 +490,23 @@ class DeviceVoiceWebSocketTests(unittest.IsolatedAsyncioTestCase):
         second = (await client.request("POST", "/api/devices/voice-session")).json()
         self.assertNotEqual(first["session_id"], second["session_id"])
         hello = {"type": "hello", "input_sample_rate": 16000, "input_channels": 1,
-                 "profile": "headset", "echo_managed": True}
+                 "profile": "headset", "echo_managed": True, "playback_ack": True}
 
         def target(session):
             return url + "/ws/voice/" + session["session_id"] + "?token=" + quote(session["token"], safe="")
 
         with patch("xagent.interfaces.voice.factory.create_soniox_adapters",
-                   side_effect=lambda *args, **kwargs: (_FakeWSRecognizer(), _FakeWSSynthesizer())):
+                   side_effect=lambda *args, **kwargs: (_FakeWSRecognizer(continuous=True), _FakeWSSynthesizer())):
             async with websockets.connect(target(first), **self.connection_options) as browser:
                 await browser.send(json.dumps(hello))
                 ready = json.loads(await asyncio.wait_for(browser.recv(), timeout=3))
                 self.assertEqual(ready["type"], "ready")
                 self.assertNotIn("credential", ready)
                 self.assertEqual(ready["room_name"], "Browser voice")
+                session_runtime = host.device_service.voice_sessions[first["session_id"]].runtime
+                self.assertTrue(session_runtime.options.direct_conversation)
+                # Even after the room attention window expires, browser speech is directed at the Agent.
+                session_runtime._attention._window_open_until = 0
                 self.assertTrue(host.device_service.voice_sessions[first["session_id"]].browser)
                 self.assertEqual(host.device_service.list_devices()["devices"], [])
                 admin = (await client.request("GET", "/api/devices")).json()
@@ -519,9 +525,29 @@ class DeviceVoiceWebSocketTests(unittest.IsolatedAsyncioTestCase):
                             transcripts.append(message)
                         if message.get("type") == "playback_done":
                             break
+                self.assertTrue(session_runtime.pause_event.is_set())
+                await browser.send(json.dumps({"type": "playback_finished", "playback_id": "stale"}))
+                await asyncio.sleep(0.06)
+                self.assertTrue(session_runtime.pause_event.is_set())
+                await browser.send(json.dumps({"type": "playback_progress", "playback_id": "stale", "played_bytes": 999999}))
+                await asyncio.sleep(0.06)
+                self.assertEqual(session_runtime._current_remote_played_bytes, 0)
+                await browser.send(json.dumps({"type": "playback_finished", "playback_id": message["playback_id"]}))
+                await self.wait_for(lambda: not session_runtime.pause_event.is_set())
                 self.assertTrue(audio)
                 self.assertTrue(any(line.get("role") == "user" for line in transcripts))
                 self.assertTrue(any(line.get("role") == "assistant" and line.get("final") for line in transcripts))
+                # The same live microphone/session handles further turns without reconnecting.
+                for _ in range(2):
+                    await browser.send(b"\x10\x00" * 320)
+                    while True:
+                        frame = await asyncio.wait_for(browser.recv(), timeout=3)
+                        if isinstance(frame, str):
+                            message = json.loads(frame)
+                            if message.get("type") == "playback_done":
+                                await browser.send(json.dumps({"type": "playback_finished", "playback_id": message["playback_id"]}))
+                                break
+                    await self.wait_for(lambda: not session_runtime.pause_event.is_set())
                 stored = await host.agent.message_storage.get_messages(10)
                 self.assertTrue(any(message.sender_id == "web_user" and message.channel == "voice" for message in stored))
                 async with websockets.connect(target(second), **self.connection_options) as other:

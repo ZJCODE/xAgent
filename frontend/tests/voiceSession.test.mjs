@@ -10,17 +10,35 @@ const transpile = (source) => ts.transpileModule(source, {
   compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX },
 }).outputText;
 const react = moduleUrl(`
-  export const useCallback = (fn) => fn;
-  export const useRef = (value) => ({current: value});
   export function useState(value) {
-    const h = globalThis.voiceTest; const index = h.states.push(value) - 1;
-    return [value, (next) => { h.states[index] = typeof next === 'function' ? next(h.states[index]) : next; }];
+    const h = globalThis.voiceTest; const index = h.cursor++;
+    if (!(index in h.states)) h.states[index] = value;
+    return [h.states[index], (next) => {
+      const value = typeof next === 'function' ? next(h.states[index]) : next;
+      if (!Object.is(value, h.states[index])) { h.states[index] = value; h.dirty = true; }
+    }];
   }
-  export const useEffect = (effect) => globalThis.voiceTest.effects.push(effect);
+  export function useRef(value) {
+    const h = globalThis.voiceTest; const index = h.cursor++;
+    return h.refs[index] ??= {current: value};
+  }
+  export function useCallback(fn, deps) {
+    const h = globalThis.voiceTest; const index = h.cursor++;
+    const previous = h.hooks[index];
+    if (!previous || deps.some((v, i) => !Object.is(v, previous.deps[i]))) h.hooks[index] = {fn, deps};
+    return h.hooks[index].fn;
+  }
+  export function useEffect(effect, deps) {
+    const h = globalThis.voiceTest; const index = h.cursor++;
+    const previous = h.hooks[index];
+    if (!previous || deps.some((v, i) => !Object.is(v, previous.deps[i]))) {
+      h.effects.push(() => { previous?.cleanup?.(); h.hooks[index] = {deps, cleanup: effect()}; });
+    }
+  }
 `);
 const imports = new Map([
   ["react", react],
-  ["react/jsx-runtime", moduleUrl("export const jsx = (type, props) => ({type, props}); export const jsxs = jsx;")],
+  ["react/jsx-runtime", moduleUrl("export const jsx = (type, props) => ({type, props}); export const jsxs = jsx; export const Fragment = 'fragment';")],
   ["lucide-react", moduleUrl("export const Mic = 'mic', Play = 'play';")],
   ["../components/ui", moduleUrl("export const Button = 'button', PageShell = 'div', PageToolbar = 'header', Panel = 'section', StatusBadge = 'span';")],
   ["../context/AgentSessionContext", moduleUrl("export const useAgentSession = () => ({agents: [], selectedAgent: 'test', refresh: async () => {}});")],
@@ -34,8 +52,9 @@ const imports = new Map([
     export class PhoneVoiceClient {
       constructor(listener) { this.listener = listener; globalThis.voiceTest.clients.push(this); }
       async connect(options) { globalThis.voiceTest.connections.push(options); await globalThis.voiceTest.onConnect(); this.listener.onLive({}); }
-      disconnect() { this.disconnected = true; }
-      setHolding() { return Promise.resolve(); }
+      disconnect() { this.disconnected = true; this.capturing = false; }
+      prime() {}
+      setCapture(enabled) { this.capturing = enabled; this.listener.onCapture?.(enabled); return Promise.resolve(); }
     }`)],
   ["../lib/deviceVoice", moduleUrl(transpile(readFileSync(new URL("../src/lib/deviceVoice.ts", import.meta.url), "utf8")))],
 ]);
@@ -46,7 +65,7 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
 
 async function harness(t, options = {}) {
   const h = {
-    effects: [], states: [], clients: [], connections: [], pending: new Map(), listeners: new Map(), channelStarts: 0,
+    effects: [], states: [], refs: [], hooks: [], cursor: 0, clients: [], connections: [], pending: new Map(), listeners: new Map(), channelStarts: 0,
     getDevices: async () => ({runtime_available: true, api_available: true, api_url: "http://localhost:8013"}),
     voiceSettings: async () => ({configured: true, restart_required: false}),
     createSession: async () => ({session_id: "web-voice-auto", token: "voice_once"}),
@@ -65,10 +84,33 @@ async function harness(t, options = {}) {
     saved.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
     Object.defineProperty(globalThis, key, {value, configurable: true});
   }
-  const page = VoicePage();
-  page.type(page.props);
-  const cleanup = h.effects.map((effect) => effect());
-  h.dispose = () => cleanup.forEach((fn) => fn?.());
+  h.render = () => {
+    h.cursor = 0; h.dirty = false;
+    const page = VoicePage();
+    h.tree = page.type(page.props);
+    h.effects.splice(0).forEach((effect) => effect());
+  };
+  h.update = async () => {
+    await flush();
+    for (let i = 0; h.dirty && i < 20; i++) { h.render(); await flush(); }
+    assert.equal(h.dirty, false, "renders should settle");
+  };
+  h.render();
+  h.dispose = () => { h.hooks.forEach((hook) => { hook.cleanup?.(); delete hook.cleanup; }); };
+  h.find = (predicate) => {
+    const visit = (value) => {
+      if (!value || typeof value !== "object") return undefined;
+      if (predicate(value.props ?? {})) return value;
+      for (const child of [value.props?.children].flat(Infinity)) { const result = visit(child); if (result) return result; }
+    };
+    const result = visit(h.tree);
+    assert.ok(result, "control must exist");
+    return result.props;
+  };
+  h.selectContinuous = async () => {
+    h.find((p) => p.children === "Continuous conversation").onClick();
+    await h.update();
+  };
   h.fireNextTimer = async () => {
     const [key, timer] = [...h.pending].sort((a, b) => a[1].delay - b[1].delay)[0];
     h.pending.delete(key); timer.callback(); await flush(); return timer.delay;
@@ -77,7 +119,7 @@ async function harness(t, options = {}) {
     h.dispose();
     for (const [key, value] of saved) value ? Object.defineProperty(globalThis, key, value) : delete globalThis[key];
   });
-  await flush();
+  await h.update();
   return h;
 }
 
@@ -152,4 +194,138 @@ test("saved settings requiring restart do not enter an unsuccessful reconnect lo
   assert.equal(h.connections.length, 0);
   assert.ok(h.states.includes("restart"));
   assert.equal(h.pending.size, 0);
+});
+
+test("continuous mode waits for Start, supports mute, and ends without losing confirmed transcripts", async (t) => {
+  const h = await harness(t);
+  await h.selectContinuous();
+  assert.equal(h.connections.length, 1);
+  const client = h.clients.at(-1);
+  assert.ok(!client.capturing);
+  h.find((p) => p['aria-label'] === 'Start conversation').onClick();
+  await h.update();
+  assert.equal(h.connections.length, 2);
+  assert.equal(client.capturing, true);
+  for (let turn = 0; turn < 3; turn++) {
+    client.listener.onTranscript({role: 'user', text: `Question ${turn}`, final: true});
+    client.listener.onFloor('thinking');
+    client.listener.onPlaying(true);
+    client.listener.onTranscript({role: 'assistant', text: `Answer ${turn}`, final: true});
+    client.listener.onPlaying(false);
+    client.listener.onFloor('listening');
+    await h.update();
+    assert.equal(client.capturing, true);
+  }
+  h.find((p) => p.children === 'Mute').onClick();
+  await h.update();
+  assert.equal(client.capturing, false);
+  assert.equal(client.disconnected, undefined);
+  h.find((p) => p.children === 'Unmute').onClick();
+  await h.update();
+  assert.equal(client.capturing, true);
+  h.find((p) => p['aria-label'] === 'End conversation').onClick();
+  await h.update();
+  assert.equal(client.disconnected, true);
+  assert.ok(h.states.some((s) => Array.isArray(s) && s.length === 6));
+  assert.equal(h.pending.size, 0);
+});
+
+test("continuous mode ignores blur, pauses when hidden and requires Continue on return", async (t) => {
+  const h = await harness(t);
+  await h.selectContinuous();
+  h.find((p) => p['aria-label'] === 'Start conversation').onClick();
+  await h.update();
+  const client = h.clients.at(-1);
+  h.listeners.get('blur')();
+  assert.equal(client.capturing, true);
+  document.visibilityState = 'hidden';
+  h.listeners.get('visibilitychange')();
+  await h.update();
+  assert.equal(client.capturing, false);
+  assert.equal(client.disconnected, true);
+  document.visibilityState = 'visible';
+  h.listeners.get('visibilitychange')();
+  await h.update();
+  assert.equal(h.connections.length, 2);
+  h.find((p) => p['aria-label'] === 'Continue conversation').onClick();
+  await h.update();
+  assert.equal(h.connections.length, 3);
+  assert.equal(client.capturing, true);
+});
+
+test("continuous reconnect restores mute; switching modes ignores late callbacks", async (t) => {
+  const h = await harness(t);
+  await h.selectContinuous();
+  h.find((p) => p['aria-label'] === 'Start conversation').onClick();
+  await h.update();
+  const client = h.clients.at(-1);
+  h.find((p) => p.children === 'Mute').onClick();
+  await h.update();
+  client.listener.onClose({code: 1006});
+  await h.fireNextTimer();
+  await h.update();
+  assert.equal(client.capturing, false);
+  client.listener.onTranscript({role: 'assistant', delta: 'Unfinished', final: false});
+  await h.update();
+  h.find((p) => p.children === 'Hold to talk').onClick();
+  await h.update();
+  const count = h.connections.length;
+  client.listener.onTranscript({role: 'user', text: 'Late', final: true});
+  client.listener.onClose({code: 1006});
+  await h.update();
+  assert.equal(h.connections.length, count);
+  assert.ok(!h.states.some((s) => Array.isArray(s) && s.some((line) => line.text === 'Late' || line.pending)));
+});
+
+test("permission errors end continuous capture without automatic retries", async (t) => {
+  const h = await harness(t);
+  await h.selectContinuous();
+  h.find((p) => p['aria-label'] === 'Start conversation').onClick();
+  await h.update();
+  h.clients.at(-1).listener.onNotice('Microphone permission was denied.');
+  await h.update();
+  assert.equal(h.clients.at(-1).capturing, false);
+  assert.equal(h.pending.size, 0);
+  assert.ok(h.states.includes('failed'));
+});
+
+test("hold mode retains pointer cancellation and keyboard press/release controls", async (t) => {
+  const h = await harness(t);
+  const client = h.clients.at(-1);
+  const button = () => h.find((p) => p['aria-label'] === 'Hold to talk' || p['aria-label'] === 'Release to stop recording');
+  const event = {button: 0, pointerId: 1, preventDefault() {}, currentTarget: {setPointerCapture() {}}};
+  button().onPointerDown(event);
+  await h.update();
+  assert.equal(client.capturing, true);
+  button().onPointerCancel();
+  await h.update();
+  assert.equal(client.capturing, false);
+  for (const key of [' ', 'Enter']) {
+    button().onKeyDown({key, repeat: false, preventDefault() {}});
+    await h.update();
+    assert.equal(client.capturing, true);
+    button().onKeyUp({key, preventDefault() {}});
+    await h.update();
+    assert.equal(client.capturing, false);
+  }
+});
+
+test("ending continuous conversation cancels a pending ticket and a late permission notice cannot restart it", async (t) => {
+  const h = await harness(t);
+  await h.selectContinuous();
+  let ticket;
+  h.createSession = () => new Promise((resolve) => { ticket = resolve; });
+  h.find((p) => p['aria-label'] === 'Start conversation').onClick();
+  await h.update();
+  h.find((p) => p['aria-label'] === 'End conversation').onClick();
+  await h.update();
+  ticket({session_id: 'late', token: 'late'});
+  await h.update();
+  assert.equal(h.connections.length, 1);
+  assert.equal(h.pending.size, 0);
+  h.find((p) => p.children === 'Hold to talk').onClick();
+  await h.update();
+  h.clients.at(-2).listener.onNotice('Old permission error');
+  await h.update();
+  assert.ok(!h.states.includes('Old permission error'));
 });

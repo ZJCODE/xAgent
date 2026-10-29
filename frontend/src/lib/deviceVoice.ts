@@ -10,6 +10,7 @@ export interface VoiceHello {
   output_channels: 1;
   profile: "headset";
   echo_managed: true;
+  playback_ack: true;
 }
 
 export interface VoiceReadyFrame {
@@ -55,6 +56,7 @@ export function voiceHello(inputSampleRate: number): VoiceHello {
     output_channels: 1,
     profile: "headset",
     echo_managed: true,
+    playback_ack: true,
   };
 }
 

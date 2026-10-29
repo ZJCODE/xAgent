@@ -63,6 +63,7 @@ class VoiceRuntimeOptions:
     # autonomous scheduler behind an explicit opt-in for a future mode.
     allow_proactive_output: bool = False
     device_id: Optional[str] = None
+    direct_conversation: bool = False
 
 
 @dataclass
@@ -949,6 +950,8 @@ class VoiceRuntime:
         utterance: VoiceUtterance,
         attribution: SpeakerAttribution,
     ) -> bool:
+        if self.options.direct_conversation:
+            return True
         tier = self._attention.attention_tier(transcript)
         if tier < 3:
             return True

@@ -246,3 +246,21 @@ are populated from the local PortAudio/sounddevice inventory,
 with an `Auto (recommended)` entry always available. If the host cannot
 enumerate audio hardware, the UI keeps the Auto choice and shows the
 enumeration error instead of blocking setup.
+
+
+## 9. Browser conversation modes
+
+Voice defaults to Hold to talk. Continuous conversation is selected on the page
+and starts only after Start conversation; it shares voice, speed and interruption
+preferences with hold-to-talk. Mute stops capture without stopping the current
+reply; End conversation stops capture, playback and the socket. Mode switches
+end the current session, drop unfinished transcripts and keep confirmed lines.
+The mode is not persisted in Agent configuration or browser storage.
+
+Continuous conversation pauses and releases audio resources on page hide and
+requires Continue conversation when visible again. It does not remain active
+on other app pages or promise background/lock-screen operation. With interruptions
+disabled, recognition is paused during thinking and playback, including the remote
+browser playback buffer and the existing echo cooldown. With interruptions enabled,
+the existing barge-in and echo safeguards apply. Browser sessions bypass room
+participation decisions; Host voice retains its room attention policy.

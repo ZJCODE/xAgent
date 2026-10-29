@@ -143,7 +143,8 @@ both are present, the header is used and the query value is ignored. Native
 clients, including ESP devices, should keep using the header: a query token
 can appear in proxy and server access logs.
 
-The admin web client page at `/voice` prepares a browser voice session automatically.
+The admin web client page at `/voice` prepares a hold-to-talk browser session automatically.
+Continuous conversation waits for an explicit Start conversation action before connecting.
 It requests a short-lived, single-use ticket from `POST /api/devices/voice-session`
 on the trusted management origin, then opens
 `wss://<agent-api>/ws/voice/{session_id}?token=…` on `web.api_url`.
@@ -154,9 +155,23 @@ Browser sessions do not create credentials or profiles and are excluded from
 device lists. Independent tabs use separate session IDs.
 
 The hello profile is `headset` with `echo_managed: true`. The page requests
-microphone permission only on hold-to-talk, sends PCM16 uplink and plays TTS
-downlink. It retries failed connections three times with increasing delays,
-then offers Retry. Leaving the page closes the session and audio resources.
+microphone permission only when holding the talk button or starting continuous
+conversation, sends PCM16 uplink and plays TTS downlink. Continuous conversation
+supports mute/unmute, ends on mode switches, and pauses when the page is hidden.
+Returning requires Continue conversation; ordinary window blur does not pause it.
+It retries failed connections three times with increasing delays, restoring the
+continuous session's mute state. Permission errors stop without automatic retry.
+Leaving the page closes the session and audio resources. Browser speech is treated
+as directed conversation, independently of the room attention window.
+
+New browser clients declare `playback_ack: true` in hello (optional, default false).
+For these clients, `playback_start`, `playback_done` and `clear_playback` include
+`playback_id`. Clients send `playback_progress` with that ID and `played_bytes`,
+then `playback_finished` with the ID once all scheduled audio has actually played.
+The server waits for the matching confirmation before ending the playback phase;
+late IDs are ignored. Interruptions and disconnects cancel the wait. A missing
+confirmation closes the connection after the sent audio duration plus five seconds.
+Clients omitting this capability retain the original protocol behavior.
 If the Agent is stopped, Start Agent prepares it before connecting.
 
 ```json

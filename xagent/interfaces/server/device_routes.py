@@ -220,6 +220,7 @@ def register_device_routes(
                 tasks_dir=tasks_dir,
                 allow_proactive_output=True,
                 device_id=device_id,
+                direct_conversation=browser,
             )
             runtime, microphone, player = create_websocket_voice_runtime(
                 agent=agent,
@@ -279,7 +280,10 @@ def register_device_routes(
                 if raw_text is not None:
                     control = VoiceClientControl.model_validate(parse_voice_control_frame(raw_text))
                     if control.type == "playback_progress":
-                        runtime.note_remote_playback_progress(control.played_bytes)
+                        if player.accepts_playback(control.playback_id):
+                            runtime.note_remote_playback_progress(control.played_bytes)
+                    elif control.type == "playback_finished":
+                        player.note_playback_finished(control.playback_id)
                     elif control.type == "ping":
                         await websocket.send_json({"type": "pong"})
                     elif control.type == "stop":
