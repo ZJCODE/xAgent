@@ -235,7 +235,7 @@ class AgentEditSetupRouteTests(unittest.TestCase):
             self.assertEqual(image_response.json()["feature"], "image_generation")
             self.assertEqual(voice_response.status_code, 200)
             self.assertEqual(voice_response.json()["feature"], "voice")
-            self.assertEqual(voice_response.json()["restart_channel"], "voice")
+            self.assertEqual(voice_response.json()["restart_channel"], "api")
             self.assertEqual(load_config(agent_dir)["image_generation"]["provider"], "openai")
             voice = load_config(agent_dir)["channels"]["voice"]
             self.assertEqual(voice["voice"], "Maya")

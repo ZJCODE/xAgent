@@ -25,8 +25,6 @@ from xagent.interfaces.voice.config import (
     VoiceRuntimeProfile,
     VoiceSpeechStyle,
 )
-from xagent.interfaces.voice.audio import AudioTopology
-from xagent.interfaces.voice.factory import create_local_voice_runtime
 from xagent.interfaces.voice.floor import FloorState
 from xagent.interfaces.voice.presence import SttLifecycleController, VoicePresenceConfig
 from xagent.interfaces.voice.spoken_ledger import SpokenLedger
@@ -133,7 +131,7 @@ class VoiceConfigTests(unittest.TestCase):
         self.assertEqual(config.languages, ["zh", "en"])
         self.assertEqual(config.fallback_language, "zh")
         self.assertEqual(config.speed, 1.0)
-        self.assertEqual(config.audio.input, "auto")
+        self.assertNotIn("audio", config.to_public_dict())
 
     def test_session_can_override_shared_speech_style(self):
         config = VoiceChannelConfig.from_dict({"api_key": "key"})
@@ -164,7 +162,7 @@ class VoiceConfigTests(unittest.TestCase):
         self.assertEqual(config.api_key, "key")
         self.assertEqual(config.languages, ["zh", "en"])
         self.assertEqual(config.fallback_language, "zh")
-        self.assertEqual(config.audio.output, 2)
+        self.assertNotIn("audio", config.to_public_dict())
 
     def test_api_key_falls_back_to_environment(self):
         with patch.dict(os.environ, {"SONIOX_API_KEY": "environment-key"}):
@@ -1114,89 +1112,3 @@ class VoiceRuntimeTests(unittest.TestCase):
             runtime._speak.assert_awaited_once()
 
         asyncio.run(run_delivery())
-
-    def test_factory_uses_fixed_soniox_audio_profiles(self):
-        input_selection = SimpleNamespace(
-            device_index=1,
-            device_name="Mic",
-            stream_sample_rate=16000,
-            stream_channels=1,
-        )
-        output_selection = SimpleNamespace(
-            device_index=2,
-            device_name="Speaker",
-            stream_sample_rate=24000,
-            stream_channels=1,
-        )
-        profile = SimpleNamespace(
-            input_selection=input_selection,
-            output_selection=output_selection,
-            topology=AudioTopology(near_field=False, echo_managed=False, reason="test"),
-        )
-        with patch("xagent.interfaces.voice.factory.create_soniox_adapters", return_value=(object(), object())), patch(
-            "xagent.interfaces.voice.factory.resolve_audio_io_profile", return_value=profile
-        ) as resolve, patch("xagent.interfaces.voice.factory.SoundDeviceMicrophone") as microphone, patch(
-            "xagent.interfaces.voice.factory.SoundDevicePlayer"
-        ) as player:
-            create_local_voice_runtime(
-                agent=FakeAgent(),
-                config=voice_config(),
-                options=VoiceRuntimeOptions(),
-            )
-
-        self.assertEqual(resolve.call_args.kwargs["input_sample_rate"], 16000)
-        self.assertEqual(resolve.call_args.kwargs["output_sample_rate"], 24000)
-        microphone.assert_called_once()
-        player.assert_called_once()
-
-    def test_factory_settles_profile_and_speech_before_the_adapters_exist(self):
-        selection = SimpleNamespace(
-            device_index=1,
-            device_name="AirPods Pro",
-            stream_sample_rate=16000,
-            stream_channels=1,
-        )
-        audio_profile = SimpleNamespace(
-            input_selection=selection,
-            output_selection=selection,
-            topology=AudioTopology(
-                near_field=True, echo_managed=True, reason="device name contains 'airpod'"
-            ),
-        )
-        config = VoiceChannelConfig.from_dict({"api_key": "key", "interruptions": False})
-        agent = FakeAgent()
-        agent.voice = "Daniel"
-        seen: dict[str, object] = {}
-
-        def _adapters(cfg, **kwargs):
-            del kwargs
-            seen["profile"] = cfg.profile
-            seen["diarization"] = cfg.enable_diarization
-            seen["voice"] = cfg.voice
-            seen["speed"] = cfg.speed
-            seen["interruptions"] = cfg.enable_interruptions
-            return object(), object()
-
-        with patch(
-            "xagent.interfaces.voice.factory.create_soniox_adapters", side_effect=_adapters
-        ), patch(
-            "xagent.interfaces.voice.factory.resolve_audio_io_profile", return_value=audio_profile
-        ), patch("xagent.interfaces.voice.factory.SoundDeviceMicrophone"), patch(
-            "xagent.interfaces.voice.factory.SoundDevicePlayer"
-        ):
-            create_local_voice_runtime(
-                agent=agent,
-                config=config,
-                options=VoiceRuntimeOptions(),
-                speed_override=1.1,
-            )
-
-        self.assertEqual(
-            seen,
-            {
-                "profile": "headset", "diarization": False, "voice": "Daniel",
-                "speed": 1.1, "interruptions": False,
-            },
-        )
-        self.assertFalse(config.enable_interruptions)
-        self.assertTrue(config.runtime_profile.echo_managed)

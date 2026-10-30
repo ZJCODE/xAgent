@@ -194,13 +194,14 @@ export class VoiceTransport {
     if (data.type === 'progress') {
       this.event('playback', output.ending ? 'draining' : 'playing');
       this.send({type: 'playback_progress', playback_id: output.id, sample_rate: this.outputRate,
+        rendered_samples: Number(data.samples),
         played_samples: Math.max(0, Number(data.samples) - Math.ceil(this.outputDelay * this.outputRate / 1000))});
     }
     if (data.type === 'finished') {
       if (!output.ending || data.samples !== output.samples) { this.fail(new Error('Playback ended before media delivery.'), true); return; }
       output.timer = setTimeout(() => {
         if (this.output !== output) return;
-        this.send({type: 'playback_progress', playback_id: output.id, sample_rate: this.outputRate, played_samples: output.samples});
+        this.send({type: 'playback_progress', playback_id: output.id, sample_rate: this.outputRate, rendered_samples: output.samples, played_samples: output.samples});
         this.send({type: 'playback_finished', playback_id: output.id});
         this.clearPlayback();
       }, this.outputDelay);

@@ -4,7 +4,6 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from xagent.interfaces.voice.audio import SoundDevicePlayer
 from xagent.interfaces.voice.preemptive import (
     PreemptiveGenerationController,
     PreemptiveGenerationConfig,
@@ -53,10 +52,6 @@ class PreemptiveTests(unittest.TestCase):
         asyncio.run(run_case())
 
 
-class WarmPlayerTests(unittest.TestCase):
-    def test_close_is_safe_without_stream(self):
-        player = SoundDevicePlayer(keep_warm=True)
-        player.close()
 
 
 class PreemptiveRuntimeTests(unittest.TestCase):

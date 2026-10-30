@@ -33,6 +33,8 @@ curl -fsSL https://raw.githubusercontent.com/ZJCODE/xagent/main/install.sh | bas
 pip install myxagent
 ```
 
+Voice uses the browser’s microphone and speaker or a paired WebSocket voice device. Configure shared voice settings in Agent, then open Voice; no separate Host voice startup is needed. The Agent server does not capture local audio.
+
 Browser voice includes Opus support by default. A startup codec self-test selects Opus for both directions, with a fixed PCM profile available when native browser codecs are unsupported. Current browsers with AudioWorklet support and audio protocol 2 are required.
 
 ## Getting Started

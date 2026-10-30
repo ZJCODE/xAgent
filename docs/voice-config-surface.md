@@ -1,279 +1,93 @@
-# Voice config surface: what to expose, what to hide
+# Voice configuration and WebSocket sessions
 
-Status: implemented. `channels.voice` grew from 6 keys to 34 during stages 1–5,
-was curated down to 11, and now writes 5 regular settings plus optional devices.
+Status: implemented. Voice uses browser or paired-device WebSocket sessions.
+Host voice is no longer a managed channel. No replacement native audio client
+is included in this phase.
 
-Scope: which of the knobs in `xagent/interfaces/voice/config.py` belong in the
-`config.yaml` that `xagent init` / `xagent voice setup` writes, which stay legal
-but unwritten, and which should stop being config at all.
+## Shared settings
 
-## 1. The test
-
-For an agent that perceives and remembers, every config key is a claim that the
-agent cannot work something out for itself. Four kinds of setting survive
-that claim:
-
-1. **A credential.** Unobservable from inside the room; it can only be told.
-2. **A boundary whose violation cannot be undone.** Waking a household, spending
-   money, streaming a room to a vendor. Surface these even when the default is
-   good, because the failure is expensive and silent.
-3. **A fact that cold start cannot observe.** Something the agent would work out
-   after a few minutes of listening, but which must be right on the first turn.
-4. **An explicit interaction preference.** Whether people want to interrupt a
-   reply cannot be inferred from whether the hardware can support it. A shared
-   channel policy must also work before any speaker is identified.
-
-Hardware properties should be detected, preferences of an identified person can
-belong in memory, and invariants with one correct answer should be constants.
-Explicit channel policies remain configuration rather than inferred hardware facts.
-
-Two hard exclusions on top:
-
-- **Never expose a value whose wrong setting corrupts memory or breaks an
-  invariant.** The user cannot be expected to know that `return_timestamps` is
-  what keeps the diary from claiming the agent said sentences it was cut off
-  before reaching.
-- **Never expose a value the user cannot measure.** `wake_energy_rms: 450` asks
-  someone to type a PCM RMS figure for their living room.
-
-## 2. What the generated config contains
+Configure voice in **Agent → Preferences → Voice** or `xagent voice setup`.
+The existing YAML location stays compatible:
 
 ```yaml
 channels:
   voice:
     api_key: your_soniox_api_key_here
-    voice: Daniel               # one of six representative English voices
-    speed: 1.25                 # optional shared default; omitted at 1.0
-    interruptions: false        # true | false
+    voice: Daniel
+    interruptions: false
+    # speed: 1.25
 ```
 
-Why each earns its line:
+Soniox credentials, speaking voice, speed (0.7–1.3), and interruption preference
+are shared across browser and device sessions. The default speed 1.0 is omitted
+when saving. Recognition uses internal Chinese and English hints.
+Keys are never returned by the settings API. PATCH submits only edited fields.
+Settings changed on a running Agent require an Agent restart; offline changes
+apply on its next start. Legacy `languages`, `enabled`, and `audio` values are
+ignored when loading and removed the next time voice settings are saved. Even
+an unavailable or malformed retired host audio selection cannot block WS voice.
 
-- **`api_key`** — test 1. Required, no default possible.
-- **`voice`** — GOAL.md asks for a consistent self, and the name still follows
-  the agent wherever it is heard. It lives in the channel block because not
-  every agent is heard aloud: an agent that never speaks carries no voice
-  setting at all, and the one place a voice is actually used is the place it
-  is configured.
-- **`interruptions`** — test 4. `true` allows the user to interrupt a reply;
-  `false` uses turn-taking and is the default. Runtime echo protection remains
-  active when interruptions are enabled.
+There are no host microphone/speaker selectors or host device inventory endpoint.
+Capture and playback hardware belong to the browser or paired device. The server
+no longer requires sounddevice or PortAudio.
 
-Recognition always uses the internal `[zh, en]` hints, with `zh` as the fallback
-reply language. `languages` is no longer a user setting. Existing saved values
-are ignored and removed the next time voice setup is saved. `audio` appears only
-once a device has been pinned.
+## Connections and lifecycle
 
-## 3. Detected, not configured
+```text
+Browser microphone/speaker ── WS ──┐
+                                  ├─ VoiceRuntime → one Agent
+Paired voice device ───────── WS ──┘
+```
 
-**Device topology and `profile`.** `detect_audio_topology` (`audio.py`) reads the
-devices that were actually selected and answers two questions the old `profile`
-boolean conflated:
+Channels manages API and Weixin. Agent Runtime and its API must be running for
+voice connections; starting Host voice is never required. The Voice page keeps
+its existing Start/Restart Agent preparation flow. Voice navigation depends on
+valid shared voice configuration, independently of host audio hardware.
 
-- **near-field?** Drives diarization, attention window, participation gating,
-  barge-in thresholds and Soniox endpointing.
-- **echo-managed?** Whether playback is prevented from reaching the microphone.
-  This is a different axis: a
-  conference speakerphone is far-field but echo-managed, a laptop mic with
-  laptop speakers is neither.
+Browser `/ws/voice/{session_id}` uses a short-lived, single-use management ticket.
+Paired devices use `/ws/devices/{device_id}/voice` and their device credentials.
+Each accepted connection creates a VoiceRuntime and cleans up its capture,
+playback, and runtime resources when disconnected. API disconnect closes its
+voice sessions. Protocol 2, Opus/PCM contracts, bounded audio queues, playback
+progress/finished acknowledgements, and reconnect behavior are unchanged.
+See [device execution](device-execution.md#device-protocol).
 
-Both are inferred session-level facts, not persistent preferences. Detection
-uses device names and whether capture/playback share a device; it does not
-measure acoustic echo cancellation. `--profile` can override the near/far-field
-profile for a session.
+Browser Hold to talk and Continuous conversation share the same transport.
+Continuous mode starts explicitly, supports mute, pauses on page hide, and
+requires Continue conversation on return. Leaving the page ends the session.
+A browser is not a background room microphone. Browser conversations bypass room
+participation gating; paired room devices retain attention, diarization, and
+idle recognition sleep. Devices supply session profile and echo handling;
+interruption policy remains separate, with the existing echo safeguard.
 
-Interruption policy is separate from those facts. Precedence is an explicitly
-provided `--interruptions true|false`, then `channels.voice.interruptions`, then
-the default `false`. Session
-overrides never overwrite the saved preference or the detected echo capability.
-Startup logs report the policy, its source, detected echo handling and whether
-barge-in is enabled.
+Host capture factory, local hardware I/O, channel controls, restart restoration,
+and CLI hardware enumeration are removed. Old `--channels voice`,
+`channel voice connect|disconnect`, and native voice command attempts provide
+migration instructions. Retired voice channel management/setup routes return
+410; configure shared settings through `/api/agent/voice` instead.
 
-`false` preserves the existing half-duplex behavior: microphone audio is paused
-during both thinking and playback, so follow-up steering during thinking is
-also disabled. Separate controls for these two phases are not introduced here.
-Timing and word-count thresholds remain internal profile settings. The current
-runtime measures the persistence of a nonempty partial transcript, not raw VAD
-speech duration.
+## Delivery and compatibility
 
-| Behaviour | `headset` | `room` |
-| --- | --- | --- |
-| `enable_diarization` | false | true |
-| `attention.open_window_seconds` | 120 (always addressable) | 25 |
-| `attention.use_decide_participation` | false | true |
-| `interruption.min_words` | 1 | 2 |
-| `interruption.min_speech_ms` | 150 | 250 |
-| aggregation grace window | 0.85 | 1.0 |
-| Soniox `endpoint_sensitivity` / `max_endpoint_delay_ms` | tighter | vendor preset |
+The `voice` conversation/delivery channel remains valid in historical messages,
+contacts, tasks, and the unified diary. Only the managed host transport is retired.
 
-Detection can misjudge echo cancellation, and that failure is loud: the agent
-interrupts itself for the rest of the session. `SelfInterruptionGuard`
-(`echo_guard.py`) recognises the symptom — the words that interrupt are the
-words being spoken — and disables duplex capture after two consecutive echo
-classifications. This also applies to `on`: capture is paused immediately for
-the current playback, subsequent replies use half-duplex, and a warning gives
-the reason and requested policy. The saved preference is unchanged; a new
-runtime session starts with a fresh guard.
+Voice delivery selects a live WS session by explicit device ID, unique room, or
+unique matching session user. A missing explicit device never falls through to
+another room or browser. Ambiguous or absent destinations are unavailable;
+there is no local speaker or sole-online-device fallback. Browser sessions stay
+session-specific and room devices keep their persistent device identity.
 
-## 4. Remembered, not configured
+Future unattended host audio can be an ordinary paired WS client running on the
+Agent computer. It must implement the same audio and playback confirmation
+contract; it does not require reinstating a managed Host voice channel.
 
-**`names`** was a hand-maintained second copy of what the agent already knows.
-Contacts carry display names and relationship cards carry a name, so
-`context_terms.py` reads them and refreshes the recognizer's context when the
-runtime starts. GOAL.md principle 8 makes derived views regenerable projections
-rather than parallel sources of truth; a YAML name list was exactly a parallel
-source. Wake terms stay limited to the agent's own name, so a mention of
-somebody else in the room does not grab the floor.
+## Goal check
 
-**`speed`** is a shared speaking default edited in Agent. Soniox accepts
-`0.7`–`1.3`; `1.0` is normal speed. Older files that saved `0.5`–`2.0` still
-load, clamped into that range. The default 1.0× is omitted from generated YAML.
-CLI `--speed` can still override it for one session without changing the saved
-preference.
-
-## 5. Constants, not configuration
-
-- **`performance.preemptive_generation`** — disabled by default. Partial STT
-  transcripts must not enter the full Agent turn, execute tools or become
-  durable messages before the final transcript and speaker are confirmed.
-  The existing speculative controller is experimental; enabling it again
-  requires a candidate-only generation path with deferred commit and tools.
-- **`idle_shutdown_minutes`** — the recognizer socket bills while open (roughly
-  \$2.88/day per device, design doc §6a) and streams the room while it does, and
-  local energy reopens it, so holding it through silence buys nothing. Closing
-  after two quiet minutes is now unconditional. The old default of `0` did not
-  merely leave that choice to the user; it left the entire wake-energy gate
-  switched off, and with it the `require_recent_speech` guard that depended on
-  the controller being enabled.
-- **`return_timestamps`** — the spoken ledger's input. False leaves
-  `SpokenLedger` with no character timeline, so a reply cut off after three
-  seconds is still stored whole and the diary holds sentences the agent never
-  said. That is a memory-integrity invariant, not a preference.
-- **`aggregate_utterances`** — exists to fix "it answered half my question";
-  false reinstates the bug.
-- **`presence.wake_energy_rms`**, **`performance.*`** — latency and threshold
-  implementation details with one correct answer each. If one turns out to need
-  per-device tuning, that is evidence for a third profile, not for seven more
-  lines in everyone's config.
-
-## 6. Schema shape
-
-`channels.voice` accepts `api_key`, `voice`, `speed`, `interruptions` and
-`audio`; anything else is rejected with a close-match hint. There is no quiet
-hours setting because voice only replies to an explicit user turn.
-`audio` is written only when pinned: on a fixed appliance the selected device is a stable machine-level fact
-that has to survive a restart, and the launcher restarts the channel without
-flags. Everywhere a human is at a terminal, `--input-device` / `--output-device`
-and `xagent voice --list-devices` are the escape hatch.
-
-There is no advanced tier of YAML thresholds. Session-level CLI flags override
-the persistent policy without changing it. Existing configurations without
-`interruptions` default to `false`; setup and credential
-rotation preserve an explicitly saved preference.
-
-## 7. Goal check (GOAL.md mandatory review)
-
-- **Identity impact.** Positive. `channels.voice.voice` keeps the audible self
-  with the only place the agent is heard, so the agent sounds like one entity
-  across devices, while an agent without a voice channel carries no voice
-  setting at all. Latency tics stop being per-install choices.
-- **Multi-user impact.** `enable_diarization` follows the detected profile and
-  defaults to on, so speaker separation cannot be switched off by a user who
-  does not know principle 2 depends on it.
-- **1:1 and group coverage.** `headset` and `room` remain the axis; it is now
-  answered by the hardware rather than asked of the user.
-- **Memory/journal perspective.** `return_timestamps` and `aggregate_utterances`
-  stay off the user surface specifically to protect what gets recorded as said:
-  no unspoken text stored as spoken, no half-question stored as a whole turn.
-- **Unified-memory impact.** Improved. Removing `names` removes a parallel store
-  of who the agent knows.
-- **Agent-governed sharing.** The current voice mode only speaks in response to
-  an explicit user turn; proactive output is disabled while this surface is
-  simplified.
-- **Diary-anchored carrier.** Unchanged; no setting here adds a parallel store.
-- **Attribution and continuity impact.** Names derived from relationship cards
-  improve recognition at the source, and diarization stays on by default so
-  who-said-what survives into the diary. Fixing `require_recent_speech` is a
-  continuity fix too: the agent no longer speaks into a room it has not heard
-  from in days.
-
-Interruption-policy goal check: the agent's identity, first-person journal,
-unified memory, diary authority and sharing decisions remain unchanged. The
-policy applies to the channel in both 1:1 and group settings, preserving speaker
-attribution and existing spoken-position metadata. Persisting it supplies
-continuity across restarts without creating a per-user memory store or changing
-who is allowed to receive information.
-
-## 8. Setup surfaces
-
-The web UI exposes a single Voice settings entry in `Agent → Preferences →
-Voice`. It uses a compact form: voice and speed share a row; a single More
-options disclosure contains the interruption switch and Agent-computer
-microphone/speaker selectors. Service credentials are represented by a
-configured indicator and a Change key action after initial setup.
-
-The dialog reads and patches `/api/agent/voice`, independently of the channel
-setup wizard. It submits only edited fields, preserving the saved key and any
-unmodified preferences. Host audio inventory is fetched lazily from
-`/api/agent/voice/devices` when More options is opened, so readiness and the
-browser Voice page do not require working host audio hardware. Auto and saved
-device selections remain usable when inventory is unavailable. Keys are never
-returned. Save is available only after an edit. The server reports whether a
-running Agent needs a restart; offline saves apply on its next start.
-
-The Voice navigation item appears directly below Chat only when the selected
-Agent has valid voice configuration. Saving voice settings refreshes that
-availability immediately. Each registered Agent reports its own availability;
-starting Host voice is not required for the browser entry to appear.
-
-`Connections → Host voice` only starts or stops audio on the Agent's computer.
-The separate Voice tab uses the current browser's microphone and speaker and
-has no settings form. If shared settings are missing, it links directly to
-Agent's Voice dialog. It does not start Host voice. Saving settings while the
-Agent is running requires an Agent restart; an offline Agent uses them on its
-next start. The existing YAML block and CLI setup remain compatible.
-
-Entering CLI voice setup enables the channel and asks only for the Soniox key;
-there is no separate enable checkbox. Edit Setup exposes speaking voice,
-interruption policy, and optional input/output device pins
-when they need to be changed.
-The summary shows the saved interruption policy, and the voice startup log
-reports the effective value when a session override is used.
-
-The web voice selector and CLI voice choices use six representative voices
-from Soniox's published shared catalogue. CLI input and output device options
-are populated from the local PortAudio/sounddevice inventory,
-with an `Auto (recommended)` entry always available. If the host cannot
-enumerate audio hardware, the UI keeps the Auto choice and shows the
-enumeration error instead of blocking setup.
-
-
-## 9. Browser conversation modes
-
-Voice defaults to Hold to talk. Continuous conversation is selected on the page
-and starts only after Start conversation; it shares voice, speed and interruption
-preferences with hold-to-talk. Mute stops capture without stopping the current
-reply; End conversation stops capture, playback and the socket. Mode switches
-end the current session, drop unfinished transcripts and keep confirmed lines.
-The mode is not persisted in Agent configuration or browser storage.
-
-Continuous conversation pauses and releases audio resources on page hide and
-requires Continue conversation when visible again. It does not remain active
-on other app pages or promise background/lock-screen operation. With interruptions
-disabled, recognition is paused during thinking and playback, including the remote
-browser playback buffer and the existing echo cooldown. With interruptions enabled,
-the existing barge-in and echo safeguards apply. Browser sessions bypass room
-participation decisions; Host voice retains its room attention policy.
-
-
-Browser audio uses protocol 2 over WS/WSS with one codec for the entire session:
-Opus at 48 kHz mono in both directions, or PCM16 at 16 kHz microphone / 24 kHz
-playback. A startup encode/decode self-test selects Opus when its complete native
-contract works, otherwise PCM. Server PyAV support is required; runtime codec
-errors stop the session and require retry. Formats never switch mid-session.
-AudioWorklets handle capture/playback, and a dedicated Worker owns the socket
-and codecs. There are no legacy capture or protocol paths. Both Hold to talk and
-Continuous conversation share this transport and required playback confirmation.
-No Agent configuration fields or restart-sensitive voice preferences are added.
-See [audio protocol 2](device-execution.md#audio-protocol-2) for packet framing,
-buffer limits and the required device-client migration.
+- **Identity:** all endpoints use the same Agent and shared speaking voice.
+- **Multi-user:** speaker attribution and identity boundaries remain in VoiceRuntime.
+- **1:1 and groups:** browser direct conversation and paired room policies remain distinct.
+- **Memory/journal perspective:** first-person records and confirmed played speech are preserved.
+- **Unified memory:** endpoints share the existing Agent memory stream.
+- **Agent-governed sharing:** existing sharing decisions remain; destination matching prevents accidental rerouting.
+- **Diary carrier:** the diary remains authoritative; no new memory store is introduced.
+- **Attribution and continuity:** existing voice records remain valid, devices retain identity, and browser sessions keep explicit lifetimes. Unattended host capture is intentionally removed in this phase.

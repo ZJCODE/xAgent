@@ -1,4 +1,4 @@
-import { ArrowUpRight, Globe2, MessageCircle, Mic, Play, RefreshCw } from "lucide-react";
+import { ArrowUpRight, Globe2, MessageCircle, Play, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ChannelSetupWizard } from "../components/ChannelSetupWizard";
 import { Button, IconButton, PageShell, PageToolbar } from "../components/ui";
@@ -13,13 +13,6 @@ function isSetupChannel(channel: ChannelId): channel is "weixin" {
 }
 
 function channelLabel(channel: ChannelStatus): string {
-  if (channel.id === "voice") {
-    if (["running", "connected"].includes(channel.status)) return "Running";
-    if (["starting", "connecting", "reconnecting"].includes(channel.status)) return "Starting";
-    if (channel.status === "disconnecting") return "Stopping";
-    if (["error", "failed"].includes(channel.status)) return "Needs attention";
-    return "Stopped";
-  }
   if (channel.status === "running" || channel.status === "connected") return "Connected";
   if (["starting", "connecting"].includes(channel.status)) return "Connecting";
   if (channel.status === "disconnecting") return "Disconnecting";
@@ -30,10 +23,9 @@ function channelLabel(channel: ChannelStatus): string {
   return "Stopped";
 }
 
-const CHANNEL_ICONS = { api: Globe2, voice: Mic, weixin: MessageCircle };
+const CHANNEL_ICONS = { api: Globe2, weixin: MessageCircle };
 const CHANNEL_DESCRIPTIONS = {
   api: "Connect your apps over HTTP and WebSocket",
-  voice: "Use the microphone and speaker on the computer running your Agent",
   weixin: "Conversations through your WeChat account",
 };
 
@@ -47,13 +39,12 @@ function ChannelRow({ channel, onSetup, onConnection, pending, disabled }: {
   const failed = channel.status === "error" || channel.status === "failed";
   const connected = channel.status === "running" || channel.status === "connected";
   const Icon = CHANNEL_ICONS[channel.id];
-  const hostVoice = channel.id === "voice";
   return (
     <div className={`connection-row connection-row-${channel.status}`}>
       <span className="connection-icon" aria-hidden="true"><Icon size={19} strokeWidth={1.65} /></span>
       <div className="connection-copy">
-        <h3>{hostVoice ? "Host voice" : channel.label}</h3>
-        <p>{hostVoice && !channel.ready ? "Configure shared voice settings in Agent." : (failed || !channel.ready) && channel.detail ? channel.detail : CHANNEL_DESCRIPTIONS[channel.id]}</p>
+        <h3>{channel.label}</h3>
+        <p>{(failed || !channel.ready) && channel.detail ? channel.detail : CHANNEL_DESCRIPTIONS[channel.id]}</p>
       </div>
       <span className={`connection-state ${failed ? "is-failed" : connected ? "is-connected" : ""}`}>
         <span aria-hidden="true" />{channel.ready ? channelLabel(channel) : channel.configured ? "Check configuration" : "Not configured"}
@@ -62,12 +53,12 @@ function ChannelRow({ channel, onSetup, onConnection, pending, disabled }: {
         {channel.can_disconnect || pending === "disconnect" || channel.status === "disconnecting" ? (
           <Button type="button" variant="secondary" disabled={disabled || Boolean(pending) || channel.status === "disconnecting"}
             onClick={() => onConnection(channel.id, "disconnect")}>
-            {pending === "disconnect" || channel.status === "disconnecting" ? hostVoice ? "Stopping…" : "Disconnecting…" : hostVoice ? "Stop" : "Disconnect"}
+            {pending === "disconnect" || channel.status === "disconnecting" ? "Disconnecting…" : "Disconnect"}
           </Button>
         ) : channel.ready ? (
           <Button type="button" variant="secondary" disabled={disabled || Boolean(pending) || !channel.can_connect}
             onClick={() => onConnection(channel.id, "connect")}>
-            {pending === "connect" ? hostVoice ? "Starting…" : "Connecting…" : hostVoice ? "Start" : "Connect"}
+            {pending === "connect" ? "Connecting…" : "Connect"}
           </Button>
         ) : null}
         {isSetupChannel(channel.id) ? (
@@ -75,7 +66,6 @@ function ChannelRow({ channel, onSetup, onConnection, pending, disabled }: {
             {channel.ready ? "Configure" : "Set up"}<ArrowUpRight size={14} />
           </Button>
         ) : null}
-        {hostVoice && !channel.ready ? <a className="chat-channel-link" href="/agent#voice">Configure in Agent<ArrowUpRight size={14} /></a> : null}
       </div>
     </div>
   );
@@ -192,7 +182,7 @@ export function ChannelPage() {
       {runtime?.error ? <div className="error-strip" role="alert">{runtime.error}</div> : null}
       <div className="connections-heading"><h3>Connections</h3><p>API starts by default. Connect other channels when needed.</p></div>
       <div className="connection-list">{data?.channels.map((channel) => <ChannelRow key={channel.id} channel={channel} onSetup={setSetupChannelId} onConnection={(id, action) => void runConnection(id, action)} pending={connectionPending[channel.id]} disabled={busy || !runtime?.runtime_ready} />)}</div>
-      <p className="connections-footnote">Host voice runs on the Agent’s computer. Browser voice works independently in the Voice tab. Manage all voice settings in Agent.</p>
+      <p className="connections-footnote">Use the Voice tab to talk in your browser, or connect a paired voice device. Manage voice settings in Agent.</p>
       </div>
       {setupChannelId ? <ChannelSetupWizard channel={setupChannelId} open onClose={() => setSetupChannelId(null)} onComplete={() => {
         if (renderEpoch !== sessionEpoch.current) return;

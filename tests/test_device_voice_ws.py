@@ -330,3 +330,57 @@ class DeviceVoiceWebSocketTests(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaises(websockets.exceptions.ConnectionClosed) as caught:
                     await ws.recv()
                 self.assertEqual(caught.exception.rcvd.code, 1013)
+
+    async def test_browser_refills_from_rendered_samples_even_when_audible_progress_lags(self):
+        from xagent.core.runtime.client import RuntimeClient
+        from xagent.interfaces.voice.transport_audio import AudioPacket, OpusDecoder
+        class FastSynthesizer(_FakeWSSynthesizer):
+            def synthesize_chunks(self, *args, **kwargs):
+                for audio in super().synthesize_chunks(*args, **kwargs):
+                    yield audio * 50  # One second of media in a single fast TTS burst.
+        for codec in ('pcm_s16le', 'opus'):
+            with self.subTest(codec=codec):
+                host, _, _, url = await self.start_host([(ReplyType.SIMPLE_REPLY, '你好。')], seed_credentials=False)
+                ticket = (await RuntimeClient(host.config_dir).request('POST', '/api/devices/voice-session')).json()
+                target = url + '/ws/voice/' + ticket['session_id'] + '?token=' + quote(ticket['token'], safe='')
+                with patch('xagent.interfaces.voice.factory.create_soniox_adapters',
+                           return_value=(_FakeWSRecognizer(continuous=True), FastSynthesizer())):
+                    async with websockets.connect(target, **self.connection_options) as ws:
+                        await ws.send(json.dumps({'type': 'hello', 'audio_protocol': 2, 'codec': codec, 'profile': 'headset'}))
+                        ready = json.loads(await ws.recv())
+                        rate = ready['output_sample_rate']
+                        decoder = OpusDecoder() if codec == 'opus' else None
+                        await self.send_audio(ws, codec)
+                        samples = 0
+                        playback_id = None
+                        stalled = False
+                        while True:
+                            message = await asyncio.wait_for(ws.recv(), timeout=2)
+                            if isinstance(message, bytes):
+                                packet = AudioPacket.unpack(message)
+                                pcm = decoder.decode(packet) if decoder else packet.payload
+                                self.assertEqual(len(pcm), packet.samples * 2)
+                                samples += packet.samples
+                                if not stalled:
+                                    if samples < rate * .28:
+                                        continue
+                                    await asyncio.sleep(.35)
+                                    player = host.device_service.voice_sessions[ticket['session_id']].player
+                                    self.assertLessEqual(player.sent_samples, int(rate * .3))
+                                    stalled = True
+                                # These counters serve different purposes: rendering releases
+                                # capacity even when output hardware has not played it yet.
+                                await ws.send(json.dumps({'type': 'playback_progress', 'playback_id': playback_id,
+                                    'rendered_samples': samples, 'played_samples': 0, 'sample_rate': rate}))
+                            else:
+                                frame = json.loads(message)
+                                if frame['type'] == 'playback_start':
+                                    playback_id = frame['playback_id']
+                                elif frame['type'] == 'playback_done':
+                                    self.assertEqual(samples, rate)
+                                    await ws.send(json.dumps({'type': 'playback_progress', 'playback_id': playback_id,
+                                        'rendered_samples': samples, 'played_samples': samples, 'sample_rate': rate}))
+                                    await ws.send(json.dumps({'type': 'playback_finished', 'playback_id': playback_id}))
+                                    break
+                        await self.wait_for(lambda: not host.device_service.voice_sessions[ticket['session_id']].runtime.pause_event.is_set())
+                        await ws.send(json.dumps({'type': 'stop'}))

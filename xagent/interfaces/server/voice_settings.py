@@ -1,11 +1,10 @@
 """The small Agent-facing voice settings surface; shared by all transports."""
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Response
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt
+from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
 from ..cli.config_editor import apply_agent_edit_setup, load_config
 from ..voice.config import (
@@ -28,8 +27,6 @@ class VoiceSettingsInput(BaseModel):
         allow_inf_nan=False,
     )
     interruptions: StrictBool | None = None
-    audio_input: str | StrictInt | None = None
-    audio_output: str | StrictInt | None = None
 
 
 def voice_settings_status(config: dict) -> dict:
@@ -54,20 +51,12 @@ def voice_settings_status(config: dict) -> dict:
         "voice": voice.speaking_voice,
         "speed": voice.speaking_speed,
         "interruptions": voice.interruptions,
-        "audio_input": voice.audio.input,
-        "audio_output": voice.audio.output,
         "voice_options": [{"id": name, "label": f"{name} · {description}"}
                           for name, description in SONIOX_SHARED_VOICE_OPTIONS],
     }
 
 
 def register_voice_settings_routes(app: FastAPI, resolve_admin, notify_config_written) -> None:
-    @app.get("/api/agent/voice/devices", tags=["Voice"])
-    async def agent_voice_devices(response: Response):
-        from ..voice.audio import list_audio_device_options
-        response.headers["Cache-Control"] = "no-store"
-        return await asyncio.to_thread(list_audio_device_options)
-
     @app.get("/api/agent/voice", tags=["Voice"])
     async def agent_voice_settings(response: Response):
         from ..cli.agent_runtime import runtime_status

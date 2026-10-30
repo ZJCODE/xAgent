@@ -38,7 +38,6 @@ from .agents import (
 from .agent_runtime import handle_channel_connection, runtime_status
 from .channels import (
     CHANNEL_API,
-    CHANNEL_VOICE,
     CHANNEL_WEIXIN,
     api_config,
     channel_readiness,
@@ -249,7 +248,7 @@ def _launcher_channel_options(config_dir: Path) -> list[MenuOption]:
         "Needs configuration": ("○", "yellow"),
     }
     for channel, title in ((CHANNEL_API, "API"),
-                           (CHANNEL_WEIXIN, "Weixin"), (CHANNEL_VOICE, "Voice")):
+                           (CHANNEL_WEIXIN, "Weixin")):
         row = _channel_control_view(config_dir, channel, runtime)
         control = _channel_connection_actions(runtime, row)[0]
         symbol, style = badge_styles.get(row["label"], ("○", "grey50"))
@@ -368,23 +367,6 @@ def _voice_is_configured(config: dict[str, Any]) -> bool:
     return bool(data)
 
 
-def _voice_channel_options(config: dict[str, Any], config_dir: Path, runtime: dict[str, Any]) -> list[MenuOption]:
-    voice_configured = _voice_is_configured(config)
-    row = _channel_control_view(config_dir, CHANNEL_VOICE, runtime)
-    return _channel_connection_actions(runtime, row) + [
-        MenuOption(
-            "configure",
-            "Configure" if voice_configured else "Set up",
-            "Update the Soniox API key or voice settings."
-            if voice_configured
-            else "Add a Soniox API key to configure voice.",
-        ),
-        MenuOption("devices", "List Devices", "Print available local audio input/output devices."),
-        MenuOption("refresh", "Refresh", "Refresh the channel state and available actions."),
-        MenuOption("back", "Back", "Return to Channel."),
-    ]
-
-
 def _voice_resetup_options(config: dict[str, Any]) -> list[MenuOption]:
     voice_configured = _voice_is_configured(config)
     disable_description = "Remove channels.voice from config." if voice_configured else "Voice is already disabled."
@@ -392,8 +374,6 @@ def _voice_resetup_options(config: dict[str, Any]) -> list[MenuOption]:
         MenuOption("api_key", "Configure Voice", "Set the Soniox API key; other settings keep their defaults."),
         MenuOption("voice", "Speaking voice", "Choose the voice used for spoken replies.", disabled=not voice_configured),
         MenuOption("interruptions", "Allow interruptions", "Enable or disable interruption during replies.", disabled=not voice_configured),
-        MenuOption("input_device", "Input device", "Choose the local microphone.", disabled=not voice_configured),
-        MenuOption("output_device", "Output device", "Choose the local speaker or headset.", disabled=not voice_configured),
         MenuOption("disable", "Disable", disable_description, disabled=not voice_configured),
         MenuOption("back", "Back", "Return to Voice."),
     ]
@@ -435,7 +415,7 @@ def _partial_update_options(config_dir: Path) -> list[MenuOption]:
             observability_description,
             disabled=not observability_available,
         ),
-        MenuOption("voice", "Voice", "Configure Soniox voice, interruptions, and audio devices."),
+        MenuOption("voice", "Voice", "Configure shared Soniox voice and interruption preferences."),
         MenuOption("back", "Back", "Return to Setup. Agent controls live under Runtime."),
     ]
 
@@ -501,7 +481,7 @@ def _launcher_help_content(*, config_dir: Path, initialized: bool) -> Text:
     content.append(_format_init_command("xagent start", config_dir=config_dir), style="cyan")
     content.append("\n    Start the Agent with API; connect other channels on demand.\n")
     content.append("  ")
-    content.append(_format_init_command("xagent channel <api|weixin|voice> connect|disconnect", config_dir=config_dir), style="cyan")
+    content.append(_format_init_command("xagent channel <api|weixin> connect|disconnect", config_dir=config_dir), style="cyan")
     content.append("\n    Connect or disconnect one channel; also available in the Channel menu.\n")
     content.append("  ")
     content.append(_format_init_command("xagent web start", config_dir=config_dir), style="cyan")
@@ -1317,7 +1297,7 @@ def _run_voice_config_launcher(ui: TerminalUI, config_dir: Path) -> None:
                 ui.print_panel(f"Voice update is invalid: {exc}", title="Setup", border_style="red")
                 continue
             _apply_config_update(ui, config_dir, update, return_home_on_success=True)
-        elif option.key in {"voice", "interruptions", "input_device", "output_device"}:
+        elif option.key in {"voice", "interruptions"}:
             current = voice_config(config)
             voice_schema = build_voice_setup_schema(config)
             update_kwargs: dict[str, Any] = {"provider": "soniox"}
@@ -1353,30 +1333,6 @@ def _run_voice_config_launcher(ui: TerminalUI, config_dir: Path) -> None:
                 if choice is None:
                     continue
                 update_kwargs["interruptions"] = choice.key == "true"
-            else:
-                direction = "input" if option.key == "input_device" else "output"
-                rows = [
-                    MenuOption(
-                        str(item.get("id")),
-                        str(item.get("label") or item.get("id")),
-                        str(item.get("description") or ""),
-                    )
-                    for item in (voice_schema.get("audio_devices", {}).get(direction) or [])
-                    if item.get("id")
-                ]
-                current_audio = current.get("audio") if isinstance(current.get("audio"), dict) else {}
-                selected = str(current_audio.get(direction) or "auto")
-                if not any(item.key == selected for item in rows):
-                    rows.append(MenuOption(selected, f"{selected} (current/unavailable)", "Saved value not reported by the local audio system."))
-                choice = ui.select_menu(
-                    title="Voice input device" if direction == "input" else "Voice output device",
-                    subtitle=(voice_schema.get("audio_devices", {}).get("error") or "Choose a local audio device."),
-                    options=rows,
-                    footer="↑/↓ Move • Enter Select  •  q Back",
-                )
-                if choice is None:
-                    continue
-                update_kwargs["audio_input" if direction == "input" else "audio_output"] = choice.key or selected
             try:
                 update = prepare_voice_preset_update(config, **update_kwargs)
             except Exception as exc:
@@ -2028,45 +1984,6 @@ def _run_inspect_launcher(config_dir: Path) -> int:
         return 0
 
 
-def _run_voice_channel_launcher(ui: TerminalUI, config_dir: Path) -> None:
-    while True:
-        config = _launcher_config_snapshot(config_dir)
-        runtime = _channel_runtime_snapshot(config_dir)
-        row = _channel_control_view(config_dir, CHANNEL_VOICE, runtime)
-        option = ui.select_menu(
-            title="xAgent Channel / Voice",
-            subtitle=_channel_menu_subtitle(config_dir, runtime, row),
-            options=_voice_channel_options(config, config_dir, runtime),
-            footer="↑/↓ Move • Enter Select  •  q Back",
-        )
-        if option is None or option.key == "back":
-            ui.clear()
-            return
-        ui.clear()
-        if option.key == "refresh":
-            continue
-        if option.key == "configure":
-            _run_voice_config_launcher(ui, config_dir)
-            continue
-        if option.key in {"connect", "disconnect"}:
-            exit_code = _run_managed_channel_action(config_dir, CHANNEL_VOICE, option.key)
-        else:
-            exit_code = handle_voice(
-                _launcher_args(
-                    config_dir=str(config_dir),
-                    user_id="local_voice",
-                    verbose=False,
-                    list_devices=option.key == "devices",
-                    input_device=None,
-                    output_device=None,
-                    memory=True,
-                )
-            )
-        if exit_code != 0:
-            ui.print_panel(f"Voice action exited with status {exit_code}.", title="Channel")
-        ui.pause("Press Enter to return to Voice")
-
-
 def _run_channel_launcher(config_dir: Path) -> int:
     ui = TerminalUI()
 
@@ -2098,11 +2015,6 @@ def _run_channel_launcher(config_dir: Path) -> int:
                 if exit_code != 0:
                     ui.print_panel(f"Chat exited with status {exit_code}.", title="Channel")
                 ui.pause("Press Enter to return to Channel")
-                continue
-
-            if channel_option.key == "voice":
-                ui.clear()
-                _run_voice_channel_launcher(ui, config_dir)
                 continue
 
             channel_title = getattr(channel_option, "title", str(channel_option.key).title())

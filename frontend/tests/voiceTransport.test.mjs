@@ -10,7 +10,7 @@ function harness(t){
   const port=()=>({sent:[],start(){},close(){},postMessage(data){this.sent.push(data);},frame(data){this.onmessage({data});}});
   const capture=port(),playback=port(),engine=new VoiceTransport((m)=>messages.push(m));
   t.after(()=>{engine.close();globalThis.WebSocket=old;});
-  return{engine,capture,playback,messages,sockets,async connect(){await engine.command({id:1,type:'init',socketUrl:'ws://localhost/voice',capture,playback,outputDelayMs:0});const s=sockets[0];s.open();s.frame({type:'ready',audio_protocol:2,codec:'pcm_s16le',input_sample_rate:16000,output_sample_rate:24000,input_channels:1,output_channels:1});return s;}};
+  return{engine,capture,playback,messages,sockets,async connect(outputDelayMs=0){await engine.command({id:1,type:'init',socketUrl:'ws://localhost/voice',capture,playback,outputDelayMs});const s=sockets[0];s.open();s.frame({type:'ready',audio_protocol:2,codec:'pcm_s16le',input_sample_rate:16000,output_sample_rate:24000,input_channels:1,output_channels:1});return s;}};
 }
 test('worker sends only the explicit codec profile and capture stream packets',async(t)=>{
   const h=harness(t),s=await h.connect();assert.equal(JSON.parse(s.sent[0]).codec,'pcm_s16le');
@@ -45,4 +45,17 @@ test('late processor errors from aborted streams do not end new capture or playb
   assert.equal(s.readyState,1);assert.ok(!h.messages.some(m=>m.type==='event'&&m.name==='error'));
   h.playback.frame({type:'error',stream:2,message:'Current playback overload'});
   assert.equal(s.readyState,3);assert.ok(h.messages.some(m=>m.type==='event'&&m.name==='error'));
+});
+test('rendered send credits are independent of output latency and audible ledger progress',async(t)=>{
+  const h=harness(t),s=await h.connect(180);
+  s.frame({type:'playback_start',codec:'pcm_s16le',sample_rate:24000,channels:1,stream_id:1,playback_id:'reply'});
+  for(let i=0;i<15;i++)s.frame(packAudio({stream:1,sequence:i,timestamp:i*20000,samples:480,discard:0,payload:new ArrayBuffer(960)}));
+  h.playback.frame({type:'progress',stream:1,samples:2400});
+  const reports=()=>s.sent.filter(m=>typeof m==='string').map(JSON.parse).filter(m=>m.type==='playback_progress');
+  assert.equal(reports().at(-1).rendered_samples,2400);
+  assert.equal(reports().at(-1).played_samples,0);
+  h.playback.frame({type:'progress',stream:1,samples:6000});
+  assert.equal(reports().at(-1).rendered_samples,6000);
+  assert.equal(reports().at(-1).played_samples,1680);
+  assert.ok(!s.sent.filter(m=>typeof m==='string').map(JSON.parse).some(m=>m.type==='playback_finished'));
 });

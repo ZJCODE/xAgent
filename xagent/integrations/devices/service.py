@@ -345,20 +345,20 @@ class DeviceService:
             return None
         target_dict = target if isinstance(target, dict) else {}
         device_id = str(target_dict.get("device_id") or "").strip()
-        if device_id and device_id in self.voice_sessions:
-            return self.voice_sessions[device_id]
+        if device_id:
+            return self.voice_sessions.get(device_id)
         room_name = str(target_dict.get("room_name") or "").strip()
         if room_name:
-            for session in self.voice_sessions.values():
-                if session.room_name == room_name or self.resolve_room_name(session.device_id) == room_name:
-                    return session
+            matches = [session for session in self.voice_sessions.values()
+                       if session.room_name == room_name or self.resolve_room_name(session.device_id) == room_name]
+            return matches[0] if len(matches) == 1 else None
         candidate_user = str(target_dict.get("user_id") or user_id or "").strip()
         if candidate_user.startswith("device:"):
-            inferred_id = candidate_user.removeprefix("device:").strip()
-            if inferred_id in self.voice_sessions:
-                return self.voice_sessions[inferred_id]
-        if len(self.voice_sessions) == 1 and not device_id and not room_name:
-            return next(iter(self.voice_sessions.values()))
+            return self.voice_sessions.get(candidate_user.removeprefix("device:").strip())
+        if candidate_user:
+            matches = [session for session in self.voice_sessions.values()
+                       if getattr(getattr(session.runtime, "options", None), "user_id", "") == candidate_user]
+            return matches[0] if len(matches) == 1 else None
         return None
 
     async def register_voice(self, session: VoiceDeviceSession) -> VoiceDeviceSession:

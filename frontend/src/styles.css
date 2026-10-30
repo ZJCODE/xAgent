@@ -3527,7 +3527,3 @@ body { -webkit-font-smoothing: antialiased; }
 .voice-interruptions-row input:checked::before { transform: translateX(12px); background: var(--bg-surface); }
 .voice-interruptions-row input:focus-visible { outline: 2px solid var(--info); outline-offset: 2px; }
 .voice-interruptions-row input:disabled { opacity: 0.5; cursor: default; }
-.voice-host-devices { display: grid; gap: 10px; }
-.voice-host-devices .wizard-hint { margin: 0; font-size: 11px; }
-.voice-device-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-@media (max-width: 400px) { .voice-device-row { grid-template-columns: minmax(0, 1fr); } }

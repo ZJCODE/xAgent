@@ -6,13 +6,15 @@ import argparse
 import sys
 
 from . import agent_runtime, agents, processes_status, runtime, setup, update
-from .channels import CHANNEL_API, CHANNEL_VOICE, CHANNEL_WEIXIN
+from .channels import CHANNEL_API, CHANNEL_WEIXIN
 
 
 class XAgentArgumentParser(argparse.ArgumentParser):
     """Root parser with task-oriented help instead of argparse's flat command list."""
 
     def error(self, message: str) -> None:
+        if self.prog == "xagent voice" and "invalid choice" in message:
+            self.exit(2, "Host voice has been removed. Use xagent voice setup, then the Voice page or a paired WebSocket voice device.\n")
         if self.prog == "xagent" and "invalid choice" in message:
             self.print_usage(sys.stderr)
             self.exit(2, "xagent: error: unknown command. Use 'xagent --help' to see available commands.\n")
@@ -38,7 +40,7 @@ class XAgentArgumentParser(argparse.ArgumentParser):
             "Use Now:",
             "  chat        Chat in the terminal",
             "  web         Manage the browser web UI",
-            "  voice       Configure audio or list devices",
+            "  voice       Configure shared voice settings",
             "  channel     Connect or disconnect one channel for this run",
             "",
             "Keep Running:",
@@ -72,7 +74,6 @@ class XAgentArgumentParser(argparse.ArgumentParser):
             "  xagent status",
             "  xagent logs -f",
             "  xagent voice setup",
-            "  xagent channel voice connect",
             "  xagent weixin setup",
             "  xagent start",
             "  xagent channel weixin connect",
@@ -122,7 +123,7 @@ def _add_channel_argument(
         action="append",
         default=None,
         metavar="CHANNELS",
-        help=f"Channel(s) to use: api, weixin, voice, or comma-separated values (default: {default_label})",
+        help=f"Channel(s) to use: api, weixin, or comma-separated values (default: {default_label})",
     )
 
 
@@ -163,52 +164,6 @@ def _add_web_client_arguments(parser: argparse.ArgumentParser, *, open_by_defaul
         )
     else:
         parser.add_argument("--open", action="store_true", dest="open_browser", help="Open the web client in a browser")
-
-
-def _add_voice_runtime_arguments(
-    parser: argparse.ArgumentParser,
-    *,
-    include_list_devices: bool = False,
-) -> None:
-    parser.add_argument("--user-id", dest="user_id", default="local_voice", help="Speaker identifier")
-    parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
-    if include_list_devices:
-        parser.add_argument(
-            "--list-devices",
-            action="store_true",
-            help="List available local audio input/output devices and exit",
-        )
-    parser.add_argument(
-        "--input-device",
-        default=None,
-        help="Override voice input device by name, #index, index, or auto",
-    )
-    parser.add_argument(
-        "--output-device",
-        default=None,
-        help="Override voice output device by name, #index, index, or auto",
-    )
-    parser.add_argument(
-        "--profile",
-        dest="voice_profile",
-        choices=["auto", "room", "headset"],
-        default="auto",
-        help="Override the profile detected from the audio devices (default: auto)",
-    )
-    parser.add_argument(
-        "--interruptions",
-        dest="interruptions",
-        choices=["true", "false"],
-        default=None,
-        help="Override channels.voice.interruptions for this session (true or false)",
-    )
-    parser.add_argument(
-        "--speed",
-        dest="speech_speed",
-        type=float,
-        default=None,
-        help="Speaking rate for this session, 0.7-1.3 (default: 1.0)",
-    )
 
 
 def _add_weixin_setup_arguments(parser: argparse.ArgumentParser) -> None:
@@ -365,9 +320,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     chat_parser.set_defaults(handler=runtime.handle_chat)
 
-    voice_parser = subparsers.add_parser("voice", help="Configure local microphone/speaker input")
+    voice_parser = subparsers.add_parser("voice", help="Configure shared browser and device voice settings")
     _add_agent_argument(voice_parser)
-    voice_parser.add_argument("--list-devices", action="store_true")
+    voice_parser.add_argument("--list-devices", action="store_true", help=argparse.SUPPRESS)
     voice_parser.set_defaults(handler=runtime.handle_voice)
     voice_sub = voice_parser.add_subparsers(dest="voice_action", metavar="<action>")
     voice_setup = voice_sub.add_parser("setup", help="Configure the voice channel")
@@ -388,7 +343,7 @@ def build_parser() -> argparse.ArgumentParser:
         channel_setup.set_defaults(handler=setup_handler)
 
     channel_parser = subparsers.add_parser("channel", help="Connect or disconnect one channel")
-    channel_parser.add_argument("channel", choices=("api", "weixin", "voice"))
+    channel_parser.add_argument("channel", choices=("api", "weixin", "voice"), metavar="{api,weixin}")
     channel_parser.add_argument("channel_action", choices=("connect", "disconnect"))
     _add_agent_argument(channel_parser)
     channel_parser.set_defaults(handler=agent_runtime.handle_channel_connection)

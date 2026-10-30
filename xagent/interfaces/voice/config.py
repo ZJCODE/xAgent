@@ -1,4 +1,4 @@
-"""Configuration for the Soniox-only local voice channel."""
+"""Configuration for the shared Soniox voice sessions."""
 from __future__ import annotations
 
 import difflib
@@ -15,7 +15,6 @@ from pydantic import (
     StrictBool,
     ValidationError,
     field_validator,
-    model_validator,
 )
 
 from .presence import VOICE_STT_IDLE_SHUTDOWN_SECONDS
@@ -182,24 +181,6 @@ class VoiceInterruptionConfig(BaseModel):
     min_words: int = Field(default=2, ge=1, le=8)
 
 
-class VoiceAudioConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    input: str | int | None = "auto"
-    output: str | int | None = "auto"
-
-    @field_validator("input", "output")
-    @classmethod
-    def _validate_device_preference(cls, value: str | int | None) -> str | int | None:
-        if value is None:
-            return None
-        if isinstance(value, int):
-            if value < 0:
-                raise ValueError("voice.audio device index must be non-negative")
-            return value
-        return value.strip() or "auto"
-
-
 _DEFAULT_PERFORMANCE = VoicePerformanceConfigModel()
 _DEFAULT_PROACTIVE_TAIL = VoiceProactiveConfigModel()
 _PRESENCE_WAKE_RMS = 450.0
@@ -225,7 +206,6 @@ class VoiceChannelConfig(BaseModel):
         allow_inf_nan=False,
     )
     interruptions: StrictBool = False
-    audio: VoiceAudioConfig = Field(default_factory=VoiceAudioConfig)
 
     _runtime_profile: VoiceRuntimeProfile = PrivateAttr(default_factory=VoiceRuntimeProfile)
     _speech_style: VoiceSpeechStyle = PrivateAttr(default_factory=VoiceSpeechStyle)
@@ -266,9 +246,9 @@ class VoiceChannelConfig(BaseModel):
             data = {}
         if not isinstance(data, dict):
             raise ValueError("channels.voice must be a dictionary")
-        # Legacy language hints are fixed now; enabled is a transport setting,
-        # not a voice-engine option. Neither starts capture in the shared core.
-        data = {key: value for key, value in data.items() if key not in {"languages", "enabled"}}
+        # Retired host audio/enable values and fixed language hints remain
+        # loadable, but never affect WS sessions or get written back.
+        data = {key: value for key, value in data.items() if key not in {"languages", "enabled", "audio"}}
         try:
             return cls.model_validate(data)
         except ValidationError as exc:
@@ -282,8 +262,7 @@ class VoiceChannelConfig(BaseModel):
     def to_public_dict(self) -> dict[str, Any]:
         """The block to write back to config.yaml.
 
-        Languages are fixed internally. Audio appears only when a device has
-        been pinned.
+        Legacy host audio selections and enable flags are never written.
         """
         public: dict[str, Any] = {
             "api_key": self.api_key or SONIOX_KEY_PLACEHOLDER,
@@ -292,13 +271,6 @@ class VoiceChannelConfig(BaseModel):
         }
         if self.speaking_speed != 1.0:
             public["speed"] = self.speaking_speed
-        audio = {
-            key: value
-            for key, value in (("input", self.audio.input), ("output", self.audio.output))
-            if value != "auto"
-        }
-        if audio:
-            public["audio"] = audio
         return public
 
     def resolved_api_key(self) -> str:

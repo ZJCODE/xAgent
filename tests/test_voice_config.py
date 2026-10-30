@@ -10,19 +10,9 @@ from xagent.interfaces.voice.config import (
     VoiceRuntimeProfile,
     VoiceSpeechStyle,
 )
-from xagent.interfaces.voice.audio import AudioTopology
-from xagent.interfaces.voice.factory import resolve_runtime_profile
 from xagent.interfaces.voice.presence import VOICE_STT_IDLE_SHUTDOWN_SECONDS
 
 
-def _audio_profile(*, near_field: bool, echo_managed: bool):
-    return SimpleNamespace(
-        topology=AudioTopology(
-            near_field=near_field,
-            echo_managed=echo_managed,
-            reason="test",
-        )
-    )
 
 
 class VoiceConfigSurfaceTests(unittest.TestCase):
@@ -94,7 +84,7 @@ class VoiceConfigSurfaceTests(unittest.TestCase):
             {"api_key": "secret", "audio": {"input": "Mic"}}
         ).to_public_dict()
 
-        self.assertEqual(public["audio"], {"input": "Mic"})
+        self.assertNotIn("audio", public)
 
     def test_voice_setup_preserves_tier1_when_rotating_key(self):
         existing = {
@@ -110,7 +100,7 @@ class VoiceConfigSurfaceTests(unittest.TestCase):
         self.assertEqual(merged["api_key"], "new-key")
         self.assertEqual(merged["voice"], "Maya")
         self.assertIs(merged["interruptions"], True)
-        self.assertEqual(merged["audio"]["input"], "Mic")
+        self.assertNotIn("audio", merged)
 
     def test_prepare_voice_preset_update_preserves_block(self):
         config = {
@@ -127,27 +117,9 @@ class VoiceConfigSurfaceTests(unittest.TestCase):
         voice = update.data["channels"]["voice"]
         self.assertEqual(voice["api_key"], "new")
         self.assertIs(voice["interruptions"], True)
-        self.assertEqual(voice["audio"]["input"], "Mic")
+        self.assertNotIn("audio", voice)
 
-    def test_runtime_profile_follows_detected_topology(self):
-        room = resolve_runtime_profile(_audio_profile(near_field=False, echo_managed=False))
-        self.assertEqual(room.name, "room")
-        self.assertFalse(room.echo_managed)
 
-        headset = resolve_runtime_profile(_audio_profile(near_field=True, echo_managed=True))
-        self.assertEqual(headset.name, "headset")
-        self.assertTrue(headset.echo_managed)
-
-    def test_session_overrides_beat_detection(self):
-        profile = resolve_runtime_profile(
-            _audio_profile(near_field=True, echo_managed=False),
-            profile_override="room",
-            interruptions_override=True,
-        )
-        self.assertEqual(profile.name, "room")
-        self.assertFalse(profile.echo_managed)
-        self.assertIs(profile.interruptions_override, True)
-        self.assertIn("override", profile.source)
 
     def test_interruption_precedence_preserves_hardware_and_saved_preference(self):
         for detected in (False, True):
@@ -155,8 +127,8 @@ class VoiceConfigSurfaceTests(unittest.TestCase):
                 for override in (None, False, True):
                     with self.subTest(detected=detected, persisted=persisted, override=override):
                         config = VoiceChannelConfig.from_dict({"interruptions": persisted})
-                        config.apply_runtime_profile(resolve_runtime_profile(
-                            _audio_profile(near_field=False, echo_managed=detected),
+                        config.apply_runtime_profile(VoiceRuntimeProfile(
+                            name="room", echo_managed=detected,
                             interruptions_override=override,
                         ))
                         self.assertIs(config.enable_interruptions, persisted if override is None else override)

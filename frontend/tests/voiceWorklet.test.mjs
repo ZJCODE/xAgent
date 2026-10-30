@@ -46,3 +46,27 @@ test('playback underflow produces silence without advancing media and completion
   for(let i=0;i<100;i++)h.node.process([],[[output]]);assert.equal(h.messages.filter(m=>m.type==='finished').length,1);
   h.send({type:'start',stream:2,rate:48000});h.send({type:'clear',stream:1});h.send({type:'audio',stream:1,buffer:new Float32Array(960).buffer});assert.equal(h.node.ring.written,0);
 });
+test('renderer reports sample credits every 50 ms and never advances them during a stall',()=>{
+  for(const rate of [24000,48000]){
+    const h=worklet('voicePlayback',48000),output=new Float32Array(128);
+    h.send({type:'start',stream:1,rate});
+    h.send({type:'audio',stream:1,buffer:new Float32Array(rate*.3).buffer});
+    for(let n=0;n<19;n++)h.node.process([],[[output]]);
+    assert.equal(h.messages.filter(m=>m.type==='progress').length,1);
+    assert.ok(h.messages.at(-1).samples>0);
+    for(let n=0;n<200;n++)h.node.process([],[[output]]);
+    const consumed=h.node.ring.consumed;
+    for(let n=0;n<200;n++)h.node.process([],[[output]]);
+    assert.equal(h.node.ring.consumed,consumed);
+    assert.equal(h.messages.at(-1).samples,consumed);
+    for(let cycle=0;cycle<200;cycle++){
+      h.send({type:'audio',stream:1,buffer:new Float32Array(rate*.28).buffer});
+      for(let n=0;n<150;n++)h.node.process([],[[output]]);
+    }
+    h.send({type:'end',stream:1});
+    for(let n=0;n<25;n++)h.node.process([],[[output]]);
+    assert.ok(!h.messages.some(m=>m.type==='error'));
+    assert.equal(h.messages.filter(m=>m.type==='finished').length,1);
+    assert.equal(h.messages.at(-1).samples,h.node.ring.written);
+  }
+});

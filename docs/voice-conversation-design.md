@@ -1,5 +1,8 @@
 # Voice conversation: first-principles analysis and a Soniox-native redesign
 
+> Historical design notes. Host audio capture has since been retired. See
+> [current voice configuration and WS sessions](voice-config-surface.md).
+
 Status: analysis and proposal. Nothing here is implemented yet. Written after
 running the current voice channel on a physical device in a real room.
 

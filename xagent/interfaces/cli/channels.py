@@ -10,19 +10,13 @@ import yaml
 CHANNEL_API = "api"
 CHANNEL_WEIXIN = "weixin"
 CHANNEL_VOICE = "voice"
-VALID_CHANNELS = {CHANNEL_API, CHANNEL_WEIXIN, CHANNEL_VOICE}
+VALID_CHANNELS = {CHANNEL_API, CHANNEL_WEIXIN}
 
 
 def _weixin_channel_enabled(config: Mapping[str, Any]) -> bool:
     if "enabled" in config:
         return bool(config.get("enabled"))
     return bool(config.get("account_id"))
-
-
-def _voice_channel_enabled(config: Mapping[str, Any]) -> bool:
-    if "enabled" in config:
-        return bool(config.get("enabled"))
-    return bool(config)
 
 
 class ChannelSelectionError(ValueError):
@@ -52,7 +46,7 @@ def restart_channels_from_status(status: Mapping[str, Any]) -> list[str] | None:
     if not isinstance(channels, Mapping):
         return None
     selected = []
-    for name in (CHANNEL_API, CHANNEL_WEIXIN, CHANNEL_VOICE):
+    for name in (CHANNEL_API, CHANNEL_WEIXIN):
         if name not in channels:
             continue
         row = channels[name]
@@ -79,8 +73,7 @@ def channel_readiness(config: Mapping[str, Any], channel: str, root: Path) -> tu
             if WeixinStateStore(root, create=False).load_credentials(cfg.account_id) is None:
                 raise ValueError("Weixin credentials are missing; run setup")
         elif channel == CHANNEL_VOICE:
-            from ..voice.config import VoiceChannelConfig
-            VoiceChannelConfig.from_dict(voice_config(config)).resolved_api_key()
+            return False, "Host voice has been removed. Use the Voice page or a paired WebSocket voice device."
         else:
             return False, "Unknown channel"
     except (ValueError, TypeError, OSError, ImportError):
@@ -107,11 +100,6 @@ def enabled_channels_from_config(config: Optional[Mapping[str, Any]]) -> list[st
     if _weixin_channel_enabled(weixin_cfg):
         result.append(CHANNEL_WEIXIN)
 
-    voice_cfg = channels.get(CHANNEL_VOICE)
-    voice_cfg = voice_cfg if isinstance(voice_cfg, Mapping) else {}
-    if _voice_channel_enabled(voice_cfg):
-        result.append(CHANNEL_VOICE)
-
     return result
 
 
@@ -130,6 +118,8 @@ def normalize_channel_values(
             channel = token.strip().lower()
             if not channel:
                 continue
+            if channel == CHANNEL_VOICE:
+                raise ChannelSelectionError("Host voice has been removed. Use the Voice page or a paired WebSocket voice device.")
             if channel not in VALID_CHANNELS:
                 valid = ", ".join(sorted(VALID_CHANNELS))
                 raise ChannelSelectionError(f"Unknown channel {channel!r}. Expected one of: {valid}.")
@@ -139,7 +129,6 @@ def normalize_channel_values(
     if not selected:
         raise ChannelSelectionError(
             "No enabled channels found. Configure channels.api, channels.weixin, "
-            "or channels.voice, "
             "or pass --channel explicitly."
         )
     return selected

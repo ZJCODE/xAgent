@@ -82,12 +82,9 @@ def handle_chat(args: argparse.Namespace) -> int:
 
 
 def handle_voice(args: argparse.Namespace) -> int:
-    if getattr(args, "list_devices", False):
-        from ..voice.audio import list_audio_devices_text
-        print(list_audio_devices_text())
-        return 0
-    print("Configure voice with xagent voice setup; run it with xagent run --channels voice.")
-    return 0
+    print("Host audio capture has been removed. Configure voice with xagent voice setup, "
+          "then use the Voice page or a paired WebSocket voice device.")
+    return 1 if getattr(args, "list_devices", False) else 0
 
 
 def _handle_channel_error(exc: ChannelSelectionError) -> int:

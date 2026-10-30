@@ -174,9 +174,7 @@ class RuntimeTransportTests(unittest.IsolatedAsyncioTestCase):
                 "weixin": {"enabled": True, "account_id": "test"},
             })
             (root / "config.yaml").write_text(yaml.safe_dump(config))
-            with patch("xagent.integrations.weixin.WeixinAdapter", FakeAdapter), patch(
-                "xagent.interfaces.voice.factory.create_local_voice_runtime", side_effect=AssertionError("device accessed")
-            ) as voice:
+            with patch("xagent.integrations.weixin.WeixinAdapter", FakeAdapter), patch("xagent.interfaces.voice.factory.create_websocket_voice_runtime") as voice:
                 first, task = await self._start_host(root, CapturingModelClient([]))
                 try:
                     self.assertTrue(all(row["state"] == "disconnected" for name, row in first.channel_status.items() if name != "api"))
@@ -241,7 +239,7 @@ class RuntimeTransportTests(unittest.IsolatedAsyncioTestCase):
                 store.save_credentials(WeixinCredentials("test", "https://example.test", "test", "owner"))
                 loop = asyncio.get_running_loop()
                 hosts = []
-                selected = ["api", "weixin", "voice"] if restore else []
+                selected = ["api", "weixin"] if restore else []
 
                 def launch(root, channels):
                     self.assertEqual(channels, selected)
@@ -252,7 +250,7 @@ class RuntimeTransportTests(unittest.IsolatedAsyncioTestCase):
 
                 with patch(
                     "xagent.integrations.weixin.WeixinAdapter", FakeAdapter,
-                ), patch("xagent.interfaces.voice.factory.create_local_voice_runtime", side_effect=lambda **kwargs: FakeVoice(**kwargs)), patch(
+                ), patch(
                     "xagent.interfaces.cli.agent_runtime.start_runtime", side_effect=launch,
                 ):
                     first, task = await self._start_host(root, CapturingModelClient([]), channels=selected)
@@ -404,7 +402,7 @@ class RuntimeTransportTests(unittest.IsolatedAsyncioTestCase):
                 try:
                     status = await client.status()
                     self.assertEqual(status["state"], "running")
-                    self.assertEqual(set(status["channels"]), {"api", "weixin", "voice"})
+                    self.assertEqual(set(status["channels"]), {"api", "weixin"})
                     self.assertTrue(all(row["state"] == "disconnected" for row in status["channels"].values()))
                     self.assertEqual(os.stat(host.paths.socket_path).st_mode & 0o777, 0o600)
                     events = [event async for event in client.chat_events(user_id="alice", user_message="hello", event_id="one")]

@@ -225,7 +225,7 @@ export interface TasksResponse {
   has_more: boolean;
 }
 
-export type ChannelId = "api" | "voice" | "weixin";
+export type ChannelId = "api" | "weixin";
 
 export type ChannelRuntimeStatus = "running" | "connected" | "starting" | "connecting" | "reconnecting" | "disconnecting" | "disconnected" | "stopped" | "disabled" | "error" | "failed";
 
@@ -292,8 +292,6 @@ export interface VoicePreferences {
   voice: string;
   speed: number;
   interruptions: boolean;
-  audio_input: string | number | null;
-  audio_output: string | number | null;
 }
 
 export interface AgentVoiceSettings extends VoicePreferences {
@@ -301,12 +299,6 @@ export interface AgentVoiceSettings extends VoicePreferences {
   has_api_key: boolean;
   voice_options: SetupOption[];
   restart_required: boolean;
-}
-
-export interface VoiceAudioDevices {
-  input: SetupOption[];
-  output: SetupOption[];
-  error?: string;
 }
 
 export interface WeixinSetupSchema {

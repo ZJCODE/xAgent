@@ -5,7 +5,6 @@ import type {
   AgentIdentity,
   AgentVoiceSettings,
   VoicePreferences,
-  VoiceAudioDevices,
   AgentInfo,
   AgentNameAvailability,
   AgentSetupSchema,
@@ -60,10 +59,6 @@ export function createBrowserVoiceSession(): Promise<{ session_id: string; token
 
 export function getAgentVoiceSettings(): Promise<AgentVoiceSettings> {
   return requestJson("/api/agent/voice");
-}
-
-export function getVoiceAudioDevices(): Promise<VoiceAudioDevices> {
-  return requestJson("/api/agent/voice/devices", { signal: AbortSignal.timeout(5000) });
 }
 
 export function updateAgentVoiceSettings(selection: Partial<VoicePreferences> & { voice_api_key?: string }): Promise<AgentEditSetupResponse> {

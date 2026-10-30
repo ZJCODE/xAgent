@@ -28,6 +28,11 @@ logger = logging.getLogger(__name__)
 MAX_VOICE_CONTROL_BYTES = 16 * 1024
 MAX_VOICE_AUDIO_CHUNK_BYTES = 256 * 1024
 
+# Includes media in the network, decoder and render queue. Leave headroom
+# below the client's 500 ms hard limit; never infer consumption from wall time.
+PLAYBACK_WINDOW_SECONDS = 0.3
+PLAYBACK_PROGRESS_TIMEOUT_SECONDS = 5.0
+
 
 class AudioInputBackpressure(ValueError):
     """The recognition consumer is not keeping up, not an invalid client frame."""
@@ -76,6 +81,7 @@ class PlaybackProgress(_Control):
     type: Literal['playback_progress']
     playback_id: str = Field(min_length=1, max_length=64)
     played_samples: int = Field(ge=0)
+    rendered_samples: int | None = Field(default=None, ge=0)
     sample_rate: Literal[24000, 48000]
 
 
@@ -318,13 +324,16 @@ class WebSocketPlayer:
         *,
         sample_rate: int = SONIOX_TTS_SAMPLE_RATE,
         channels: int = SONIOX_TTS_CHANNELS,
+        playback_flow_control: bool = False,
     ) -> None:
         self.bridge = bridge
         self.sample_rate = int(sample_rate)
         self.channels = int(channels)
         self.stream_sample_rate = int(bridge.hello.output_sample_rate)
         self.stream_channels = int(bridge.hello.output_channels)
-        self._playback_lock = threading.Lock()
+        self.playback_flow_control = playback_flow_control
+        self._rendered_samples = 0
+        self._playback_lock = threading.Condition()
         self._playback_id: str | None = None
         self._finished = threading.Event()
         self._stream = 0
@@ -363,6 +372,45 @@ class WebSocketPlayer:
         with self._playback_lock:
             return playback_id is not None and playback_id == self._playback_id
 
+    def note_playback_progress(self, playback_id: str, rendered_samples: int) -> None:
+        """Release send credits only for samples consumed by this renderer."""
+        with self._playback_lock:
+            if playback_id != self._playback_id:
+                return
+            if not 0 <= rendered_samples <= self.sent_samples:
+                raise ValueError("Rendered samples exceed delivered playback audio")
+            self._rendered_samples = max(self._rendered_samples, rendered_samples)
+            self._playback_lock.notify_all()
+
+    def _playback_timeout(self) -> None:
+        self.bridge.send_json({"type": "error", "code": "playback_timeout", "message": "Playback confirmation timed out. Please try again."})
+        async def close_timed_out():
+            await self.bridge.websocket.close(code=1011, reason="Playback confirmation timed out. Please try again.")
+        self.bridge._schedule_send(close_timed_out)
+        self.bridge.closed.set()
+        raise TimeoutError("Browser playback confirmation timed out")
+
+    def _wait_for_capacity(self, samples: int, stop_event: threading.Event) -> None:
+        # The receiver's media clock is the authority. A stalled renderer,
+        # decoder burst or jitter-buffer refill must not earn wall-clock credit.
+        with self._playback_lock:
+            window = int(self.stream_sample_rate * PLAYBACK_WINDOW_SECONDS)
+            rendered = self._rendered_samples
+            deadline = time.monotonic() + PLAYBACK_PROGRESS_TIMEOUT_SECONDS
+            while self.sent_samples + samples - self._rendered_samples > window:
+                if stop_event.is_set() or self.bridge.closed.is_set():
+                    return
+                if self._rendered_samples > rendered:
+                    rendered = self._rendered_samples
+                    deadline = time.monotonic() + PLAYBACK_PROGRESS_TIMEOUT_SECONDS
+                if time.monotonic() >= deadline:
+                    break
+                self._playback_lock.wait(0.05)
+            else:
+                return
+        # Network sends must not hold the lock used by the socket receive loop.
+        self._playback_timeout()
+
     def note_playback_finished(self, playback_id: str | None) -> None:
         with self._playback_lock:
             if playback_id is not None and playback_id == self._playback_id:
@@ -376,9 +424,10 @@ class WebSocketPlayer:
         with self._playback_lock:
             self._playback_id = playback_id
             self._finished.clear()
+            self._rendered_samples = 0
+            self.sent_samples = 0
         identity = {"playback_id": playback_id}
         self._stream += 1
-        self.sent_samples = 0
         media_started = None
         sent_bytes = 0
         identity.update(stream_id=self._stream, codec=self.bridge.hello.codec)
@@ -399,16 +448,20 @@ class WebSocketPlayer:
                     break
                 if media_started is None:
                     media_started = time.monotonic()
-                # Pace media at most 200 ms ahead of the audio clock, keeping
-                # network and browser decoder queues bounded even for fast TTS.
-                while self.sent_samples / self.stream_sample_rate - (time.monotonic() - media_started) > 0.2:
-                    if stop_event.is_set() or self.bridge.closed.wait(0.02):
-                        interrupted = stop_event.is_set()
-                        break
+                if self.playback_flow_control:
+                    self._wait_for_capacity(chunk.samples, stop_event)
+                    interrupted = stop_event.is_set()
+                else:
+                    # Existing paired-device clients may only confirm at EOS.
+                    while self.sent_samples / self.stream_sample_rate - (time.monotonic() - media_started) > 0.2:
+                        if stop_event.is_set() or self.bridge.closed.wait(0.02):
+                            interrupted = stop_event.is_set()
+                            break
                 if interrupted or self.bridge.closed.is_set():
                     break
                 wire = replace(chunk, stream=self._stream).pack()
-                self.sent_samples += chunk.samples
+                with self._playback_lock:
+                    self.sent_samples += chunk.samples
                 self.bridge.send_bytes(wire)
                 sent_bytes += len(wire)
                 if stop_event.is_set() or self.bridge.closed.is_set():
@@ -423,12 +476,7 @@ class WebSocketPlayer:
                         interrupted = stop_event.is_set()
                         break
                     if time.monotonic() >= deadline:
-                        self.bridge.send_json({"type": "error", "code": "playback_timeout", "message": "Playback confirmation timed out. Please try again."})
-                        async def close_timed_out():
-                            await self.bridge.websocket.close(code=1011, reason="Playback confirmation timed out. Please try again.")
-                        self.bridge._schedule_send(close_timed_out)
-                        self.bridge.closed.set()
-                        raise TimeoutError("Browser playback confirmation timed out")
+                        self._playback_timeout()
             if interrupted and not self.bridge.closed.is_set():
                 self.bridge.send_json({"type": "clear_playback", **identity})
         except AudioCodecError:

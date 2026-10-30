@@ -164,7 +164,9 @@ continuous session's mute state. Permission errors stop without automatic retry.
 Leaving the page closes the session and audio resources. Browser speech is treated
 as directed conversation, independently of the room attention window.
 
-If the Agent is stopped, Start Agent prepares it before connecting.
+If the Agent is stopped, Start Agent prepares it before connecting. There is no
+separate Host voice channel to start. Shared voice settings live in Agent;
+microphone and speaker selection belongs to the browser or device.
 
 ### Audio protocol 2
 
@@ -193,7 +195,8 @@ confirmation timeouts stop and require user action.
 audio. Browser recognition disconnects and input overload close with retryable
 code 1013, releasing capture before the next connection. Explicit browser
 conversations keep recognition awake until the session ends or the page hides;
-Host voice and room devices retain their idle sleep policy.
+Paired room devices retain their idle sleep policy. Host audio capture is retired;
+use the browser Voice page or a paired voice device.
 
 Binary messages consist of a 28-byte network-byte-order header followed by one
 raw Opus packet or PCM16 little-endian payload. The header layout is `!4sIIQII`:
@@ -212,7 +215,12 @@ stream audio and callbacks cannot affect the next reply.
 
 Playback confirmation is required. Clients send `playback_progress` with
 `playback_id`, `played_samples` and `sample_rate`; the server clamps progress to
-sent media. After draining the renderer, clients send `playback_finished` with
+sent media. Browser progress also carries `rendered_samples`, the monotonic
+count actually consumed by the render worklet before output-device latency.
+It releases send capacity; `played_samples` remains the latency-adjusted spoken
+ledger input. Neither network arrival nor decoding earns render credit. Counts
+from old playback IDs are ignored; rendered counts beyond sent media are rejected.
+After draining the renderer, clients send `playback_finished` with
 the matching ID. Network delivery and decoder completion do not confirm playback.
 The browser accounts for reported audio output latency plus one render quantum;
 this is an estimate of output completion, not a hardware audibility guarantee.
@@ -226,7 +234,12 @@ intent through one session controller. Both worklets use fixed-capacity sample
 rings and persistent resampling. Playback starts with a 60 ms jitter buffer;
 underruns output silence without advancing media progress. Capture uses a pool of
 eight reusable 20 ms buffers. Incoming/outgoing queues are bounded to 500 ms;
-server output is paced at most 200 ms ahead. Overload ends the session explicitly.
+browser output uses a 300 ms consumption window across the network, decoder and
+render queue. The worklet reports progress every 50 ms. A paused renderer earns
+no capacity from wall time; network stalls cannot cause catch-up bursts exceeding
+the window. Missing render progress for five seconds ends the session explicitly.
+Existing paired devices retain 200 ms wall-clock pacing and their existing
+playback confirmation contract. Overload still ends the session explicitly.
 
 Voice requires HTTPS/localhost, AudioWorklet, module Workers and current Web Audio
 support. There is no ScriptProcessor or prefixed AudioContext path. Protocol 1,
@@ -579,3 +592,12 @@ memory; the following identity, sharing, and attribution boundaries still apply.
 | Agent-governed sharing | Tools discover this Agent's paired devices; the Agent retains its execution and sharing judgment. |
 | Diary as memory carrier | Connection state is operational data, not a competing long-term memory store. |
 | Attribution and continuity | Device IDs and command IDs identify actions; saved credentials preserve device binding across restarts without replaying uncertain work. |
+
+
+### Playback flow-control goal check
+
+The Agent's identity, multi-user attribution, 1:1/group behavior, unified memory,
+sharing rules and diary authority are unchanged. Render credit controls transport
+only; latency-adjusted played samples still govern the first-person spoken ledger.
+Playback IDs isolate sessions, and interruption/disconnect cancels blocked sends.
+This preserves attribution and continuity without recording queued audio as heard.

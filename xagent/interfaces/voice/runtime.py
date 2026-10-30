@@ -53,7 +53,7 @@ _PLAYBACK_MICROPHONE_COOLDOWN_SECONDS = 0.5
 
 @dataclass(frozen=True)
 class VoiceRuntimeOptions:
-    """Runtime options controlled by the CLI command."""
+    """Runtime options supplied by the voice session."""
 
     user_id: str = "local_voice"
     stream: bool = True

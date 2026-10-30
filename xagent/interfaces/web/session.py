@@ -35,7 +35,7 @@ from ..cli.setup import (
     build_setup_schema,
     init_selection_from_mapping,
 )
-from ..cli.channels import CHANNEL_API, channel_readiness, load_config_file
+from ..cli.channels import CHANNEL_API, load_config_file
 from ..cli.web_client import web_client_config
 from ..cli.processes import managed_paths, running_pid
 from ..server.admin_service import AdminService
@@ -92,7 +92,8 @@ class WebAgentSession:
         for name, entry in sorted(registry.agents.items()):
             active = runtime_is_active(entry.path)
             try:
-                voice_configured, _ = channel_readiness(load_config_file(entry.path), "voice", entry.path)
+                from ..server.voice_settings import voice_settings_status
+                voice_configured = voice_settings_status(load_config_file(entry.path))["configured"]
             except (ValueError, OSError):
                 voice_configured = False
             rows.append({

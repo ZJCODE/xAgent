@@ -44,7 +44,6 @@ dependencies = [
     "python-multipart>=0.0.20",
     "readchar>=4.2.1",
     "rich>=13.9.4",
-    "sounddevice>=0.5.0",
     "soniox>=2.8,<3",
     "av>=14,<17",
     "python-socks>=2.4.0",

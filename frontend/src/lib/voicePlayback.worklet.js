@@ -47,7 +47,7 @@ class VoicePlayback extends AudioWorkletProcessor {
       }
     }
     this.clock += output.length;
-    if (this.active && this.clock >= sampleRate * .2) { this.clock = 0; this.progress(); }
+    if (this.active && this.clock >= sampleRate * .05) { this.clock = 0; this.progress(); }
     return true;
   }
 }

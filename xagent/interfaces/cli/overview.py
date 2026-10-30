@@ -16,7 +16,6 @@ from ..base import BaseAgentConfig, BaseAgentRunner
 from ..voice.config import VoiceChannelConfig
 from .channels import (
     CHANNEL_API,
-    CHANNEL_VOICE,
     CHANNEL_WEIXIN,
     api_config,
     load_config_file,
@@ -246,11 +245,6 @@ def _image_item(config: dict[str, Any]) -> OverviewItem:
 
 
 def _voice_item(config_dir: Path, config: dict[str, Any], *, runtime: dict[str, Any] | None = None) -> OverviewItem:
-    runtime = runtime or runtime_snapshot(config_dir)
-    active = runtime.get("channels", {}).get(CHANNEL_VOICE)
-    if isinstance(active, dict):
-        state, status, error = _channel_state(runtime, CHANNEL_VOICE)
-        return OverviewItem("Voice", state, status, error or "soniox voice")
     raw_voice = voice_config(config)
     if not raw_voice:
         return OverviewItem("Voice", "not set", STATUS_DISABLED)
@@ -263,8 +257,7 @@ def _voice_item(config_dir: Path, config: dict[str, Any], *, runtime: dict[str, 
     except ValueError as exc:
         return OverviewItem("Voice", "soniox", STATUS_ERROR, _friendly_overview_error(str(exc), fallback="Setup"))
 
-    state, status, error = _channel_state(runtime or runtime_snapshot(config_dir), CHANNEL_VOICE)
-    return OverviewItem("Voice", state, status, error or "soniox voice")
+    return OverviewItem("Voice", "configured", STATUS_OK, "Browser / WebSocket devices")
 
 
 def _api_service_url(config: dict[str, Any]) -> str:

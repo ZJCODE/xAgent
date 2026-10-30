@@ -15,7 +15,7 @@ from tests.test_voice_runtime import FakeAgent
 from xagent.interfaces.cli.config_editor import apply_agent_edit_setup, load_config
 from xagent.interfaces.cli.setup import build_voice_setup_schema
 from xagent.interfaces.voice.config import VoiceChannelConfig
-from xagent.interfaces.voice.factory import create_local_voice_runtime, create_websocket_voice_runtime
+from xagent.interfaces.voice.factory import create_websocket_voice_runtime
 from xagent.interfaces.voice.runtime import VoiceRuntimeOptions
 from xagent.interfaces.web.server import WebClientServer
 
@@ -32,14 +32,13 @@ class AgentVoiceSettingsTests(unittest.TestCase):
         self.client = TestClient(server.app)
 
     def test_readiness_needs_no_audio_hardware_and_does_not_expose_keys(self):
-        with patch.dict("os.environ", {"SONIOX_API_KEY": ""}), patch(
-            "xagent.interfaces.voice.audio.list_audio_device_options", side_effect=AssertionError("No host inventory needed")):
+        with patch.dict("os.environ", {"SONIOX_API_KEY": ""}):
             settings = self.client.get("/api/agent/voice").json()
             self.assertFalse(settings["configured"])
             self.assertFalse(settings["has_api_key"])
             self.assertFalse(settings["restart_required"])
             self.assertEqual(set(settings), {"configured", "has_api_key", "voice", "speed", "interruptions",
-                                             "audio_input", "audio_output", "voice_options", "restart_required"})
+                                             "voice_options", "restart_required"})
             response = self.client.patch("/api/agent/voice", json={"voice_api_key": "secret-soniox-key", "voice": "Maya"})
             self.assertEqual(response.status_code, 200, response.text)
             self.assertNotIn("secret-soniox-key", response.text)
@@ -63,7 +62,7 @@ class AgentVoiceSettingsTests(unittest.TestCase):
         response = self.client.patch("/api/agent/voice", json={"voice_api_key": "", "voice": "Maya"})
         self.assertEqual(response.status_code, 200, response.text)
         changed = load_config(self.agent_dir)
-        expected = {**config["channels"]["voice"], "voice": "Maya"}
+        expected = {"api_key": "keep-key", "voice": "Maya", "interruptions": True, "speed": 1.25}
         self.assertEqual(changed["channels"]["voice"], expected)
         self.assertEqual(changed["channels"]["api"], config["channels"]["api"])
         schema = build_voice_setup_schema(changed)
@@ -81,29 +80,17 @@ class AgentVoiceSettingsTests(unittest.TestCase):
     def test_preferences_round_trip_and_reset_without_losing_the_saved_key(self):
         response = self.client.patch("/api/agent/voice", json={
             "voice_api_key": "keep-key", "voice": "Maya", "speed": 1.25, "interruptions": True,
-            "audio_input": "Desk mic", "audio_output": 3,
         })
         self.assertEqual(response.status_code, 200, response.text)
         state = self.client.get("/api/agent/voice").json()
         self.assertEqual((state["voice"], state["speed"], state["interruptions"]), ("Maya", 1.25, True))
-        self.assertEqual((state["audio_input"], state["audio_output"]), ("Desk mic", 3))
         response = self.client.patch("/api/agent/voice", json={
-            "speed": 1, "interruptions": False, "audio_input": "auto", "audio_output": "auto",
+            "speed": 1, "interruptions": False,
         })
         self.assertEqual(response.status_code, 200, response.text)
         saved = load_config(self.agent_dir)["channels"]["voice"]
         self.assertEqual(saved, {"api_key": "keep-key", "voice": "Maya", "interruptions": False})
 
-    def test_device_inventory_is_fetched_separately_from_voice_readiness(self):
-        options = {"input": [{"id": "auto"}, {"id": "1", "label": "USB mic"}], "output": [{"id": "auto"}]}
-        with patch("xagent.interfaces.voice.audio.list_audio_device_options", return_value=options) as inventory:
-            self.client.get("/api/agent/voice")
-            inventory.assert_not_called()
-            response = self.client.get("/api/agent/voice/devices")
-            self.assertEqual(response.status_code, 200)
-            self.assertEqual(response.json(), options)
-            self.assertEqual(response.headers["cache-control"], "no-store")
-            inventory.assert_called_once()
 
     def test_invalid_preference_types_leave_the_file_unchanged(self):
         original = (self.agent_dir / "config.yaml").read_text()
@@ -142,25 +129,6 @@ class AgentVoiceSettingsTests(unittest.TestCase):
             self.assertEqual(response.status_code, 200, response.text)
         self.assertNotIn("environment-key", (self.agent_dir / "config.yaml").read_text())
 
-    def test_host_and_websocket_audio_use_the_same_saved_voice_and_speed(self):
-        agent = FakeAgent()
-        agent.voice = "Daniel"  # A stale Agent attribute must not override the shared settings.
-        hello = SimpleNamespace(profile="headset", echo_managed=True, interruptions=None)
-        bridge = SimpleNamespace(hello=hello, room_name="Browser voice")
-        audio = SimpleNamespace(topology=SimpleNamespace(near_field=True, echo_managed=True, reason="test"),
-                                input_selection=SimpleNamespace(device_index=0, device_name="Mic", stream_sample_rate=16000, stream_channels=1),
-                                output_selection=SimpleNamespace(device_index=1, device_name="Speaker", stream_sample_rate=24000, stream_channels=1))
-        with patch("xagent.interfaces.voice.factory.create_soniox_adapters", return_value=(object(), object())) as adapters, patch(
-            "xagent.interfaces.voice.factory.resolve_audio_io_profile", return_value=audio), patch.multiple(
-                "xagent.interfaces.voice.factory", SoundDeviceMicrophone=object_mock(), SoundDevicePlayer=object_mock(),
-                WebSocketMicrophone=object_mock(), WebSocketPlayer=object_mock(), VoiceRuntime=object_mock(),
-                make_websocket_output_sink=object_mock()):
-            settings = {"api_key": "key", "voice": "Maya", "speed": 1.25}
-            create_local_voice_runtime(agent=agent, config=VoiceChannelConfig.from_dict(settings), options=VoiceRuntimeOptions())
-            create_websocket_voice_runtime(agent=agent, config=VoiceChannelConfig.from_dict(settings),
-                                           bridge=bridge, options=VoiceRuntimeOptions())
-        self.assertEqual([(call.args[0].voice, call.args[0].speed) for call in adapters.call_args_list],
-                         [("Maya", 1.25), ("Maya", 1.25)])
 
 
 def object_mock():
