@@ -182,7 +182,6 @@ export function ChannelPage() {
       {runtime?.error ? <div className="error-strip" role="alert">{runtime.error}</div> : null}
       <div className="connections-heading"><h3>Connections</h3><p>API starts by default. Connect other channels when needed.</p></div>
       <div className="connection-list">{data?.channels.map((channel) => <ChannelRow key={channel.id} channel={channel} onSetup={setSetupChannelId} onConnection={(id, action) => void runConnection(id, action)} pending={connectionPending[channel.id]} disabled={busy || !runtime?.runtime_ready} />)}</div>
-      <p className="connections-footnote">Use the Voice tab to talk in your browser, or connect a paired voice device. Manage voice settings in Agent.</p>
       </div>
       {setupChannelId ? <ChannelSetupWizard channel={setupChannelId} open onClose={() => setSetupChannelId(null)} onComplete={() => {
         if (renderEpoch !== sessionEpoch.current) return;

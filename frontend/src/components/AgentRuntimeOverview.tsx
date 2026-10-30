@@ -1,5 +1,5 @@
 import { FileText, Play, RefreshCw, Square, X } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useAgentSession } from "../context/AgentSessionContext";
 import { getRuntime, getRuntimeLogs, restartRuntime, startRuntime, stopRuntime } from "../lib/api";
 import type { AgentRuntimeStatus } from "../types";
@@ -8,8 +8,10 @@ import { Button, IconButton, Panel, StatusBadge } from "./ui";
 type RuntimeAction = "start" | "stop" | "restart";
 
 // Key this component by agent so pending requests and logs stay with their owner.
-export function AgentRuntimeOverview({ restartRequired, onSettingsApplied }: {
+export function AgentRuntimeOverview({ restartRequired, settingsNotice, onSettingsApplied, children }: {
   restartRequired: boolean;
+  settingsNotice?: string;
+  children?: ReactNode;
   onSettingsApplied: () => void;
 }) {
   const { selectedAgent, refresh: refreshAgents } = useAgentSession();
@@ -102,7 +104,7 @@ export function AgentRuntimeOverview({ restartRequired, onSettingsApplied }: {
   return (
     <Panel className="runtime-overview">
       <div className="runtime-heading">
-        <div className="runtime-heading-copy"><span className="runtime-eyebrow">OVERVIEW</span><h3>{selectedAgent}</h3></div>
+        <div className="runtime-heading-copy"><h3>{selectedAgent}</h3></div>
         <StatusBadge tone={state === "degraded" ? "info" : ready ? "good" : "muted"} role="status"><span className="runtime-status-dot" aria-hidden="true" />{status}</StatusBadge>
       </div>
       <div className="runtime-controls">
@@ -112,7 +114,7 @@ export function AgentRuntimeOverview({ restartRequired, onSettingsApplied }: {
         <Button type="button" variant="ghost" disabled={logsBusy || logsOpen} onClick={() => void loadLogs()}><FileText size={14} />{logsBusy ? "Loading logs…" : "View logs"}</Button>
       </div>
       {error ? <div className="error-strip" role="alert">{error}<Button type="button" variant="ghost" onClick={() => void load()}>Retry status</Button></div> : null}
-      {notice ? <div className="success-strip" role="status">{notice}</div> : null}
+      {notice || settingsNotice ? <div className="success-strip" role="status">{[notice, settingsNotice].filter(Boolean).join(" ")}</div> : null}
       {runtime?.needs_restart || restartRequired ? <div className="warning-strip">{running ? "Settings saved. Restart the Agent to apply them." : "Settings saved. They will apply when the Agent starts."}</div> : null}
       {runtime?.error ? <p className="task-error-copy" role="alert">{runtime.error}</p> : null}
       {reviewCount ? <div className="warning-strip"><a href="/tasks">{reviewCount} task{reviewCount === 1 ? "" : "s"} need checking.</a> Review the result before retrying.</div> : null}
@@ -120,6 +122,7 @@ export function AgentRuntimeOverview({ restartRequired, onSettingsApplied }: {
         <div className="channel-log-header"><span>Agent logs · Auto refresh</span><IconButton title="Close logs" onClick={() => { logsSequence.current += 1; setLogs(null); }}><X size={15} /></IconButton></div>
         <pre className="channel-log-output">{logs?.trim() || "No log output yet."}</pre>
       </div> : null}
+      {children}
     </Panel>
   );
 }
