@@ -1,5 +1,5 @@
 import { Mic, Play } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Button, PageShell, PageToolbar, Panel, StatusBadge } from "../components/ui";
 import { useAgentSession } from "../context/AgentSessionContext";
 import {VoiceSessionController, initialVoiceSnapshot} from '../lib/voiceSessionController';
@@ -26,6 +26,8 @@ function VoiceSession({ configuredApiUrl, refreshAgents }: {
 }) {
   const [state, setState] = useState(initialVoiceSnapshot);
   const controller = useRef<VoiceSessionController | null>(null);
+  const transcriptRef = useRef<HTMLUListElement>(null);
+  const followTranscript = useRef(true);
   useEffect(() => {
     const session = new VoiceSessionController(configuredApiUrl, refreshAgents);
     controller.current = session;
@@ -46,6 +48,10 @@ function VoiceSession({ configuredApiUrl, refreshAgents }: {
     };
   }, [configuredApiUrl, refreshAgents]);
   const {mode, started, muted, level, lines, error, floor} = state;
+  useLayoutEffect(() => {
+    const transcript = transcriptRef.current;
+    if (transcript && followTranscript.current) transcript.scrollTop = transcript.scrollHeight;
+  }, [lines]);
   const phase = state.connection;
   const live = phase === 'live';
   const continuous = mode === 'continuous';
@@ -134,7 +140,10 @@ function VoiceSession({ configuredApiUrl, refreshAgents }: {
           <p className="wizard-hint">{continuous
             ? "Start once to talk continuously. Conversation pauses when this page is hidden."
             : "Hold to talk; release to stop recording."}</p>
-          <ul className="voice-transcript">
+          <ul className="voice-transcript" ref={transcriptRef} onScroll={(event) => {
+            const element = event.currentTarget;
+            followTranscript.current = element.scrollHeight - element.scrollTop - element.clientHeight <= 48;
+          }}>
             {lines.length === 0 ? <li className="voice-transcript-empty">Transcripts appear here after you speak.</li> : null}
             {lines.map((line) => <li key={line.id}><span className="role">{line.role === "user" ? "You" : "Agent"}</span>{line.text}</li>)}
           </ul>
