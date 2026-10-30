@@ -41,8 +41,9 @@ a user, room, subscription, or immediate chat reply.
 
 For hardware implementation, open **Agent → Devices → Connection Help**.
 It uses the same dialog interaction as API Help and includes the selected
-Agent's device WebSocket address, pairing steps, and registration/command/result
-examples. **Copy for Agent** copies the complete guide for another Agent to
+Agent's device WebSocket address, pairing steps, registration/command/result
+examples, and the complete hardware voice contract (section 6). API Help also
+opens this same Device Connection Help directly. **Copy for Agent** copies the complete guide for another Agent to
 write ESP32, Raspberry Pi, or other device code. Pairing codes and credentials
 remain placeholders; supply the real code directly on the device when pairing.
 
@@ -197,6 +198,90 @@ code 1013, releasing capture before the next connection. Explicit browser
 conversations keep recognition awake until the session ends or the page hides;
 Paired room devices retain their idle sleep policy. Host audio capture is retired;
 use the browser Voice page or a paired voice device.
+
+### Hardware voice implementation
+
+Hardware connects to `/ws/devices/{device_id}/voice`, sharing the browser Voice
+tab's audio protocol and server speech/Agent pipeline. It uses a persistent device
+credential instead of a temporary browser ticket. A voice-only device can pair
+directly on this socket: authenticate with a pairing code, send `hello` within
+five seconds, and durably save the credential returned in `ready`. No `register`
+or capability manifest is needed on the voice socket. Subsequent connections
+authenticate with that saved credential and repeat `hello` → `ready`. A device
+with control and voice uses two sockets with the same ID/credential; complete
+pairing on one before opening the other. A second voice connection replaces the
+first for that device ID.
+
+For initial hardware bring-up, use:
+
+```json
+{"type":"hello","audio_protocol":2,"codec":"pcm_s16le","profile":"room","echo_managed":false,"interruptions":false}
+```
+
+Wait for `ready` before sending microphone audio. PCM requires 16 kHz input and
+24 kHz output, both mono signed 16-bit little-endian. A full 20 ms input payload
+is 320 samples / 640 bytes; output is 480 samples / 960 bytes. Convert locally
+when the audio hardware uses another rate. PCM needs no audio codec on the device;
+the server installation still requires its normal voice codec dependencies.
+
+Start each capture with `{"type":"input_start","stream_id":1}` and end it with
+`{"type":"input_end","stream_id":1}`. Use increasing nonzero uint32 input stream
+IDs per connection. Each binary WebSocket message is one 28-byte header plus one
+payload. The header uses unsigned big-endian integers, `!4sIIQII`:
+
+| Offset | Bytes | Field |
+| --- | --- | --- |
+| 0 | 4 | ASCII `XAV2` |
+| 4 | 4 | Stream ID |
+| 8 | 4 | Packet sequence, starting at zero per stream |
+| 12 | 8 | Timestamp: `floor(previous_valid_samples * 1000000 / sample_rate)` |
+| 20 | 4 | Valid mono sample count |
+| 24 | 4 | Leading decoded samples to discard (zero for PCM) |
+| 28 | remaining | PCM16LE bytes or one raw Opus packet |
+
+For uplink, valid samples plus discard must not exceed 20 ms; a final partial
+frame is allowed. Sequence increments by one, timestamps advance by valid samples,
+and PCM payload length equals twice the valid sample count. For Opus, trim priming
+and tail padding using `discard` and the valid sample count. Start a fresh encoder
+per input capture and a fresh decoder per downlink playback stream. Audio is raw
+payload, without WAV/Ogg/WebM containers or Base64. Pace uplink to real capture time;
+more than 500 ms of queued microphone audio causes a retryable 1013 close.
+
+On `playback_start`, use its `playback_id`, `stream_id`, codec, sample rate and
+channels; reset playback counters and route matching binary packets into a bounded
+speaker queue. Input/output stream ID counters are independent. Keep the network
+receive loop running while playing. Report cumulative actual speaker-consumed
+media samples using `playback_progress` with `playback_id`, `played_samples`, and
+`sample_rate` (24000 for PCM, 48000 for Opus), periodically and after draining.
+Exclude underrun silence, discarded samples and unplayed queued audio. Do not
+estimate playback from reception, decoding or elapsed time. After `playback_done`
+and hardware/DMA output has drained, send final progress followed by
+`{"type":"playback_finished","playback_id":"..."}`. Missing completion causes
+a playback timeout. Paired hardware currently supports confirmation at end of
+playback; periodic progress also keeps the server's spoken-history accounting
+current. The browser additionally uses a 300 ms progress-driven send window.
+
+On `clear_playback`, stop the matching playback immediately and flush both
+software/hardware queues. Ignore stale packets and controls. `transcript` and
+`state` messages are optional display data, not playback completion signals.
+
+For hardware without validated echo cancellation/isolation, explicitly disable
+interruptions and stop forwarding microphone audio during playback. End capture
+on playback start and resume with a new input stream ID after the speaker drains
+and the acoustic tail settles. `echo_managed` is client metadata; it does not
+activate server acoustic echo cancellation. Enable interruptions only after
+simultaneous capture/playback works without self-triggering. `room` uses room
+attention/wake rules; `headset` selects directed speech attention and does not
+provide echo cancellation.
+
+Voice control JSON is limited to 16 KiB and binary messages to 256 KiB. Application
+`ping` receives `pong`; `stop` ends the whole voice session. After transient
+disconnect/1013, clear queues and reconnect with bounded backoff/jitter, then
+negotiate again before fresh capture. Never replay old audio. A 1008 close may
+indicate invalid credentials or malformed protocol; inspect the reason. Diagnose
+codec failures/playback timeouts instead of retrying indefinitely. Hardware
+acceptance should cover persistent pairing, multiple turns, long reply completion,
+network loss during playback, speaker echo, and audio clearing on interruption.
 
 Binary messages consist of a 28-byte network-byte-order header followed by one
 raw Opus packet or PCM16 little-endian payload. The header layout is `!4sIIQII`:

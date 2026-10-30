@@ -7,6 +7,7 @@ interface HelpDialogProps {
   open: boolean;
   currentAgent: string;
   directApiUrl: string;
+  onOpenDeviceHelp: () => void;
   onClose: () => void;
 }
 
@@ -29,7 +30,7 @@ function websocketUrl(baseUrl: string): string {
   }
 }
 
-export function HelpDialog({ open, currentAgent, directApiUrl, onClose }: HelpDialogProps) {
+export function HelpDialog({ open, currentAgent, directApiUrl, onOpenDeviceHelp, onClose }: HelpDialogProps) {
   const [copyState, setCopyState] = useState<CopyState>(null);
   const copyResetTimer = useRef<number | null>(null);
   const proxyUrl = window.location.origin;
@@ -123,6 +124,12 @@ socket.addEventListener("message", ({ data }) => {
             Choose the direct address when your client should always talk to this Agent, or use the Web Proxy when it
             should follow whichever Agent is selected in this page.
           </p>
+
+          <section className="help-api-section" aria-labelledby="hardware-help-title">
+            <h4 id="hardware-help-title">Connecting hardware with a microphone and speaker?</h4>
+            <p>Device Connection Help covers pairing, device commands and events, and real-time voice using the same audio protocol and voice service as the Voice tab. Copy the guide to generate device code.</p>
+            <Button type="button" variant="secondary" onClick={onOpenDeviceHelp}>Open Device Connection Help</Button>
+          </section>
 
           <dl className="help-connection-details">
             <div>
