@@ -189,6 +189,12 @@ and require user retry. A session never changes codec. Transient network failure
 retain the three retries after 1, 2 and 4 seconds. Permission errors and playback
 confirmation timeouts stop and require user action.
 
+`ready` is sent only after the recognition sender begins consuming microphone
+audio. Browser recognition disconnects and input overload close with retryable
+code 1013, releasing capture before the next connection. Explicit browser
+conversations keep recognition awake until the session ends or the page hides;
+Host voice and room devices retain their idle sleep policy.
+
 Binary messages consist of a 28-byte network-byte-order header followed by one
 raw Opus packet or PCM16 little-endian payload. The header layout is `!4sIIQII`:
 magic `XAV2`, uint32 stream ID, uint32 sequence, uint64 timestamp in microseconds,

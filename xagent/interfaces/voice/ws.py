@@ -29,6 +29,10 @@ MAX_VOICE_CONTROL_BYTES = 16 * 1024
 MAX_VOICE_AUDIO_CHUNK_BYTES = 256 * 1024
 
 
+class AudioInputBackpressure(ValueError):
+    """The recognition consumer is not keeping up, not an invalid client frame."""
+
+
 class VoiceSessionHello(BaseModel):
     """One explicit audio contract for browser and device clients."""
     model_config = ConfigDict(extra="forbid")
@@ -111,6 +115,12 @@ class WebSocketVoiceBridge:
         self._schedule_send(close_failed)
         self.closed.set()
 
+    def recognition_unavailable(self) -> None:
+        async def close_unavailable():
+            await self.websocket.close(code=1013, reason='Speech recognition disconnected. Reconnecting.')
+        self._schedule_send(close_unavailable)
+        self.closed.set()
+
     def _schedule_send(self, work) -> None:
         if self.closed.is_set():
             return
@@ -182,6 +192,8 @@ class WebSocketMicrophone:
         self._wire_bytes = 0
         self._queued_samples = 0
         self._queue_lock = threading.Lock()
+        self.consuming = threading.Event()
+        self._last_consumed_at: float | None = None
 
     def start_input(self, stream_id: int) -> None:
         if stream_id <= self._stream:
@@ -202,7 +214,7 @@ class WebSocketMicrophone:
         try:
             self._chunks.put_nowait(item)
         except queue.Full as exc:
-            raise ValueError('Audio input queue exceeded 500 ms') from exc
+            raise AudioInputBackpressure('Audio input queue exceeded 500 ms') from exc
 
     def push_audio(self, data: bytes) -> None:
         if self._closed or not data:
@@ -214,15 +226,17 @@ class WebSocketMicrophone:
             return
         if packet.sequence != self._sequence or abs(packet.timestamp - self._samples * 1_000_000 // self.stream_sample_rate) > 1:
             raise ValueError('Discontinuous input audio')
+        with self._queue_lock:
+            if self._queued_samples + packet.samples > self.stream_sample_rate // 2:
+                logger.warning('Voice input overload codec=%s stream=%d queue_ms=%.1f packets=%d consumer_idle_ms=%s',
+                               self.bridge.hello.codec, self._stream, self._queued_samples * 1000 / self.stream_sample_rate,
+                               self._chunks.qsize(), None if self._last_consumed_at is None else round((time.monotonic() - self._last_consumed_at) * 1000))
+                raise AudioInputBackpressure('Audio input queue exceeded 500 ms')
+            self._put(packet)
+            self._queued_samples += packet.samples
         self._sequence += 1
         self._samples += packet.samples
         self._wire_bytes += len(data)
-        with self._queue_lock:
-            self._queued_samples += packet.samples
-            if self._queued_samples > self.stream_sample_rate // 2:
-                raise ValueError('Audio input queue exceeded 500 ms')
-        self._put(packet)
-        return
 
     def close(self) -> None:
         if self._closed:
@@ -247,6 +261,9 @@ class WebSocketMicrophone:
         pause_event: threading.Event,
         stop_event: threading.Event,
     ) -> Iterator[bytes]:
+        # First pull comes from the STT sender, after its connection has opened.
+        # Merely constructing this generator does not mean it can consume audio.
+        self.consuming.set()
         converter = _PCMInputConverter(
             source_channels=self.stream_channels,
             source_rate=self.stream_sample_rate,
@@ -274,6 +291,7 @@ class WebSocketMicrophone:
             if isinstance(raw_chunk, AudioPacket):
                 with self._queue_lock:
                     self._queued_samples -= raw_chunk.samples
+                    self._last_consumed_at = time.monotonic()
                 if self.bridge.hello.codec == 'opus':
                     try:
                         raw_chunk = decoder.decode(raw_chunk)

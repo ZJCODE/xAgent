@@ -28,6 +28,7 @@ from ..voice.runtime import VoiceRuntimeOptions
 from ..voice.transport_audio import AudioCodecError
 from ..voice.ws import (
     MAX_VOICE_AUDIO_CHUNK_BYTES,
+    AudioInputBackpressure,
     parse_client_control,
     VoiceSessionHello,
     WebSocketVoiceBridge,
@@ -255,11 +256,24 @@ def register_device_routes(
             ready_frame.update(audio_protocol=2, codec=hello.codec)
             if issued is not None:
                 ready_frame["credential"] = issued
+            session.runtime_task = asyncio.create_task(runtime.run_forever())
+            # Do not authorize browser/device capture until the real STT sender
+            # pulls audio. Context refresh and provider connection can take >500ms.
+            deadline = asyncio.get_running_loop().time() + 7.0
+            while not microphone.consuming.is_set():
+                if session.runtime_task.done():
+                    await session.runtime_task
+                    return
+                if bridge.closed.is_set():
+                    return
+                if asyncio.get_running_loop().time() >= deadline:
+                    await websocket.close(code=1013, reason='Speech recognition is still connecting. Please retry.')
+                    return
+                await asyncio.sleep(0.01)
             await asyncio.wait_for(
                 websocket.send_json(ready_frame),
                 timeout=5,
             )
-            session.runtime_task = asyncio.create_task(runtime.run_forever())
             while service.voice_sessions.get(device_id) is session and not session.runtime_task.done():
                 receive_task = asyncio.create_task(websocket.receive())
                 done, _ = await asyncio.wait(
@@ -304,6 +318,8 @@ def register_device_routes(
                 exc = session.runtime_task.exception()
                 if exc is not None:
                     raise exc
+        except AudioInputBackpressure:
+            await websocket.close(code=1013, reason='Speech recognition is not keeping up. Reconnecting.')
         except AudioCodecError as exc:
             try:
                 await websocket.send_json({'type': 'error', 'code': 'audio_codec', 'message': str(exc)})

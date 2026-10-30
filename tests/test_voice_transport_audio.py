@@ -68,6 +68,8 @@ class AudioProtocolTests(unittest.TestCase):
             mic.push_audio(AudioPacket(1, n, n * 20000, 320, 0, b'\0\0' * 320).pack())
         with self.assertRaisesRegex(ValueError, '500 ms'):
             mic.push_audio(AudioPacket(1, 25, 500000, 320, 0, b'\0\0' * 320).pack())
+        self.assertEqual(mic._queued_samples, 16000 // 2)
+        self.assertEqual(mic._sequence, 25)
         mic.close()
 
 

@@ -287,3 +287,46 @@ class DeviceVoiceWebSocketTests(unittest.IsolatedAsyncioTestCase):
                 self.assertGreater(await self.playback(ws), 0)
                 self.assertTrue((await delivery)['accepted'])
                 await ws.send(json.dumps({'type': 'stop'}))
+
+
+    async def test_ready_waits_for_slow_recognition_consumer(self):
+        class SlowRecognizer(_FakeWSRecognizer):
+            def iter_utterances(self, audio_chunks, *, pause_event, stop_event):
+                stop_event.wait(.75)  # Model provider connection/context refresh.
+                yield from super().iter_utterances(audio_chunks, pause_event=pause_event, stop_event=stop_event)
+        host, _, _, url = await self.start_host([(ReplyType.SIMPLE_REPLY, '好的。')])
+        with patch('xagent.interfaces.voice.factory.create_soniox_adapters', return_value=(SlowRecognizer(continuous=True), _FakeWSSynthesizer())):
+            async with websockets.connect(url + '/ws/devices/living-speaker/voice', additional_headers={'Authorization': 'Bearer speaker-secret'}, **self.connection_options) as ws:
+                started = time.monotonic()
+                await ws.send(json.dumps({'type': 'hello', 'audio_protocol': 2, 'codec': 'pcm_s16le', 'profile': 'headset'}))
+                ready = json.loads(await asyncio.wait_for(ws.recv(), 3))
+                self.assertEqual(ready['type'], 'ready')
+                self.assertGreater(time.monotonic() - started, .7)
+                await self.send_audio(ws)
+                self.assertGreater(await self.playback(ws), 0)
+                await ws.send(json.dumps({'type': 'stop'}))
+
+    async def test_stalled_consumer_overload_is_retryable(self):
+        from xagent.interfaces.voice.transport_audio import AudioPacket
+        consumed = threading.Event()
+        class StalledRecognizer(_FakeWSRecognizer):
+            def iter_utterances(self, audio_chunks, *, pause_event, stop_event):
+                for chunk in audio_chunks:
+                    if chunk:
+                        consumed.set()
+                        stop_event.wait(3)
+                        return
+                yield  # Keep the recognizer interface a generator.
+        host, _, _, url = await self.start_host([])
+        with patch('xagent.interfaces.voice.factory.create_soniox_adapters', return_value=(StalledRecognizer(), _FakeWSSynthesizer())):
+            async with websockets.connect(url + '/ws/devices/living-speaker/voice', additional_headers={'Authorization': 'Bearer speaker-secret'}, **self.connection_options) as ws:
+                await ws.send(json.dumps({'type': 'hello', 'audio_protocol': 2, 'codec': 'pcm_s16le'}))
+                await ws.recv()
+                await ws.send(json.dumps({'type': 'input_start', 'stream_id': 1}))
+                await ws.send(AudioPacket(1, 0, 0, 320, 0, b'\0\0' * 320).pack())
+                self.assertTrue(await asyncio.to_thread(consumed.wait, 1))
+                for n in range(1, 27):
+                    await ws.send(AudioPacket(1, n, n * 20000, 320, 0, b'\0\0' * 320).pack())
+                with self.assertRaises(websockets.exceptions.ConnectionClosed) as caught:
+                    await ws.recv()
+                self.assertEqual(caught.exception.rcvd.code, 1013)

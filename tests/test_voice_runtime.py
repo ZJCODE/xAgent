@@ -565,6 +565,15 @@ class SonioxSDKAdapterTests(unittest.TestCase):
         self.assertEqual(session.resume_calls, 1)
         self.assertEqual(session.sent, [b"audio"])
 
+    def test_stt_disconnect_notifies_before_session_cleanup(self):
+        order = []
+        stt = SonioxRealtimeSTT(api_key='key', config=voice_config(),
+            client=FakeClient(stt_session=FakeSTTSession([])),
+            callbacks=SonioxSTTCallbacks(on_disconnected=lambda: order.append('unavailable')))
+        with patch.object(stt, '_close_session', side_effect=lambda _: order.append('close')):
+            list(stt._iter_session([], pause_event=threading.Event(), stop_event=threading.Event(), session_stop=threading.Event()))
+        self.assertEqual(order[:2], ['unavailable', 'close'])
+
     def test_stt_reconnects_for_service_and_max_duration_errors(self):
         stt = SonioxRealtimeSTT(
             api_key="key",

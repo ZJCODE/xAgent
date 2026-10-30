@@ -210,14 +210,20 @@ def create_websocket_voice_runtime(
         )
     )
     presence_cfg = VoicePresenceConfig(
-        close_stt_after_idle_seconds=config.presence.close_stt_after_idle_seconds,
+        # An explicitly active browser conversation stays ready until ended.
+        close_stt_after_idle_seconds=0 if options.direct_conversation else config.presence.close_stt_after_idle_seconds,
         wake_energy_rms=config.presence.wake_energy_rms,
         recent_speech_hours=config.presence.recent_speech_hours,
     )
     lifecycle = SttLifecycleController(presence_cfg)
     recognizer, synthesizer = create_soniox_adapters(
         config,
-        stt_callbacks=SonioxSTTCallbacks(),
+        # Browser capture must stop while STT is unavailable. Closing this
+        # session uses the browser's existing bounded reconnect and cleanup.
+        stt_callbacks=SonioxSTTCallbacks(
+            on_reconnecting=bridge.recognition_unavailable if options.direct_conversation else None,
+            on_disconnected=bridge.recognition_unavailable if options.direct_conversation else None,
+        ),
         lifecycle=lifecycle,
     )
     extra_terms = startup_context_terms(agent)

@@ -256,7 +256,9 @@ class VoiceRuntime:
     async def run_forever(self) -> None:
         """Run until stopped or a non-recoverable STT error is raised."""
         self._event_loop = asyncio.get_running_loop()
+        self.logger.info('Voice recognition preparing context')
         await self._refresh_stt_context_terms()
+        self.logger.info('Voice recognition context ready')
         self.output("xAgent voice ready. Speak to the microphone; press Ctrl+C to stop.")
         audio_chunks = self.microphone.iter_chunks(
             pause_event=self.pause_event,

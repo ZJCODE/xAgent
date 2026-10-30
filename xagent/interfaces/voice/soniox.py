@@ -67,6 +67,7 @@ class SonioxSTTCallbacks:
     on_reconnecting: _STT_RECONNECTING | None = None
     on_recovered: _STT_RECOVERED | None = None
     on_connected: Callable[[], None] | None = None
+    on_disconnected: Callable[[], None] | None = None
 
 
 class SonioxVoiceError(RuntimeError):
@@ -282,6 +283,7 @@ class SonioxRealtimeSTT:
     ) -> Iterator[VoiceUtterance]:
         send_errors: queue.Queue[BaseException] = queue.Queue()
         session = self._client.realtime.stt.connect(config=self._stt_config())
+        _logger.info('Soniox STT opening connection')
         with self._session_lock:
             self._active_session = session
         if self._closed.is_set():
@@ -291,6 +293,7 @@ class SonioxRealtimeSTT:
             return
         try:
             with session:
+                _logger.info('Soniox STT connection established')
                 if self._closed.is_set() or stop_event.is_set():
                     self._close_session(session)
                     return
@@ -356,6 +359,8 @@ class SonioxRealtimeSTT:
                         raise send_errors.get()
                 finally:
                     session_stop.set()
+                    if not stop_event.is_set() and not self._closed.is_set() and self._callbacks.on_disconnected is not None:
+                        self._callbacks.on_disconnected()
                     try:
                         self._close_session(session)
                     except Exception:
