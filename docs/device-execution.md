@@ -259,7 +259,7 @@ and hardware/DMA output has drained, send final progress followed by
 `{"type":"playback_finished","playback_id":"..."}`. Missing completion causes
 a playback timeout. Paired hardware currently supports confirmation at end of
 playback; periodic progress also keeps the server's spoken-history accounting
-current. The browser additionally uses a 300 ms progress-driven send window.
+current. The browser additionally uses a 1 s progress-driven send window.
 
 On `clear_playback`, stop the matching playback immediately and flush both
 software/hardware queues. Ignore stale packets and controls. `transcript` and
@@ -316,15 +316,40 @@ confirmation closes the connection after sent media duration plus five seconds.
 A dedicated Worker owns the socket and codecs, with direct MessagePorts to capture
 and playback AudioWorklets. The page owns resource lifecycle and conversation
 intent through one session controller. Both worklets use fixed-capacity sample
-rings and persistent resampling. Playback starts with a 60 ms jitter buffer;
-underruns output silence without advancing media progress. Capture uses a pool of
-eight reusable 20 ms buffers. Incoming/outgoing queues are bounded to 500 ms;
-browser output uses a 300 ms consumption window across the network, decoder and
-render queue. The worklet reports progress every 50 ms. A paused renderer earns
+rings and persistent resampling. Playback starts or resumes after accumulating
+200 ms of audio; subsequent packets play continuously on the media clock. EOS
+releases a shorter final buffer immediately. Underruns output silence without
+advancing media progress; interruption clears buffered audio immediately. Capture
+uses a pool of eight reusable 20 ms buffers and keeps its 500 ms upload/server
+queue limits. Browser playback and decoder queues allow up to 1.2 s of media;
+the server limits outstanding output to 1 s across the network, decoder and
+render queue. This window allows a 500 ms feedback round trip with headroom for
+prebuffering, 50 ms reports and arrival jitter; it is a finite budget, not a
+guarantee for arbitrary WAN stalls. Decoder capacity is measured in media samples,
+so legitimate catch-up bursts do not trip a smaller packet-count limit.
+The worklet reports progress every 50 ms. A paused renderer earns
 no capacity from wall time; network stalls cannot cause catch-up bursts exceeding
 the window. Missing render progress for five seconds ends the session explicitly.
 Existing paired devices retain 200 ms wall-clock pacing and their existing
 playback confirmation contract. Overload still ends the session explicitly.
+
+Browser `playback_progress` also includes optional diagnostics: `queue_samples`
+(pending render samples), `underruns` (rebuffer events in the current reply) and
+`max_arrival_gap_ms` (largest gap between audio packets received by the worker).
+These fields do not release send credit or advance spoken history. The server
+logs one `Voice playback` summary per reply with underruns, sampled maximum queue
+duration, maximum arrival gap, maximum server send gap and total time waiting
+for send capacity. Send timestamps measure origin enqueueing, not edge delivery;
+compare these values to distinguish origin/flow-control pauses from downstream
+delivery pauses. Missing diagnostics from other clients are shown as
+`underruns=None`. Deploy the server and rebuilt browser assets together.
+
+To validate public-path playback, run frontend tests (including deterministic
+20/500 ms RTT and 150 ms arrival-jitter traces), rebuild the frontend, and test a
+multi-second reply over cellular using the public HTTPS admin page. Compare
+underruns and first-audio delay with home Wi-Fi through the same hostname. A
+1.5 s outage test verifies bounded recovery and exact sample delivery, not
+continuous playback through an outage longer than the available audio reserve.
 
 Voice requires HTTPS/localhost, AudioWorklet, module Workers and current Web Audio
 support. There is no ScriptProcessor or prefixed AudioContext path. Protocol 1,

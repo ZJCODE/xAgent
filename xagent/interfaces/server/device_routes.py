@@ -305,7 +305,9 @@ def register_device_routes(
                             if control.rendered_samples is not None and control.played_samples > control.rendered_samples:
                                 raise ValueError("Played samples exceed rendered playback audio")
                             player.note_playback_progress(control.playback_id,
-                                control.rendered_samples if control.rendered_samples is not None else min(control.played_samples, player.sent_samples))
+                                control.rendered_samples if control.rendered_samples is not None else min(control.played_samples, player.sent_samples),
+                                queue_samples=control.queue_samples, underruns=control.underruns,
+                                max_arrival_gap_ms=control.max_arrival_gap_ms)
                             runtime.note_remote_playback_samples(min(control.played_samples, player.sent_samples), control.sample_rate)
                     elif control.type == "playback_finished":
                         player.note_playback_finished(control.playback_id)

@@ -3,7 +3,8 @@ import {OpusInput, OpusOutput, VoiceCodecFailure, VoiceAudioBackpressure, select
 
 export interface VoiceCommand {id: number; type: string; [key: string]: unknown}
 type Input = {stream: number; start: number; end?: number; sequence: number; samples: number; encoder?: OpusInput};
-type Playback = {stream: number; id: string; sequence: number; samples: number; decoder?: OpusOutput; ending: boolean; timer?: ReturnType<typeof setTimeout>};
+type Playback = {stream: number; id: string; sequence: number; samples: number; decoder?: OpusOutput; ending: boolean;
+  lastArrival?: number; maxArrivalGapMs: number; underruns?: number; timer?: ReturnType<typeof setTimeout>};
 
 /** Sole owner of WebSocket and codecs; runs in the dedicated audio worker. */
 export class VoiceTransport {
@@ -152,7 +153,7 @@ export class VoiceTransport {
     if (frame.type === 'playback_start') {
       if (frame.codec !== this.codec || frame.sample_rate !== this.outputRate || frame.channels !== 1 || typeof frame.playback_id !== 'string' || !frame.playback_id || !Number.isSafeInteger(frame.stream_id) || Number(frame.stream_id) <= this.lastOutput || Number(frame.stream_id) > 0xffffffff) throw new Error('Invalid playback profile or stream.');
       this.clearPlayback();
-      const output: Playback = {id: frame.playback_id, stream: Number(frame.stream_id), sequence: 0, samples: 0, ending: false};
+      const output: Playback = {id: frame.playback_id, stream: Number(frame.stream_id), sequence: 0, samples: 0, ending: false, maxArrivalGapMs: 0};
       this.output = output; this.lastOutput = output.stream;
       this.playback.postMessage({type: 'start', stream: output.stream, rate: this.outputRate});
       if (this.codec === 'opus') output.decoder = new OpusOutput((samples) => { if (this.output === output) this.play(samples); }, (error) => { if (this.output === output) this.fail(error, true); });
@@ -174,6 +175,9 @@ export class VoiceTransport {
     const packet = unpackAudio(bytes), output = this.output;
     if (!output || packet.stream !== output.stream) return;
     if (output.ending || packet.sequence !== output.sequence++ || Math.abs(packet.timestamp - Math.floor(output.samples * 1e6 / this.outputRate)) > 1) throw new Error('Discontinuous playback audio.');
+    const now = performance.now();
+    if (output.lastArrival !== undefined) output.maxArrivalGapMs = Math.max(output.maxArrivalGapMs, now - output.lastArrival);
+    output.lastArrival = now;
     output.samples += packet.samples;
     if (output.decoder) output.decoder.write(packet);
     else {
@@ -186,22 +190,25 @@ export class VoiceTransport {
     const buffer = Float32Array.from(samples).buffer;
     this.playback.postMessage({type: 'audio', stream: this.output.stream, buffer}, [buffer]);
   }
-  private playbackMessage(data: {type: string; stream?: number; samples?: number; message?: string}): void {
+  private playbackMessage(data: {type: string; stream?: number; samples?: number; message?: string; queueSamples?: number; underruns?: number; buffering?: boolean}): void {
     const output = this.output;
     if (!output || output.stream !== data.stream || this.closed) return;
     if (data.type === 'error') { this.fail(new VoiceAudioBackpressure(data.message), true); return; }
     if (!Number.isSafeInteger(data.samples) || Number(data.samples) < 0 || Number(data.samples) > output.samples) { this.fail(new Error('Invalid rendered sample count.'), true); return; }
+    output.underruns = data.underruns;
     if (data.type === 'progress') {
-      this.event('playback', output.ending ? 'draining' : 'playing');
+      this.event('playback', output.ending ? 'draining' : data.buffering ? 'buffering' : 'playing');
       this.send({type: 'playback_progress', playback_id: output.id, sample_rate: this.outputRate,
         rendered_samples: Number(data.samples),
+        queue_samples: data.queueSamples, underruns: output.underruns, max_arrival_gap_ms: output.maxArrivalGapMs,
         played_samples: Math.max(0, Number(data.samples) - Math.ceil(this.outputDelay * this.outputRate / 1000))});
     }
     if (data.type === 'finished') {
       if (!output.ending || data.samples !== output.samples) { this.fail(new Error('Playback ended before media delivery.'), true); return; }
       output.timer = setTimeout(() => {
         if (this.output !== output) return;
-        this.send({type: 'playback_progress', playback_id: output.id, sample_rate: this.outputRate, rendered_samples: output.samples, played_samples: output.samples});
+        this.send({type: 'playback_progress', playback_id: output.id, sample_rate: this.outputRate, rendered_samples: output.samples, played_samples: output.samples,
+          queue_samples: 0, underruns: output.underruns, max_arrival_gap_ms: output.maxArrivalGapMs});
         this.send({type: 'playback_finished', playback_id: output.id});
         this.clearPlayback();
       }, this.outputDelay);

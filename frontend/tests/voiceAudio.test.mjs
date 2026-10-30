@@ -1,11 +1,7 @@
 import assert from 'node:assert/strict';
-import {readFileSync} from 'node:fs';
-import vm from 'node:vm';
 import test from 'node:test';
-import ts from 'typescript';
-const source = readFileSync(new URL('../src/lib/voiceAudio.ts', import.meta.url), 'utf8');
-const output = ts.transpileModule(source, {compilerOptions: {target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext}}).outputText;
-const audio = await import(`data:text/javascript;base64,${Buffer.from(output).toString('base64')}`);
+import {moduleUrl} from './voiceTestModules.mjs';
+const audio = await import(moduleUrl('voiceAudio'));
 
 test('audio packet header matches the Python wire format and rejects invalid sizes', () => {
   const packet = {stream: 2, sequence: 3, timestamp: 20000, samples: 320, discard: 0, payload: new ArrayBuffer(640)};
@@ -80,4 +76,26 @@ test('decoder drain precedes completion and closed decoder callbacks only releas
   assert.equal(frames.length,1);
   assert.equal(closed,2);
   assert.equal(errors.length,0);
+});
+
+test('Opus decoder accepts a one-second catch-up burst and still bounds a stalled decoder', (t) => {
+  const saved = {AudioDecoder: globalThis.AudioDecoder, EncodedAudioChunk: globalThis.EncodedAudioChunk};
+  t.after(() => Object.assign(globalThis, saved));
+  let instance;
+  globalThis.EncodedAudioChunk = class {};
+  globalThis.AudioDecoder = class {
+    state = 'configured';
+    constructor(init) { instance = this; this.init = init; }
+    configure() {} decode() {} close() { this.state = 'closed'; }
+  };
+  const errors = [];
+  const decoder = new audio.OpusOutput(() => {}, error => errors.push(error));
+  const packet = {stream: 1, sequence: 0, timestamp: 0, samples: 960, discard: 0, payload: new ArrayBuffer(2)};
+  for (let i = 0; i < 50; i++) decoder.write(packet);
+  assert.equal(errors.length, 0);
+  // Renderer callbacks free decoder capacity by media duration.
+  for (let i = 0; i < 10; i++) instance.init.output({sampleRate: 48000, numberOfFrames: 960, copyTo() {}, close() {}});
+  for (let i = 0; i < 20; i++) decoder.write(packet);
+  assert.throws(() => decoder.write(packet), audio.VoiceAudioBackpressure);
+  decoder.close();
 });

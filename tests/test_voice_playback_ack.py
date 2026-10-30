@@ -93,7 +93,7 @@ class PlaybackAcknowledgementTests(unittest.IsolatedAsyncioTestCase):
     async def test_timeout_closes_session(self):
         bridge = Bridge()
         with patch('xagent.interfaces.voice.ws.time') as clock:
-            clock.monotonic.side_effect = [0, 0, 0, 100]
+            clock.monotonic.side_effect = [0, 0, 0, 0, 100]
             player, _, task = await self.begin(bridge)
             with self.assertRaises(TimeoutError):
                 await asyncio.wait_for(task, 1)
@@ -105,6 +105,7 @@ class PlaybackAcknowledgementTests(unittest.IsolatedAsyncioTestCase):
 class PlaybackFlowControlTests(unittest.IsolatedAsyncioTestCase):
     async def start_playback(self, *, seconds=2, codec='pcm_s16le'):
         from xagent.interfaces.voice.transport_audio import AudioPacket
+        from xagent.interfaces.voice.ws import PLAYBACK_WINDOW_SECONDS
         class Receiver(Bridge):
             def __init__(self):
                 super().__init__()
@@ -124,7 +125,7 @@ class PlaybackFlowControlTests(unittest.IsolatedAsyncioTestCase):
                 player.note_playback_progress(self.frames[0]['playback_id'], samples)
             def wait_samples(self, samples):
                 with self.available:
-                    return self.available.wait_for(lambda: self.received >= samples, timeout=1)
+                    return self.available.wait_for(lambda: self.received >= samples, timeout=3)
         bridge = Receiver()
         player = WebSocketPlayer(bridge, playback_flow_control=True)
         stop = threading.Event()
@@ -135,7 +136,8 @@ class PlaybackFlowControlTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.gather(task, return_exceptions=True)
         self.addAsyncCleanup(cleanup)
         # Opus priming can leave <20 ms unused in the first window.
-        self.assertTrue(await asyncio.to_thread(bridge.wait_samples, int(player.stream_sample_rate * .28)))
+        self.assertTrue(await asyncio.to_thread(bridge.wait_samples,
+            int(player.stream_sample_rate * (min(seconds, PLAYBACK_WINDOW_SECONDS) - .02))))
         return bridge, player, stop, task
 
     async def test_renderer_stalls_do_not_earn_wall_clock_credit_or_overflow(self):
@@ -144,7 +146,7 @@ class PlaybackFlowControlTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(codec=codec):
                 bridge, player, _, task = await self.start_playback(seconds=3, codec=codec)
                 window = int(player.stream_sample_rate * PLAYBACK_WINDOW_SECONDS)
-                await asyncio.sleep(.35)  # Old sender would now enqueue >500 ms.
+                await asyncio.sleep(.35)  # Waiting must not create more render credits.
                 self.assertLessEqual(bridge.received, window)
                 self.assertFalse(task.done())
                 # Repeated refill cycles, delayed progress and a slow media clock.
@@ -189,3 +191,18 @@ class PlaybackFlowControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(bridge.closed.is_set())
         self.assertTrue(bridge.close_scheduled)
         self.assertEqual(bridge.frames[-1]['code'], 'playback_timeout')
+
+    async def test_diagnostics_do_not_grant_credit_and_are_logged_for_the_current_reply(self):
+        bridge, player, stop, task = await self.start_playback()
+        identity = bridge.frames[0]['playback_id']
+        player.note_playback_progress('stale', 0, queue_samples=999999, underruns=99)
+        self.assertEqual(player._max_queue_samples, 0)
+        with self.assertLogs('xagent.interfaces.voice.ws', level='INFO') as logs:
+            player.note_playback_progress(identity, 0, queue_samples=4800, underruns=2, max_arrival_gap_ms=175)
+            self.assertEqual(player._rendered_samples, 0)
+            self.assertEqual(player._max_queue_samples, 4800)
+            stop.set()
+            await asyncio.wait_for(task, 1)
+        self.assertIn('underruns=2', logs.output[-1])
+        self.assertIn('max_queue_ms=200.0', logs.output[-1])
+        self.assertIn('max_arrival_gap_ms=175.0', logs.output[-1])

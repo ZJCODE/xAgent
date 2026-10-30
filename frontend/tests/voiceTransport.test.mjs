@@ -59,3 +59,21 @@ test('rendered send credits are independent of output latency and audible ledger
   assert.equal(reports().at(-1).played_samples,1680);
   assert.ok(!s.sent.filter(m=>typeof m==='string').map(JSON.parse).some(m=>m.type==='playback_finished'));
 });
+
+test('playback diagnostics survive transport, buffering status and final completion', async (t) => {
+  const h = harness(t), s = await h.connect();
+  s.frame({type:'playback_start',codec:'pcm_s16le',sample_rate:24000,channels:1,stream_id:1,playback_id:'reply'});
+  s.frame(packAudio({stream:1,sequence:0,timestamp:0,samples:480,discard:0,payload:new ArrayBuffer(960)}));
+  h.playback.frame({type:'progress',stream:1,samples:0,queueSamples:480,underruns:2,buffering:true});
+  const reports = () => s.sent.filter(m => typeof m === 'string').map(JSON.parse).filter(m => m.type === 'playback_progress');
+  assert.equal(reports().at(-1).rendered_samples, 0);
+  assert.equal(reports().at(-1).queue_samples, 480);
+  assert.equal(reports().at(-1).underruns, 2);
+  assert.equal(reports().at(-1).max_arrival_gap_ms, 0);
+  assert.ok(h.messages.some(m => m.name === 'playback' && m.value === 'buffering'));
+  s.frame({type:'playback_done',playback_id:'reply'}); await flush();
+  h.playback.frame({type:'finished',stream:1,samples:480,queueSamples:0,underruns:2,buffering:false});
+  await new Promise(resolve => setTimeout(resolve, 5));
+  assert.equal(reports().at(-1).queue_samples, 0);
+  assert.equal(reports().at(-1).underruns, 2);
+});

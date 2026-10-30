@@ -334,10 +334,11 @@ class DeviceVoiceWebSocketTests(unittest.IsolatedAsyncioTestCase):
     async def test_browser_refills_from_rendered_samples_even_when_audible_progress_lags(self):
         from xagent.core.runtime.client import RuntimeClient
         from xagent.interfaces.voice.transport_audio import AudioPacket, OpusDecoder
+        from xagent.interfaces.voice.ws import PLAYBACK_WINDOW_SECONDS
         class FastSynthesizer(_FakeWSSynthesizer):
             def synthesize_chunks(self, *args, **kwargs):
                 for audio in super().synthesize_chunks(*args, **kwargs):
-                    yield audio * 50  # One second of media in a single fast TTS burst.
+                    yield audio * 150  # Three seconds exceeds the WAN send window.
         for codec in ('pcm_s16le', 'opus'):
             with self.subTest(codec=codec):
                 host, _, _, url = await self.start_host([(ReplyType.SIMPLE_REPLY, '你好。')], seed_credentials=False)
@@ -362,22 +363,23 @@ class DeviceVoiceWebSocketTests(unittest.IsolatedAsyncioTestCase):
                                 self.assertEqual(len(pcm), packet.samples * 2)
                                 samples += packet.samples
                                 if not stalled:
-                                    if samples < rate * .28:
+                                    if samples < rate * (PLAYBACK_WINDOW_SECONDS - .02):
                                         continue
                                     await asyncio.sleep(.35)
                                     player = host.device_service.voice_sessions[ticket['session_id']].player
-                                    self.assertLessEqual(player.sent_samples, int(rate * .3))
+                                    self.assertLessEqual(player.sent_samples, int(rate * PLAYBACK_WINDOW_SECONDS))
                                     stalled = True
                                 # These counters serve different purposes: rendering releases
                                 # capacity even when output hardware has not played it yet.
                                 await ws.send(json.dumps({'type': 'playback_progress', 'playback_id': playback_id,
-                                    'rendered_samples': samples, 'played_samples': 0, 'sample_rate': rate}))
+                                    'rendered_samples': samples, 'played_samples': 0, 'sample_rate': rate,
+                                    'queue_samples': 0, 'underruns': 0, 'max_arrival_gap_ms': 150}))
                             else:
                                 frame = json.loads(message)
                                 if frame['type'] == 'playback_start':
                                     playback_id = frame['playback_id']
                                 elif frame['type'] == 'playback_done':
-                                    self.assertEqual(samples, rate)
+                                    self.assertEqual(samples, rate * 3)
                                     await ws.send(json.dumps({'type': 'playback_progress', 'playback_id': playback_id,
                                         'rendered_samples': samples, 'played_samples': samples, 'sample_rate': rate}))
                                     await ws.send(json.dumps({'type': 'playback_finished', 'playback_id': playback_id}))

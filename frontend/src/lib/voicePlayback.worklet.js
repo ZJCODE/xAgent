@@ -1,4 +1,5 @@
 import {AudioRing} from './audioDsp.js';
+import {PLAYBACK_BUFFER_SECONDS, MAX_PLAYBACK_QUEUE_SECONDS} from './voicePlaybackConfig';
 
 class VoicePlayback extends AudioWorkletProcessor {
   constructor() {
@@ -18,7 +19,7 @@ class VoicePlayback extends AudioWorkletProcessor {
         try {
           if (data.type === 'audio') {
             this.ring.push(new Float32Array(data.buffer));
-            if (this.ring.pending > this.rate / 2) throw new Error('Playback audio queue exceeded 500 ms');
+            if (this.ring.pending > this.rate * MAX_PLAYBACK_QUEUE_SECONDS) throw new Error('Playback audio queue exceeded 1200 ms');
           }
           if (data.type === 'end') this.ring.final = true;
           if (data.type === 'clear') this.active = false;
@@ -28,14 +29,15 @@ class VoicePlayback extends AudioWorkletProcessor {
   }
   progress(finished = false) {
     this.port.postMessage({type: finished ? 'finished' : 'progress', stream: this.stream,
-      samples: finished ? this.ring.written : this.ring.consumed, underruns: this.underruns, queueSamples: this.ring.pending});
+      samples: finished ? this.ring.written : this.ring.consumed, underruns: this.underruns,
+      queueSamples: this.ring.pending, buffering: this.buffering});
   }
   process(_inputs, outputs) {
     const output = outputs[0]?.[0];
     if (!output) return true;
     output.fill(0);
     if (!this.active) return true;
-    if (this.buffering && (this.ring.pending >= this.rate * .06 || this.ring.final)) this.buffering = false;
+    if (this.buffering && (this.ring.pending >= this.rate * PLAYBACK_BUFFER_SECONDS || this.ring.final)) this.buffering = false;
     if (!this.buffering) {
       const count = this.ring.read(output);
       if (this.ring.complete) {

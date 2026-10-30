@@ -28,9 +28,10 @@ logger = logging.getLogger(__name__)
 MAX_VOICE_CONTROL_BYTES = 16 * 1024
 MAX_VOICE_AUDIO_CHUNK_BYTES = 256 * 1024
 
-# Includes media in the network, decoder and render queue. Leave headroom
-# below the client's 500 ms hard limit; never infer consumption from wall time.
-PLAYBACK_WINDOW_SECONDS = 0.3
+# Includes media in flight, decoding and rendering. With 200 ms prebuffering,
+# 1 s leaves room for a 500 ms feedback round trip plus reporting/jitter.
+# Keep below the client's 1.2 s limit; only renderer consumption releases credit.
+PLAYBACK_WINDOW_SECONDS = 1.0
 PLAYBACK_PROGRESS_TIMEOUT_SECONDS = 5.0
 
 
@@ -83,6 +84,10 @@ class PlaybackProgress(_Control):
     played_samples: int = Field(ge=0)
     rendered_samples: int | None = Field(default=None, ge=0)
     sample_rate: Literal[24000, 48000]
+    # Optional browser diagnostics; these never grant send credit.
+    queue_samples: int | None = Field(default=None, ge=0, le=0xffffffff)
+    underruns: int | None = Field(default=None, ge=0, le=0xffffffff)
+    max_arrival_gap_ms: float | None = Field(default=None, ge=0, allow_inf_nan=False)
 
 
 class PlaybackFinished(_Control):
@@ -338,6 +343,10 @@ class WebSocketPlayer:
         self._finished = threading.Event()
         self._stream = 0
         self.sent_samples = 0
+        self._max_queue_samples = 0
+        self._underruns: int | None = None
+        self._max_arrival_gap_ms = 0.0
+        self._capacity_wait_seconds = 0.0
 
     def _audio_packets(self, chunks, stop_event):
         try:
@@ -372,7 +381,9 @@ class WebSocketPlayer:
         with self._playback_lock:
             return playback_id is not None and playback_id == self._playback_id
 
-    def note_playback_progress(self, playback_id: str, rendered_samples: int) -> None:
+    def note_playback_progress(self, playback_id: str, rendered_samples: int, *,
+                               queue_samples: int | None = None, underruns: int | None = None,
+                               max_arrival_gap_ms: float | None = None) -> None:
         """Release send credits only for samples consumed by this renderer."""
         with self._playback_lock:
             if playback_id != self._playback_id:
@@ -380,6 +391,12 @@ class WebSocketPlayer:
             if not 0 <= rendered_samples <= self.sent_samples:
                 raise ValueError("Rendered samples exceed delivered playback audio")
             self._rendered_samples = max(self._rendered_samples, rendered_samples)
+            if queue_samples is not None:
+                self._max_queue_samples = max(self._max_queue_samples, queue_samples)
+            if underruns is not None:
+                self._underruns = max(self._underruns or 0, underruns)
+            if max_arrival_gap_ms is not None:
+                self._max_arrival_gap_ms = max(self._max_arrival_gap_ms, max_arrival_gap_ms)
             self._playback_lock.notify_all()
 
     def _playback_timeout(self) -> None:
@@ -396,18 +413,25 @@ class WebSocketPlayer:
         with self._playback_lock:
             window = int(self.stream_sample_rate * PLAYBACK_WINDOW_SECONDS)
             rendered = self._rendered_samples
-            deadline = time.monotonic() + PLAYBACK_PROGRESS_TIMEOUT_SECONDS
-            while self.sent_samples + samples - self._rendered_samples > window:
-                if stop_event.is_set() or self.bridge.closed.is_set():
+            wait_started = time.monotonic()
+            deadline = wait_started + PLAYBACK_PROGRESS_TIMEOUT_SECONDS
+            waited = False
+            try:
+                while self.sent_samples + samples - self._rendered_samples > window:
+                    if stop_event.is_set() or self.bridge.closed.is_set():
+                        return
+                    waited = True
+                    if self._rendered_samples > rendered:
+                        rendered = self._rendered_samples
+                        deadline = time.monotonic() + PLAYBACK_PROGRESS_TIMEOUT_SECONDS
+                    if time.monotonic() >= deadline:
+                        break
+                    self._playback_lock.wait(0.05)
+                else:
                     return
-                if self._rendered_samples > rendered:
-                    rendered = self._rendered_samples
-                    deadline = time.monotonic() + PLAYBACK_PROGRESS_TIMEOUT_SECONDS
-                if time.monotonic() >= deadline:
-                    break
-                self._playback_lock.wait(0.05)
-            else:
-                return
+            finally:
+                if waited:
+                    self._capacity_wait_seconds += time.monotonic() - wait_started
         # Network sends must not hold the lock used by the socket receive loop.
         self._playback_timeout()
 
@@ -426,10 +450,16 @@ class WebSocketPlayer:
             self._finished.clear()
             self._rendered_samples = 0
             self.sent_samples = 0
+            self._max_queue_samples = 0
+            self._underruns = None
+            self._max_arrival_gap_ms = 0.0
+            self._capacity_wait_seconds = 0.0
         identity = {"playback_id": playback_id}
         self._stream += 1
         media_started = None
         sent_bytes = 0
+        last_send_time = None
+        max_send_gap_ms = 0.0
         identity.update(stream_id=self._stream, codec=self.bridge.hello.codec)
         try:
             self.bridge.send_json(
@@ -463,6 +493,10 @@ class WebSocketPlayer:
                 with self._playback_lock:
                     self.sent_samples += chunk.samples
                 self.bridge.send_bytes(wire)
+                now = time.monotonic()
+                if last_send_time is not None:
+                    max_send_gap_ms = max(max_send_gap_ms, (now - last_send_time) * 1000)
+                last_send_time = now
                 sent_bytes += len(wire)
                 if stop_event.is_set() or self.bridge.closed.is_set():
                     interrupted = stop_event.is_set()
@@ -483,9 +517,12 @@ class WebSocketPlayer:
             self.bridge.codec_failed()
             raise
         finally:
-            logger.info('Voice playback codec=%s audio_ms=%.1f wire_bytes=%d',
-                        self.bridge.hello.codec, self.sent_samples * 1000 / self.stream_sample_rate, sent_bytes)
             with self._playback_lock:
+                logger.info('Voice playback codec=%s audio_ms=%.1f wire_bytes=%d underruns=%s '
+                            'max_queue_ms=%.1f max_arrival_gap_ms=%.1f max_send_gap_ms=%.1f capacity_wait_ms=%.1f',
+                            self.bridge.hello.codec, self.sent_samples * 1000 / self.stream_sample_rate, sent_bytes,
+                            self._underruns, self._max_queue_samples * 1000 / self.stream_sample_rate,
+                            self._max_arrival_gap_ms, max_send_gap_ms, self._capacity_wait_seconds * 1000)
                 self._playback_id = None
 
 

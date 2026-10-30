@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import math
 import struct
 import threading
@@ -11,7 +12,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from xagent.interfaces.voice.transport_audio import AudioCodecError, AudioPacket, OpusDecoder, OpusEncoder, ensure_opus_ready
-from xagent.interfaces.voice.ws import VoiceSessionHello, WebSocketVoiceBridge, WebSocketMicrophone, WebSocketPlayer
+from xagent.interfaces.voice.ws import VoiceSessionHello, WebSocketVoiceBridge, WebSocketMicrophone, WebSocketPlayer, parse_client_control
 
 
 def bridge(hello):
@@ -19,6 +20,15 @@ def bridge(hello):
 
 
 class AudioProtocolTests(unittest.TestCase):
+    def test_playback_diagnostics_are_optional_and_reject_invalid_values(self):
+        report = dict(type='playback_progress', playback_id='reply', played_samples=0, sample_rate=24000)
+        self.assertIsNone(parse_client_control(json.dumps(report)).underruns)
+        control = parse_client_control(json.dumps(dict(report, queue_samples=4800, underruns=2, max_arrival_gap_ms=150)))
+        self.assertEqual((control.queue_samples, control.underruns, control.max_arrival_gap_ms), (4800, 2, 150))
+        for extra in (dict(queue_samples=-1), dict(underruns=-1), dict(max_arrival_gap_ms=-1), dict(max_arrival_gap_ms=float('inf'))):
+            with self.subTest(extra=extra), self.assertRaises(ValueError):
+                parse_client_control(json.dumps(dict(report, **extra)))
+
     def test_codec_initialization_failure_is_explicit_even_for_pcm(self):
         ensure_opus_ready.cache_clear()
         try:

@@ -1,3 +1,5 @@
+import {MAX_PLAYBACK_QUEUE_SECONDS} from './voicePlaybackConfig';
+
 /** WS audio v2: fixed codec profiles, media time and packet boundaries. */
 export type AudioCodec = "opus" | "pcm_s16le";
 export const OPUS_RATE = 48000;
@@ -126,6 +128,7 @@ export class OpusOutput {
   private decoder: AudioDecoder;
   private pending: AudioPacket[] = [];
   private closed = false;
+  private pendingSamples = 0;
   constructor(private output: (samples: Float32Array) => void, private failure: (error: Error) => void) {
     try {
       this.decoder = new AudioDecoder({output: (data) => {
@@ -133,6 +136,7 @@ export class OpusOutput {
           if (this.closed) return;
           const packet = this.pending.shift();
           if (!packet || data.sampleRate !== OPUS_RATE || packet.discard + packet.samples > data.numberOfFrames) throw new Error("Invalid decoded audio length.");
+          this.pendingSamples -= packet.samples;
           const samples = new Float32Array(packet.samples);
           data.copyTo(samples, {planeIndex: 0, format: "f32-planar", frameOffset: packet.discard, frameCount: packet.samples});
           this.output(samples);
@@ -144,8 +148,9 @@ export class OpusOutput {
   }
   write(packet: AudioPacket): void {
     if (this.closed) return;
-    if (this.pending.length >= 25) throw new VoiceAudioBackpressure("Audio decoding is falling behind. Please try again.");
+    if (this.pendingSamples + packet.samples > OPUS_RATE * MAX_PLAYBACK_QUEUE_SECONDS || this.pending.length >= 128) throw new VoiceAudioBackpressure("Audio decoding is falling behind. Please try again.");
     this.pending.push(packet);
+    this.pendingSamples += packet.samples;
     try { this.decoder.decode(new EncodedAudioChunk({type: "key", timestamp: packet.timestamp, data: packet.payload})); }
     catch (error) { throw new VoiceCodecFailure(String(error)); }
   }
@@ -155,5 +160,5 @@ export class OpusOutput {
       if (!this.closed && this.pending.length) throw new VoiceCodecFailure("Missing decoded audio frames.");
     }
   }
-  close(): void { this.closed = true; this.pending = []; if (this.decoder.state !== "closed") this.decoder.close(); }
+  close(): void { this.closed = true; this.pending = []; this.pendingSamples = 0; if (this.decoder.state !== "closed") this.decoder.close(); }
 }
