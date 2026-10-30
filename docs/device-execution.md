@@ -233,7 +233,7 @@ support. There is no ScriptProcessor or prefixed AudioContext path. Protocol 1,
 raw PCM messages, independent per-direction codec lists, `playback_ack` and
 `played_bytes` are removed: existing device clients must migrate to protocol 2.
 Update the server and shipped browser assets together. Both conversation modes
-share this transport; Connection details shows the selected codec.
+share this transport.
 
 
 ```json

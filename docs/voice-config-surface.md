@@ -275,6 +275,5 @@ AudioWorklets handle capture/playback, and a dedicated Worker owns the socket
 and codecs. There are no legacy capture or protocol paths. Both Hold to talk and
 Continuous conversation share this transport and required playback confirmation.
 No Agent configuration fields or restart-sensitive voice preferences are added.
-Connection details on the Voice page displays the microphone/playback codec.
 See [audio protocol 2](device-execution.md#audio-protocol-2) for packet framing,
 buffer limits and the required device-client migration.

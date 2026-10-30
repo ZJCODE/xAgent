@@ -134,10 +134,6 @@ function VoiceSession({ configuredApiUrl, refreshAgents }: {
           <p className="wizard-hint">{continuous
             ? "Start once to talk continuously. Conversation pauses when this page is hidden."
             : "Hold to talk; release to stop recording."}</p>
-          {live ? <details className="voice-connection-details">
-            <summary>Connection details</summary>
-            <p className="wizard-hint">Microphone: {state.codec === "opus" ? "Opus" : "PCM16"} · Playback: {state.codec === "opus" ? "Opus" : "PCM16"} · WebSocket</p>
-          </details> : null}
           <ul className="voice-transcript">
             {lines.length === 0 ? <li className="voice-transcript-empty">Transcripts appear here after you speak.</li> : null}
             {lines.map((line) => <li key={line.id}><span className="role">{line.role === "user" ? "You" : "Agent"}</span>{line.text}</li>)}
