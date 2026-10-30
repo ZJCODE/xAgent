@@ -3374,15 +3374,17 @@ body { -webkit-font-smoothing: antialiased; }
 .runtime-status-dot, .connection-state > span { width: 5px; height: 5px; border-radius: 50%; background: currentColor; flex-shrink: 0; }
 .runtime-controls { display: flex; flex-wrap: wrap; gap: 8px; margin: 24px 0 0; }
 .runtime-controls .ui-button { font-size: 12px; min-height: 34px; }
-.runtime-summary-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 22px; margin: 26px 0 0; padding-top: 22px; border-top: 1px solid var(--border); }
-.runtime-summary-grid dt { font-size: 11px; color: var(--text-muted); margin-bottom: 8px; }
-.runtime-summary-grid dd { margin: 0; font-size: 16px; font-weight: 550; line-height: 1.45; font-variant-numeric: tabular-nums; }
-.runtime-summary-grid > div:last-child dd { font-size: 13px; padding-top: 2px; }
+.runtime-detail-link { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text-muted); text-decoration: underline; text-underline-offset: 3px; }
+.runtime-detail-link:hover { color: var(--text); }
+.runtime-overview > .error-strip, .runtime-overview > .success-strip { margin-top: 18px; }
 .runtime-overview > .warning-strip { margin-top: 18px; }
 .runtime-overview > .warning-strip a { font-weight: 600; text-decoration: underline; text-underline-offset: 3px; }
 .runtime-overview .channel-log-panel { margin-top: 22px; background: var(--bg-surface-subtle); border-radius: 10px; }
 .channel-log-output { font-size: 11px; overflow-wrap: anywhere; }
 .connections-heading { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin: 32px 0 14px; }
+.channels-content > .connections-heading:first-child { margin-top: 0; }
+.channel-runtime-notice { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding: 16px 18px; margin-bottom: 20px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-surface-subtle); }
+.channel-runtime-notice p { margin: 0; font-size: 12px; color: var(--text-muted); line-height: 1.6; }
 .connections-heading h3 { margin: 0; font-size: 14px; font-weight: 600; }
 .connections-heading p, .connections-footnote { margin: 0; color: var(--text-muted); font-size: 12px; line-height: 1.6; }
 .connection-list { border: 1px solid var(--border); background: var(--bg-surface); border-radius: 12px; overflow: hidden; }
@@ -3402,6 +3404,7 @@ body { -webkit-font-smoothing: antialiased; }
 .connections-footnote { margin: 16px 4px 0; font-size: 11px; }
 .agent-grid { width: 100%; max-width: 1140px; margin: 0 auto; padding: 32px; gap: 20px; align-content: start; }
 .agent-grid > .ui-panel { min-width: 0; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-surface); padding: 22px; }
+.agent-grid > .runtime-overview { grid-column: 1 / -1; }
 .agent-grid .panel-header { margin-bottom: 20px; }
 .agent-grid .panel-header h3 { font-weight: 600; }
 .panel-header-copy span { display: block; max-width: 100%; }
@@ -3434,9 +3437,6 @@ body { -webkit-font-smoothing: antialiased; }
   .runtime-overview.ui-panel { padding: 22px; }
   .runtime-heading { gap: 12px; }
   .runtime-heading-copy h3 { font-size: 21px; }
-  .runtime-log-toggle { width: 34px; padding: 0; }
-  .runtime-log-toggle span { display: none; }
-  .runtime-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
   .connections-heading { display: block; }
   .connections-heading p { margin-top: 5px; }
   .connection-row { grid-template-columns: 34px minmax(0, 1fr) auto; gap: 12px; padding: 18px; }

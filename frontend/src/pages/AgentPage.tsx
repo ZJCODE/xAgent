@@ -1,5 +1,6 @@
-import { RefreshCw, Save, RotateCcw, Trash2 } from "lucide-react";
+import { Save, RotateCcw, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { AgentRuntimeOverview } from "../components/AgentRuntimeOverview";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { FeatureSetupModal } from "../components/FeatureSetupModal";
 import { VoiceSettingsDialog } from "../components/VoiceSettingsDialog";
@@ -15,7 +16,6 @@ import {
   getAgentIdentity,
   getAgentInfo,
   getAgentVoiceSettings,
-  restartRuntime,
   updateAgentConfig,
   updateAgentIdentity,
 } from "../lib/api";
@@ -145,7 +145,6 @@ export function AgentPage() {
   const [setupSchema, setSetupSchema] = useState<AgentEditSetupSchema | null>(null);
   const [setupFeature, setSetupFeature] = useState<AgentEditSetupFeatureId | null>(null);
   const [setupNotice, setSetupNotice] = useState("");
-  const [restarting, setRestarting] = useState(false);
   const [restartRequired, setRestartRequired] = useState(false);
   const [voiceSettingsOpen, setVoiceSettingsOpen] = useState(false);
   const [voiceConfigured, setVoiceConfigured] = useState<boolean | null>(null);
@@ -218,6 +217,8 @@ export function AgentPage() {
   useEffect(() => {
     setVoiceSettingsOpen(window.location.hash === "#voice");
     setVoiceConfigured(null);
+    setRestartRequired(false);
+    setSetupNotice("");
     setConfigData(null);
     setConfigEditorValue("");
     setConfigNotice("");
@@ -242,7 +243,7 @@ export function AgentPage() {
       const updated = await updateAgentIdentity(value);
       setIdentity(updated);
       setEditorValue(updated.identity);
-      setSetupNotice("Identity saved. Restart the Agent to apply it.");
+      setSetupNotice("Identity saved.");
       setRestartRequired(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -265,7 +266,7 @@ export function AgentPage() {
       setConfigData(updated);
       setConfigEditorValue(updated.config);
       setConfigNotice(
-        "Settings saved. Restart the Agent to apply them.",
+        "Settings saved.",
       );
       setRestartRequired(true);
       await load();
@@ -288,28 +289,9 @@ export function AgentPage() {
       return;
     }
     setRestartRequired(result.restart_required);
-    setSetupNotice(
-      result.restart_required
-        ? "Settings saved. Restart the Agent to apply them."
-        : "Setup saved.",
-    );
+    setSetupNotice("Settings saved.");
     await load();
     if (activeTab === "config") await loadConfig();
-  };
-
-  const restartAgent = async () => {
-    setRestarting(true);
-    setError("");
-    try {
-      await restartRuntime();
-      setSetupNotice("Agent restarted.");
-      setRestartRequired(false);
-      await load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setRestarting(false);
-    }
   };
 
   const runMaintenanceClear = async () => {
@@ -359,22 +341,21 @@ export function AgentPage() {
     <PageShell className="agent-page">
       <PageToolbar
         title="Agent"
-        subtitle="Identity, preferences and local data."
+        subtitle="Status, identity, preferences and local data."
       />
       {error ? <div className="error-strip">{error}</div> : null}
       {setupNotice ? (
         <div className="success-strip setup-notice-strip">
           <span>{setupNotice}</span>
-          {restartRequired ? (
-            <Button type="button" variant="secondary" disabled={restarting} onClick={() => void restartAgent()}>
-              <RefreshCw size={14} />
-              {restarting ? "Restarting..." : "Restart Agent"}
-            </Button>
-          ) : null}
         </div>
       ) : null}
 
       <div className="agent-grid">
+        <AgentRuntimeOverview key={selectedAgent} restartRequired={restartRequired} onSettingsApplied={() => {
+          setRestartRequired(false);
+          setSetupNotice("");
+          setConfigNotice("");
+        }} />
         <Panel className="info-panel">
           <PanelHeader title="Model & capabilities" />
           <dl>
@@ -625,9 +606,7 @@ export function AgentPage() {
             }
           }}
           onSaved={(result) => {
-            setSetupNotice(!result.changed ? "Voice settings are up to date." : result.restart_required
-              ? "Voice settings saved. Restart the Agent to apply them."
-              : "Voice settings saved. They will apply when the Agent starts.");
+            setSetupNotice(!result.changed ? "Voice settings are up to date." : "Voice settings saved.");
             setRestartRequired((previous) => previous || result.restart_required);
             void loadSetupSchema();
             void refreshAgents();
