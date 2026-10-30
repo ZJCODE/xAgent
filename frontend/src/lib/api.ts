@@ -48,6 +48,19 @@ import type {
   DevicePairing,
   DeviceProfileInput,
 } from "../types";
+import type { VoicePreviewSelection } from "./voicePreview";
+
+export async function previewAgentVoice(selection: VoicePreviewSelection, signal: AbortSignal): Promise<ArrayBuffer> {
+  const response = await fetch("/api/agent/voice/preview", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(selection), signal,
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(typeof error.detail === "string" ? error.detail : "Unable to generate the voice preview. Please try again.");
+  }
+  return response.arrayBuffer();
+}
 
 export function getDevices(): Promise<DeviceStatus> {
   return requestJson("/api/devices");

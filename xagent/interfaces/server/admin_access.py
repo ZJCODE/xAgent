@@ -23,6 +23,10 @@ def register_admin_access(app: FastAPI, resolve_admin) -> None:
     @app.middleware("http")
     async def owner_mutations(request: Request, call_next):
         path = request.url.path
+        # Preview reads saved settings and synthesizes a fixed clip. It neither
+        # mutates Agent state nor needs the runtime owner's write lock.
+        if request.method == "POST" and path == "/api/agent/voice/preview":
+            return await call_next(request)
         mutation = request.method in {"POST", "PUT", "PATCH", "DELETE"}
         admin_path = path.startswith(ADMIN_PREFIXES) or path == "/clear_messages" or (path.startswith("/api/channels/") and path.endswith("/setup"))
         if not mutation or not admin_path:

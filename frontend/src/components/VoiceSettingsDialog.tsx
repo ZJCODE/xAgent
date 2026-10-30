@@ -1,5 +1,7 @@
-import { useEffect, useState } from "react";
-import { getAgentVoiceSettings, updateAgentVoiceSettings } from "../lib/api";
+import { useEffect, useRef, useState } from "react";
+import { LoaderCircle, Play, Square } from "lucide-react";
+import { getAgentVoiceSettings, previewAgentVoice, updateAgentVoiceSettings } from "../lib/api";
+import { VoicePreviewPlayer, type VoicePreviewState } from "../lib/voicePreview";
 import type { AgentEditSetupResponse, AgentVoiceSettings, VoicePreferences } from "../types";
 import { SetupWizardShell } from "./SetupWizardShell";
 import { WizardField } from "./WizardField";
@@ -26,9 +28,26 @@ export function VoiceSettingsDialog({ onClose, onSaved }: {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [previewState, setPreviewState] = useState<VoicePreviewState>('idle');
+  const [previewError, setPreviewError] = useState('');
+  const preview = useRef<VoicePreviewPlayer | null>(null);
   const dirty = Boolean(settings && (voice !== settings.voice || speed !== settings.speed
     || interruptions !== settings.interruptions || apiKey.trim()));
   const speeds = [...new Set([...SPEED_PRESETS, clampSpeed(speed)])].sort((a, b) => a - b);
+
+  useEffect(() => {
+    let active = true;
+    const player = new VoicePreviewPlayer(previewAgentVoice,
+      (state) => { if (active) setPreviewState(state); },
+      (message) => { if (active) setPreviewError(message); });
+    preview.current = player;
+    return () => { active = false; player.stop(); preview.current = null; };
+  }, []);
+
+  useEffect(() => {
+    preview.current?.stop();
+    setPreviewError('');
+  }, [voice, speed, apiKey]);
 
   useEffect(() => {
     let cancelled = false;
@@ -52,6 +71,7 @@ export function VoiceSettingsDialog({ onClose, onSaved }: {
       return;
     }
     setSaving(true);
+    preview.current?.stop();
     setError("");
     const changes: Partial<VoicePreferences> & { voice_api_key?: string } = {};
     if (apiKey.trim()) changes.voice_api_key = apiKey.trim();
@@ -99,16 +119,31 @@ export function VoiceSettingsDialog({ onClose, onSaved }: {
             </select>
           </WizardField>
         </div>
-        <details className="voice-more-options">
-          <summary>More options</summary>
-          <div className="voice-more-fields">
-            <label className="voice-interruptions-row">
-              <span>Allow interruptions</span>
-              <input type="checkbox" role="switch" checked={interruptions} disabled={saving}
-                onChange={(event) => setInterruptions(event.target.checked)} />
-            </label>
+        <div className="voice-preview">
+          <div className="voice-preview-controls">
+            <Button type="button" variant="secondary" disabled={saving || (!settings.has_api_key && !apiKey.trim())}
+              onClick={() => previewState === 'idle'
+                ? void preview.current?.play({ voice, speed, ...(apiKey.trim() ? { voice_api_key: apiKey.trim() } : {}) })
+                : preview.current?.stop()}>
+              {previewState === 'loading' ? <LoaderCircle size={14} className="voice-preview-spinner" />
+                : previewState === 'playing' ? <Square size={13} /> : <Play size={14} />}
+              {previewState === 'loading' ? 'Cancel preview' : previewState === 'playing' ? 'Stop preview' : 'Preview voice'}
+            </Button>
+            <span className="voice-preview-hint" role="status">
+              {previewState === 'loading' ? 'Preparing your sample…' : previewState === 'playing' ? 'Playing sample…' : 'Try your current voice and speed.'}
+            </span>
           </div>
-        </details>
+          {previewError ? <p className="voice-preview-error" role="alert">{previewError}</p> : null}
+        </div>
+        <label className="voice-interruptions-row">
+          <span className="voice-interruptions-copy">
+            <span>Allow interruptions</span>
+            <span className="voice-interruptions-hint" id="voice-interruptions-hint">Speak to interrupt a reply.</span>
+          </span>
+          <input type="checkbox" role="switch" aria-label="Allow interruptions" aria-describedby="voice-interruptions-hint"
+            checked={interruptions} disabled={saving}
+            onChange={(event) => setInterruptions(event.target.checked)} />
+        </label>
       </div> : null}
     </SetupWizardShell>
   );

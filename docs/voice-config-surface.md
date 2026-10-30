@@ -31,6 +31,34 @@ There are no host microphone/speaker selectors or host device inventory endpoint
 Capture and playback hardware belong to the browser or paired device. The server
 no longer requires sounddevice or PortAudio.
 
+## Voice preview
+
+The Voice settings dialog offers **Preview voice** below Voice and Speed. It
+synthesizes one fixed Chinese/English sample using the current draft preferences,
+including a newly entered key when present. Otherwise it uses the saved key or
+environment credential. Previewing never saves those preferences or creates an
+Agent conversation, contact, task, or memory record; the Agent need not be running.
+
+`POST /api/agent/voice/preview` accepts only voice, speed and an optional temporary
+voice_api_key. The management service returns an in-memory, non-cacheable 24 kHz
+mono WAV using the existing Soniox TTS adapter. It caps audio at fifteen seconds
+and generation at twenty seconds, closes provider resources, and cancels on
+request disconnect. It is excluded from state-mutation forwarding and ownership
+locking because it never changes Agent state. Provider errors are sanitized.
+
+The browser primes playback from the button gesture. Cancel/Stop, changing the
+voice, speed or key, saving, or closing the dialog aborts the request and releases
+the playback context. Late requests/decodes cannot start an obsolete preview.
+Preview errors stay separate from saving preferences. No microphone is opened.
+
+Preview goal check: **Identity** uses the same speaking preferences; **multi-user**
+adds no speaker attribution or identity records; **1:1 and group coverage** is
+unchanged because preview is a settings sample; **journal perspective** records
+no sample as conversation; **unified memory** gains no extra store;
+**Agent-governed sharing** exposes only a fixed public sample, with no Agent
+context; **diary authority** is unchanged; **attribution and continuity** retain
+existing records and leave draft preferences unsaved until Save.
+
 ## Connections and lifecycle
 
 ```text
