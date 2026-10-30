@@ -16,34 +16,6 @@ test('audio packet header matches the Python wire format and rejects invalid siz
   assert.throws(() => audio.unpackAudio(audio.packAudio({...packet, samples: 6000})));
 });
 
-test('worklet resampling is continuous across render blocks and flushes the final partial frame', () => {
-  const source = readFileSync(new URL('../src/lib/voiceCapture.worklet.js', import.meta.url), 'utf8');
-  const run = (sourceRate, targetRate, blockSize) => {
-    let Processor; const frames = [];
-    vm.runInNewContext(source, {
-      Float32Array, Math, Array, sampleRate: sourceRate,
-      AudioWorkletProcessor: class { constructor() { this.port = {postMessage: (frame) => {if(frame instanceof Float32Array) frames.push(frame);}}; } },
-      registerProcessor: (_, constructor) => {Processor = constructor;},
-    });
-    const instance = new Processor({processorOptions: {rate: targetRate}});
-    const count = sourceRate + 101;
-    for (let start=0; start<count; start+=blockSize) {
-      const data = Float32Array.from({length: Math.min(blockSize, count-start)}, (_, i) => Math.sin(2*Math.PI*1000*(start+i)/sourceRate));
-      instance.process([[data]], [[new Float32Array(128)]]);
-    }
-    instance.port.onmessage({data: 'flush'});
-    const samples = Float32Array.from(frames.flatMap((frame) => Array.from(frame)));
-    assert.equal(samples.length, Math.floor(count * targetRate / sourceRate));
-    assert.ok(frames.slice(0, -1).every((frame) => frame.length === targetRate/50));
-    return samples;
-  };
-  for (const [sourceRate, targetRate] of [[48000,16000],[48000,48000],[44100,48000]]) {
-    const a = run(sourceRate, targetRate, 128), b = run(sourceRate, targetRate, 2048);
-    assert.equal(a.length, b.length);
-    for(let i=0; i<a.length; i++) assert.ok(Math.abs(a[i]-b[i]) < .001, `sample ${i}`);
-  }
-});
-
 test('Opus input uses encoder pre-skip and trims the drained tail to the submitted samples', async (t) => {
   const previousEncoder = globalThis.AudioEncoder, previousData = globalThis.AudioData;
   const packets = [], failures = [];
@@ -71,17 +43,15 @@ test('Opus input uses encoder pre-skip and trims the drained tail to the submitt
   assert.deepEqual(packets.map((p) => [p.sequence,p.timestamp,p.samples,p.discard]), [[0,0,648,312],[1,13500,312,0]]);
 });
 
-test('capabilities are negotiated independently and forced PCM never probes codecs', async (t) => {
-  const saved = Object.fromEntries(['AudioEncoder','AudioDecoder','AudioData'].map((key)=>[key,globalThis[key]]));
-  t.after(()=>Object.assign(globalThis,saved));
-  globalThis.AudioData=class {};
-  globalThis.AudioEncoder={isConfigSupported:async()=>({supported:true})};
-  globalThis.AudioDecoder={isConfigSupported:async()=>({supported:false})};
-  assert.deepEqual(await audio.supportedCodecs(true,false),{input:['opus','pcm_s16le'],output:['pcm_s16le']});
-  assert.deepEqual(await audio.supportedCodecs(false,false),{input:['pcm_s16le'],output:['pcm_s16le']});
-  globalThis.AudioEncoder.isConfigSupported=()=>{throw new Error('No probing during fallback');};
-  globalThis.AudioDecoder.isConfigSupported=globalThis.AudioEncoder.isConfigSupported;
-  assert.deepEqual(await audio.supportedCodecs(true,true),{input:['pcm_s16le'],output:['pcm_s16le']});
+test('startup selects symmetric PCM when the complete codec contract is unavailable', async (t) => {
+  const saved = {AudioEncoder: globalThis.AudioEncoder, AudioDecoder: globalThis.AudioDecoder, AudioData: globalThis.AudioData};
+  t.after(() => Object.assign(globalThis,saved));
+  globalThis.AudioEncoder = undefined;
+  assert.equal(await audio.selectAudioCodec(), 'pcm_s16le');
+  globalThis.AudioEncoder = {isConfigSupported: async () => ({supported: true})};
+  globalThis.AudioDecoder = {isConfigSupported: async () => ({supported: false})};
+  globalThis.AudioData = class {};
+  assert.equal(await audio.selectAudioCodec(), 'pcm_s16le');
 });
 
 test('decoder drain precedes completion and closed decoder callbacks only release their data', async (t) => {
@@ -110,19 +80,4 @@ test('decoder drain precedes completion and closed decoder callbacks only releas
   assert.equal(frames.length,1);
   assert.equal(closed,2);
   assert.equal(errors.length,0);
-});
-
-test('PCM fallback resampling retains fractional phase across legacy callback sizes', () => {
-  for(const [sourceRate,targetRate] of [[48000,16000],[44100,16000],[44100,48000]]) {
-    const run = (blockSize) => {
-      const resampler = new audio.PcmResampler(sourceRate,targetRate), result=[];
-      for(let start=0;start<sourceRate+101;start+=blockSize) {
-        result.push(...resampler.push(Float32Array.from({length:Math.min(blockSize,sourceRate+101-start)},(_,i)=>Math.sin((start+i)*.02))));
-      }
-      result.push(...resampler.finish());
-      assert.equal(result.length, Math.floor((sourceRate+101)*targetRate/sourceRate));
-      return result;
-    };
-    assert.deepEqual(run(2048),run(128));
-  }
 });

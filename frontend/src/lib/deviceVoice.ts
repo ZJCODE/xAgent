@@ -1,32 +1,15 @@
-export const PHONE_OUTPUT_SAMPLE_RATE = 24000;
-
-export interface VoiceHello {
-  type: "hello";
-  name: string;
-  location: string;
-  input_sample_rate: number;
-  input_channels: 1;
-  output_sample_rate: number;
-  output_channels: 1;
-  profile: "headset";
-  echo_managed: true;
-  playback_ack: true;
-  audio_protocol: 2;
-  input_codecs: ("opus" | "pcm_s16le")[];
-  output_codecs: ("opus" | "pcm_s16le")[];
-}
-
 export interface VoiceReadyFrame {
   type: "ready";
-  audio_protocol?: 1 | 2;
-  input_codec?: "opus" | "pcm_s16le";
-  output_codec?: "opus" | "pcm_s16le";
-  device_id?: string;
-  room_name?: string;
-  credential?: string;
-  input_sample_rate?: number;
-  output_sample_rate?: number;
-  output_channels?: number;
+  audio_protocol: 2;
+  codec: "opus" | "pcm_s16le";
+  input_sample_rate: 16000 | 48000;
+  output_sample_rate: 24000 | 48000;
+  input_channels: 1;
+  output_channels: 1;
+}
+
+export function voiceHello(codec: "opus" | "pcm_s16le") {
+  return {type: "hello", audio_protocol: 2, codec, name: "Browser microphone", location: "", profile: "headset", echo_managed: true};
 }
 
 export interface TranscriptLine {
@@ -41,32 +24,6 @@ export interface TranscriptFrame {
   text?: unknown;
   delta?: unknown;
   final?: unknown;
-}
-
-export function clampSampleRate(rate: number): number {
-  if (!Number.isFinite(rate)) return 16000;
-  const rounded = Math.round(rate);
-  if (rounded < 8000) return 8000;
-  if (rounded > 48000) return 48000;
-  return rounded;
-}
-
-export function voiceHello(inputSampleRate: number, codecs = {input: ["pcm_s16le"], output: ["pcm_s16le"]} as {input: ("opus" | "pcm_s16le")[]; output: ("opus" | "pcm_s16le")[]}): VoiceHello {
-  return {
-    type: "hello",
-    name: "Browser microphone",
-    location: "",
-    input_sample_rate: clampSampleRate(inputSampleRate),
-    input_channels: 1,
-    output_sample_rate: PHONE_OUTPUT_SAMPLE_RATE,
-    output_channels: 1,
-    profile: "headset",
-    echo_managed: true,
-    playback_ack: true,
-    audio_protocol: 2,
-    input_codecs: codecs.input,
-    output_codecs: codecs.output,
-  };
 }
 
 export function toDeviceWebSocketBase(apiUrl: string): string {
@@ -129,24 +86,6 @@ export function pcmRms(samples: ArrayLike<number>): number {
     sum += sample * sample;
   }
   return Math.sqrt(sum / samples.length);
-}
-
-export function resampleLinear(input: ArrayLike<number>, fromRate: number, toRate: number): Float32Array {
-  if (!(fromRate > 0) || !(toRate > 0) || fromRate === toRate) {
-    return input instanceof Float32Array ? input : Float32Array.from(input);
-  }
-  const outLength = Math.max(1, Math.round((input.length * toRate) / fromRate));
-  const output = new Float32Array(outLength);
-  const scale = fromRate / toRate;
-  for (let i = 0; i < outLength; i += 1) {
-    const position = i * scale;
-    const index = Math.floor(position);
-    const fraction = position - index;
-    const start = input[index] || 0;
-    const end = input[Math.min(index + 1, input.length - 1)] || start;
-    output[i] = start + (end - start) * fraction;
-  }
-  return output;
 }
 
 export function applyTranscript(lines: TranscriptLine[], frame: TranscriptFrame, nextId: () => number): TranscriptLine[] {

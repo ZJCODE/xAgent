@@ -40,24 +40,8 @@ test("https pages reject a cleartext voice socket", () => {
   assert.doesNotThrow(() => voice.assertSocketAllowedOnPage(socketUrl, "http:"));
 });
 
-test("browser hello is a headset profile with echo managed by the page", () => {
-  assert.deepEqual(voice.voiceHello(48000), {
-    type: "hello",
-    name: "Browser microphone",
-    location: "",
-    input_sample_rate: 48000,
-    input_channels: 1,
-    output_sample_rate: 24000,
-    output_channels: 1,
-    profile: "headset",
-    echo_managed: true,
-    playback_ack: true,
-    audio_protocol: 2,
-    input_codecs: ["pcm_s16le"],
-    output_codecs: ["pcm_s16le"],
-  });
-  assert.equal(voice.voiceHello(96000).input_sample_rate, 48000);
-  assert.equal(voice.clampSampleRate(Number.NaN), 16000);
+test("browser hello declares exactly one fixed codec profile", () => {
+  assert.deepEqual(voice.voiceHello("opus"), {type: "hello", audio_protocol: 2, codec: "opus", name: "Browser microphone", location: "", profile: "headset", echo_managed: true});
 });
 
 test("pcm16 roundtrip keeps silence and a mid-scale sample", () => {
@@ -66,13 +50,6 @@ test("pcm16 roundtrip keeps silence and a mid-scale sample", () => {
   assert.equal(plane[0], 0);
   assert.ok(Math.abs(plane[1] - 0.5) < 0.001);
   assert.ok(Math.abs(plane[2] + 0.5) < 0.001);
-});
-
-test("linear resample halves a four-sample ramp", () => {
-  const output = voice.resampleLinear([0, 1, 2, 3], 4, 2);
-  assert.equal(output.length, 2);
-  assert.equal(output[0], 0);
-  assert.equal(output[1], 2);
 });
 
 test("assistant deltas fold into one final transcript line", () => {

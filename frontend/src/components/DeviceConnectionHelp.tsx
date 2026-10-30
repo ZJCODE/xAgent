@@ -108,9 +108,13 @@ The Agent receives stored attachment metadata and can choose to inspect images w
 
 Devices with a microphone and speaker (smart speakers, voice satellites, companions) can open \`${base}/ws/devices/{device_id}/voice\` with \`Authorization: Bearer <DEVICE_CREDENTIAL>\` (or a one-time \`<PAIRING_CODE>\` for voice-only devices). Browsers cannot set that header, so they may pass the same value as \`?token=\` on the voice or control WebSocket; when both are present, the header wins. The admin Voice page uses a separate, automatically managed browser session; it does not pair a device. Send a \`hello\` JSON frame first:
 \`\`\`json
-{"type":"hello","name":"Living Room Speaker","location":"living_room","input_sample_rate":16000,"input_channels":1,"output_sample_rate":24000,"output_channels":1,"profile":"room","echo_managed":false}
+{"type":"hello","audio_protocol":2,"codec":"pcm_s16le","name":"Living Room Speaker","location":"living_room","profile":"room","echo_managed":false}
 \`\`\`
-Wait for \`{"type":"ready","device_id":"...","room_name":"..."}\` (which also includes \`"credential":"dvc_..."\` when completing a one-time pairing), then stream binary PCM16LE microphone frames and play incoming binary PCM16LE TTS frames between \`playback_start\` and \`playback_done\` JSON control events. Send \`{"type":"playback_progress","played_bytes":N}\` during playback for accurate barge-in tracking.
+Wait for the matching \`ready\` frame (including \`audio_protocol: 2\`, \`codec\`, fixed sample rates, and \`credential: "dvc_..."\` when completing a one-time pairing). Only two mono profiles are supported: PCM16LE at 16 kHz uplink / 24 kHz downlink, or Opus at 48 kHz both ways. Old clients must upgrade; arbitrary sample rates, stereo and protocol 1 are rejected.
+
+Start each capture with \`{"type":"input_start","stream_id":1}\` and end with \`input_end\` carrying that ID. Stream IDs increase on every new capture. Each binary audio message has the 28-byte big-endian header \`!4sIIQII\`: magic \`XAV2\`, stream ID, sequence, timestamp in microseconds, valid mono sample count, leading samples to discard; then one audio packet. Use 20 ms frames, trim Opus priming and tail padding, and retain only valid samples.
+
+For downlink, follow \`playback_start\` / \`playback_done\` and \`clear_playback\` with the supplied stream and playback IDs. Report rendered media using \`{"type":"playback_progress","playback_id":"...","played_samples":N,"sample_rate":24000}\` (48000 for Opus), then \`playback_finished\` with that playback ID after playback drains. Sending or decoding the final packet alone does not finish playback. Discard queued audio when cleared and ignore messages from old streams.
 
 ### 7. Transport and reconnect
 

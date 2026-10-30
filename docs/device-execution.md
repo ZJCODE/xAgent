@@ -164,63 +164,70 @@ continuous session's mute state. Permission errors stop without automatic retry.
 Leaving the page closes the session and audio resources. Browser speech is treated
 as directed conversation, independently of the room attention window.
 
-New browser clients declare `playback_ack: true` in hello (optional, default false).
-For these clients, `playback_start`, `playback_done` and `clear_playback` include
-`playback_id`. Clients send `playback_progress` with that ID and `played_bytes`,
-then `playback_finished` with the ID once all scheduled audio has actually played.
-The server waits for the matching confirmation before ending the playback phase;
-late IDs are ignored. Interruptions and disconnects cancel the wait. A missing
-confirmation closes the connection after the sent audio duration plus five seconds.
-Clients omitting this capability retain the original protocol behavior.
 If the Agent is stopped, Start Agent prepares it before connecting.
 
-### Browser audio protocol 2
+### Audio protocol 2
 
-Standard installations include PyAV 14–16 (verified with 16.1) for Opus
-compression. Browser capability detection and server codec initialization choose
-uplink and downlink separately; only the browser-to-Agent leg is compressed.
-The Soniox connection and internal voice runtime continue using PCM16.
+Browser and paired-device voice use one explicit protocol. Send
+`{"type":"hello","audio_protocol":2,"codec":"opus","profile":"headset"}`
+(or `codec: "pcm_s16le"`). The codec selects a complete mono profile:
 
-New browsers send `audio_protocol: 2`, `playback_ack: true`, and ordered
-`input_codecs` / `output_codecs` lists containing `opus` and/or `pcm_s16le`.
-`ready` confirms the version, selected `input_codec` / `output_codec`, rates and
-channels before audio starts. Opus uses 48 kHz mono, 20 ms packets, 24 kbps uplink
-and 32 kbps downlink. PCM v2 uses 16 kHz mono uplink and 24 kHz mono downlink.
-DTX and in-band FEC are disabled. Legacy hello messages retain protocol 1 and
-unaltered raw PCM frames, including existing device sample-rate selections.
+| Codec | Microphone | Playback |
+| --- | --- | --- |
+| `opus` | 48 kHz, 20 ms, 24 kbps | 48 kHz, 20 ms, 32 kbps |
+| `pcm_s16le` | 16 kHz, 20 ms | 24 kHz, 20 ms |
 
-Protocol 2 binary messages consist of a 28-byte network-byte-order header followed
-by one raw Opus packet or PCM16 little-endian payload. The header layout is
-`!4sIIQII`: magic `XAV2`, uint32 stream ID, uint32 sequence, uint64 timestamp in
-microseconds, uint32 valid mono samples, uint32 leading samples to discard.
-Timestamps refer to valid media time from the beginning of the stream. Opus
-priming is trimmed using encoder initialization metadata; padding in the final
-packet is excluded from valid samples. Raw packets have no WebM/Ogg container.
+`ready` confirms `audio_protocol`, `codec`, both sample rates and both channel
+counts before audio starts. Standard installations require PyAV 14–16; a server
+codec initialization failure ends the session explicitly. Soniox and the internal
+voice runtime continue using PCM16. No REST or configuration fields are added.
 
-`input_start` / `input_end` controls carry `stream_id`; IDs increase each time the
-mic opens. Each new stream resets decoder and resampler state. Audio from older
-or ended streams is ignored; sequence/time gaps in the active stream are rejected.
-`playback_start` adds a numeric `stream_id` and `codec` alongside `playback_id`.
-Decoded audio and callbacks from cleared streams must not reach a new playback.
+The browser self-tests native WebCodecs encoding and decoding at startup, including
+Opus priming and tail trimming. It selects Opus only when the complete contract
+works; otherwise it selects the PCM profile. Runtime codec failures end the session
+and require user retry. A session never changes codec. Transient network failures
+retain the three retries after 1, 2 and 4 seconds. Permission errors and playback
+confirmation timeouts stop and require user action.
 
-V2 `playback_progress` sends `played_samples`, `sample_rate` and `playback_id`.
-The server maps media time to the canonical PCM spoken ledger and clamps progress
-to sent samples. `playback_finished` still confirms actual browser playback, not
-network delivery or decoder drain. Confirmation timeouts use media duration plus
-five seconds. Protocol 1 clients continue sending `played_bytes`.
+Binary messages consist of a 28-byte network-byte-order header followed by one
+raw Opus packet or PCM16 little-endian payload. The header layout is `!4sIIQII`:
+magic `XAV2`, uint32 stream ID, uint32 sequence, uint64 timestamp in microseconds,
+uint32 valid mono samples and uint32 leading samples to discard. Timestamps refer
+to valid media time from the beginning of the stream. Opus initialization metadata
+supplies priming trim; final padding is excluded from valid samples. Packets have
+no WebM/Ogg container. Each packet covers at most 20 ms, including leading discard.
 
-Capture uses AudioWorklet with persistent resampling and 20 ms output frames;
-browsers without it retain the PCM ScriptProcessor fallback. Native WebCodecs
-capabilities are probed per direction. `codec_error` ends an unusable compressed
-session; the browser obtains a new ticket and reconnects with PCM, retaining that
-choice for the rest of the page's lifetime. Network and permission errors do not
-trigger a codec downgrade. The same rules apply to both conversation modes.
+`input_start` / `input_end` carry `stream_id`; IDs increase each time the microphone
+opens. Each new stream resets decoder and resampler state. Older/ended-stream
+audio is ignored; active-stream sequence/time gaps are rejected. `playback_start`
+includes `playback_id`, numeric `stream_id`, `codec`, `sample_rate` and `channels`.
+`playback_done` and `clear_playback` carry the same playback identity. Cleared
+stream audio and callbacks cannot affect the next reply.
 
-Incoming/encoding/decoding queues are bounded to 500 ms of audio, outgoing media
-is paced at most 200 ms ahead, and browser playback is capped at one second ahead.
-Persistent overload reconnects rather than accumulating latency. Logs include
-negotiated codecs, media duration and transmitted audio bytes; the Voice page's
-Connection details shows the current uplink/downlink codecs.
+Playback confirmation is required. Clients send `playback_progress` with
+`playback_id`, `played_samples` and `sample_rate`; the server clamps progress to
+sent media. After draining the renderer, clients send `playback_finished` with
+the matching ID. Network delivery and decoder completion do not confirm playback.
+The browser accounts for reported audio output latency plus one render quantum;
+this is an estimate of output completion, not a hardware audibility guarantee.
+The server waits for confirmation before ending playback and applying microphone
+cooldown. Late IDs are ignored; interruption/disconnect cancels the wait. Missing
+confirmation closes the connection after sent media duration plus five seconds.
+
+A dedicated Worker owns the socket and codecs, with direct MessagePorts to capture
+and playback AudioWorklets. The page owns resource lifecycle and conversation
+intent through one session controller. Both worklets use fixed-capacity sample
+rings and persistent resampling. Playback starts with a 60 ms jitter buffer;
+underruns output silence without advancing media progress. Capture uses a pool of
+eight reusable 20 ms buffers. Incoming/outgoing queues are bounded to 500 ms;
+server output is paced at most 200 ms ahead. Overload ends the session explicitly.
+
+Voice requires HTTPS/localhost, AudioWorklet, module Workers and current Web Audio
+support. There is no ScriptProcessor or prefixed AudioContext path. Protocol 1,
+raw PCM messages, independent per-direction codec lists, `playback_ack` and
+`played_bytes` are removed: existing device clients must migrate to protocol 2.
+Update the server and shipped browser assets together. Both conversation modes
+share this transport; Connection details shows the selected codec.
 
 
 ```json

@@ -45,15 +45,15 @@ class AudioPacket:
 
 
 @functools.lru_cache(maxsize=1)
-def opus_available() -> bool:
+def ensure_opus_ready() -> None:
     try:
         encoder = OpusEncoder()
         packets = list(encoder.push(b'\0\0' * FRAME_SAMPLES)) + list(encoder.finish())
         decoder = OpusDecoder()
-        return sum(len(decoder.decode(packet)) for packet in packets) == FRAME_SAMPLES * 2
+        if sum(len(decoder.decode(packet)) for packet in packets) != FRAME_SAMPLES * 2:
+            raise AudioCodecError("Opus self-test returned the wrong sample count")
     except Exception as exc:
-        logger.info('Opus initialization unavailable (%s); using PCM.', type(exc).__name__)
-        return False
+        raise AudioCodecError('Voice codec initialization failed; check the PyAV installation') from exc
 
 
 class OpusEncoder:

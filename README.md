@@ -33,7 +33,7 @@ curl -fsSL https://raw.githubusercontent.com/ZJCODE/xagent/main/install.sh | bas
 pip install myxagent
 ```
 
-Browser voice includes Opus support by default. Voice automatically uses Opus when both ends support it, otherwise PCM remains available.
+Browser voice includes Opus support by default. A startup codec self-test selects Opus for both directions, with a fixed PCM profile available when native browser codecs are unsupported. Current browsers with AudioWorklet support and audio protocol 2 are required.
 
 ## Getting Started
 

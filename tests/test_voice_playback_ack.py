@@ -11,8 +11,8 @@ from xagent.interfaces.voice.ws import WebSocketPlayer, VoiceSessionHello
 
 
 class Bridge:
-    def __init__(self, *, ack=True):
-        self.hello = VoiceSessionHello(playback_ack=ack)
+    def __init__(self):
+        self.hello = VoiceSessionHello(type='hello', audio_protocol=2, codec='pcm_s16le')
         self.closed = threading.Event()
         self.done = threading.Event()
         self.frames = []
@@ -65,7 +65,8 @@ class PlaybackAcknowledgementTests(unittest.IsolatedAsyncioTestCase):
         _, stop, task = await self.begin(bridge)
         stop.set()
         await asyncio.wait_for(task, 1)
-        self.assertEqual(bridge.frames[-1], {'type': 'clear_playback', 'playback_id': bridge.frames[0]['playback_id']})
+        self.assertEqual(bridge.frames[-1]['type'], 'clear_playback')
+        self.assertEqual(bridge.frames[-1]['playback_id'], bridge.frames[0]['playback_id'])
 
     async def test_disconnect_releases_waiter(self):
         bridge = Bridge()
@@ -92,17 +93,10 @@ class PlaybackAcknowledgementTests(unittest.IsolatedAsyncioTestCase):
     async def test_timeout_closes_session(self):
         bridge = Bridge()
         with patch('xagent.interfaces.voice.ws.time') as clock:
-            clock.monotonic.side_effect = [0, 100]
+            clock.monotonic.side_effect = [0, 0, 0, 100]
             player, _, task = await self.begin(bridge)
             with self.assertRaises(TimeoutError):
                 await asyncio.wait_for(task, 1)
         self.assertTrue(bridge.closed.is_set())
         self.assertTrue(bridge.close_scheduled)
-
-    async def test_legacy_client_needs_no_confirmation_or_new_fields(self):
-        bridge = Bridge(ack=False)
-        player, _, task = await self.begin(bridge)
-        await asyncio.wait_for(task, 1)
-        self.assertTrue(player.accepts_playback(None))
-        self.assertNotIn('playback_id', bridge.frames[0])
-        self.assertEqual(bridge.frames[-1], {'type': 'playback_done'})
+        self.assertEqual(bridge.frames[-1]['code'], 'playback_timeout')

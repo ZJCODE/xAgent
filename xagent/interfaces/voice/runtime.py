@@ -196,6 +196,7 @@ class VoiceRuntime:
         self._floor = ConversationFloor()
         self._utterance_queue: asyncio.Queue[VoiceUtterance | Exception | None] | None = None
         self._steer_result: asyncio.Future[str] | None = None
+        self._active_steer_event: asyncio.Event | None = None
         self._active_voice_turn_id: str | None = None
         self._active_voice_user_id: str | None = None
         self._preemptive_turn_id: str | None = None
@@ -416,23 +417,14 @@ class VoiceRuntime:
     def _active_spoken_ledger(self) -> SpokenLedger | None:
         return getattr(self, "_current_spoken_ledger", None)
 
-    def note_remote_playback_progress(self, played_bytes: int) -> None:
-        """Record client-confirmed playback progress for remote WebSocket voice sessions."""
-        ledger = self._active_spoken_ledger()
-        if ledger is None or played_bytes <= 0:
-            return
-        previous = int(getattr(self, "_current_remote_played_bytes", 0))
-        delta = max(0, int(played_bytes) - previous)
-        if delta > 0:
-            self._current_remote_played_bytes = int(played_bytes)
-            ledger.note_playback_bytes(delta)
-
     def note_remote_playback_samples(self, played_samples: int, sample_rate: int) -> None:
-        """Convert media time to the canonical PCM ledger; compressed bytes have no fixed duration."""
+        """Record rendered media time in the canonical PCM spoken ledger."""
         ledger = self._active_spoken_ledger()
-        if ledger is not None and sample_rate > 0:
-            canonical_frames = played_samples * ledger.sample_rate // sample_rate
-            self.note_remote_playback_progress(canonical_frames * ledger.channels * ledger.bytes_per_sample)
+        if ledger is None or sample_rate <= 0:
+            return
+        seconds = played_samples / sample_rate
+        if seconds > ledger.playback_seconds:
+            ledger.playback_seconds = seconds
 
     @property
     def _duplex_capture_enabled(self) -> bool:
@@ -505,7 +497,6 @@ class VoiceRuntime:
                 channels=SONIOX_TTS_CHANNELS,
             )
             self._current_spoken_ledger = spoken_ledger
-            self._current_remote_played_bytes = 0
             await self._execute_floor_commands(
                 self._floor.handle(FloorEvent(FloorEventKind.STT_ENDPOINT, text=transcript))
             )
@@ -542,7 +533,6 @@ class VoiceRuntime:
                 raise
             finally:
                 self._current_spoken_ledger = None
-                self._current_remote_played_bytes = 0
                 steer_event.set()
                 self._active_steer_event = None
                 if steer_task is not None:

@@ -5,7 +5,7 @@ from .config import VoiceAudioConfig, VoiceChannelConfig
 from .runtime import VoiceRuntime, VoiceRuntimeOptions
 from .types import VoiceUtterance
 from .ws import (
-    VoiceClientControl,
+    parse_client_control,
     VoiceSessionHello,
     WebSocketMicrophone,
     WebSocketPlayer,
@@ -18,7 +18,7 @@ __all__ = [
     "VoiceRuntime",
     "VoiceRuntimeOptions",
     "VoiceUtterance",
-    "VoiceClientControl",
+    "parse_client_control",
     "VoiceSessionHello",
     "WebSocketMicrophone",
     "WebSocketPlayer",

@@ -266,9 +266,15 @@ the existing barge-in and echo safeguards apply. Browser sessions bypass room
 participation decisions; Host voice retains its room attention policy.
 
 
-Browser audio compression is negotiated automatically per direction over the
-existing WS/WSS transport. Standard installations include the server's Opus codec;
-unsupported browsers or unavailable runtime codecs fall back to PCM.
+Browser audio uses protocol 2 over WS/WSS with one codec for the entire session:
+Opus at 48 kHz mono in both directions, or PCM16 at 16 kHz microphone / 24 kHz
+playback. A startup encode/decode self-test selects Opus when its complete native
+contract works, otherwise PCM. Server PyAV support is required; runtime codec
+errors stop the session and require retry. Formats never switch mid-session.
+AudioWorklets handle capture/playback, and a dedicated Worker owns the socket
+and codecs. There are no legacy capture or protocol paths. Both Hold to talk and
+Continuous conversation share this transport and required playback confirmation.
 No Agent configuration fields or restart-sensitive voice preferences are added.
-Both Hold to talk and Continuous conversation share this transport. Connection
-details on the Voice page displays the selected microphone/playback codecs.
+Connection details on the Voice page displays the microphone/playback codec.
+See [audio protocol 2](device-execution.md#audio-protocol-2) for packet framing,
+buffer limits and the required device-client migration.

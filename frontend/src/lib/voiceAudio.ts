@@ -1,4 +1,4 @@
-/** WS audio v2: media time, packet boundaries and optional native Opus codecs. */
+/** WS audio v2: fixed codec profiles, media time and packet boundaries. */
 export type AudioCodec = "opus" | "pcm_s16le";
 export const OPUS_RATE = 48000;
 export const FRAME_SAMPLES = 960;
@@ -44,17 +44,24 @@ export function unpackAudio(buffer: ArrayBuffer): AudioPacket {
   return {stream: view.getUint32(4), sequence: view.getUint32(8), timestamp, samples, discard, payload: buffer.slice(AUDIO_HEADER_BYTES)};
 }
 
-export async function supportedCodecs(worklet: boolean, forcePcm: boolean): Promise<{input: AudioCodec[]; output: AudioCodec[]}> {
-  let encode = false, decode = false;
-  if (!forcePcm) {
-    if (worklet && typeof AudioEncoder !== "undefined" && typeof AudioData !== "undefined") {
-      try { encode = Boolean((await AudioEncoder.isConfigSupported(OPUS_ENCODER_CONFIG)).supported); } catch { /* PCM fallback */ }
-    }
-    if (typeof AudioDecoder !== "undefined") {
-      try { decode = Boolean((await AudioDecoder.isConfigSupported(OPUS_DECODER_CONFIG)).supported); } catch { /* PCM fallback */ }
-    }
-  }
-  return {input: encode ? ["opus", "pcm_s16le"] : ["pcm_s16le"], output: decode ? ["opus", "pcm_s16le"] : ["pcm_s16le"]};
+/** Probe the entire native codec contract once before opening a voice socket. */
+export async function selectAudioCodec(): Promise<AudioCodec> {
+  if (typeof AudioEncoder === "undefined" || typeof AudioDecoder === "undefined" || typeof AudioData === "undefined") return "pcm_s16le";
+  let encoder: OpusInput | undefined, decoder: OpusOutput | undefined;
+  try {
+    if (!(await AudioEncoder.isConfigSupported(OPUS_ENCODER_CONFIG)).supported || !(await AudioDecoder.isConfigSupported(OPUS_DECODER_CONFIG)).supported) return "pcm_s16le";
+    const packets: AudioPacket[] = [];
+    let samples = 0, failure: Error | null = null;
+    const failed = (error: Error) => { failure = error; };
+    encoder = new OpusInput(1, (packet) => packets.push(packet), failed);
+    encoder.write(new Float32Array(FRAME_SAMPLES));
+    await encoder.finish();
+    decoder = new OpusOutput((frame) => { samples += frame.length; }, failed);
+    for (const packet of packets) decoder.write(packet);
+    await decoder.finish();
+    return !failure && samples === FRAME_SAMPLES ? "opus" : "pcm_s16le";
+  } catch { return "pcm_s16le"; }
+  finally { encoder?.close(); decoder?.close(); }
 }
 
 /** Encoder header supplies pre-skip; wire samples exclude priming and padded tail. */
@@ -149,39 +156,4 @@ export class OpusOutput {
     }
   }
   close(): void { this.closed = true; this.pending = []; if (this.decoder.state !== "closed") this.decoder.close(); }
-}
-
-/** Stateful PCM compatibility path: preserve fractional phase across ScriptProcessor blocks. */
-export class PcmResampler {
-  private input: number[] = [];
-  private positionTicks = 0;
-  private total = 0;
-  private produced = 0;
-  constructor(private sourceRate: number, private targetRate: number) {}
-  push(samples: Float32Array): Float32Array {
-    if (this.sourceRate === this.targetRate) return samples;
-    for (const sample of samples) this.input.push(sample);
-    this.total += samples.length;
-    return this.drain();
-  }
-  private drain(): Float32Array {
-    const output: number[] = [];
-    const limit = Math.floor(this.total * this.targetRate / this.sourceRate);
-    let position = this.positionTicks / this.targetRate;
-    while (position + 1 < this.input.length && this.produced < limit) {
-      const index = Math.floor(position), fraction = (this.positionTicks % this.targetRate) / this.targetRate;
-      output.push(this.input[index] + (this.input[index + 1] - this.input[index]) * fraction);
-      this.produced++;
-      this.positionTicks += this.sourceRate;
-      position = this.positionTicks / this.targetRate;
-    }
-    const remove = Math.min(this.input.length - 1, Math.floor(position));
-    if (remove > 0) { this.input.splice(0, remove); this.positionTicks -= remove * this.targetRate; }
-    return Float32Array.from(output);
-  }
-  finish(): Float32Array {
-    if (this.sourceRate === this.targetRate || !this.input.length) return new Float32Array(0);
-    this.input.push(this.input[this.input.length - 1]);
-    return this.drain();
-  }
 }

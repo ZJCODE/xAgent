@@ -10,7 +10,7 @@ from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from xagent.interfaces.voice.transport_audio import AudioPacket, OpusDecoder, OpusEncoder, opus_available
+from xagent.interfaces.voice.transport_audio import AudioCodecError, AudioPacket, OpusDecoder, OpusEncoder, ensure_opus_ready
 from xagent.interfaces.voice.ws import VoiceSessionHello, WebSocketVoiceBridge, WebSocketMicrophone, WebSocketPlayer
 
 
@@ -19,6 +19,15 @@ def bridge(hello):
 
 
 class AudioProtocolTests(unittest.TestCase):
+    def test_codec_initialization_failure_is_explicit_even_for_pcm(self):
+        ensure_opus_ready.cache_clear()
+        try:
+            with patch('xagent.interfaces.voice.transport_audio.OpusEncoder', side_effect=RuntimeError('Codec unavailable')):
+                with self.assertRaisesRegex(AudioCodecError, 'PyAV'):
+                    bridge(VoiceSessionHello(type='hello', audio_protocol=2, codec='pcm_s16le'))
+        finally:
+            ensure_opus_ready.cache_clear()
+
     def test_packet_round_trip_and_rejects_invalid_headers(self):
         packet = AudioPacket(2, 3, 20000, 320, 0, b'\0\0' * 320)
         self.assertEqual(AudioPacket.unpack(packet.pack()), packet)
@@ -26,25 +35,18 @@ class AudioProtocolTests(unittest.TestCase):
             with self.subTest(data=bad[:28]), self.assertRaises(ValueError):
                 AudioPacket.unpack(bad)
 
-    def test_legacy_needs_no_codecs_and_retains_requested_audio_rates(self):
-        with patch('xagent.interfaces.voice.ws.opus_available', side_effect=AssertionError('Must not probe')):
-            transport = bridge(VoiceSessionHello(input_sample_rate=48000, output_sample_rate=16000))
-        self.assertEqual(transport.input_codec, 'pcm_s16le')
-        self.assertEqual(transport.hello.input_sample_rate, 48000)
-        self.assertEqual(transport.hello.output_sample_rate, 16000)
-
-    def test_independent_codec_negotiation_and_missing_dependency_fallback(self):
-        for available, offered_input, offered_output, expected in (
-            (True, ['opus', 'pcm_s16le'], ['pcm_s16le'], ('opus', 'pcm_s16le', 48000, 24000)),
-            (True, ['pcm_s16le'], ['opus', 'pcm_s16le'], ('pcm_s16le', 'opus', 16000, 48000)),
-            (False, ['opus', 'pcm_s16le'], ['opus', 'pcm_s16le'], ('pcm_s16le', 'pcm_s16le', 16000, 24000)),
-        ):
-            with patch('xagent.interfaces.voice.ws.opus_available', return_value=available):
-                transport = bridge(VoiceSessionHello(audio_protocol=2, playback_ack=True, input_codecs=offered_input, output_codecs=offered_output))
-                self.assertEqual((transport.input_codec, transport.output_codec, transport.hello.input_sample_rate, transport.hello.output_sample_rate), expected)
+    def test_protocol_is_explicit_and_codec_profiles_are_fixed(self):
+        for codec, rates in [('opus', (48000, 48000)), ('pcm_s16le', (16000, 24000))]:
+            transport = bridge(VoiceSessionHello(type='hello', audio_protocol=2, codec=codec))
+            self.assertEqual((transport.hello.input_sample_rate, transport.hello.output_sample_rate), rates)
+        for values in ({}, {'audio_protocol': 1, 'codec': 'pcm_s16le'},
+                       {'audio_protocol': 2, 'codec': 'opus', 'input_sample_rate': 16000},
+                       {'audio_protocol': 2, 'codec': 'opus', 'input_codecs': ['pcm_s16le']}):
+            with self.assertRaises(ValueError):
+                VoiceSessionHello.model_validate({'type': 'hello', **values})
 
     def test_pcm_stream_boundaries_ignore_old_packets_and_reject_gaps(self):
-        transport = bridge(VoiceSessionHello(audio_protocol=2, playback_ack=True))
+        transport = bridge(VoiceSessionHello(type='hello', audio_protocol=2, codec='pcm_s16le'))
         mic = WebSocketMicrophone(transport)
         mic.start_input(1)
         mic.end_input(1)
@@ -60,7 +62,7 @@ class AudioProtocolTests(unittest.TestCase):
         generator.close()
 
     def test_audio_queue_is_bounded_by_duration(self):
-        mic = WebSocketMicrophone(bridge(VoiceSessionHello(audio_protocol=2, playback_ack=True)))
+        mic = WebSocketMicrophone(bridge(VoiceSessionHello(type='hello', audio_protocol=2, codec='pcm_s16le')))
         mic.start_input(1)
         for n in range(25):
             mic.push_audio(AudioPacket(1, n, n * 20000, 320, 0, b'\0\0' * 320).pack())
@@ -94,11 +96,10 @@ class RealOpusTests(unittest.TestCase):
                     dot = sum(a * b for a, b in zip(original[4800:], actual[4800:]))
                     norm = math.sqrt(sum(a*a for a in original[4800:]) * sum(b*b for b in actual[4800:]))
                     self.assertGreater(dot / norm, .8)
-        self.assertTrue(opus_available())
+        ensure_opus_ready()
 
     def test_output_resampling_flush_keeps_the_last_native_samples(self):
-        transport = bridge(VoiceSessionHello(audio_protocol=2, playback_ack=True,
-                                             input_codecs=['pcm_s16le'], output_codecs=['opus', 'pcm_s16le']))
+        transport = bridge(VoiceSessionHello(type='hello', audio_protocol=2, codec='opus'))
         player = WebSocketPlayer(transport)
         packets = list(player._audio_packets(iter([b'\x10\0' * 24000]), threading.Event()))
         self.assertEqual(sum(packet.samples for packet in packets), 48000)

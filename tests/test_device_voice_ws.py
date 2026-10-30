@@ -43,12 +43,19 @@ class _FakeWSRecognizer:
         pause_event: threading.Event,
         stop_event: threading.Event,
     ):
+        spoken = False
         for chunk in audio_chunks:
             if stop_event.is_set():
                 return
-            if not chunk or pause_event.is_set():
+            if not chunk:
+                spoken = False
+                continue
+            if pause_event.is_set():
                 continue
             self.received_chunks.append(chunk)
+            if spoken:
+                continue
+            spoken = True
             yield VoiceUtterance(text=self.utterance_text, language="zh")
             if not self.continuous:
                 return
@@ -140,280 +147,6 @@ class DeviceVoiceWebSocketTests(unittest.IsolatedAsyncioTestCase):
         await self.wait_for(lambda: host.channel_status["api"]["state"] == "connected")
         return host, task, root, f"ws://127.0.0.1:{port}"
 
-    async def test_paired_device_voice_session_inherits_room_location_and_streams_audio_and_control(self):
-        host, _, _, url = await self.start_host([(ReplyType.SIMPLE_REPLY, "好的，已为您打开客厅灯。")])
-        # Register the control socket first so the device's location is recorded in DeviceProfiles.
-        async with websockets.connect(
-            url + "/ws/devices/living-speaker",
-            additional_headers={"Authorization": "Bearer speaker-secret"},
-            **self.connection_options,
-        ) as control_ws:
-            manifest = device_test.manifest("living-speaker", location="客厅").model_dump()
-            manifest["name"] = "客厅音箱"
-            await control_ws.send(json.dumps(manifest))
-            await self.wait_for(lambda: "living-speaker" in host.device_service.devices)
-
-            fake_recognizer = _FakeWSRecognizer("打开客厅灯")
-            fake_synth = _FakeWSSynthesizer()
-            with patch(
-                "xagent.interfaces.voice.factory.create_soniox_adapters",
-                return_value=(fake_recognizer, fake_synth),
-            ):
-                async with websockets.connect(
-                    url + "/ws/devices/living-speaker/voice",
-                    additional_headers={"Authorization": "Bearer speaker-secret"},
-                    **self.connection_options,
-                ) as voice_ws:
-                    await voice_ws.send(
-                        json.dumps(
-                            {
-                                "type": "hello",
-                                "input_sample_rate": 16000,
-                                "input_channels": 1,
-                                "output_sample_rate": 24000,
-                                "output_channels": 1,
-                                "profile": "headset",
-                                "echo_managed": True,
-                                "user_id": "alice",
-                            }
-                        )
-                    )
-                    ready = json.loads(await asyncio.wait_for(voice_ws.recv(), timeout=3))
-                    self.assertEqual(ready["type"], "ready")
-                    self.assertEqual(ready["device_id"], "living-speaker")
-                    self.assertEqual(ready["room_name"], "客厅")
-
-                    # Send 20ms of 16kHz PCM16 audio
-                    await voice_ws.send(b"\x10\x00" * 320)
-
-                    received_binary: list[bytes] = []
-                    received_json: list[dict] = []
-                    deadline = time.monotonic() + 5.0
-                    while time.monotonic() < deadline:
-                        frame = await asyncio.wait_for(voice_ws.recv(), timeout=3)
-                        if isinstance(frame, bytes):
-                            received_binary.append(frame)
-                            await voice_ws.send(
-                                json.dumps(
-                                    {
-                                        "type": "playback_progress",
-                                        "played_bytes": sum(len(b) for b in received_binary),
-                                    }
-                                )
-                            )
-                        else:
-                            payload = json.loads(frame)
-                            received_json.append(payload)
-                            if payload.get("type") == "playback_done":
-                                break
-
-                    self.assertTrue(fake_recognizer.received_chunks)
-                    self.assertTrue(received_binary)
-                    types = [item.get("type") for item in received_json]
-                    self.assertIn("playback_start", types)
-                    self.assertIn("playback_done", types)
-                    user_transcripts = [
-                        item
-                        for item in received_json
-                        if item.get("type") == "transcript" and item.get("role") == "user"
-                    ]
-                    self.assertEqual(user_transcripts[0]["text"], "打开客厅灯")
-                    assistant_finals = [
-                        item
-                        for item in received_json
-                        if item.get("type") == "transcript"
-                        and item.get("role") == "assistant"
-                        and item.get("final") is True
-                    ]
-                    self.assertEqual(assistant_finals[0]["text"], "好的，已为您打开客厅灯。")
-
-                    # Verify that the Agent turn received room_name="客厅" and user_id="alice"
-                    stored = await host.agent.message_storage.get_messages(10)
-                    user_msg = next(msg for msg in stored if msg.sender_id == "alice")
-                    self.assertEqual(user_msg.channel, "voice")
-                    self.assertEqual(user_msg.room_name, "客厅")
-
-                    # Verify ping/pong control message
-                    await voice_ws.send(json.dumps({"type": "ping"}))
-                    pong = json.loads(await asyncio.wait_for(voice_ws.recv(), timeout=2))
-                    self.assertEqual(pong, {"type": "pong"})
-                    await voice_ws.send(json.dumps({"type": "stop"}))
-
-            await self.wait_for(lambda: not host.device_service.voice_sessions)
-
-    async def test_pure_voice_device_can_pair_directly_on_voice_socket_and_reports_voice_online(self):
-        host, _, _, url = await self.start_host([])
-        code = host.device_service.create_pairing()["pairing_code"]
-        fake_recognizer = _FakeWSRecognizer("早上好")
-        fake_synth = _FakeWSSynthesizer()
-        with patch(
-            "xagent.interfaces.voice.factory.create_soniox_adapters",
-            return_value=(fake_recognizer, fake_synth),
-        ):
-            async with websockets.connect(
-                url + "/ws/devices/kitchen-mic/voice",
-                additional_headers={"Authorization": "Bearer " + code},
-                **self.connection_options,
-            ) as ws:
-                await ws.send(
-                    json.dumps(
-                        {
-                            "type": "hello",
-                            "name": "厨房麦克风",
-                            "location": "厨房",
-                            "profile": "room",
-                        }
-                    )
-                )
-                ready = json.loads(await asyncio.wait_for(ws.recv(), timeout=3))
-                self.assertEqual(ready["type"], "ready")
-                self.assertEqual(ready["device_id"], "kitchen-mic")
-                self.assertEqual(ready["room_name"], "厨房")
-                issued = ready.get("credential", "")
-                self.assertTrue(issued.startswith("dvc_"))
-
-                # Pure-voice device appears in list_devices and admin status with voice_online=True
-                listed = host.device_service.list_devices()["devices"]
-                kitchen_entry = next(item for item in listed if item["device_id"] == "kitchen-mic")
-                self.assertTrue(kitchen_entry["voice_online"])
-                self.assertEqual(kitchen_entry["location"], "厨房")
-                self.assertEqual(kitchen_entry["name"], "厨房麦克风")
-
-                from xagent.core.runtime.client import RuntimeClient
-                admin_rows = (await RuntimeClient(host.config_dir).request("GET", "/api/devices")).json()["devices"]
-                admin_kitchen = next(item for item in admin_rows if item["device_id"] == "kitchen-mic")
-                self.assertTrue(admin_kitchen["online"])
-                self.assertTrue(admin_kitchen["voice_online"])
-
-                await ws.send(json.dumps({"type": "stop"}))
-
-            await self.wait_for(lambda: not host.device_service.voice_sessions)
-
-            # One-time pairing code cannot be reused after pairing completed
-            with self.assertRaises(Exception):
-                async with websockets.connect(
-                    url + "/ws/devices/kitchen-mic/voice",
-                    additional_headers={"Authorization": "Bearer " + code},
-                    **self.connection_options,
-                ) as ws2:
-                    await ws2.recv()
-
-            # Issued dvc_ credential can reconnect without a control socket
-            async with websockets.connect(
-                url + "/ws/devices/kitchen-mic/voice",
-                additional_headers={"Authorization": "Bearer " + issued},
-                **self.connection_options,
-            ) as ws3:
-                await ws3.send(json.dumps({"type": "hello", "profile": "room"}))
-                ready2 = json.loads(await asyncio.wait_for(ws3.recv(), timeout=3))
-                self.assertEqual(ready2["type"], "ready")
-                self.assertNotIn("credential", ready2)
-                self.assertEqual(ready2["room_name"], "厨房")
-                await ws3.send(json.dumps({"type": "stop"}))
-
-    async def test_scheduled_task_and_subconscious_route_to_remote_device_voice_session(self):
-        from xagent.core.runtime import ContactEntry, ScheduledTaskRecord, SubconsciousDelivery, load_contacts
-
-        host, _, root, url = await self.start_host(
-            [
-                (ReplyType.SIMPLE_REPLY, "已为您设置提醒。"),
-                (ReplyType.SIMPLE_REPLY, "主人，水已经烧开了。"),
-            ]
-        )
-        fake_recognizer = _FakeWSRecognizer("十分钟后提醒我关火")
-        fake_synth = _FakeWSSynthesizer()
-        with patch(
-            "xagent.interfaces.voice.factory.create_soniox_adapters",
-            return_value=(fake_recognizer, fake_synth),
-        ):
-            async with websockets.connect(
-                url + "/ws/devices/living-speaker/voice",
-                additional_headers={"Authorization": "Bearer speaker-secret"},
-                **self.connection_options,
-            ) as voice_ws:
-                await voice_ws.send(
-                    json.dumps(
-                        {
-                            "type": "hello",
-                            "name": "客厅音箱",
-                            "location": "客厅",
-                            "profile": "headset",
-                            "echo_managed": True,
-                            "user_id": "alice",
-                        }
-                    )
-                )
-                ready = json.loads(await asyncio.wait_for(voice_ws.recv(), timeout=3))
-                self.assertEqual(ready["room_name"], "客厅")
-
-                # Even though local voice channel is disconnected, remote voice session makes 'voice' deliverable
-                self.assertEqual(host.channel_status["voice"]["state"], "disconnected")
-                self.assertIn("voice", host._deliverable_channels())
-
-                # Trigger one live voice turn so contacts.json is updated with device_id and room_name
-                await voice_ws.send(b"\x10\x00" * 320)
-                while True:
-                    frame = await asyncio.wait_for(voice_ws.recv(), timeout=3)
-                    if isinstance(frame, str) and json.loads(frame).get("type") == "playback_done":
-                        break
-
-                contacts = load_contacts(root / "contacts.json")
-                voice_contact = next(c for c in contacts if c.channel == "voice" and c.user_id == "alice")
-                self.assertEqual(voice_contact.target.get("device_id"), "living-speaker")
-                self.assertEqual(voice_contact.target.get("room_name"), "客厅")
-
-                # Execute and deliver a scheduled voice task targeted at this device
-                from datetime import datetime, timezone
-                task = ScheduledTaskRecord(
-                    path=root / "tasks" / "task-kettle.json",
-                    run_at=datetime(2026, 10, 16, 8, 0, tzinfo=timezone.utc),
-                    kind="task",
-                    payload={
-                        "id": "task-kettle",
-                        "title": "关火提醒",
-                        "task": {"type": "message", "content": "请记得关火。"},
-                        "delivery": {
-                            "channel": "voice",
-                            "user_id": "alice",
-                            "target": {"user_id": "alice", "device_id": "living-speaker", "room_name": "客厅"},
-                        },
-                    },
-                )
-                self.assertTrue(host._can_handle_task(task))
-                result = await host._execute_task(task)
-                delivery_receipt = await host._deliver_task(task, result, "run-1")
-                self.assertTrue(delivery_receipt["accepted"])
-                self.assertGreater(delivery_receipt["audio_bytes"], 0)
-
-                # Drain the scheduled task playback frames from the WebSocket
-                scheduled_audio: list[bytes] = []
-                while True:
-                    frame = await asyncio.wait_for(voice_ws.recv(), timeout=3)
-                    if isinstance(frame, bytes):
-                        scheduled_audio.append(frame)
-                    elif json.loads(frame).get("type") == "playback_done":
-                        break
-                self.assertTrue(scheduled_audio)
-
-                # Deliver a subconscious voice message to the same device session
-                sub_delivery = SubconsciousDelivery(
-                    content="顺便提一下，外面好像要下雨了。",
-                    recipient=voice_contact,
-                    internal_content="Outside looks cloudy.",
-                    created_at=datetime(2026, 10, 16, 8, 5, tzinfo=timezone.utc),
-                )
-                await host._deliver_subconscious(sub_delivery)
-                sub_audio: list[bytes] = []
-                while True:
-                    frame = await asyncio.wait_for(voice_ws.recv(), timeout=3)
-                    if isinstance(frame, bytes):
-                        sub_audio.append(frame)
-                    elif json.loads(frame).get("type") == "playback_done":
-                        break
-                self.assertTrue(sub_audio)
-
-                await voice_ws.send(json.dumps({"type": "stop"}))
-
     async def test_sensor_only_device_registers_with_empty_capabilities(self):
         host, _, _, url = await self.start_host([])
         async with websockets.connect(
@@ -439,256 +172,118 @@ class DeviceVoiceWebSocketTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(listed[0]["capabilities"], [])
             self.assertFalse(listed[0]["voice_online"])
 
-    async def test_revoke_device_closes_active_voice_session_and_resampling_works(self):
-        host, _, _, url = await self.start_host([])
-        fake_recognizer = _FakeWSRecognizer("测试重采样")
-        fake_synth = _FakeWSSynthesizer()
-        with patch(
-            "xagent.interfaces.voice.factory.create_soniox_adapters",
-            return_value=(fake_recognizer, fake_synth),
-        ):
-            async with websockets.connect(
-                url + "/ws/devices/living-speaker/voice",
-                additional_headers={"Authorization": "Bearer speaker-secret"},
-                **self.connection_options,
-            ) as voice_ws:
-                await voice_ws.send(
-                    json.dumps(
-                        {
-                            "type": "hello",
-                            "input_sample_rate": 48000,
-                            "input_channels": 2,
-                            "output_sample_rate": 16000,
-                            "output_channels": 1,
-                            "profile": "room",
-                            "echo_managed": False,
-                        }
-                    )
-                )
-                ready = json.loads(await asyncio.wait_for(voice_ws.recv(), timeout=3))
-                self.assertEqual(ready["type"], "ready")
-                # Without a prior profile location, room_name falls back to device_id
-                self.assertEqual(ready["room_name"], "living-speaker")
-                self.assertIn("living-speaker", host.device_service.voice_sessions)
 
-                # Revoking the device closes the active voice session
-                await host.device_service.revoke("living-speaker")
-                await self.wait_for(lambda: not host.device_service.voice_sessions)
-                with self.assertRaises(websockets.exceptions.ConnectionClosed):
-                    while True:
-                        await asyncio.wait_for(voice_ws.recv(), timeout=2)
-
-    async def test_browser_voice_uses_temporary_sessions_without_pairing(self):
-        from xagent.core.runtime.client import RuntimeClient
-
-        host, _, root, url = await self.start_host([(ReplyType.SIMPLE_REPLY, "你好。") for _ in range(3)], seed_credentials=False)
-        # A legacy browser device must not prevent a new browser from talking.
-        host.device_service.credentials.add("phone-web", "old-browser-secret")
-        pairing = host.device_service.create_pairing()["pairing_code"]
-        client = RuntimeClient(root)
-        first = (await client.request("POST", "/api/devices/voice-session")).json()
-        second = (await client.request("POST", "/api/devices/voice-session")).json()
-        self.assertNotEqual(first["session_id"], second["session_id"])
-        hello = {"type": "hello", "input_sample_rate": 16000, "input_channels": 1,
-                 "profile": "headset", "echo_managed": True, "playback_ack": True}
-
-        def target(session):
-            return url + "/ws/voice/" + session["session_id"] + "?token=" + quote(session["token"], safe="")
-
-        with patch("xagent.interfaces.voice.factory.create_soniox_adapters",
-                   side_effect=lambda *args, **kwargs: (_FakeWSRecognizer(continuous=True), _FakeWSSynthesizer())):
-            async with websockets.connect(target(first), **self.connection_options) as browser:
-                await browser.send(json.dumps(hello))
-                ready = json.loads(await asyncio.wait_for(browser.recv(), timeout=3))
-                self.assertEqual(ready["type"], "ready")
-                self.assertNotIn("credential", ready)
-                self.assertEqual(ready["room_name"], "Browser voice")
-                session_runtime = host.device_service.voice_sessions[first["session_id"]].runtime
-                self.assertTrue(session_runtime.options.direct_conversation)
-                # Even after the room attention window expires, browser speech is directed at the Agent.
-                session_runtime._attention._window_open_until = 0
-                self.assertTrue(host.device_service.voice_sessions[first["session_id"]].browser)
-                self.assertEqual(host.device_service.list_devices()["devices"], [])
-                admin = (await client.request("GET", "/api/devices")).json()
-                self.assertEqual([row["device_id"] for row in admin["devices"]], ["phone-web"])
-                self.assertFalse(admin["devices"][0]["online"])
-                await browser.send(b"\x10\x00" * 320)
-                audio = []
-                transcripts = []
-                while True:
-                    frame = await asyncio.wait_for(browser.recv(), timeout=3)
-                    if isinstance(frame, bytes):
-                        audio.append(frame)
-                    else:
-                        message = json.loads(frame)
-                        if message.get("type") == "transcript":
-                            transcripts.append(message)
-                        if message.get("type") == "playback_done":
-                            break
-                self.assertTrue(session_runtime.pause_event.is_set())
-                await browser.send(json.dumps({"type": "playback_finished", "playback_id": "stale"}))
-                await asyncio.sleep(0.06)
-                self.assertTrue(session_runtime.pause_event.is_set())
-                await browser.send(json.dumps({"type": "playback_progress", "playback_id": "stale", "played_bytes": 999999}))
-                await asyncio.sleep(0.06)
-                self.assertEqual(session_runtime._current_remote_played_bytes, 0)
-                await browser.send(json.dumps({"type": "playback_finished", "playback_id": message["playback_id"]}))
-                await self.wait_for(lambda: not session_runtime.pause_event.is_set())
-                self.assertTrue(audio)
-                self.assertTrue(any(line.get("role") == "user" for line in transcripts))
-                self.assertTrue(any(line.get("role") == "assistant" and line.get("final") for line in transcripts))
-                # The same live microphone/session handles further turns without reconnecting.
-                for _ in range(2):
-                    await browser.send(b"\x10\x00" * 320)
-                    while True:
-                        frame = await asyncio.wait_for(browser.recv(), timeout=3)
-                        if isinstance(frame, str):
-                            message = json.loads(frame)
-                            if message.get("type") == "playback_done":
-                                await browser.send(json.dumps({"type": "playback_finished", "playback_id": message["playback_id"]}))
-                                break
-                    await self.wait_for(lambda: not session_runtime.pause_event.is_set())
-                stored = await host.agent.message_storage.get_messages(10)
-                self.assertTrue(any(message.sender_id == "web_user" and message.channel == "voice" for message in stored))
-                async with websockets.connect(target(second), **self.connection_options) as other:
-                    await other.send(json.dumps(hello))
-                    self.assertEqual(json.loads(await asyncio.wait_for(other.recv(), timeout=3))["type"], "ready")
-                    self.assertEqual(len(host.device_service.voice_sessions), 2)
-                await self.wait_for(lambda: len(host.device_service.voice_sessions) == 1)
-            await self.wait_for(lambda: not host.device_service.voice_sessions)
-
-        with self.assertRaises(Exception):
-            async with websockets.connect(target(first), **self.connection_options):
-                pass  # A consumed ticket cannot be replayed.
-        self.assertTrue(host.device_service.authenticate("phone-web", "Bearer old-browser-secret"))
-        self.assertTrue(host.device_service.authenticate("another-device", "Bearer " + pairing))
-        self.assertEqual(list(host.device_service.credentials.digests), ["phone-web"])
-        self.assertFalse((root / ".device_profiles.json").exists())
-
-    async def test_browser_query_token_pairs_phone_and_header_auth_still_connects(self):
-        host, _, _, url = await self.start_host([], seed_credentials=False)
-        with self.assertRaises(Exception):
-            async with websockets.connect(
-                url + "/ws/devices/phone-web/voice?token=not-a-credential",
-                **self.connection_options,
-            ) as rejected:
-                await rejected.recv()
-
-        code = host.device_service.create_pairing()["pairing_code"]
-        hello = {
-            "type": "hello",
-            "name": "Phone mic",
-            "input_sample_rate": 16000,
-            "input_channels": 1,
-            "output_sample_rate": 24000,
-            "output_channels": 1,
-            "profile": "headset",
-            "echo_managed": True,
-        }
-        fake_recognizer = _FakeWSRecognizer("你好")
-        fake_synth = _FakeWSSynthesizer()
-        with patch(
-            "xagent.interfaces.voice.factory.create_soniox_adapters",
-            return_value=(fake_recognizer, fake_synth),
-        ):
-            async with websockets.connect(
-                url + "/ws/devices/phone-web/voice?token=" + quote(code, safe=""),
-                **self.connection_options,
-            ) as phone:
-                await phone.send(json.dumps(hello))
-                ready = json.loads(await asyncio.wait_for(phone.recv(), timeout=3))
-                self.assertEqual(ready["type"], "ready")
-                self.assertEqual(ready["device_id"], "phone-web")
-                self.assertEqual(ready["room_name"], "Phone mic")
-                issued = ready["credential"]
-                self.assertTrue(issued.startswith("dvc_"))
-                listed = host.device_service.list_devices()["devices"]
-                row = next(item for item in listed if item["device_id"] == "phone-web")
-                self.assertTrue(row["voice_online"])
-                self.assertEqual(row["name"], "Phone mic")
-                await phone.send(json.dumps({"type": "stop"}))
-
-            async with websockets.connect(
-                url + "/ws/devices/phone-web/voice",
-                additional_headers={"Authorization": "Bearer " + issued},
-                **self.connection_options,
-            ) as phone:
-                await phone.send(json.dumps(hello))
-                ready = json.loads(await asyncio.wait_for(phone.recv(), timeout=3))
-                self.assertEqual(ready["type"], "ready")
-                self.assertNotIn("credential", ready)
-                await phone.send(json.dumps({"type": "stop"}))
-
-            async with websockets.connect(
-                url + "/ws/devices/phone-web/voice?token=not-a-credential",
-                additional_headers={"Authorization": "Bearer " + issued},
-                **self.connection_options,
-            ) as phone:
-                await phone.send(json.dumps(hello))
-                ready = json.loads(await asyncio.wait_for(phone.recv(), timeout=3))
-                self.assertEqual(ready["device_id"], "phone-web")
-                await phone.send(json.dumps({"type": "stop"}))
-
-            async with websockets.connect(
-                url + "/ws/devices/phone-web/voice?token=" + quote(issued, safe=""),
-                **self.connection_options,
-            ) as phone:
-                await phone.send(json.dumps(hello))
-                ready = json.loads(await asyncio.wait_for(phone.recv(), timeout=3))
-                self.assertEqual(ready["type"], "ready")
-                self.assertNotIn("credential", ready)
-                await phone.send(json.dumps({"type": "stop"}))
-
-
-    async def test_v2_pcm_and_opus_use_media_time_and_input_stream_boundaries(self):
+    async def send_audio(self, ws, codec='pcm_s16le', stream=1):
+        from xagent.interfaces.voice.transport_audio import AudioPacket, OpusEncoder
+        await ws.send(json.dumps({'type': 'input_start', 'stream_id': stream}))
+        if codec == 'opus':
+            encoder = OpusEncoder(24000)
+            packets = list(encoder.push(b'\x10\0' * 960)) + list(encoder.finish())
+        else:
+            packets = [AudioPacket(stream, 0, 0, 320, 0, b'\x10\0' * 320)]
         from dataclasses import replace
-        from xagent.core.runtime.client import RuntimeClient
-        from xagent.interfaces.voice.transport_audio import AudioPacket, OpusEncoder, OpusDecoder, opus_available
+        for packet in packets:
+            await ws.send(replace(packet, stream=stream).pack())
+        await ws.send(json.dumps({'type': 'input_end', 'stream_id': stream}))
 
-        for use_opus in (False, True):
-            if use_opus and not opus_available():
-                continue
-            with self.subTest(opus=use_opus):
-                host, _, root, url = await self.start_host([(ReplyType.SIMPLE_REPLY, "你好。")], seed_credentials=False)
+    async def playback(self, ws, rate=24000):
+        from xagent.interfaces.voice.transport_audio import AudioPacket, OpusDecoder
+        samples = 0
+        decoder = OpusDecoder() if rate == 48000 else None
+        while True:
+            message = await asyncio.wait_for(ws.recv(), timeout=4)
+            if isinstance(message, bytes):
+                packet = AudioPacket.unpack(message)
+                pcm = decoder.decode(packet) if decoder else packet.payload
+                self.assertEqual(len(pcm), packet.samples * 2)
+                samples += packet.samples
+            else:
+                frame = json.loads(message)
+                if frame['type'] == 'playback_done':
+                    await ws.send(json.dumps({'type': 'playback_progress', 'playback_id': frame['playback_id'], 'played_samples': samples, 'sample_rate': rate}))
+                    await ws.send(json.dumps({'type': 'playback_finished', 'playback_id': frame['playback_id']}))
+                    return samples
+
+    async def test_device_pairing_profile_and_audio_use_one_protocol(self):
+        host, _, root, url = await self.start_host([(ReplyType.SIMPLE_REPLY, '好的。')], seed_credentials=False)
+        code = host.device_service.create_pairing()['pairing_code']
+        with patch('xagent.interfaces.voice.factory.create_soniox_adapters', return_value=(_FakeWSRecognizer(continuous=True), _FakeWSSynthesizer())):
+            async with websockets.connect(url + '/ws/devices/desk/voice?token=' + quote(code, safe=''), **self.connection_options) as ws:
+                await ws.send(json.dumps({'type': 'hello', 'audio_protocol': 2, 'codec': 'pcm_s16le', 'profile': 'headset', 'name': 'Desk', 'location': 'Office', 'user_id': 'alice'}))
+                ready = json.loads(await ws.recv())
+                self.assertEqual(ready['codec'], 'pcm_s16le')
+                self.assertTrue(ready['credential'].startswith('dvc_'))
+                self.assertEqual(ready['room_name'], 'Office')
+                await self.send_audio(ws)
+                self.assertGreater(await self.playback(ws), 0)
+                await self.wait_for(lambda: not host.device_service.voice_sessions['desk'].runtime.pause_event.is_set())
+                from xagent.core.runtime import load_contacts
+                contact = next(c for c in load_contacts(root / 'contacts.json') if c.channel == 'voice' and c.user_id == 'alice')
+                self.assertEqual(contact.target['device_id'], 'desk')
+                self.assertEqual(contact.target['room_name'], 'Office')
+                self.assertIn('voice', host._deliverable_channels())
+                await ws.send(json.dumps({'type': 'ping'}))
+                self.assertEqual(json.loads(await ws.recv())['type'], 'pong')
+                await ws.send(json.dumps({'type': 'stop'}))
+            await self.wait_for(lambda: not host.device_service.voice_sessions)
+            async with websockets.connect(url + '/ws/devices/desk/voice', additional_headers={'Authorization': 'Bearer ' + ready['credential']}, **self.connection_options) as ws:
+                await ws.send(json.dumps({'type': 'hello', 'audio_protocol': 2, 'codec': 'pcm_s16le'}))
+                self.assertNotIn('credential', json.loads(await ws.recv()))
+                await host.device_service.revoke('desk')
+                await self.wait_for(lambda: not host.device_service.voice_sessions)
+
+    async def test_browser_three_turns_in_both_profiles_and_single_use_tickets(self):
+        from xagent.core.runtime.client import RuntimeClient
+        for codec in ('pcm_s16le', 'opus'):
+            with self.subTest(codec=codec):
+                host, _, root, url = await self.start_host([(ReplyType.SIMPLE_REPLY, '你好。') for _ in range(6)], seed_credentials=False)
                 ticket = (await RuntimeClient(root).request('POST', '/api/devices/voice-session')).json()
+                target = url + '/ws/voice/' + ticket['session_id'] + '?token=' + quote(ticket['token'], safe='')
                 recognizer = _FakeWSRecognizer(continuous=True)
                 with patch('xagent.interfaces.voice.factory.create_soniox_adapters', return_value=(recognizer, _FakeWSSynthesizer())):
-                    async with websockets.connect(url + '/ws/voice/' + ticket['session_id'] + '?token=' + quote(ticket['token'], safe=''), **self.connection_options) as ws:
-                        codecs = ['opus', 'pcm_s16le'] if use_opus else ['pcm_s16le']
-                        await ws.send(json.dumps({'type': 'hello', 'audio_protocol': 2, 'playback_ack': True,
-                                                  'profile': 'headset', 'input_codecs': codecs, 'output_codecs': codecs}))
-                        ready = json.loads(await asyncio.wait_for(ws.recv(), 3))
-                        self.assertEqual(ready['audio_protocol'], 2)
-                        self.assertEqual(ready['input_codec'], 'opus' if use_opus else 'pcm_s16le')
-                        rate = ready['input_sample_rate']
-                        await ws.send(json.dumps({'type': 'input_start', 'stream_id': 1}))
-                        if use_opus:
-                            encoder = OpusEncoder(24000)
-                            packets = list(encoder.push(b'\x10\0' * (rate // 50))) + list(encoder.finish())
-                        else:
-                            packets = [AudioPacket(1, 0, 0, rate // 50, 0, b'\x10\0' * (rate // 50))]
-                        for packet in packets:
-                            await ws.send(replace(packet, stream=1).pack())
-                        await ws.send(json.dumps({'type': 'input_end', 'stream_id': 1}))
-                        output_samples = 0
-                        decoder = OpusDecoder() if use_opus else None
-                        while True:
-                            message = await asyncio.wait_for(ws.recv(), 3)
-                            if isinstance(message, bytes):
-                                packet = AudioPacket.unpack(message)
-                                self.assertEqual(len(decoder.decode(packet) if decoder else packet.payload), packet.samples * 2)
-                                output_samples += packet.samples
-                            else:
-                                control = json.loads(message)
-                                if control['type'] == 'playback_done':
-                                    break
-                        self.assertGreater(output_samples, 0)
+                    async with websockets.connect(target, **self.connection_options) as ws:
+                        await ws.send(json.dumps({'type': 'hello', 'audio_protocol': 2, 'codec': codec, 'profile': 'headset'}))
+                        ready = json.loads(await ws.recv())
+                        self.assertEqual(ready['codec'], codec)
                         runtime = host.device_service.voice_sessions[ticket['session_id']].runtime
-                        self.assertTrue(runtime.pause_event.is_set())
-                        await ws.send(json.dumps({'type': 'playback_progress', 'playback_id': control['playback_id'],
-                                                  'played_samples': output_samples, 'sample_rate': ready['output_sample_rate']}))
-                        await self.wait_for(lambda: runtime._current_remote_played_bytes > 0)
-                        self.assertLessEqual(runtime._current_remote_played_bytes, output_samples * 24000 // ready['output_sample_rate'] * 2)
-                        await ws.send(json.dumps({'type': 'playback_finished', 'playback_id': control['playback_id']}))
-                        await self.wait_for(lambda: not runtime.pause_event.is_set())
+                        runtime._attention._window_open_until = 0
+                        self.assertTrue(runtime.options.direct_conversation)
+                        self.assertEqual(host.device_service.list_devices()['devices'], [])
+                        for stream in range(1, 4):
+                            await self.send_audio(ws, codec, stream)
+                            self.assertGreater(await self.playback(ws, ready['output_sample_rate']), 0)
+                            await self.wait_for(lambda: not runtime.pause_event.is_set())
+                            await asyncio.sleep(.21)  # No speech while the fake recognizer resets its endpoint.
                         await ws.send(json.dumps({'type': 'stop'}))
+                    await self.wait_for(lambda: not host.device_service.voice_sessions)
+                with self.assertRaises(Exception):
+                    async with websockets.connect(target, **self.connection_options):
+                        pass
+
+    async def test_old_protocol_and_byte_progress_are_rejected_explicitly(self):
+        host, _, _, url = await self.start_host([])
+        with patch('xagent.interfaces.voice.factory.create_soniox_adapters', return_value=(_FakeWSRecognizer(continuous=True), _FakeWSSynthesizer())):
+            for hello in ({'type': 'hello'}, {'type': 'hello', 'audio_protocol': 1}):
+                async with websockets.connect(url + '/ws/devices/living-speaker/voice', additional_headers={'Authorization': 'Bearer speaker-secret'}, **self.connection_options) as ws:
+                    await ws.send(json.dumps(hello))
+                    with self.assertRaises(websockets.exceptions.ConnectionClosed) as caught:
+                        await ws.recv()
+                    self.assertIn('protocol 2', str(caught.exception))
+            async with websockets.connect(url + '/ws/devices/living-speaker/voice', additional_headers={'Authorization': 'Bearer speaker-secret'}, **self.connection_options) as ws:
+                await ws.send(json.dumps({'type': 'hello', 'audio_protocol': 2, 'codec': 'pcm_s16le'})); await ws.recv()
+                await ws.send(json.dumps({'type': 'playback_progress', 'playback_id': 'old', 'played_bytes': 100}))
+                with self.assertRaises(websockets.exceptions.ConnectionClosed): await ws.recv()
+
+    async def test_remote_scheduled_output_waits_for_playback_acknowledgement(self):
+        from datetime import datetime, timezone
+        from xagent.core.runtime import ScheduledTaskRecord
+        host, _, root, url = await self.start_host([])
+        with patch('xagent.interfaces.voice.factory.create_soniox_adapters', return_value=(_FakeWSRecognizer(continuous=True), _FakeWSSynthesizer())):
+            async with websockets.connect(url + '/ws/devices/living-speaker/voice', additional_headers={'Authorization': 'Bearer speaker-secret'}, **self.connection_options) as ws:
+                await ws.send(json.dumps({'type': 'hello', 'audio_protocol': 2, 'codec': 'pcm_s16le'})); await ws.recv()
+                task = ScheduledTaskRecord(path=root/'tasks'/'reminder.json', run_at=datetime.now(timezone.utc), kind='task', payload={'id': 'reminder', 'title': 'Reminder', 'task': {'type': 'message', 'content': '喝水。'}, 'delivery': {'channel': 'voice', 'user_id': 'alice', 'target': {'device_id': 'living-speaker', 'user_id': 'alice'}}})
+                result = await host._execute_task(task)
+                delivery = asyncio.create_task(host._deliver_task(task, result, 'run-1'))
+                self.assertGreater(await self.playback(ws), 0)
+                self.assertTrue((await delivery)['accepted'])
+                await ws.send(json.dumps({'type': 'stop'}))
