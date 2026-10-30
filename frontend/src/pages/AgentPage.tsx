@@ -350,7 +350,7 @@ export function AgentPage() {
               <a className="runtime-detail-link" href="/channels">Channels <ChevronRight size={14} aria-hidden="true" /></a>
             </div>
             <div className="agent-setting-list">
-              {(setupSchema?.features || []).map((feature) => (
+              {(setupSchema?.features || []).filter((feature) => feature.id !== "observability").map((feature) => (
                 <SetupFeatureRow key={feature.id} feature={feature} onEdit={openSetupFeature} />
               ))}
               <button type="button" className="agent-setting-row" onClick={() => setVoiceSettingsOpen(true)}>
@@ -358,6 +358,9 @@ export function AgentPage() {
                 <span className="agent-setting-value">{voiceConfigured === null ? "Loading…" : voiceConfigured ? "Configured" : "Needs setup"}</span>
                 <ChevronRight size={16} className="agent-setting-chevron" aria-hidden="true" />
               </button>
+              {(setupSchema?.features || []).filter((feature) => feature.id === "observability").map((feature) => (
+                <SetupFeatureRow key={feature.id} feature={feature} onEdit={openSetupFeature} />
+              ))}
             </div>
             {!setupSchema ? <p className="wizard-hint">Loading configuration…</p> : null}
           </div>
