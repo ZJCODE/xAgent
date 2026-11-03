@@ -162,6 +162,8 @@ def create_runtime_heartbeat(
     subconscious_delivery_sink: Optional[Callable[..., Any]] = None,
     subconscious_deliverable_channels: Optional[Iterable[str]] = None,
     subconscious_contact_deliverable: Optional[Callable[..., bool]] = None,
+    trigger_bus: Any = None,
+    fast_path: Any = None,
 ) -> Optional[RuntimeHeartbeat]:
     config = RuntimeHeartbeatConfig.from_mapping(runtime_config)
     if not config.enabled:
@@ -180,6 +182,8 @@ def create_runtime_heartbeat(
             delivery_sink=subconscious_delivery_sink,
             deliverable_channels=subconscious_deliverable_channels,
             contact_deliverable=subconscious_contact_deliverable,
+            trigger_bus=trigger_bus,
+            fast_path=fast_path,
             logger_=logger_,
         )
 

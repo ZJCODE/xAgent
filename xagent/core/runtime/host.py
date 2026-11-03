@@ -83,6 +83,8 @@ class RuntimeHost:
         self.heartbeat = None
         self.scheduler = None
         self.device_service = None
+        self.trigger_bus = None
+        self.router = None
         self.shutdown_timeout = 30.0
         self._shutdown_pending: set[asyncio.Task] = set()
         self._ownership_finalized = False
@@ -209,11 +211,29 @@ class RuntimeHost:
                 shutdown_timeout_seconds=10.0,
             )
             await self.scheduler.start()
+            from .triggers import TriggerBus, FastPathFilter
+            from .router import AgentRouter
+            from .async_jobs import AsyncJobRunner
+
+            self.trigger_bus = TriggerBus()
+            fast_path = FastPathFilter(
+                allowed_channels=self._deliverable_channels(),
+                quiet_hours=AgentConfig.SUBCONSCIOUS_QUIET_HOURS,
+                paired_device_ids=self._paired_device_ids,
+                decision_log=[],
+            )
+            self.router = AgentRouter(
+                trigger_bus=self.trigger_bus,
+                fast_path=fast_path,
+                job_runner=AsyncJobRunner(self.trigger_bus),
+            )
             self.heartbeat = create_runtime_heartbeat(
                 self.agent, self.runner.config.get("runtime"),
                 subconscious_delivery_sink=self._deliver_subconscious,
                 subconscious_deliverable_channels=self._deliverable_channels(),
                 subconscious_contact_deliverable=self._is_subconscious_contact_deliverable,
+                trigger_bus=self.trigger_bus,
+                fast_path=fast_path,
             )
             if self.heartbeat is not None:
                 await self.heartbeat.start()
@@ -292,6 +312,16 @@ class RuntimeHost:
             channels.add("voice")
         return channels
 
+    def _paired_device_ids(self) -> set[str]:
+        service = self.device_service
+        if service is None:
+            return set()
+        credentials = getattr(service, "credentials", None)
+        digests = getattr(credentials, "digests", None)
+        if isinstance(digests, dict):
+            return {str(device_id).strip() for device_id in digests if str(device_id).strip()}
+        return set()
+
     def _is_subconscious_contact_deliverable(self, contact: Any) -> bool:
         channel = str(getattr(contact, "channel", "") or "").strip().lower()
         user_id = str(getattr(contact, "user_id", "") or "").strip()
@@ -319,9 +349,13 @@ class RuntimeHost:
         return True
 
     def _sync_delivery_channels(self) -> None:
+        channels = self._deliverable_channels()
         loop = getattr(self.heartbeat, "subconscious_loop", None)
         if loop is not None:
-            loop.set_deliverable_channels(self._deliverable_channels())
+            loop.set_deliverable_channels(channels)
+        router = self.router
+        if router is not None and getattr(router, "fast_path", None) is not None:
+            router.fast_path.set_allowed_channels(channels)
         if self.scheduler is not None:
             self.scheduler.wake()
 

@@ -254,6 +254,9 @@ class AgentConfig:
     # stale_streak by 1, so alone time can restore inner life. 0 disables.
     SUBCONSCIOUS_HABITUATION_RECOVERY_SECONDS = 3600
     SUBCONSCIOUS_STATE_FILENAME = "subconscious_state.json"
+    # Optional quiet hours for proactive outbound (start_hour, end_hour) in local
+    # time. None disables. Wraps midnight when start > end, e.g. (23, 7).
+    SUBCONSCIOUS_QUIET_HOURS = None
 
     # ============================================================
     # 11. Tool Policy Baseline

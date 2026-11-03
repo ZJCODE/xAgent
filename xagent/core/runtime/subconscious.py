@@ -28,6 +28,13 @@ except ImportError:  # pragma: no cover - POSIX platforms
 from ..config import AgentConfig
 from ..providers import maintenance_reasoning_config
 from .task_receipts import sync_task_directory as _fsync_directory
+from .triggers import (
+    FastPathDecision,
+    FastPathFilter,
+    TriggerBus,
+    TriggerKind,
+    make_trigger,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -254,6 +261,9 @@ class SubconsciousLoop:
         delivery_sink: Optional[Callable[[SubconsciousDelivery], Awaitable[None] | None]] = None,
         deliverable_channels: Optional[Iterable[str]] = None,
         contact_deliverable: Optional[Callable[[ContactEntry], bool]] = None,
+        trigger_bus: Optional[TriggerBus] = None,
+        fast_path: Optional[FastPathFilter] = None,
+        quiet_hours: Optional[Iterable[int]] = None,
         logger_: Optional[logging.Logger] = None,
     ) -> None:
         self._agent = agent
@@ -263,6 +273,16 @@ class SubconsciousLoop:
         self._delivery_sink = delivery_sink
         self._deliverable_channels = self._normalize_deliverable_channels(deliverable_channels)
         self._contact_deliverable = contact_deliverable
+        self._trigger_bus = trigger_bus
+        self._fast_path_log: list[dict] = []
+        self._fast_path = fast_path or FastPathFilter(
+            allowed_channels=self._deliverable_channels or None,
+            quiet_hours=quiet_hours if quiet_hours is not None else AgentConfig.SUBCONSCIOUS_QUIET_HOURS,
+            decision_log=self._fast_path_log,
+            logger_=logger_ or logger,
+        )
+        if fast_path is None and self._deliverable_channels:
+            self._fast_path.set_allowed_channels(self._deliverable_channels)
         self._logger = logger_ or logger
         self._enabled = AgentConfig.SUBCONSCIOUS_ENABLED
         self._probability = (
@@ -297,6 +317,7 @@ class SubconsciousLoop:
 
     def set_deliverable_channels(self, channels: Iterable[str]) -> None:
         self._deliverable_channels = self._normalize_deliverable_channels(channels)
+        self._fast_path.set_allowed_channels(self._deliverable_channels)
 
     def set_contact_deliverable(
         self,
@@ -364,6 +385,23 @@ class SubconsciousLoop:
             self._recover_habituation_from_solitude()
 
         if not self.should_trigger():
+            return
+
+        timer_trigger = make_trigger(
+            source="subconscious",
+            kind=TriggerKind.TIMER,
+            payload_summary="subconscious heartbeat tick",
+            payload={"experience_cursor": experience_cursor},
+        )
+        if self._trigger_bus is not None:
+            self._trigger_bus.enqueue(timer_trigger)
+        timer_decision = self._fast_path.evaluate(timer_trigger)
+        if timer_decision.decision is FastPathDecision.DROP:
+            self._logger.info(
+                "Subconscious tick dropped by Fast Path: rule=%s reason=%s",
+                timer_decision.rule,
+                timer_decision.reason,
+            )
             return
 
         self._logger.info("Subconscious thought triggered – generating thought")
@@ -926,12 +964,70 @@ class SubconsciousLoop:
         expected_cursor: Optional[int],
     ) -> bool:
         """Deliver a worthy thought. Return True only when the sink accepted it."""
+        candidate = make_trigger(
+            source="subconscious",
+            kind=TriggerKind.SUBCONSCIOUS_CANDIDATE,
+            actor_id=str(recipient_hint or "").strip() or None,
+            channel=None,
+            payload_summary=(external_content or "")[:240],
+            payload={
+                "recipient_hint": recipient_hint,
+                "external_content": external_content,
+                "internal_content": internal_content,
+                "worthy": True,
+            },
+        )
+        # Fast Path before Slow Path recipient resolution: empty hint, quiet
+        # hours, and channel allowlist drops stay explainable.
+        fast = self._fast_path.evaluate(candidate)
+        if self._trigger_bus is not None:
+            # Keep a trace of candidates even when dropped.
+            self._trigger_bus.enqueue(candidate)
+        if fast.decision is FastPathDecision.DROP:
+            self._logger.info(
+                "Subconscious delivery dropped by Fast Path: rule=%s reason=%s hint=%r",
+                fast.rule,
+                fast.reason,
+                recipient_hint,
+            )
+            return False
+
         contacts = self._filter_deliverable_contacts(load_contacts(self._contacts_file))
         contacts = await self._alias_contacts_for_routing(contacts)
         recipient = self._pick_recipient(contacts, recipient_hint)
 
         if recipient is None:
-            self._logger.info("No suitable recipient for subconscious thought")
+            self._logger.info(
+                "No suitable recipient for subconscious thought (hint=%r deliverable=%s)",
+                recipient_hint,
+                sorted(self._deliverable_channels),
+            )
+            return False
+
+        # Channel-scoped Fast Path after recipient is known.
+        channel_trigger = make_trigger(
+            source="subconscious",
+            kind=TriggerKind.SUBCONSCIOUS_CANDIDATE,
+            actor_id=recipient.user_id,
+            channel=recipient.channel,
+            payload_summary=(external_content or "")[:240],
+            payload={
+                "recipient_hint": recipient_hint,
+                "recipient_channel": recipient.channel,
+                "recipient_user_id": recipient.user_id,
+            },
+            trigger_id=candidate.id,
+        )
+        channel_fast = self._fast_path.evaluate(channel_trigger)
+        if channel_fast.decision is FastPathDecision.DROP:
+            self._logger.info(
+                "Subconscious delivery dropped by Fast Path after recipient: "
+                "rule=%s reason=%s channel=%s user_id=%s",
+                channel_fast.rule,
+                channel_fast.reason,
+                recipient.channel,
+                recipient.user_id,
+            )
             return False
 
         if self._delivery_sink is None:

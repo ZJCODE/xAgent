@@ -37,6 +37,18 @@ from .tasks import (
     update_scheduled_task,
 )
 
+from .triggers import (
+    FastPathDecision,
+    FastPathFilter,
+    FastPathResult,
+    Trigger,
+    TriggerBus,
+    TriggerKind,
+    make_trigger,
+)
+from .async_jobs import AsyncJobRunner, JobHandle, JobStatus
+from .router import AgentRouter, RouterAdmission
+
 __all__ = [
     "RuntimeHeartbeat",
     "RuntimeHeartbeatConfig",
@@ -72,4 +84,16 @@ __all__ = [
     "retry_scheduled_task",
     "scheduled_delivery_context",
     "update_scheduled_task",
+    "FastPathDecision",
+    "FastPathFilter",
+    "FastPathResult",
+    "Trigger",
+    "TriggerBus",
+    "TriggerKind",
+    "make_trigger",
+    "AsyncJobRunner",
+    "JobHandle",
+    "JobStatus",
+    "AgentRouter",
+    "RouterAdmission",
 ]
