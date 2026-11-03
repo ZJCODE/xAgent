@@ -415,3 +415,95 @@ class RouterJobResultDrainTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(handled), 1)
         self.assertEqual(handled[0]["job_id"], handle.job_id)
         self.assertEqual(handled[0]["status"], "completed")
+
+
+class AutoBackgroundLongWaitTests(unittest.IsolatedAsyncioTestCase):
+    async def test_auto_upgrades_sleep_when_async_enabled(self):
+        from xagent.tools.shell_tool import create_workspace_run_command_tool
+
+        bus = TriggerBus()
+        runner = AsyncJobRunner(bus)
+        started = []
+
+        def starter(name, work, **kwargs):
+            handle = runner.start(name, work, **kwargs)
+            started.append(handle.job_id)
+            return handle
+
+        tool = create_workspace_run_command_tool(
+            "/tmp",
+            job_starter=starter,
+            async_jobs_enabled=True,
+            max_active=4,
+            context_provider=lambda: {"channel": "api", "actor_id": "jun", "thread_id": None},
+            active_count_provider=lambda: runner.active_count,
+        )
+        t0 = asyncio.get_running_loop().time()
+        result = await tool(command="sleep 5", background=False, timeout=30)
+        elapsed = asyncio.get_running_loop().time() - t0
+        self.assertLess(elapsed, 0.2)
+        self.assertEqual(result.get("status"), "started")
+        self.assertTrue(result.get("background"))
+        self.assertTrue(result.get("auto_background"))
+        self.assertIn("JOB_RESULT", result.get("guidance", ""))
+        self.assertEqual(started, [result["job_id"]])
+        finished = await runner.wait(result["job_id"], timeout=8.0)
+        self.assertEqual(finished.status, JobStatus.COMPLETED)
+
+    async def test_auto_upgrades_poll_loop(self):
+        from xagent.tools.shell_tool import create_workspace_run_command_tool
+
+        bus = TriggerBus()
+        runner = AsyncJobRunner(bus)
+
+        def starter(name, work, **kwargs):
+            return runner.start(name, work, **kwargs)
+
+        tool = create_workspace_run_command_tool(
+            "/tmp",
+            job_starter=starter,
+            async_jobs_enabled=True,
+            context_provider=lambda: {"channel": "api", "actor_id": "jun"},
+            active_count_provider=lambda: runner.active_count,
+        )
+        cmd = "for i in $(seq 1 3); do sleep 0.01; done"
+        # seq loop + sleep matches poll heuristic even if each sleep is short
+        result = await tool(command=cmd, background=False, timeout=120)
+        self.assertEqual(result.get("status"), "started")
+        self.assertTrue(result.get("auto_background"))
+        await runner.wait(result["job_id"], timeout=2.0)
+
+    async def test_refuse_foreground_when_enabled_without_starter(self):
+        from xagent.tools.shell_tool import create_workspace_run_command_tool
+
+        tool = create_workspace_run_command_tool(
+            "/tmp",
+            async_jobs_enabled=True,
+        )
+        result = await tool(command="sleep 30", background=False, timeout=60)
+        self.assertEqual(result.get("status"), "refused_foreground_wait")
+        self.assertEqual(result.get("return_code"), -1)
+        self.assertIn("background=true", result.get("stderr", ""))
+
+    async def test_short_command_stays_foreground(self):
+        from xagent.tools.shell_tool import create_workspace_run_command_tool
+
+        bus = TriggerBus()
+        runner = AsyncJobRunner(bus)
+        started = []
+
+        def starter(name, work, **kwargs):
+            handle = runner.start(name, work, **kwargs)
+            started.append(handle.job_id)
+            return handle
+
+        tool = create_workspace_run_command_tool(
+            "/tmp",
+            job_starter=starter,
+            async_jobs_enabled=True,
+            active_count_provider=lambda: runner.active_count,
+        )
+        result = await tool(command="echo stay-fg", background=False, timeout=30)
+        self.assertEqual(result.get("return_code"), 0)
+        self.assertIn("stay-fg", result.get("stdout", ""))
+        self.assertEqual(started, [])

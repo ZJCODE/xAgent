@@ -235,10 +235,14 @@ function ChatPanel({
           <StatusBadge
             tone={chatStatus === "sending" ? "info" : "muted"}
             className="chat-status-badge"
-            title={chatStatus === "sending" ? "Chat running" : "Chat idle"}
+            title={
+              chatStatus === "sending"
+                ? "Chat running — you can keep sending; replies may join this turn"
+                : "Chat idle"
+            }
           >
             <Activity size={14} />
-            <span className="status-badge-label">{chatStatus === "sending" ? "Chat running" : "Chat idle"}</span>
+            <span className="status-badge-label">{chatStatus === "sending" ? "Chat running · 可继续发" : "Chat idle"}</span>
           </StatusBadge>
         </div>
       </div>

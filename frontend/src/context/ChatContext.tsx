@@ -33,6 +33,9 @@ type SocketOptions = {
   userMessageId?: string;
 };
 
+/** Shown when a follow-up is steered into a busy turn (empty assistant bubble). */
+const STEERED_ACK_CONTENT = "已收到，做完这步马上回你";
+
 type PanelId = ChatPanelState["id"];
 
 interface ChatContextValue {
@@ -425,7 +428,15 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             sending: followup ? panel.sending : false,
             messages: messages.flatMap((message) => {
               if (!localMessageIds.has(message.id) || !message.pending) return [message];
-              if ((aborted || steeredStream) && !message.content) return [];
+              if (aborted && !message.content) return [];
+              if (steeredStream && !message.content) {
+                return [{
+                  ...message,
+                  pending: false,
+                  content: STEERED_ACK_CONTENT,
+                  meta: message.meta || "queued",
+                }];
+              }
               return [{
                 ...message,
                 pending: false,
@@ -475,7 +486,16 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           if (followupUserId) {
             patchPanel(panelId, (panel) => ({
               ...panel,
-              messages: placeSteeredUser(panel.messages, followupUserId),
+              messages: placeSteeredUser(panel.messages, followupUserId).map((message) =>
+                message.id === assistantId && !message.content
+                  ? {
+                      ...message,
+                      pending: false,
+                      content: STEERED_ACK_CONTENT,
+                      meta: message.meta || "queued",
+                    }
+                  : message,
+              ),
             }));
           }
           return;
