@@ -85,6 +85,8 @@ class RuntimeHost:
         self.device_service = None
         self.trigger_bus = None
         self.router = None
+        self.async_jobs_config = None
+        self._router_unsub = None
         self.shutdown_timeout = 30.0
         self._shutdown_pending: set[asyncio.Task] = set()
         self._ownership_finalized = False
@@ -213,8 +215,11 @@ class RuntimeHost:
             await self.scheduler.start()
             from .triggers import TriggerBus, FastPathFilter
             from .router import AgentRouter
-            from .async_jobs import AsyncJobRunner
+            from .async_jobs import AsyncJobRunner, AsyncJobsConfig
 
+            self.async_jobs_config = AsyncJobsConfig.from_mapping(
+                self.runner.config.get("runtime") if self.runner is not None else None
+            )
             self.trigger_bus = TriggerBus()
             fast_path = FastPathFilter(
                 allowed_channels=self._deliverable_channels(),
@@ -226,7 +231,10 @@ class RuntimeHost:
                 trigger_bus=self.trigger_bus,
                 fast_path=fast_path,
                 job_runner=AsyncJobRunner(self.trigger_bus),
+                job_result_handler=self._on_job_result,
             )
+            if self.async_jobs_config.enabled:
+                self._bind_async_run_command()
             self.heartbeat = create_runtime_heartbeat(
                 self.agent, self.runner.config.get("runtime"),
                 subconscious_delivery_sink=self._deliver_subconscious,
@@ -238,6 +246,11 @@ class RuntimeHost:
             if self.heartbeat is not None:
                 await self.heartbeat.start()
             self.runtime_ready = True
+            if self.async_jobs_config is not None and self.async_jobs_config.enabled:
+                self._tasks["router-pump"] = asyncio.create_task(
+                    self._router_pump_loop(),
+                    name="xagent-router-pump",
+                )
             self.lifecycle_timings["startup_seconds"] = round(time.monotonic() - startup_started, 3)
             self.state = "degraded" if any(row["state"] in {"failed", "reconnecting"} for row in self.channel_status.values()) else "running"
             self.paths.pid_path.parent.mkdir(parents=True, exist_ok=True)
@@ -706,7 +719,223 @@ class RuntimeHost:
             return await self.api.tasks.deliver(task, result, run_id)
         return await adapter.deliver_scheduled_task(task, result, run_id)
 
+    def _async_job_context(self) -> dict:
+        """Channel/actor/thread for Worker metadata from the live turn."""
+        from . import current_delivery_context
+
+        channel = None
+        actor_id = None
+        thread_id = None
+        delivery = current_delivery_context()
+        if delivery is not None:
+            channel = delivery.channel
+            actor_id = delivery.user_id or None
+            metadata = delivery.metadata if isinstance(delivery.metadata, dict) else {}
+            thread_id = metadata.get("room_name") or metadata.get("thread_id")
+        ticket = getattr(getattr(self.agent, "inbox", None), "current_ticket", None)
+        if ticket is not None:
+            channel = channel or ticket.channel
+            actor_id = actor_id or ticket.user_id
+            thread_id = thread_id or ticket.room_name
+        return {
+            "channel": channel,
+            "actor_id": actor_id,
+            "thread_id": thread_id,
+        }
+
+    def _bind_async_run_command(self) -> None:
+        """Late-bind run_command so background work can call Router.start_job."""
+        if self.agent is None or self.router is None or self.async_jobs_config is None:
+            return
+        if not self.async_jobs_config.enabled:
+            return
+        from ...tools.shell_tool import create_workspace_run_command_tool
+
+        workspace = str(
+            getattr(self.agent, "workspace_dir", "")
+            or getattr(self.runner, "workspace_dir", "")
+            or ""
+        )
+        if not workspace:
+            logger.warning("async_jobs enabled but workspace_dir missing; run_command not rebound")
+            return
+        tool = create_workspace_run_command_tool(
+            default_working_directory=workspace,
+            job_starter=self.router.start_job,
+            async_jobs_enabled=True,
+            max_active=self.async_jobs_config.max_active,
+            context_provider=self._async_job_context,
+            active_count_provider=lambda: self.router.jobs.active_count,
+        )
+        self.agent.tool_manager.replace_tool(tool)
+        logger.info(
+            "run_command rebound for async Workers (max_active=%s)",
+            self.async_jobs_config.max_active,
+        )
+
+    async def _router_pump_loop(self) -> None:
+        """Drain TriggerBus periodically and on enqueue so JOB_RESULT reaches the main loop."""
+        if self.router is None or self.trigger_bus is None or self.async_jobs_config is None:
+            return
+        wake = asyncio.Event()
+
+        def _on_trigger(_trigger) -> None:
+            wake.set()
+
+        self._router_unsub = self.trigger_bus.subscribe(_on_trigger)
+        interval = float(self.async_jobs_config.pump_interval_seconds)
+        try:
+            while not self._stop_event.is_set():
+                wake.clear()
+                try:
+                    await self.router.drain_and_route()
+                except Exception:
+                    logger.exception("Router pump drain_and_route failed")
+                if self._stop_event.is_set():
+                    break
+                try:
+                    await asyncio.wait_for(wake.wait(), timeout=interval)
+                except asyncio.TimeoutError:
+                    pass
+        finally:
+            unsub = self._router_unsub
+            self._router_unsub = None
+            if callable(unsub):
+                unsub()
+
+    async def _on_job_result(self, trigger) -> None:
+        """Route Worker completion into a new scheduled-style formal turn (never Worker speech)."""
+        if self.agent is None or not self.runtime_ready:
+            logger.warning(
+                "Dropping JOB_RESULT while runtime is not ready job_id=%s",
+                (trigger.payload or {}).get("job_id"),
+            )
+            return
+        job_id = str((trigger.payload or {}).get("job_id") or trigger.id)
+        task_name = f"job-result-{job_id}"
+        existing = self._tasks.get(task_name)
+        if existing is not None and not existing.done():
+            return
+        self._tasks[task_name] = asyncio.create_task(
+            self._run_job_result_turn(trigger),
+            name=f"xagent-{task_name}",
+        )
+
+    def _format_job_result_prompt(self, trigger) -> str:
+        from ..inbox import SCHEDULED_AGENT_PROMPT_PREFIX
+
+        payload = trigger.payload if isinstance(trigger.payload, dict) else {}
+        metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+        status = str(payload.get("status") or "completed")
+        job_id = str(payload.get("job_id") or "")
+        name = str(payload.get("name") or "job")
+        error = str(payload.get("error") or "").strip()
+        result = payload.get("result")
+        summary = str(trigger.payload_summary or "").strip()
+        command = metadata.get("command")
+        lines = [
+            f"status={status}",
+            f"job_id={job_id}",
+            f"name={name}",
+        ]
+        if command:
+            lines.append(f"command={command}")
+        if error:
+            lines.append(f"error={error}")
+        if summary and summary not in lines:
+            lines.append(f"summary={summary}")
+        if result is not None and result != summary:
+            lines.append(f"result={result!r}"[:2000])
+        body = (
+            "An asynchronous background job finished. Tell the user what happened "
+            "in your own voice (you are still the same Agent). Keep it brief; include "
+            "important stdout/stderr when useful. Do not pretend a separate worker spoke.\n\n"
+            + "\n".join(lines)
+        )
+        return SCHEDULED_AGENT_PROMPT_PREFIX + body
+
+    async def _run_job_result_turn(self, trigger) -> None:
+        from . import (
+            ScheduledDeliveryContext,
+            collect_scheduled_turn_events,
+            scheduled_delivery_context,
+        )
+
+        payload = trigger.payload if isinstance(trigger.payload, dict) else {}
+        actor_id = str(trigger.actor_id or AgentConfig.DEFAULT_USER_ID).strip() or AgentConfig.DEFAULT_USER_ID
+        channel = str(trigger.channel or "api").strip().lower() or "api"
+        if channel not in {"api", "weixin", "voice"}:
+            channel = "api"
+        thread_id = trigger.thread_id
+        prompt = self._format_job_result_prompt(trigger)
+        context = ScheduledDeliveryContext(
+            channel=channel,
+            user_id=actor_id,
+            target={"user_id": actor_id},
+            metadata={
+                "source": "async_job",
+                "job_id": payload.get("job_id"),
+                "job_name": payload.get("name"),
+                "job_status": payload.get("status"),
+                "room_name": thread_id,
+                "thread_id": thread_id,
+            },
+        )
+        try:
+            with scheduled_delivery_context(context):
+                content, _attachments, last_error = await collect_scheduled_turn_events(
+                    self.agent.chat_events(
+                        user_message=prompt,
+                        user_id=actor_id,
+                        stream=False,
+                        channel=channel,
+                        room_name=thread_id,
+                        inbox_kind="scheduled_turn",
+                        extra_message_metadata={
+                            "source": "async_job",
+                            "job_id": payload.get("job_id"),
+                        },
+                    )
+                )
+        except Exception:
+            logger.exception(
+                "Job result turn failed job_id=%s actor=%s channel=%s",
+                payload.get("job_id"),
+                actor_id,
+                channel,
+            )
+            return
+        text = str(content or "").strip()
+        if not text:
+            if last_error:
+                logger.warning(
+                    "Job result turn produced no content job_id=%s error=%s",
+                    payload.get("job_id"),
+                    last_error,
+                )
+            return
+        if channel == "api" and self.api is not None:
+            try:
+                await self.api.delivery.push(
+                    actor_id,
+                    {
+                        "type": "job_result_message",
+                        "content": text,
+                        "job": {
+                            "job_id": payload.get("job_id"),
+                            "name": payload.get("name"),
+                            "status": payload.get("status"),
+                        },
+                    },
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to push job result to API delivery job_id=%s",
+                    payload.get("job_id"),
+                )
+
     async def _deliver_subconscious(self, delivery):
+
         channel = delivery.recipient.channel
         if channel == "voice":
             adapter = self._resolve_voice_adapter(
@@ -952,6 +1181,11 @@ class RuntimeHost:
         for name, owner in (("heartbeat", self.heartbeat), ("scheduler", self.scheduler)):
             if owner is not None:
                 self._tasks[f"{name}-stop"] = asyncio.create_task(owner.stop())
+        if self.router is not None:
+            self._tasks["async-jobs-stop"] = asyncio.create_task(
+                self.router.jobs.shutdown(timeout=5.0),
+                name="xagent-async-jobs-stop",
+            )
         if self.agent is not None:
             deadline = time.monotonic() + 15.0
             while (self.agent.inbox.busy or self.agent.inbox.pending_count) and time.monotonic() < deadline:

@@ -1,13 +1,17 @@
 import asyncio
+import copy
 import functools
 import logging
-from typing import Optional
+from typing import Any, Callable, Dict, Optional
 
 from xagent.core.config import AgentConfig
 from xagent.core.tooling.guards import WorkspaceEscapeError, resolve_workspace_cwd
 from xagent.utils.tool_decorator import function_tool
 
 logger = logging.getLogger(__name__)
+
+JobStarter = Callable[..., Any]
+ContextProvider = Callable[[], Dict[str, Any]]
 
 
 def _truncate(text: str, max_size: int) -> str:
@@ -20,29 +24,54 @@ def _truncate(text: str, max_size: int) -> str:
     return truncated + "\n[truncated]"
 
 
+_RUN_COMMAND_DESCRIPTION = (
+    "Run a scoped shell command and return stdout, stderr, and exit code. "
+    "Default cwd is the agent workspace; routine reads and edits there are fine. "
+    "Prefer read-only inspection first. Get explicit approval before destructive "
+    "operations (large deletes, irreversible overwrites), sensitive work, or any "
+    "mutation outside the workspace. Never expose secrets. Output is capped and truncated. "
+    "For long-blocking work (sleep, downloads, builds, apt, docker build), set "
+    "background=true so the main turn can keep talking; you will get a job_id and "
+    "a later turn reports completion."
+)
+
+_RUN_COMMAND_PARAM_DESCRIPTIONS = {
+    "command": (
+        "Shell command to execute. Keep it specific and bounded."
+    ),
+    "working_directory": "Optional cwd; defaults to the agent workspace in standard runtimes.",
+    "timeout": "Maximum seconds, 1-300. Defaults to 30. Applies to foreground runs and to the background Worker.",
+    "background": (
+        "When true, start the command as an async Worker and return immediately with "
+        "job_id/status=started. Use for long sleeps, downloads, builds, and other "
+        "work that would block the conversation. Requires runtime.async_jobs.enabled."
+    ),
+}
+
+
 @function_tool(
     name="run_command",
-    description=(
-        "Run a scoped shell command and return stdout, stderr, and exit code. "
-        "Default cwd is the agent workspace; routine reads and edits there are fine. "
-        "Prefer read-only inspection first. Get explicit approval before destructive "
-        "operations (large deletes, irreversible overwrites), sensitive work, or any "
-        "mutation outside the workspace. Never expose secrets. Output is capped and truncated."
-    ),
-    param_descriptions={
-        "command": (
-            "Shell command to execute. Keep it specific and bounded."
-        ),
-        "working_directory": "Optional cwd; defaults to the agent workspace in standard runtimes.",
-        "timeout": "Maximum seconds, 1-300. Defaults to 30.",
-    },
+    description=_RUN_COMMAND_DESCRIPTION,
+    param_descriptions=_RUN_COMMAND_PARAM_DESCRIPTIONS,
 )
 async def run_command(
     command: str,
     working_directory: Optional[str] = None,
     timeout: int = 30,
+    background: bool = False,
 ) -> dict:
     """Execute a shell command and return stdout, stderr, and return code."""
+    if background:
+        return {
+            "stdout": "",
+            "stderr": (
+                "background=true requires runtime.async_jobs.enabled and a bound "
+                "Router job starter; refusing to run synchronously so miswiring is visible."
+            ),
+            "return_code": -1,
+            "background": True,
+            "status": "unavailable",
+        }
     return await _run_shell_command(
         command=command,
         working_directory=working_directory,
@@ -50,7 +79,15 @@ async def run_command(
     )
 
 
-def create_workspace_run_command_tool(default_working_directory: str):
+def create_workspace_run_command_tool(
+    default_working_directory: str,
+    *,
+    job_starter: Optional[JobStarter] = None,
+    async_jobs_enabled: bool = False,
+    max_active: Optional[int] = None,
+    context_provider: Optional[ContextProvider] = None,
+    active_count_provider: Optional[Callable[[], int]] = None,
+):
     """Create a run_command tool whose default cwd is the agent workspace."""
 
     @functools.wraps(run_command)
@@ -58,7 +95,20 @@ def create_workspace_run_command_tool(default_working_directory: str):
         command: str,
         working_directory: Optional[str] = None,
         timeout: int = 30,
+        background: bool = False,
     ) -> dict:
+        if background:
+            return await _start_background_shell(
+                command=command,
+                working_directory=working_directory or default_working_directory,
+                timeout=timeout,
+                workspace_root=default_working_directory,
+                job_starter=job_starter,
+                async_jobs_enabled=async_jobs_enabled,
+                max_active=max_active,
+                context_provider=context_provider,
+                active_count_provider=active_count_provider,
+            )
         return await _run_shell_command(
             command=command,
             working_directory=working_directory or default_working_directory,
@@ -66,9 +116,102 @@ def create_workspace_run_command_tool(default_working_directory: str):
             workspace_root=default_working_directory,
         )
 
-    workspace_run_command.tool_spec = run_command.tool_spec
+    tool_spec = copy.deepcopy(run_command.tool_spec)
+    workspace_run_command.tool_spec = tool_spec
     workspace_run_command.__name__ = run_command.__name__
     return workspace_run_command
+
+
+async def _start_background_shell(
+    *,
+    command: str,
+    working_directory: Optional[str],
+    timeout: int,
+    workspace_root: Optional[str],
+    job_starter: Optional[JobStarter],
+    async_jobs_enabled: bool,
+    max_active: Optional[int],
+    context_provider: Optional[ContextProvider],
+    active_count_provider: Optional[Callable[[], int]],
+) -> dict:
+    if not async_jobs_enabled or job_starter is None:
+        return {
+            "stdout": "",
+            "stderr": (
+                "background=true requires runtime.async_jobs.enabled and a bound "
+                "Router job starter; refusing to run synchronously so miswiring is visible."
+            ),
+            "return_code": -1,
+            "background": True,
+            "status": "unavailable",
+            "command": command,
+        }
+    if max_active is not None and active_count_provider is not None:
+        try:
+            active = int(active_count_provider())
+        except Exception:
+            active = 0
+        if active >= int(max_active):
+            return {
+                "stdout": "",
+                "stderr": f"async job limit reached ({max_active}); try again when a Worker finishes",
+                "return_code": -1,
+                "background": True,
+                "status": "rejected",
+                "command": command,
+            }
+
+    context = {}
+    if context_provider is not None:
+        try:
+            context = dict(context_provider() or {})
+        except Exception as exc:
+            logger.warning("async job context_provider failed: %s", exc)
+            context = {}
+
+    async def work() -> dict:
+        return await _run_shell_command(
+            command=command,
+            working_directory=working_directory,
+            timeout=timeout,
+            workspace_root=workspace_root,
+        )
+
+    try:
+        handle = job_starter(
+            "run_command",
+            work,
+            channel=context.get("channel"),
+            actor_id=context.get("actor_id"),
+            thread_id=context.get("thread_id"),
+            metadata={
+                "command": command,
+                "cwd": working_directory,
+                "timeout": timeout,
+                "tool": "run_command",
+            },
+        )
+    except Exception as exc:
+        logger.error("Failed to start background run_command: %s", exc)
+        return {
+            "stdout": "",
+            "stderr": f"failed to start background job: {exc}",
+            "return_code": -1,
+            "background": True,
+            "status": "failed",
+            "command": command,
+        }
+
+    payload = handle.to_started_payload() if hasattr(handle, "to_started_payload") else {
+        "job_id": getattr(handle, "job_id", ""),
+        "status": getattr(getattr(handle, "status", None), "value", "started"),
+    }
+    return {
+        **payload,
+        "background": True,
+        "command": command,
+        "status": "started",
+    }
 
 
 async def _run_shell_command(

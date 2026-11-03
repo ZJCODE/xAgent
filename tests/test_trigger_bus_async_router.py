@@ -312,3 +312,106 @@ class SubconsciousFastPathIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class AsyncJobsConfigTests(unittest.TestCase):
+    def test_from_mapping_defaults_disabled(self):
+        from xagent.core.runtime.async_jobs import AsyncJobsConfig
+
+        cfg = AsyncJobsConfig.from_mapping(None)
+        self.assertFalse(cfg.enabled)
+        self.assertGreater(cfg.max_active, 0)
+
+    def test_from_mapping_reads_nested_runtime(self):
+        from xagent.core.runtime.async_jobs import AsyncJobsConfig
+
+        cfg = AsyncJobsConfig.from_mapping(
+            {"async_jobs": {"enabled": True, "max_active": 2, "pump_interval_seconds": 0.5}}
+        )
+        self.assertTrue(cfg.enabled)
+        self.assertEqual(cfg.max_active, 2)
+        self.assertEqual(cfg.pump_interval_seconds, 0.5)
+
+
+class BackgroundRunCommandTests(unittest.IsolatedAsyncioTestCase):
+    async def test_background_without_starter_errors(self):
+        from xagent.tools.shell_tool import create_workspace_run_command_tool, run_command
+
+        bare = await run_command(command="echo hi", background=True)
+        self.assertEqual(bare.get("status"), "unavailable")
+        self.assertEqual(bare.get("return_code"), -1)
+
+        tool = create_workspace_run_command_tool("/tmp")
+        result = await tool(command="sleep 30", background=True, timeout=5)
+        self.assertEqual(result.get("status"), "unavailable")
+        self.assertTrue(result.get("background"))
+
+    async def test_background_start_returns_quickly(self):
+        from xagent.tools.shell_tool import create_workspace_run_command_tool
+
+        bus = TriggerBus()
+        runner = AsyncJobRunner(bus)
+        started = []
+
+        def starter(name, work, **kwargs):
+            handle = runner.start(name, work, **kwargs)
+            started.append(handle.job_id)
+            return handle
+
+        tool = create_workspace_run_command_tool(
+            "/tmp",
+            job_starter=starter,
+            async_jobs_enabled=True,
+            max_active=4,
+            context_provider=lambda: {"channel": "api", "actor_id": "jun", "thread_id": None},
+            active_count_provider=lambda: runner.active_count,
+        )
+        t0 = asyncio.get_running_loop().time()
+        result = await tool(command="sleep 0.2", background=True, timeout=5)
+        elapsed = asyncio.get_running_loop().time() - t0
+        self.assertLess(elapsed, 0.15)
+        self.assertEqual(result.get("status"), "started")
+        self.assertTrue(result.get("background"))
+        self.assertTrue(result.get("job_id"))
+        self.assertEqual(started, [result["job_id"]])
+        finished = await runner.wait(result["job_id"], timeout=2.0)
+        self.assertEqual(finished.status, JobStatus.COMPLETED)
+        batch = bus.drain()
+        self.assertEqual(batch[0].kind, TriggerKind.JOB_RESULT)
+        self.assertEqual(batch[0].actor_id, "jun")
+        self.assertEqual(batch[0].channel, "api")
+
+    async def test_foreground_unchanged(self):
+        from xagent.tools.shell_tool import create_workspace_run_command_tool
+
+        tool = create_workspace_run_command_tool("/tmp")
+        result = await tool(command="echo p0-sync", background=False)
+        self.assertEqual(result.get("return_code"), 0)
+        self.assertIn("p0-sync", result.get("stdout", ""))
+
+
+class RouterJobResultDrainTests(unittest.IsolatedAsyncioTestCase):
+    async def test_drain_invokes_handler_for_job_result(self):
+        handled = []
+
+        async def on_job_result(trigger):
+            handled.append(dict(trigger.payload))
+
+        router = AgentRouter(job_result_handler=on_job_result)
+
+        async def work():
+            await asyncio.sleep(0.01)
+            return {"stdout": "ok", "return_code": 0}
+
+        handle = router.start_job(
+            "run_command",
+            work,
+            channel="api",
+            actor_id="jun",
+            metadata={"command": "echo ok"},
+        )
+        await router.jobs.wait(handle.job_id, timeout=2.0)
+        leftovers = await router.drain_and_route()
+        self.assertEqual(leftovers, [])
+        self.assertEqual(len(handled), 1)
+        self.assertEqual(handled[0]["job_id"], handle.job_id)
+        self.assertEqual(handled[0]["status"], "completed")

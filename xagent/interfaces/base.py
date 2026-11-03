@@ -222,6 +222,7 @@ class BaseAgentRunner:
                 "default_channel",
                 "heartbeat_enabled",
                 "heartbeat_interval_seconds",
+                "async_jobs",
             }
             unsupported_runtime_keys = sorted(set(runtime_cfg) - allowed_runtime_keys)
             if unsupported_runtime_keys:
@@ -238,6 +239,31 @@ class BaseAgentRunner:
                     runtime_cfg["heartbeat_interval_seconds"],
                     "runtime.heartbeat_interval_seconds",
                 )
+            if "async_jobs" in runtime_cfg:
+                async_jobs = runtime_cfg.get("async_jobs")
+                if not isinstance(async_jobs, dict):
+                    raise ValueError("runtime.async_jobs must be a dictionary")
+                allowed_async_jobs_keys = {
+                    "enabled",
+                    "max_active",
+                    "pump_interval_seconds",
+                }
+                unsupported_async_jobs_keys = sorted(set(async_jobs) - allowed_async_jobs_keys)
+                if unsupported_async_jobs_keys:
+                    joined_keys = ", ".join(unsupported_async_jobs_keys)
+                    raise ValueError(f"Unsupported runtime.async_jobs key(s): {joined_keys}")
+                if "enabled" in async_jobs and not isinstance(async_jobs["enabled"], bool):
+                    raise ValueError("runtime.async_jobs.enabled must be a boolean")
+                if "max_active" in async_jobs:
+                    self._validate_positive_number(
+                        async_jobs["max_active"],
+                        "runtime.async_jobs.max_active",
+                    )
+                if "pump_interval_seconds" in async_jobs:
+                    self._validate_positive_number(
+                        async_jobs["pump_interval_seconds"],
+                        "runtime.async_jobs.pump_interval_seconds",
+                    )
 
         agent_cfg = config.get("agent")
         if agent_cfg is not None:

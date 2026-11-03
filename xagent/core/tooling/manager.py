@@ -35,6 +35,16 @@ class ToolManager:
         """Look up a tool by name."""
         return self._tools.get(name)
 
+    def replace_tool(self, fn) -> None:
+        """Replace or insert a tool by name (used for late Router binding)."""
+        tool_name = self._tool_spec_name(fn.tool_spec)
+        if not tool_name:
+            raise ValueError("Tool function is missing a tool_spec name")
+        if not asyncio.iscoroutinefunction(fn):
+            raise TypeError(f"Tool function '{tool_name}' must be async.")
+        self._tools[tool_name] = fn
+        self._cache_dirty = True
+
     @property
     def cached_tool_specs(self) -> Optional[list]:
         """Returns cached tool specifications, rebuilding only when dirty."""

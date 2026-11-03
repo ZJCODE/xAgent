@@ -46,7 +46,7 @@ from .triggers import (
     TriggerKind,
     make_trigger,
 )
-from .async_jobs import AsyncJobRunner, JobHandle, JobStatus
+from .async_jobs import AsyncJobRunner, AsyncJobsConfig, JobHandle, JobStatus
 from .router import AgentRouter, RouterAdmission
 
 __all__ = [
@@ -92,6 +92,7 @@ __all__ = [
     "TriggerKind",
     "make_trigger",
     "AsyncJobRunner",
+    "AsyncJobsConfig",
     "JobHandle",
     "JobStatus",
     "AgentRouter",

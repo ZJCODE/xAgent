@@ -259,6 +259,16 @@ class AgentConfig:
     SUBCONSCIOUS_QUIET_HOURS = None
 
     # ============================================================
+    # 10c. Async Jobs (ephemeral Workers off the formal turn)
+    # Heavy work can leave the main turn via Router.start_job and return as
+    # JOB_RESULT Triggers. Default off so behavior matches pre-P0 unless a
+    # runtime enables it explicitly (e.g. deeptest validation).
+    # ============================================================
+    ASYNC_JOBS_ENABLED = False
+    ASYNC_JOBS_MAX_ACTIVE = 4
+    ASYNC_JOBS_ROUTER_PUMP_INTERVAL_SECONDS = 0.25
+
+    # ============================================================
     # 11. Tool Policy Baseline
     # Cross-tool floor rules injected when any tool is active.
     # Per-tool usage lives in tool descriptions / schemas.

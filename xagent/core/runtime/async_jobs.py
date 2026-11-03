@@ -14,11 +14,47 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Awaitable, Callable, Dict, Optional
+from typing import Any, Awaitable, Callable, Dict, Mapping, Optional
 
+from ..config import AgentConfig
 from .triggers import TriggerBus, TriggerKind, make_trigger
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class AsyncJobsConfig:
+    """Feature flag + limits for ephemeral async Workers."""
+
+    enabled: bool = AgentConfig.ASYNC_JOBS_ENABLED
+    max_active: int = AgentConfig.ASYNC_JOBS_MAX_ACTIVE
+    pump_interval_seconds: float = AgentConfig.ASYNC_JOBS_ROUTER_PUMP_INTERVAL_SECONDS
+
+    @classmethod
+    def from_mapping(cls, runtime_config: Optional[Mapping[str, Any]]) -> "AsyncJobsConfig":
+        data = runtime_config if isinstance(runtime_config, Mapping) else {}
+        raw = data.get("async_jobs") if isinstance(data.get("async_jobs"), Mapping) else {}
+        enabled = raw.get("enabled", AgentConfig.ASYNC_JOBS_ENABLED)
+        if not isinstance(enabled, bool):
+            enabled = AgentConfig.ASYNC_JOBS_ENABLED
+        try:
+            max_active = int(raw.get("max_active", AgentConfig.ASYNC_JOBS_MAX_ACTIVE))
+        except (TypeError, ValueError):
+            max_active = AgentConfig.ASYNC_JOBS_MAX_ACTIVE
+        if max_active <= 0:
+            max_active = AgentConfig.ASYNC_JOBS_MAX_ACTIVE
+        try:
+            interval = float(
+                raw.get(
+                    "pump_interval_seconds",
+                    AgentConfig.ASYNC_JOBS_ROUTER_PUMP_INTERVAL_SECONDS,
+                )
+            )
+        except (TypeError, ValueError):
+            interval = float(AgentConfig.ASYNC_JOBS_ROUTER_PUMP_INTERVAL_SECONDS)
+        if interval <= 0:
+            interval = float(AgentConfig.ASYNC_JOBS_ROUTER_PUMP_INTERVAL_SECONDS)
+        return cls(enabled=enabled, max_active=max_active, pump_interval_seconds=interval)
 
 
 class JobStatus(str, Enum):
