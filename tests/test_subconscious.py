@@ -463,6 +463,11 @@ class SubconsciousLoopTests(unittest.TestCase):
             self.assertIsNotNone(datetime.fromisoformat(current_time).utcoffset())
             self.assertIn("would speak now", current_task["content"])
             self.assertIn("will be sent", current_task["content"])
+            self.assertIn("lean toward worthy=true", current_task["content"])
+            self.assertIn("routing-only", current_task["content"])
+            self.assertIn("blanket 'bad time' veto", current_task["content"])
+            self.assertNotIn("Set worthy=true only when", current_task["content"])
+            self.assertNotIn("If there is no reason to speak now, silence is fine", current_task["content"])
             self.assertIn("their thread to someone else", current_task["content"])
             self.assertIn("people on this channel only", current_task["content"])
             self.assertIn("recent diary already holds this observation", current_task["content"])
@@ -586,6 +591,31 @@ class SubconsciousLoopTests(unittest.TestCase):
         self.assertIn("Reachable here", context)
         kwargs = memory_handler.get_relationship_context.await_args.kwargs
         self.assertEqual(kwargs["speaker_keys"], ["api:web_user"])
+
+    def test_collect_relationship_context_passes_routing_labels_for_cardless_contacts(self):
+        """Contacts without relationship cards still reach get_relationship_context with labels."""
+        agent = self._make_agent_mock()
+        memory_handler = MagicMock()
+        memory_handler.relationship_store.list_keys = AsyncMock(return_value=[])
+        memory_handler.get_relationship_context = AsyncMock(
+            return_value="## Jun [user_id: jun]\n(routing-only contact stub; no relationship card yet.)"
+        )
+        agent.memory_handler = memory_handler
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            loop = SubconsciousLoop(agent, workspace=Path(tmpdir), deliverable_channels={"api"})
+            loop.record_interaction(
+                channel="api",
+                user_id="jun",
+                target={"user_id": "jun", "sender_name": "Jun"},
+            )
+            context = asyncio.run(loop._collect_relationship_context())
+
+        self.assertIn("[user_id: jun]", context)
+        kwargs = memory_handler.get_relationship_context.await_args.kwargs
+        self.assertEqual(kwargs["speaker_keys"], ["api:jun"])
+        self.assertTrue(kwargs["include_routing_id"])
+        self.assertEqual(kwargs["routing_labels"], {"api:jun": "Jun"})
 
     def test_collect_relationship_context_omits_just_seen_other_channel_contact(self):
         agent = self._make_agent_mock()

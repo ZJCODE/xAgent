@@ -357,6 +357,34 @@ class MemoryHandlerRelationshipTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn("[user_id: alice]", subconscious_view)
 
+    async def test_get_relationship_context_routing_stub_without_card(self):
+        """Deliverable contacts without a card still expose [user_id] for recipient_hint."""
+        storage = _FakeMessageStorage()
+        handler = self._make_handler(storage, _FakeDiaryLLMService())
+
+        reply_view = await handler.get_relationship_context(speaker_keys=["api:jun"])
+        self.assertEqual(reply_view, "")
+
+        stub_view = await handler.get_relationship_context(
+            speaker_keys=["api:jun"],
+            include_routing_id=True,
+            routing_labels={"api:jun": "Jun"},
+            unanswered_outbound={"api:jun": 1},
+        )
+        self.assertIn("## Jun [user_id: jun]", stub_view)
+        self.assertIn("routing-only contact stub", stub_view)
+        self.assertIn("1 proactive message(s)", stub_view)
+        self.assertNotIn("We are close", stub_view)
+
+        mixed = await handler.get_relationship_context(
+            speaker_keys=["api:missing", "api:jun"],
+            include_routing_id=True,
+            routing_labels={"api:jun": "Jun"},
+        )
+        self.assertIn("[user_id: missing]", mixed)
+        self.assertIn("[user_id: jun]", mixed)
+        self.assertIn("API contact", mixed)
+
     async def test_get_relationship_context_does_not_title_cards_with_platform_ids(self):
         await self.store.write_card(
             RelationshipCard(

@@ -9,7 +9,7 @@ import threading
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import IO, TYPE_CHECKING, List, Optional
+from typing import IO, TYPE_CHECKING, Dict, List, Optional
 
 try:
     import fcntl
@@ -531,6 +531,7 @@ class MemoryHandler:
         max_cards: Optional[int] = None,
         include_routing_id: bool = False,
         unanswered_outbound: Optional[dict[str, int]] = None,
+        routing_labels: Optional[Dict[str, str]] = None,
     ) -> str:
         """Return rendered relationship cards for the given people.
 
@@ -539,9 +540,19 @@ class MemoryHandler:
         ``include_routing_id`` appends each person's ``user_id`` to the header
         so the subconscious can emit a deterministic ``recipient_hint``; reply
         turns leave it off so the identifier is never exposed to users.
+        When routing ids are requested, deliverable people without a stored
+        card still get a routing-only stub (no fabricated relationship prose).
         ``unanswered_outbound`` adds transient delivery observations to that
         view only; these are not persisted relationship claims or send limits.
+        ``routing_labels`` optionally supplies a display name per person key
+        for those stubs / headers when a card has no personal name yet.
         """
+        from ...components.memory import (
+            RelationshipStore,
+            anonymous_contact_label,
+            human_display_name,
+        )
+
         ordered_keys: list[str] = []
         seen: set[str] = set()
         for key in [*(speaker_keys or []), *(participant_keys or [])]:
@@ -560,27 +571,54 @@ class MemoryHandler:
             cards = await self.relationship_store.read_cards(ordered_keys)
         except Exception as exc:
             logger.warning("Failed to read relationship cards: %s", exc, exc_info=True)
-            return ""
+            cards = []
 
-        if not cards:
-            return ""
-
-        from ...components.memory import anonymous_contact_label, human_display_name
+        by_key = {card.key: card for card in cards if getattr(card, "key", None)}
+        label_map = {
+            str(key).strip(): str(label).strip()
+            for key, label in dict(routing_labels or {}).items()
+            if str(key).strip() and str(label).strip()
+        }
 
         blocks: list[str] = []
-        for card in cards:
-            name = human_display_name(
-                card.display_name,
-                user_id=card.user_id,
-                key=card.key,
-            ) or anonymous_contact_label(card.channel)
-            body = card.body.strip()
-            if include_routing_id and card.user_id:
-                header = f"## {name} [user_id: {card.user_id}]"
+        for key in ordered_keys:
+            card = by_key.get(key)
+            channel, user_id = RelationshipStore.split_key(key)
+            if card is not None:
+                name = human_display_name(
+                    card.display_name,
+                    user_id=card.user_id,
+                    key=card.key,
+                ) or human_display_name(
+                    label_map.get(key, ""),
+                    user_id=card.user_id or user_id,
+                    key=key,
+                ) or anonymous_contact_label(card.channel or channel)
+                body = card.body.strip()
+                rid = card.user_id or user_id
+                ch = (card.channel or channel or "").strip().lower()
+            elif include_routing_id and user_id:
+                # Routing-only stub: legal recipient_hint without inventing history.
+                name = human_display_name(
+                    label_map.get(key, ""),
+                    user_id=user_id,
+                    key=key,
+                ) or anonymous_contact_label(channel)
+                body = (
+                    "(routing-only contact stub; no relationship card yet. "
+                    "Do not invent shared history from this stub.)"
+                )
+                rid = user_id
+                ch = (channel or "").strip().lower()
+            else:
+                continue
+
+            if include_routing_id and rid:
+                header = f"## {name} [user_id: {rid}]"
             else:
                 header = f"## {name}"
-            if include_routing_id and unanswered_outbound:
-                observation_key = f"{card.channel.strip().lower()}:{card.user_id.strip()}"
+            if include_routing_id and unanswered_outbound and rid:
+                observation_key = f"{ch}:{rid.strip()}"
                 count = unanswered_outbound.get(observation_key)
                 if count is not None:
                     body += (

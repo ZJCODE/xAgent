@@ -865,13 +865,20 @@ class SubconsciousLoop:
         ):
             return ""
         contacts = self._filter_deliverable_contacts(load_contacts(self._contacts_file))
-        from ...components.memory import RelationshipStore
+        from ...components.memory import RelationshipStore, human_display_name
 
         keys: list[str] = []
+        routing_labels: dict[str, str] = {}
         for contact in contacts:
-            self._append_unique_key(
-                keys, RelationshipStore.make_key(contact.channel, contact.user_id)
+            key = RelationshipStore.make_key(contact.channel, contact.user_id)
+            self._append_unique_key(keys, key)
+            label = human_display_name(
+                contact.target.get("sender_name") or contact.target.get("display_name") or "",
+                user_id=contact.user_id,
+                key=key,
             )
+            if label:
+                routing_labels[key] = label
 
         relationship_store = getattr(memory_handler, "relationship_store", None)
         list_keys = getattr(relationship_store, "list_keys", None)
@@ -895,6 +902,7 @@ class SubconsciousLoop:
                 max_cards=AgentConfig.RELATIONSHIP_SUBCONSCIOUS_MAX_CARDS,
                 include_routing_id=True,
                 unanswered_outbound=dict(self._unanswered_outbound),
+                routing_labels=routing_labels or None,
             )
         except Exception:
             self._logger.warning("Failed to collect relationship context", exc_info=True)
