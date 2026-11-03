@@ -120,6 +120,8 @@ class WeixinAdapter:
     """Bridge iLink direct messages to an in-process xAgent instance."""
 
     channel_name = "weixin"
+    STEERED_ACK_TEXT = "收到，忙完这步马上回你"
+    STEERED_ACK_COOLDOWN_SECONDS = 45.0
 
     def __init__(
         self,
@@ -145,6 +147,7 @@ class WeixinAdapter:
         self._processing_tasks_lock = asyncio.Lock()
         self._typing_cache = _TypingTicketCache(config.typing_ticket_ttl_seconds)
         self._dedup = _MessageDeduplicator()
+        self._steered_ack_dedupe: dict[tuple[str, str], float] = {}
         self._stop_event = asyncio.Event()
         self._tasks_dir = self.runtime_dir / AgentConfig.TASKS_DIRNAME
         self._contacts_file = resolve_contacts_path(self.runtime_dir)
@@ -581,7 +584,15 @@ class WeixinAdapter:
             async with asyncio.timeout(timeout_seconds):
                 async for event in event_source:
                     event_type = event.get("type")
-                    if event_type in {"steered", "accepted"}:
+                    if event_type == "steered":
+                        await self._maybe_send_steered_ack(
+                            user_id=user_id,
+                            context_token=context_token,
+                            turn_id=event.get("turn_id"),
+                            source_message_id=source_message_id,
+                        )
+                        continue
+                    if event_type == "accepted":
                         continue
                     if event_type == "message_done":
                         content = str(event.get("content") or "").strip()
@@ -621,6 +632,34 @@ class WeixinAdapter:
             close = getattr(event_source, "aclose", None)
             if callable(close):
                 await close()
+
+    async def _maybe_send_steered_ack(
+        self,
+        *,
+        user_id: str,
+        context_token: str,
+        turn_id: Any,
+        source_message_id: str,
+    ) -> bool:
+        """Send one short busy-ack per turn within the cooldown window."""
+        turn_key = str(turn_id or "").strip() or "unknown"
+        dedupe_key = (str(user_id), turn_key)
+        now = time.monotonic()
+        cutoff = now - self.STEERED_ACK_COOLDOWN_SECONDS
+        stale = [key for key, stamp in self._steered_ack_dedupe.items() if stamp < cutoff]
+        for key in stale:
+            self._steered_ack_dedupe.pop(key, None)
+        last = self._steered_ack_dedupe.get(dedupe_key)
+        if last is not None and (now - last) < self.STEERED_ACK_COOLDOWN_SECONDS:
+            return False
+        self._steered_ack_dedupe[dedupe_key] = now
+        await self._send_text(
+            user_id=user_id,
+            context_token=context_token,
+            text=self.STEERED_ACK_TEXT,
+            stable_key=f"steer-ack:{turn_key}:{source_message_id or 'message'}",
+        )
+        return True
 
     async def _send_text_and_attachments(
         self,
@@ -799,6 +838,46 @@ class WeixinAdapter:
             )
         except Exception:
             self.logger.debug("Failed to persist Weixin subconscious delivery", exc_info=True)
+
+    async def deliver_job_result_message(
+        self,
+        *,
+        user_id: str,
+        content: str,
+        job_id: str,
+        status: str = "completed",
+        attachments: Optional[list[_WeixinOutboundAttachment]] = None,
+        fallback: bool = False,
+    ) -> None:
+        """Push an async job result (or short fallback) to a Weixin DM user."""
+        resolved_user = str(user_id or "").strip()
+        if not resolved_user:
+            raise ValueError("job result Weixin delivery is missing user_id")
+        context_token = self._context_tokens.get(resolved_user)
+        if not context_token:
+            raise ValueError(
+                f"job result Weixin delivery cannot send to {resolved_user}: no cached context_token"
+            )
+        outbound = list(attachments or [])
+        text = str(content or "").strip()
+        if not text and not outbound:
+            raise ValueError("job result Weixin delivery produced no content")
+        job_key = str(job_id or "").strip() or "unknown"
+        stable_key = f"job_result:{job_key}:fallback" if fallback else f"job_result:{job_key}"
+        await self._send_text_and_attachments(
+            user_id=resolved_user,
+            context_token=context_token,
+            content=text,
+            attachments=outbound,
+            stable_key=stable_key,
+        )
+        self.logger.info(
+            "Delivered Weixin job result user=%s job_id=%s status=%s fallback=%s",
+            _safe_id(resolved_user),
+            _safe_id(job_key),
+            status,
+            fallback,
+        )
 
     async def _scheduled_task_result(self, task, *, user_id: str) -> _WeixinScheduledTaskResult:
         if task.task_type == "message":

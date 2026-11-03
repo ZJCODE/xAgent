@@ -126,10 +126,6 @@ class WeixinAdapterTests(unittest.TestCase):
         adapter._context_tokens = state.load_context_tokens(credentials.account_id)
         return adapter, agent, client, state
 
-
-def _process_until_idle(adapter, message):
-    asyncio.run(adapter._process_message(message))
-
     def test_owner_direct_message_routes_to_agent_and_replies(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             adapter, agent, client, state = self._adapter(tmpdir)
@@ -311,6 +307,93 @@ def _process_until_idle(adapter, message):
         self.assertEqual(started, [201, 202, 203])
         self.assertEqual(finished, [201, 202, 203])
         self.assertEqual(chat_calls, [])
+
+    def test_steered_event_sends_ack_once_per_turn(self):
+        async def run_case():
+            with tempfile.TemporaryDirectory() as tmpdir:
+                adapter, agent, client, _state = self._adapter(tmpdir)
+
+                async def steered_once(**kwargs):
+                    yield {"type": "steered", "turn_id": "turn-1", "ok": True}
+                    yield {"type": "done"}
+
+                agent.chat_events = steered_once
+                await adapter._send_event_replies(
+                    user_id="owner@im.wechat",
+                    context_token="ctx-owner",
+                    source_message_id="hey-1",
+                )
+                # Same turn again within cooldown — no second ack.
+                async def steered_again(**kwargs):
+                    yield {"type": "steered", "turn_id": "turn-1", "ok": True}
+                    yield {"type": "done"}
+
+                agent.chat_events = steered_again
+                await adapter._send_event_replies(
+                    user_id="owner@im.wechat",
+                    context_token="ctx-owner",
+                    source_message_id="hey-2",
+                )
+                return [item["text"] for item in client.sent_text]
+
+        texts = asyncio.run(run_case())
+        self.assertEqual(texts, [WeixinAdapter.STEERED_ACK_TEXT])
+
+    def test_accepted_event_still_skipped(self):
+        async def run_case():
+            with tempfile.TemporaryDirectory() as tmpdir:
+                adapter, agent, client, _state = self._adapter(tmpdir)
+
+                async def accepted_only(**kwargs):
+                    yield {"type": "accepted", "turn_id": "turn-a"}
+                    yield {"type": "done"}
+
+                agent.chat_events = accepted_only
+                await adapter._send_event_replies(
+                    user_id="owner@im.wechat",
+                    context_token="ctx-owner",
+                    source_message_id="acc-1",
+                )
+                return client.sent_text
+
+        self.assertEqual(asyncio.run(run_case()), [])
+
+    def test_deliver_job_result_message_requires_token_and_sends(self):
+        async def run_case():
+            with tempfile.TemporaryDirectory() as tmpdir:
+                adapter, _agent, client, _state = self._adapter(tmpdir)
+                with self.assertRaisesRegex(ValueError, "no cached context_token"):
+                    await adapter.deliver_job_result_message(
+                        user_id="owner@im.wechat",
+                        content="job done",
+                        job_id="job-1",
+                        status="completed",
+                    )
+                adapter._context_tokens["owner@im.wechat"] = "ctx-owner"
+                await adapter.deliver_job_result_message(
+                    user_id="owner@im.wechat",
+                    content="job done",
+                    job_id="job-1",
+                    status="completed",
+                )
+                await adapter.deliver_job_result_message(
+                    user_id="owner@im.wechat",
+                    content="fallback body",
+                    job_id="job-2",
+                    status="failed",
+                    fallback=True,
+                )
+                return client.sent_text
+
+        sent = asyncio.run(run_case())
+        self.assertEqual(sent[0]["text"], "job done")
+        self.assertEqual(sent[0]["context_token"], "ctx-owner")
+        self.assertTrue(sent[0]["client_id"])
+        self.assertEqual(sent[1]["text"], "fallback body")
+
+
+def _process_until_idle(adapter, message):
+    asyncio.run(adapter._process_message(message))
 
 
 if __name__ == "__main__":

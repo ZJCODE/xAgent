@@ -854,6 +854,81 @@ class RuntimeHost:
         )
         return SCHEDULED_AGENT_PROMPT_PREFIX + body
 
+    def _job_result_fallback_text(self, *, status: str, last_error: Any, payload: dict) -> str:
+        reason = str(last_error or payload.get("error") or status or "unknown").strip() or "unknown"
+        if len(reason) > 40:
+            reason = reason[:39] + "…"
+        text = f"后台任务没跑完：{reason}。你回我一句「重试」我再搞。"
+        if len(text) > 80:
+            text = text[:79] + "…"
+        return text
+
+    async def _deliver_job_result_weixin(
+        self,
+        *,
+        actor_id: str,
+        job_id: str,
+        status: str,
+        text: str,
+        last_error: Any,
+        turn_failed: bool,
+        payload: dict,
+    ) -> None:
+        adapter = self.adapters.get("weixin")
+        state = self.channel_status.get("weixin", {}).get("state")
+        if adapter is None or state != "connected":
+            logger.warning(
+                "Skipping Weixin job result delivery job_id=%s state=%s adapter=%s",
+                job_id,
+                state,
+                adapter is not None,
+            )
+            return
+        content = str(text or "").strip()
+        fallback = False
+        if not content:
+            if status in {"failed", "stopped"} or last_error or turn_failed:
+                content = self._job_result_fallback_text(
+                    status=status, last_error=last_error, payload=payload
+                )
+                fallback = True
+            else:
+                logger.warning(
+                    "Job result turn produced no content for Weixin job_id=%s",
+                    job_id,
+                )
+                return
+        activity = self._channel_activity.get("weixin")
+        if activity is None:
+            logger.warning(
+                "Skipping Weixin job result delivery job_id=%s: no channel activity",
+                job_id,
+            )
+            return
+        try:
+            task = activity.create_task(
+                adapter.deliver_job_result_message(
+                    user_id=actor_id,
+                    content=content,
+                    job_id=job_id,
+                    status=status,
+                    fallback=fallback,
+                )
+            )
+            await task
+        except asyncio.CancelledError:
+            if asyncio.current_task() and asyncio.current_task().cancelling():
+                raise
+            logger.warning(
+                "Weixin disconnected during job result delivery job_id=%s",
+                job_id,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to push job result to Weixin job_id=%s",
+                job_id,
+            )
+
     async def _run_job_result_turn(self, trigger) -> None:
         from . import (
             ScheduledDeliveryContext,
@@ -867,6 +942,8 @@ class RuntimeHost:
         if channel not in {"api", "weixin", "voice"}:
             channel = "api"
         thread_id = trigger.thread_id
+        job_id = str(payload.get("job_id") or trigger.id)
+        status = str(payload.get("status") or "completed").strip().lower() or "completed"
         prompt = self._format_job_result_prompt(trigger)
         context = ScheduledDeliveryContext(
             channel=channel,
@@ -881,6 +958,9 @@ class RuntimeHost:
                 "thread_id": thread_id,
             },
         )
+        text = ""
+        last_error = None
+        turn_failed = False
         try:
             with scheduled_delivery_context(context):
                 content, _attachments, last_error = await collect_scheduled_turn_events(
@@ -897,24 +977,26 @@ class RuntimeHost:
                         },
                     )
                 )
+            text = str(content or "").strip()
         except Exception:
+            turn_failed = True
             logger.exception(
                 "Job result turn failed job_id=%s actor=%s channel=%s",
                 payload.get("job_id"),
                 actor_id,
                 channel,
             )
-            return
-        text = str(content or "").strip()
-        if not text:
-            if last_error:
-                logger.warning(
-                    "Job result turn produced no content job_id=%s error=%s",
-                    payload.get("job_id"),
-                    last_error,
-                )
-            return
+            if channel != "weixin":
+                return
         if channel == "api" and self.api is not None:
+            if not text:
+                if last_error:
+                    logger.warning(
+                        "Job result turn produced no content job_id=%s error=%s",
+                        payload.get("job_id"),
+                        last_error,
+                    )
+                return
             try:
                 await self.api.delivery.push(
                     actor_id,
@@ -933,6 +1015,23 @@ class RuntimeHost:
                     "Failed to push job result to API delivery job_id=%s",
                     payload.get("job_id"),
                 )
+            return
+        if channel == "weixin":
+            await self._deliver_job_result_weixin(
+                actor_id=actor_id,
+                job_id=job_id,
+                status=status,
+                text=text,
+                last_error=last_error,
+                turn_failed=turn_failed,
+                payload=payload,
+            )
+            return
+        if channel == "voice":
+            logger.info(
+                "Job result voice delivery not implemented in P0 job_id=%s",
+                job_id,
+            )
 
     async def _deliver_subconscious(self, delivery):
 

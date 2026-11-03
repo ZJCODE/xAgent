@@ -507,3 +507,102 @@ class AutoBackgroundLongWaitTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.get("return_code"), 0)
         self.assertIn("stay-fg", result.get("stdout", ""))
         self.assertEqual(started, [])
+
+
+class JobResultWeixinDeliveryTests(unittest.IsolatedAsyncioTestCase):
+    def _host_stub(self, *, adapter, connected=True, api=None):
+        from xagent.core.runtime.channel_activity import ChannelActivity
+        from xagent.core.runtime.host import RuntimeHost
+
+        host = RuntimeHost.__new__(RuntimeHost)
+        host.agent = MagicMock()
+        host.api = api
+        host.adapters = {"weixin": adapter}
+        host.channel_status = {"weixin": {"state": "connected" if connected else "disconnected"}}
+        host._channel_activity = {"weixin": ChannelActivity()}
+        host.runtime_ready = True
+        return host
+
+    async def test_weixin_job_result_calls_adapter_not_api(self):
+        from xagent.core.runtime.host import RuntimeHost
+
+        adapter = MagicMock()
+        adapter.deliver_job_result_message = AsyncMock()
+        api = MagicMock()
+        api.delivery.push = AsyncMock()
+        host = self._host_stub(adapter=adapter, api=api)
+
+        async def fake_chat_events(**kwargs):
+            yield {"type": "message_done", "content": "cpu chart ready", "phase": "final"}
+            yield {"type": "done"}
+
+        host.agent.chat_events = fake_chat_events
+        trigger = make_trigger(
+            source="async_jobs",
+            kind=TriggerKind.JOB_RESULT,
+            actor_id="owner@im.wechat",
+            channel="weixin",
+            payload={
+                "job_id": "job-wx-1",
+                "name": "run_command",
+                "status": "completed",
+                "result": {"summary": "ok"},
+            },
+        )
+        await host._run_job_result_turn(trigger)
+        adapter.deliver_job_result_message.assert_awaited_once()
+        kwargs = adapter.deliver_job_result_message.await_args.kwargs
+        self.assertEqual(kwargs["user_id"], "owner@im.wechat")
+        self.assertEqual(kwargs["content"], "cpu chart ready")
+        self.assertEqual(kwargs["job_id"], "job-wx-1")
+        self.assertFalse(kwargs.get("fallback"))
+        api.delivery.push.assert_not_awaited()
+
+    async def test_weixin_job_result_fallback_on_failed_empty(self):
+        adapter = MagicMock()
+        adapter.deliver_job_result_message = AsyncMock()
+        host = self._host_stub(adapter=adapter)
+
+        async def empty_turn(**kwargs):
+            yield {"type": "done"}
+
+        host.agent.chat_events = empty_turn
+        trigger = make_trigger(
+            source="async_jobs",
+            kind=TriggerKind.JOB_RESULT,
+            actor_id="owner@im.wechat",
+            channel="weixin",
+            payload={
+                "job_id": "job-wx-fail",
+                "name": "run_command",
+                "status": "failed",
+                "error": "timeout",
+            },
+        )
+        await host._run_job_result_turn(trigger)
+        adapter.deliver_job_result_message.assert_awaited_once()
+        kwargs = adapter.deliver_job_result_message.await_args.kwargs
+        self.assertTrue(kwargs.get("fallback"))
+        self.assertIn("没跑完", kwargs["content"])
+        self.assertIn("timeout", kwargs["content"])
+
+    async def test_weixin_job_result_skips_when_disconnected(self):
+        adapter = MagicMock()
+        adapter.deliver_job_result_message = AsyncMock()
+        host = self._host_stub(adapter=adapter, connected=False)
+
+        async def fake_chat_events(**kwargs):
+            yield {"type": "message_done", "content": "done", "phase": "final"}
+            yield {"type": "done"}
+
+        host.agent.chat_events = fake_chat_events
+        trigger = make_trigger(
+            source="async_jobs",
+            kind=TriggerKind.JOB_RESULT,
+            actor_id="owner@im.wechat",
+            channel="weixin",
+            payload={"job_id": "job-wx-2", "name": "run_command", "status": "completed"},
+        )
+        await host._run_job_result_turn(trigger)
+        adapter.deliver_job_result_message.assert_not_awaited()
+
