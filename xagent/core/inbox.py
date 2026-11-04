@@ -28,6 +28,7 @@ class InboxKind(str, Enum):
 
     USER_TURN = "user_turn"
     SCHEDULED_TURN = "scheduled_turn"
+    WORK_TURN = "work_turn"
     OBSERVATION = "observation"
 
 
@@ -35,7 +36,7 @@ def is_scheduled_work(metadata: Optional[Dict[str, Any]] = None) -> bool:
     """True when a stored message is a due task, not a human utterance."""
     payload = metadata or {}
     kind = str(payload.get(INBOX_KIND_METADATA_KEY) or "").strip()
-    if kind == InboxKind.SCHEDULED_TURN.value:
+    if kind in {InboxKind.SCHEDULED_TURN.value, InboxKind.WORK_TURN.value}:
         return True
     return str(payload.get("source") or "").strip() == "scheduled_task"
 

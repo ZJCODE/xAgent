@@ -131,6 +131,7 @@ class TaskStore:
     def connect(self):
         connection = sqlite3.connect(self.path.as_uri() + "?mode=rw", timeout=10, uri=True)
         connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA journal_mode=WAL")
         connection.execute("PRAGMA foreign_keys=ON")
         connection.execute("PRAGMA synchronous=FULL")
         try:

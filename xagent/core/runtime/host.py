@@ -11,7 +11,7 @@ import signal
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import uvicorn
 from fastapi import Body, FastAPI, HTTPException, Request
@@ -62,6 +62,19 @@ class RuntimeStopInput(BaseModel):
     restart: bool = False
 
 
+class WorkMessageInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    user_id: str
+    channel: str = "api"
+    content: str = ""
+
+
+class WorkCancelInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    user_id: str
+    channel: str = "api"
+
+
 class _HostedServer(uvicorn.Server):
     """Servers share the host's signal handler and cannot own shutdown."""
 
@@ -96,6 +109,8 @@ class RuntimeHost:
         self.started_at = None
         self.recovered_turns = 0
         self.control_app = None
+        self.work_store = None
+        self.work_runner = None
         self._startup_fingerprint = None
         self.channel_drain_timeout = 10.0
         self.channel_cleanup_timeout = 5.0
@@ -183,6 +198,12 @@ class RuntimeHost:
             recovery = getattr(self.agent.memory_handler, "recover_pending_commit", None)
             if callable(recovery):
                 await recovery()
+            from .work_store import recover_work
+            self._ensure_work_runtime()
+            await recover_work(self.work_store, self.agent.turn_store)
+            for work in await self.work_store.list_all():
+                if work.get("status") == "queued":
+                    await self.work_runner.submit(work["id"])
             self.recovered_turns = await self.agent.turn_store.recover()
             from ...interfaces.cli.channels import voice_config
             self.api = ApiChannelAdapter(self.agent,
@@ -704,6 +725,97 @@ class RuntimeHost:
         await asyncio.wait_for(wait_ready(), timeout=10.0)
         self.paths.socket_path.chmod(0o600)
 
+    def _ensure_work_runtime(self) -> None:
+        if self.work_store is not None:
+            return
+        from .work_runner import WorkRunner
+        from .work_store import WorkStore
+
+        turn_path = getattr(getattr(self.agent, "turn_store", None), "path", None)
+        path = Path(turn_path).parent / "work.sqlite3" if turn_path else None
+        self.work_store = WorkStore(path)
+        self.work_runner = WorkRunner(work_store=self.work_store,
+                                      max_background_work=AgentConfig.MAX_BACKGROUND_WORK)
+        self.work_runner.execute = self._execute_work
+        agent = self.agent
+        if agent is not None:
+            agent.work_store = self.work_store
+            tool_manager = getattr(agent, "tool_manager", None)
+            if tool_manager is not None and callable(getattr(tool_manager, "register_tools", None)):
+                from xagent.tools.work_tools import (
+                    create_cancel_work_tool,
+                    create_delegate_work_tool,
+                    create_list_work_tool,
+                )
+                tool_manager.register_tools([
+                    create_delegate_work_tool(self.work_store, self.work_runner),
+                    create_list_work_tool(self.work_store),
+                    create_cancel_work_tool(self.work_store, self.work_runner),
+                ])
+
+    async def _execute_work(self, record: dict, controls) -> Optional[str]:
+        """Run one queued work item as a serialized ``work_turn``.
+
+        Supplements from the control API are steered into the running turn
+        through the agent's own steering queue and marked ``incorporated``
+        only when the turn actually accepts them. Returns ``"failed"`` or
+        ``"cancelled"`` when the turn ended that way, else None.
+        """
+        agent = self.agent
+        channel = record.get("channel")
+        user_id = record.get("user_id") or ""
+        room_name = record.get("room_name") or ""
+        if controls.cancel_event.is_set():
+            return None  # cancelled before starting; the runner sees "stopping"
+        turn_id = None
+        failed = False
+        cancelled = False
+        abort_requested = False
+        async for event in agent.chat_events(
+            user_message=record.get("goal") or "",
+            user_id=user_id,
+            channel=channel,
+            room_name=room_name,
+            inbox_kind="work_turn",
+            work_id=record["id"],
+        ):
+            if event.get("type") == "accepted" and not event.get("replay") and turn_id is None:
+                turn_id = event.get("turn_id")
+                if turn_id:
+                    await self.work_store.update(record["id"], turn_ids=[turn_id])
+            if event.get("type") == "error":
+                failed = True
+            elif event.get("type") == "aborted":
+                cancelled = True
+            if controls.cancel_event.is_set() and turn_id and not abort_requested:
+                abort_requested = agent.abort(turn_id, channel=channel)
+            while turn_id and not controls.cancel_event.is_set():
+                item = await controls.next_supplement()
+                if item is None:
+                    break
+                control_id, content = item
+                if await agent.steer(turn_id, content, channel=channel,
+                                     user_id=user_id, room_name=room_name):
+                    await self.work_store.mark_control_incorporated(record["id"], control_id)
+                # A refused steer means the turn is not the active one (still
+                # queued or already finishing). The control stays "received"
+                # in the record and is not re-delivered.
+        return "failed" if failed else ("cancelled" if cancelled else None)
+
+    async def _authorized_work(self, work_id: str, user_id: str, channel: str) -> dict:
+        self._ensure_work_runtime()
+        if not user_id:
+            raise HTTPException(422, "user_id is required")
+        try:
+            record = await self.work_store.get(work_id)
+        except KeyError:
+            raise HTTPException(404, "Work not found")
+        if (str(record.get("channel") or "") != str(channel or "").strip()
+                or str(record.get("user_id") or "") != str(user_id or "").strip()):
+            # Cross-channel and cross-user probes look like missing work.
+            raise HTTPException(404, "Work not found")
+        return record
+
     def _create_control_app(self):
         from ...interfaces.server.admin_routes import register_admin_routes
         from ...integrations.api.input_normalization import input_attachments, input_image_sources
@@ -795,6 +907,53 @@ class RuntimeHost:
                 raise HTTPException(503, "Agent runtime is not ready")
             result = await self.agent.observe(**payload.model_dump(exclude_none=True))
             return result.model_dump()
+
+        @app.get("/work")
+        async def list_work(user_id: str = "", channel: str = "api"):
+            if not user_id:
+                raise HTTPException(422, "user_id is required")
+            self._ensure_work_runtime()
+            return {"work": await self.work_store.list_for(channel, user_id)}
+
+        @app.get("/work/{work_id}")
+        async def get_work(work_id: str, user_id: str = "", channel: str = "api"):
+            return await self._authorized_work(work_id, user_id, channel)
+
+        @app.post("/work/{work_id}/messages")
+        async def work_messages(work_id: str, payload: WorkMessageInput):
+            record = await self._authorized_work(work_id, payload.user_id, payload.channel)
+            from .work_store import WORK_TERMINAL
+            if record.get("status") in WORK_TERMINAL:
+                raise HTTPException(409, "Work is no longer active")
+            control_id = await self.work_store.append_control(work_id, payload.content)
+            if not await self.work_runner.supplement(work_id, control_id, payload.content):
+                # No live runner channel (a converted turn runs under its own
+                # broker): steer directly into the active turn.
+                turn_ids = record.get("turn_ids") or []
+                steer = getattr(self.agent, "steer", None)
+                if turn_ids and callable(steer) and await steer(
+                    turn_ids[-1], payload.content,
+                    channel=record.get("channel"),
+                    user_id=record.get("user_id"),
+                    room_name=record.get("room_name"),
+                ):
+                    await self.work_store.mark_control_incorporated(work_id, control_id)
+            return {"accepted": True, "control_id": control_id, "state": "received"}
+
+        @app.post("/work/{work_id}/cancel")
+        async def work_cancel(work_id: str, payload: WorkCancelInput):
+            record = await self._authorized_work(work_id, payload.user_id, payload.channel)
+            stopping = await self.work_runner.cancel(work_id)
+            if stopping:
+                # Stop the turn itself, not just the record. Works for a
+                # converted turn (no runner channel) and for a delegated turn
+                # still waiting on the inbox queue; a None turn_id is never
+                # sent, so an unrelated foreground turn cannot be hit.
+                turn_ids = record.get("turn_ids") or []
+                abort = getattr(self.agent, "abort", None)
+                if turn_ids and callable(abort):
+                    abort(turn_ids[-1], channel=record.get("channel"))
+            return {"stopping": stopping}
 
         @app.get("/runtime/events")
         async def subscribe(request: Request, user_id: str):

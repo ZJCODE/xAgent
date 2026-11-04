@@ -68,6 +68,7 @@ def create_workspace_run_command_tool(default_working_directory: str):
 
     workspace_run_command.tool_spec = run_command.tool_spec
     workspace_run_command.__name__ = run_command.__name__
+    workspace_run_command.write_scope = "workspace"
     return workspace_run_command
 
 

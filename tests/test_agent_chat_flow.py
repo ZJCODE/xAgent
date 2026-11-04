@@ -2367,7 +2367,11 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
                     agent, user_message="拍张照片并描述画面", user_id="alice",
                     channel="api", stream=stream, event_id="photo-request",
                 )]
-                self.assertEqual([event for event in replay if event["type"] == "message_done"], completed)
+                replayed_done = [
+                    {key: value for key, value in event.items() if key != "replay"}
+                    for event in replay if event["type"] == "message_done"
+                ]
+                self.assertEqual(replayed_done, completed)
                 self.assertEqual(len(model_client.calls), 3)
                 self.assertEqual(len(storage.messages), 3)
 

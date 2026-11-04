@@ -93,6 +93,68 @@ STEER_CONTINUATION_NUDGE = (
 )
 
 
+class _TurnWorkObserver:
+    """Attach one user turn's lifecycle to a work record (auto-conversion).
+
+    Created by ``chat_events`` for foreground user turns when a work runtime
+    is wired. It runs drain-side in the broker, so conversion and terminal
+    bookkeeping survive a disconnected foreground subscriber. The foreground
+    subscriber is released as soon as the ``backgrounded`` event is observed.
+    """
+
+    def __init__(self, work_store, *, channel, user_id, room_name, goal):
+        self._store = work_store
+        self._channel = str(channel or "").strip()
+        self._user_id = str(user_id or "")
+        self._room_name = str(room_name or "")
+        self._goal = goal
+        self.work_id = None
+        self._failed = False
+        self._cancelled = False
+
+    async def on_event(self, event: dict) -> None:
+        kind = event.get("type")
+        if kind == "backgrounded":
+            if self.work_id is None and event.get("turn_id"):
+                record = await self._store.create(
+                    channel=self._channel, user_id=self._user_id,
+                    room_name=self._room_name, source="converted",
+                    goal=self._goal, status="running",
+                    turn_ids=[str(event["turn_id"])],
+                )
+                self.work_id = record["id"]
+            if self.work_id:
+                event["work_id"] = self.work_id
+                event["work_status"] = "running"
+            return
+        if kind == "error":
+            self._failed = True
+        elif kind == "aborted":
+            self._cancelled = True
+        elif kind == "done" and self.work_id:
+            record = await self._store.get(self.work_id)
+            if record.get("status") == "stopping":
+                # Cancelled through the control API while running.
+                event["work_id"] = self.work_id
+                event["work_status"] = "completed"
+                await self._store.update(self.work_id, status="completed",
+                                         completion_reason="stopped",
+                                         finished_at=time.time())
+                return
+            status = "failed" if self._failed else "completed"
+            event["work_id"] = self.work_id
+            event["work_status"] = status
+            changes = dict(status=status, finished_at=time.time(),
+                           result_ref=event.get("turn_id"))
+            if not self._failed and self._cancelled:
+                changes["completion_reason"] = "cancelled"
+            await self._store.update(self.work_id, **changes)
+            return
+        if self.work_id:
+            event["work_id"] = self.work_id
+            event["work_status"] = "running"
+
+
 class Agent:
     """AI agent runtime for a continuous agent-level message stream."""
 
@@ -726,6 +788,7 @@ class Agent:
         event_id: Optional[str] = None,
         turn_id: Optional[str] = None,
         request_id: Optional[str] = None,
+        work_id: Optional[str] = None,
     ) -> AsyncGenerator[dict, None]:
         """Emit one agent turn as structured message/tool events.
 
@@ -738,11 +801,19 @@ class Agent:
             inbox_kind: How this input should be classified. Defaults to a
                 user turn; scheduled delivery context upgrades it to
                 ``scheduled_turn``.
+            work_id: Tag the turn's structural events with this background-work
+                id (used by the work driver; disables auto-conversion).
 
         A plain-text user message for the same channel, user, and room as
         the running turn is injected into that turn. The caller then receives
         ``type: steered`` and the reply continues on the running turn.
         Anything that cannot be steered takes the normal queue.
+
+        A user turn that outlives the background budget converts to a work
+        record (``source="converted"``) when a work runtime is wired: the
+        caller receives ``backgrounded`` (with ``work_id``), a final notice
+        ``message_done``, and ``done``, while the turn keeps running in the
+        background. Replayed turns never convert.
         """
         self._record_last_interaction()
         from .runtime import current_delivery_context
@@ -771,10 +842,58 @@ class Agent:
             yield steered
             yield {"type": "done", "turn_id": steered.get("turn_id"), "steered": True}
             return
-        async for event in self._run_inbox_turn(
-            inbox_item, stream=stream, max_agent_loops=max_agent_loops,
-            event_id=event_id, turn_id=turn_id, request_id=request_id,
-        ):
+        from .runtime.broker import ExecutionBroker
+
+        conversion = None
+        on_event = None
+        work_store = getattr(self, "work_store", None)
+        if work_id:
+            async def _tag_work(event: dict) -> None:
+                event["work_id"] = work_id
+            on_event = _tag_work
+        elif work_store is not None and inbox_item.kind is InboxKind.USER_TURN:
+            conversion = _TurnWorkObserver(
+                work_store,
+                channel=inbox_item.channel,
+                user_id=inbox_item.user_id,
+                room_name=inbox_item.room_name,
+                goal=inbox_item.content,
+            )
+            on_event = conversion.on_event
+        broker = ExecutionBroker(
+            self._run_inbox_turn(
+                inbox_item, stream=stream, max_agent_loops=max_agent_loops,
+                event_id=event_id, turn_id=turn_id, request_id=request_id,
+            ),
+            turn_store=self.turn_store,
+            budget_seconds=AgentConfig.TURN_BACKGROUND_BUDGET_SECONDS,
+            on_event=on_event,
+        )
+        meta: dict = {}
+        async for event in broker.subscribe():
+            if not meta and event.get("type") == "accepted" and not event.get("replay"):
+                meta = {
+                    "turn_id": event.get("turn_id"),
+                    "event_id": event.get("event_id"),
+                    "request_id": event.get("request_id"),
+                }
+            if (conversion is not None and conversion.work_id
+                    and event.get("type") == "backgrounded" and not event.get("replay")):
+                # Auto-conversion: hand the turn to the background (the drain
+                # keeps running it) and release this foreground subscriber.
+                yield event
+                yield {
+                    "type": "message_done",
+                    "message_id": f"{meta.get('turn_id')}-backgrounded",
+                    "phase": "final",
+                    "content": (
+                        f"任务执行时间较长，已转入后台继续执行"
+                        f"（work_id: {conversion.work_id}），完成后结果会写入聊天历史。"
+                    ),
+                    **meta,
+                }
+                yield {"type": "done", **meta}
+                return
             yield event
 
     async def _run_inbox_turn(
@@ -806,7 +925,6 @@ class Agent:
         claimed = False
         finished = False
         iterator = None
-        final_events = []
         terminal = "completed"
         side_effect_started = False
         try:
@@ -818,10 +936,10 @@ class Agent:
             if not fresh:
                 self.inbox.discard(ticket)
                 for saved in record.get("events") or []:
-                    yield saved
+                    yield {**saved, "replay": True}
                 if not record.get("events"):
-                    yield {"type": "duplicate", "turn_id": record["turn_id"], "event_id": event_id, "state": record["state"]}
-                    yield {"type": "done", "turn_id": record["turn_id"], "event_id": event_id}
+                    yield {"type": "duplicate", "turn_id": record["turn_id"], "event_id": event_id, "state": record["state"], "replay": True}
+                    yield {"type": "done", "turn_id": record["turn_id"], "event_id": event_id, "replay": True}
                 finished = True
                 return
             metadata.update(turn_id=ticket.turn_id, event_id=event_id, event_scope=scope, request_id=request_id)
@@ -854,17 +972,15 @@ class Agent:
                     terminal = "cancelled"
                 if event.get("type") in {"error", "aborted"} and side_effect_started:
                     event["needs_review"] = True
-                if event.get("type") in {"message_done", "error", "aborted", "done"}:
-                    final_events.append(event)
                 if event.get("type") == "done":
-                    await self.turn_store.update(ticket.turn_id, state=terminal, events=final_events,
+                    await self.turn_store.update(ticket.turn_id, state=terminal,
                         input_cursor=(existing_user_msg.metadata or {}).get("storage_cursor"),
                         needs_review=side_effect_started and terminal != "completed")
                     finished = True
                     logger.info("Turn finished request_id=%s turn_id=%s state=%s", request_id, ticket.turn_id, terminal)
                 yield event
             if not finished:
-                await self.turn_store.update(ticket.turn_id, state=terminal, events=final_events,
+                await self.turn_store.update(ticket.turn_id, state=terminal,
                     input_cursor=(existing_user_msg.metadata or {}).get("storage_cursor"))
                 finished = True
         except (InboxQueueTimeout, asyncio.TimeoutError, _TurnStepTimeout) as exc:
@@ -874,14 +990,14 @@ class Agent:
             event = {**build_public_error(code="timeout", message=message, cause=exc), "turn_id": ticket.turn_id,
                      "event_id": event_id, "request_id": request_id, "needs_review": side_effect_started}
             done = {"type": "done", "turn_id": ticket.turn_id, "event_id": event_id, "request_id": request_id}
-            await self.turn_store.update(ticket.turn_id, state="timeout", events=[event, done], needs_review=side_effect_started)
+            await self.turn_store.update(ticket.turn_id, state="timeout", needs_review=side_effect_started)
             finished = True
             yield event
             yield done
         except InboxCancelledError:
             event = {"type": "aborted", "turn_id": ticket.turn_id, "event_id": event_id, "request_id": request_id}
             done = {"type": "done", "turn_id": ticket.turn_id, "event_id": event_id, "request_id": request_id}
-            await self.turn_store.update(ticket.turn_id, state="cancelled", events=[event, done])
+            await self.turn_store.update(ticket.turn_id, state="cancelled")
             finished = True
             yield event
             yield done
@@ -891,7 +1007,7 @@ class Agent:
                      "request_id": request_id, "needs_review": side_effect_started}
             done = {"type": "done", "turn_id": ticket.turn_id, "event_id": event_id, "request_id": request_id}
             if record is not None:
-                await self.turn_store.update(ticket.turn_id, state="failed", events=[event, done], needs_review=side_effect_started)
+                await self.turn_store.update(ticket.turn_id, state="failed", needs_review=side_effect_started)
             finished = True
             yield event
             yield done
@@ -905,6 +1021,24 @@ class Agent:
                     self.inbox.release_turn()
                 if record is not None and not finished:
                     await asyncio.shield(self.turn_store.update(ticket.turn_id, state="interrupted", needs_review=True))
+
+    async def _persist_resume_snapshot(self, turn_id: Optional[str], input_messages: list) -> None:
+        """Store a resumable boundary before each model call.
+
+        A snapshot larger than ``AgentConfig.RESUME_SNAPSHOT_MAX_BYTES`` cannot
+        be recovered safely, so the turn is marked non-resumable instead.
+        """
+        if not turn_id:
+            return
+        try:
+            serialized = json.dumps(input_messages, ensure_ascii=False)
+        except (TypeError, ValueError):
+            await self.turn_store.update(turn_id, resumable=False)
+            return
+        if len(serialized) <= AgentConfig.RESUME_SNAPSHOT_MAX_BYTES:
+            await self.turn_store.update(turn_id, resume_snapshot=json.loads(serialized), resumable=True)
+        else:
+            await self.turn_store.update(turn_id, resumable=False)
 
     async def _drive_claimed_turn(
         self,
@@ -1077,6 +1211,7 @@ class Agent:
                     trace_metadata.get("turn_id"), iteration_index + 1,
                     MessageHandler.count_current_task_images(input_messages),
                 )
+                await self._persist_resume_snapshot(trace_metadata.get("turn_id"), input_messages)
                 async for model_event in self.model_client.model_turn_events(
                     messages=input_messages,
                     tool_specs=tool_specs,

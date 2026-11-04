@@ -12,6 +12,7 @@ from xagent.core.inbox import (
     AgentInbox,
     InboxItem,
     InboxKind,
+    is_scheduled_work,
     scheduled_task_display_content,
 )
 from xagent.core.runtime import ScheduledDeliveryContext, scheduled_delivery_context
@@ -27,6 +28,14 @@ from tests.test_agent_chat_flow import (
     FakeToolManager,
     InMemoryMessageStorage,
 )
+
+
+class ScheduledWorkDetectionTests(unittest.TestCase):
+    def test_work_turn_counts_as_non_human_work(self):
+        self.assertTrue(is_scheduled_work({INBOX_KIND_METADATA_KEY: InboxKind.WORK_TURN.value}))
+        self.assertTrue(is_scheduled_work({INBOX_KIND_METADATA_KEY: InboxKind.SCHEDULED_TURN.value}))
+        self.assertFalse(is_scheduled_work({INBOX_KIND_METADATA_KEY: InboxKind.USER_TURN.value}))
+        self.assertFalse(is_scheduled_work(None))
 
 
 class ScheduledTaskDisplayContentTests(unittest.TestCase):

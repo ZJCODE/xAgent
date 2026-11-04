@@ -301,7 +301,15 @@ class ModelLimitsTests(unittest.IsolatedAsyncioTestCase):
                         await service.run_chat_response(ChatInput(user_id="alice", user_message="hello"))
                 self.assertEqual(error.exception.payload["error_code"], "timeout")
                 self.assertTrue(error.exception.payload["turn_id"])
-                records = await agent.turn_store.list_records()
+                # The client-side deadline no longer cancels the turn: it keeps
+                # running under the broker until its own run deadline expires.
+                records = []
+                deadline = time.monotonic() + 2.0
+                while time.monotonic() < deadline:
+                    records = await agent.turn_store.list_records()
+                    if records and records[0]["state"] == "timeout" and not agent.inbox.busy:
+                        break
+                    await asyncio.sleep(0.005)
                 self.assertEqual(records[0]["state"], "timeout")
                 self.assertFalse(agent.inbox.busy)
                 self.assertEqual(endpoint.create.await_count, 1)

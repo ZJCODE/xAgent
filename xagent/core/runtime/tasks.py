@@ -706,7 +706,7 @@ class AsyncTaskScheduler:
         if self.is_running:
             return
         self._stop_event.clear()
-        self.recover_running_tasks()
+        await asyncio.to_thread(self.recover_running_tasks)
         self._task = asyncio.create_task(self.run_forever())
 
     def recover_running_tasks(self):
@@ -727,7 +727,7 @@ class AsyncTaskScheduler:
                 await asyncio.wait(pending, timeout=1)
         # Ownership is retained by RuntimeHost while any tool writer is alive.
         if not any(not t.done() for t in self._inflight):
-            self.store.recover(self._now())
+            await asyncio.to_thread(self.store.recover, self._now())
 
     async def run_forever(self):
         while not self._stop_event.is_set():
@@ -749,12 +749,14 @@ class AsyncTaskScheduler:
     async def tick(self, *, wait_for_dispatches=True):
         now = self._now()
         for run_id in list(self._orphaned_runs):
-            self.store.recover(now, run_id)
+            await asyncio.to_thread(self.store.recover, now, run_id)
             self._orphaned_runs.discard(run_id)
-        self.store.materialize(now)
+        await asyncio.to_thread(self.store.materialize, now)
         started = []
         while len(self._inflight) < self.max_concurrent_dispatches:
-            run = self.store.claim(now, lambda payload: self.can_handle(_record(self.tasks_dir, dict(payload, status="active"))))
+            run = await asyncio.to_thread(
+                self.store.claim, now,
+                lambda payload: self.can_handle(_record(self.tasks_dir, dict(payload, status="active"))))
             if run is None:
                 break
             payload = dict(run["snapshot"], status="active", next_due=run["due_at"], scheduled_at=run["due_at"])
@@ -766,7 +768,8 @@ class AsyncTaskScheduler:
             started.append(task)
         if wait_for_dispatches and started:
             await asyncio.gather(*started, return_exceptions=False)
-        return min((aware(p["next_due"]) for p in self.store.tasks() if p.get("next_due")), default=None)
+        tasks = await asyncio.to_thread(self.store.tasks)
+        return min((aware(p["next_due"]) for p in tasks if p.get("next_due")), default=None)
 
     def _done(self, task):
         self._inflight.discard(task)
@@ -796,23 +799,23 @@ class AsyncTaskScheduler:
                         if not isinstance(result, dict) or not (result.get("content") or result.get("attachments")):
                             raise ValueError("Scheduled task produced no final result")
                         run.update(status="result_ready", phase="deliver", result=result)
-                        self.store.save_run(run)
+                        await asyncio.to_thread(self.store.save_run, run)
                     run.update(status="delivering", phase="deliver")
-                    self.store.save_run(run)
+                    await asyncio.to_thread(self.store.save_run, run)
                     with strict_task_delivery():
                         receipt = await self.deliver(record, run["result"], run["id"])
                     if not isinstance(receipt, dict) or not receipt.get("accepted"):
                         raise DeliveryUncertainError("Delivery returned no positive acknowledgement")
                     run["delivery_receipt"] = receipt
             run.update(status="succeeded", phase="completed", error=None, finished_at=stamp(self._now()), attempt_finished_at=stamp(self._now()))
-            self.store.save_run(run)
+            await asyncio.to_thread(self.store.save_run, run)
         except asyncio.CancelledError:
             # The persisted executing/delivering boundary is reconciled once the
             # handler has stopped. Do not overwrite accepted per-part receipts.
             raise
         except Exception as exc:
             phase = run["phase"]
-            parts = self.store.get_run(record.task_id, run["id"])["deliveries"]
+            parts = (await asyncio.to_thread(self.store.get_run, record.task_id, run["id"]))["deliveries"]
             uncertain = isinstance(exc, DeliveryUncertainError) or (phase == "prepare" and run.get("unsafe_tools_started"))
             if phase == "deliver":
                 uncertain = uncertain or any(p["status"] in {"sending", "needs_review"} and p.get("uncertain_on_error", True) for p in parts)
@@ -830,7 +833,7 @@ class AsyncTaskScheduler:
                        failure_stage=phase, error=_safe_error_summary(exc), error_type=type(exc).__name__,
                        retry_at=stamp(retry_at) if retry else None,
                        attempt_finished_at=stamp(self._now()), finished_at=None if retry else stamp(self._now()))
-            self.store.save_run(run)
+            await asyncio.to_thread(self.store.save_run, run)
             self.logger.warning("Task execution %s failed in %s: %s", run["id"], phase, run["error"])
 
 

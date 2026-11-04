@@ -220,8 +220,11 @@ class RuntimeTurnFaultTests(unittest.IsolatedAsyncioTestCase):
             async def aclose(self):
                 raise RuntimeError("cleanup failed")
         agent._drive_claimed_turn = lambda **kwargs: FailedCleanupIterator()
-        with self.assertRaisesRegex(RuntimeError, "cleanup failed"):
-            _ = [event async for event in agent.chat_events("hello", user_id="alice", channel="api")]
+        # Generator failures surface as internal error events now that the
+        # broker owns the turn; the inbox slot must still be released.
+        events = [event async for event in agent.chat_events("hello", user_id="alice", channel="api")]
+        internal = [event for event in events if event.get("type") == "error" and event.get("internal")]
+        self.assertTrue(internal and "cleanup failed" in str(internal[-1].get("error") or ""))
         self.assertFalse(agent.inbox.busy)
         ticket = agent.inbox.reserve_turn(channel="weixin")
         await asyncio.wait_for(agent.inbox.acquire_turn(ticket), 0.1)
@@ -248,6 +251,7 @@ class RuntimeTurnFaultTests(unittest.IsolatedAsyncioTestCase):
         retry = await attempt("attempt-2")
         self.assertEqual(len(calls), 2)
         self.assertTrue(any(event.get("error") == "first attempt failed" for event in first))
-        self.assertFalse(any(event["type"] == "accepted" for event in duplicate))
+        accepted = [event for event in duplicate if event["type"] == "accepted"]
+        self.assertTrue(accepted and all(event.get("replay") for event in accepted))
         self.assertTrue(any(event.get("content") == "retry succeeded" for event in retry))
         self.assertEqual(len(await agent.turn_store.list_records()), 2)

@@ -7,6 +7,7 @@ from typing import Any, Optional
 from ..config import AgentConfig
 from .manager import ToolManager
 from .guards import ToolCallContext, ToolDecision, ToolGuardResult
+from .scope import tool_call_scope
 from ...components import MessageStorage
 from ...utils.image_utils import MAX_IMAGES_PER_MESSAGE, is_image_output
 from ...tools.artifact_tool import (
@@ -34,6 +35,25 @@ class ToolDisplayResult:
     attachments: list[dict] = field(default_factory=list)
 
 
+class ResourceLocks:
+    """Serialize tool executions that share a declared resource.
+
+    Read-only tools run unlocked. Tools declaring a ``write_scope`` serialize
+    per scope; undeclared mutating tools fall back to one conservative global
+    lock, preserving the pre-existing single-inbox serialization.
+    """
+
+    def __init__(self) -> None:
+        self._scoped: dict[str, asyncio.Lock] = {}
+        self.default_write = asyncio.Lock()
+
+    def for_key(self, key: str) -> asyncio.Lock:
+        lock = self._scoped.get(key)
+        if lock is None:
+            lock = self._scoped[key] = asyncio.Lock()
+        return lock
+
+
 class ToolExecutor:
     """Executes tool calls, handles image display results, and manages concurrent execution."""
 
@@ -52,10 +72,8 @@ class ToolExecutor:
         self.observability = observability
         self.guards = list(guards or [])
         self.workspace_dir = workspace_dir
-        self._turn_user_id = ""
-        self._turn_channel = None
-        self._turn_room_name = None
-        self._turn_inbox_kind = ""
+        self._call_scope = tool_call_scope
+        self.resource_locks = ResourceLocks()
         self._see_image_already_visible = 0
         self._see_image_paths: list[str] = []
         self._see_image_lock = asyncio.Lock()
@@ -97,16 +115,7 @@ class ToolExecutor:
         Returns:
             None if no displayable output, otherwise a ToolDisplayResult.
         """
-        previous = (
-            self._turn_user_id,
-            self._turn_channel,
-            self._turn_room_name,
-            self._turn_inbox_kind,
-        )
-        self._turn_user_id = user_id
-        self._turn_channel = channel
-        self._turn_room_name = room_name
-        self._turn_inbox_kind = inbox_kind
+        scope_token = self._call_scope.set((user_id, channel, room_name, inbox_kind))
         try:
             return await self._handle_tool_calls_locked(
                 tool_calls,
@@ -114,12 +123,7 @@ class ToolExecutor:
                 max_concurrent_tools,
             )
         finally:
-            (
-                self._turn_user_id,
-                self._turn_channel,
-                self._turn_room_name,
-                self._turn_inbox_kind,
-            ) = previous
+            self._call_scope.reset(scope_token)
 
     async def _handle_tool_calls_locked(
         self,
@@ -214,10 +218,10 @@ class ToolExecutor:
             name=name,
             args=args,
             workspace_dir=self.workspace_dir,
-            user_id=self._turn_user_id,
-            channel=self._turn_channel,
-            room_name=self._turn_room_name,
-            inbox_kind=self._turn_inbox_kind,
+            user_id=self._call_scope.get()[0],
+            channel=self._call_scope.get()[1],
+            room_name=self._call_scope.get()[2],
+            inbox_kind=self._call_scope.get()[3],
         )
         denied = await self._pre_execute(call_ctx)
         if denied is not None:
@@ -228,9 +232,14 @@ class ToolExecutor:
         logger.info("Calling tool: %s with args: %s", name, args)
 
         tool_ctx = self._tool_observation(name=name, call_id=call_id, arguments=args)
+        lock = self._execution_lock(func)
         with tool_ctx as tool_obs:
             try:
-                result = await func(**args)
+                if lock is None:
+                    result = await func(**args)
+                else:
+                    async with lock:
+                        result = await func(**args)
                 result = await self._post_execute(call_ctx, result)
             except Exception as e:
                 logger.error("Tool call error: %s", e)
@@ -296,6 +305,15 @@ class ToolExecutor:
                 attachments=[],
             ) if image_data else None
             return self._tool_result_message(call_id, model_output), display_result
+
+    def _execution_lock(self, func) -> Optional[asyncio.Lock]:
+        """Read-only tools run unlocked; others serialize per declared scope."""
+        if getattr(func, "retry_safety", "external") == "read_only":
+            return None
+        scope = str(getattr(func, "write_scope", "") or "").strip()
+        if scope:
+            return self.resource_locks.for_key(scope)
+        return self.resource_locks.default_write
 
     async def _pre_execute(self, ctx: ToolCallContext) -> Optional[str]:
         for guard in self.guards:

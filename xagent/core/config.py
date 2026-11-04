@@ -91,6 +91,14 @@ class AgentConfig:
     WORKING_CONTEXT_ROLL_SLACK_MAX = 16
     WORKING_CONTEXT_SUMMARY_MAX_CHARS = 1500
     WORKING_CONTEXT_SUMMARY_MAX_TOKENS = 2048
+    # A turn that runs longer than this wall-clock budget in the foreground is
+    # converted to background work (ExecutionBroker emits ``backgrounded``).
+    TURN_BACKGROUND_BUDGET_SECONDS = 8.0
+    # Upper bound for a persisted resume snapshot; larger turns are marked
+    # non-resumable instead of storing an oversized snapshot.
+    RESUME_SNAPSHOT_MAX_BYTES = 1_000_000
+    # Maximum number of background work executions that may run at once.
+    MAX_BACKGROUND_WORK = 2
 
     @staticmethod
     def history_fetch_depth(
@@ -576,7 +584,7 @@ class AgentConfig:
     ) -> str:
         del channel_instructions  # assembled as its own prompt section
         resolved_current_time = current_time or current_date
-        if str(inbox_kind or "").strip() == "scheduled_turn":
+        if str(inbox_kind or "").strip() in {"scheduled_turn", "work_turn"}:
             return AgentConfig.CURRENT_SCHEDULED_TASK_TEMPLATE.format(
                 current_user_id=current_user_id,
                 current_time=resolved_current_time,

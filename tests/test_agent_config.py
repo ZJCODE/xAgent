@@ -95,6 +95,16 @@ class AgentConfigPromptTests(unittest.TestCase):
         self.assertEqual(AgentConfig.MEMORY_RECENT_MAX_CHARS, 8000)
         self.assertEqual(AgentConfig.MEMORY_WINDOW_OVERLAP_RATIO, 0.2)
 
+    def test_current_task_prompt_treats_work_turn_as_a_due_task(self):
+        work_prompt = AgentConfig.build_current_task(
+            "u1", current_time="2026-01-01 10:00", inbox_kind="work_turn"
+        )
+        self.assertIn("due scheduled task", work_prompt)
+        reply_prompt = AgentConfig.build_current_task(
+            "u1", current_time="2026-01-01 10:00", inbox_kind="user_turn"
+        )
+        self.assertNotIn("due scheduled task", reply_prompt)
+
 class ProviderConfigTests(unittest.TestCase):
     def test_reasoning_config_normalizes_supported_provider_controls(self):
         self.assertEqual(

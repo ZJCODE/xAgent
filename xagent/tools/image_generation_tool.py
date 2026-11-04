@@ -461,6 +461,7 @@ def create_image_generation_tool(
         )
 
     _limit_tool_schema_to_provider(generate_image.tool_spec, provider)
+    generate_image.write_scope = "workspace"
     return generate_image
 
 

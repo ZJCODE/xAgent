@@ -12,6 +12,11 @@ from .skills_tool import create_read_skill_tool
 from .scheduler_tool import create_schedule_task_tool
 from .web_fetch_tool import create_web_fetch_tool
 from .device_tool import create_device_tool
+from .work_tools import (
+    create_cancel_work_tool,
+    create_delegate_work_tool,
+    create_list_work_tool,
+)
 
 __all__ = [
     "run_command",
@@ -27,6 +32,9 @@ __all__ = [
     "create_schedule_task_tool",
     "create_web_fetch_tool",
     "create_device_tool",
+    "create_delegate_work_tool",
+    "create_list_work_tool",
+    "create_cancel_work_tool",
 ]
 
 TOOL_REGISTRY = {

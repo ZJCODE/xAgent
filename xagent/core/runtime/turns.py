@@ -60,6 +60,32 @@ class TurnStore:
     async def update(self, turn_id: str, **changes) -> None:
         await asyncio.to_thread(self._update, turn_id, changes)
 
+    async def append_events(self, turn_id: str, events: list[dict]) -> None:
+        """Append structural events to the stored turn record atomically."""
+        if not events:
+            return
+        await asyncio.to_thread(self._append_events, turn_id, events)
+
+    def _append_events(self, turn_id, events):
+        if self.path is None:
+            for record in self._records.values():
+                if record["turn_id"] == turn_id:
+                    record.setdefault("events", []).extend(events)
+                    record["updated_at"] = time.time()
+                    return
+            return
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute("SELECT record_json FROM turns WHERE turn_id=?", (turn_id,)).fetchone()
+            if row is None:
+                return
+            record = json.loads(row[0])
+            record.setdefault("events", []).extend(events)
+            record["updated_at"] = time.time()
+            connection.execute("UPDATE turns SET record_json=? WHERE turn_id=?", (
+                json.dumps(record, ensure_ascii=False), turn_id,
+            ))
+
     def _update(self, turn_id, changes):
         if self.path is None:
             for record in self._records.values():

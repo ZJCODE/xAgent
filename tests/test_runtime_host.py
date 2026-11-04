@@ -97,7 +97,8 @@ class AgentAdmissionTests(unittest.IsolatedAsyncioTestCase):
         second = [event async for event in agent.chat_events("hello", user_id="alice", channel="api", event_id="request-1")]
         self.assertEqual(len(model.calls), 1)
         self.assertEqual(len(agent.message_storage.messages), 2)
-        self.assertEqual(first[-1], second[-1])
+        replayed_done = {key: value for key, value in second[-1].items() if key != "replay"}
+        self.assertEqual(first[-1], replayed_done)
 
     async def test_queue_has_one_shared_capacity_and_timeout(self):
         inbox = AgentInbox(max_pending=1, queue_timeout=0.02)
