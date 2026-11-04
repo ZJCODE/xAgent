@@ -74,6 +74,16 @@ from .working_context import (
 
 logger = logging.getLogger(__name__)
 
+class _TurnStepTimeout(Exception):
+    """An operation inside a turn timed out before the turn deadline."""
+
+
+async def _next_turn_event(iterator):
+    try:
+        return await iterator.__anext__()
+    except TimeoutError as exc:
+        raise _TurnStepTimeout() from exc
+
 # Model-facing only. Not stored and not shown to the user.
 STEER_CONTINUATION_NUDGE = (
     "Address the new user message. "
@@ -831,7 +841,7 @@ class Agent:
             )
             while True:
                 try:
-                    event = await asyncio.wait_for(iterator.__anext__(), timeout=max(0.001, deadline - time.monotonic()))
+                    event = await asyncio.wait_for(_next_turn_event(iterator), timeout=max(0.001, deadline - time.monotonic()))
                 except StopAsyncIteration:
                     break
                 event = {**event, "turn_id": ticket.turn_id, "event_id": event_id, "request_id": request_id}
@@ -857,8 +867,11 @@ class Agent:
                 await self.turn_store.update(ticket.turn_id, state=terminal, events=final_events,
                     input_cursor=(existing_user_msg.metadata or {}).get("storage_cursor"))
                 finished = True
-        except (InboxQueueTimeout, asyncio.TimeoutError) as exc:
-            event = {**build_public_error(code="timeout", cause=exc), "turn_id": ticket.turn_id,
+        except (InboxQueueTimeout, asyncio.TimeoutError, _TurnStepTimeout) as exc:
+            stage = "queue" if isinstance(exc, InboxQueueTimeout) else "operation" if isinstance(exc, _TurnStepTimeout) else "execution"
+            logger.warning("Turn timed out request_id=%s turn_id=%s channel=%s stage=%s queue_limit=%ss run_limit=%ss", request_id, ticket.turn_id, item.channel, stage, self.inbox.queue_timeout, self.inbox.run_timeout, exc_info=isinstance(exc, _TurnStepTimeout))
+            message = "An operation timed out while processing your message." if stage == "operation" else None
+            event = {**build_public_error(code="timeout", message=message, cause=exc), "turn_id": ticket.turn_id,
                      "event_id": event_id, "request_id": request_id, "needs_review": side_effect_started}
             done = {"type": "done", "turn_id": ticket.turn_id, "event_id": event_id, "request_id": request_id}
             await self.turn_store.update(ticket.turn_id, state="timeout", events=[event, done], needs_review=side_effect_started)

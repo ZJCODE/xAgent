@@ -199,7 +199,7 @@ class AgentConfig:
     # legacy callable-agent settings are kept alongside their shared defaults.
     # ============================================================
     DEFAULT_MAX_PENDING_TURNS = 32
-    DEFAULT_TURN_RUN_TIMEOUT = 600.0  # 10 minutes, across all model/tool iterations
+    DEFAULT_TURN_RUN_TIMEOUT = 1800.0  # 30 minutes, across all model/tool iterations
     # A queued follow-up has to outlive the turn already holding the lock.
     # The wait is one full run budget plus a short grace. The grace covers
     # the gap between reserving the waiter and the holder starting its run

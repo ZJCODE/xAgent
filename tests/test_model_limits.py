@@ -308,6 +308,27 @@ class ModelLimitsTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 await agent.working_context_compactor.cancel_refresh()
 
+    async def test_inner_timeout_is_distinguished_from_turn_deadline(self):
+        async def timed_out_step(**kwargs):
+            raise TimeoutError("upstream step timed out")
+            yield
+
+        with tempfile.TemporaryDirectory() as root:
+            agent = Agent(client=fake_client(SimpleNamespace()), workspace=root,
+                          model_api=MODEL_API_OPENAI_CHAT_COMPLETIONS)
+            try:
+                with patch.object(agent, "_drive_claimed_turn", side_effect=timed_out_step):
+                    events = [event async for event in agent.chat_events(
+                        user_message="hello", user_id="alice", channel="weixin", stream=False,
+                    )]
+                error = next(event for event in events if event["type"] == "error")
+                self.assertIn("operation timed out", error["error"])
+                self.assertEqual(error["error_code"], "timeout")
+                self.assertEqual((await agent.turn_store.list_records())[0]["state"], "timeout")
+                self.assertFalse(agent.inbox.busy)
+            finally:
+                await agent.working_context_compactor.cancel_refresh()
+
     async def test_uncertain_scheduled_result_closes_its_turn_immediately(self):
         closed = []
 
