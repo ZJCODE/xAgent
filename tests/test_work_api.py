@@ -63,6 +63,8 @@ class WorkApiTests(unittest.IsolatedAsyncioTestCase):
     async def test_supplement_messages_are_persisted_and_forwarded(self):
         host = await self._host()
         work = await self._create_work(host)
+        # A converted-style work: running under its own turn, no runner channel.
+        await host.work_store.update(work["id"], status="running", turn_ids=["turn-9"])
         app = host._create_control_app()
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
             response = await client.post(
@@ -79,6 +81,8 @@ class WorkApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(payload["control_id"])
         record = await host.work_store.get(work["id"])
         self.assertEqual(record["controls"][0]["content"], "also update the docs")
+        self.assertEqual(record["controls"][0]["state"], "incorporated")
+        self.assertEqual(host.agent.steers, [("turn-9", "also update the docs", "api", "alice", "")])
         self.assertEqual(wrong_user.status_code, 404)
         self.assertEqual(len(record["controls"]), 1)
 
@@ -94,9 +98,10 @@ class WorkApiTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(response.status_code, 409)
 
-    async def test_cancel_flips_active_work_to_stopping(self):
+    async def test_cancel_flips_active_work_to_stopping_and_aborts_its_turn(self):
         host = await self._host()
         work = await self._create_work(host)
+        await host.work_store.update(work["id"], turn_ids=["turn-9"])
         done = await self._create_work(host)
         await host.work_store.update(done["id"], status="completed")
         app = host._create_control_app()
@@ -109,6 +114,7 @@ class WorkApiTests(unittest.IsolatedAsyncioTestCase):
                                            json={"user_id": "bob", "channel": "api"})
         self.assertEqual(response.json()["stopping"], True)
         self.assertEqual((await host.work_store.get(work["id"]))["status"], "stopping")
+        self.assertEqual(host.agent.aborts, [("turn-9", "api")])
         self.assertEqual(terminal.json()["stopping"], False)
         self.assertEqual(wrong_user.status_code, 404)
 
