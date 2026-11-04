@@ -1,6 +1,8 @@
-import { useEffect, useState } from "react";
-import { getAgentVoiceSettings, getVoiceAudioDevices, updateAgentVoiceSettings } from "../lib/api";
-import type { AgentEditSetupResponse, AgentVoiceSettings, SetupOption, VoiceAudioDevices, VoicePreferences } from "../types";
+import { useEffect, useRef, useState } from "react";
+import { LoaderCircle, Play, Square } from "lucide-react";
+import { getAgentVoiceSettings, previewAgentVoice, updateAgentVoiceSettings } from "../lib/api";
+import { VoicePreviewPlayer, type VoicePreviewState } from "../lib/voicePreview";
+import type { AgentEditSetupResponse, AgentVoiceSettings, VoicePreferences } from "../types";
 import { SetupWizardShell } from "./SetupWizardShell";
 import { WizardField } from "./WizardField";
 import { Button } from "./ui";
@@ -9,17 +11,10 @@ const SPEED_MIN = 0.7;
 const SPEED_MAX = 1.3;
 const SPEED_PRESETS = [0.7, 0.85, 1, 1.15, 1.3];
 
-const deviceValue = (value: string | number | null) => String(value ?? "auto");
 function clampSpeed(value: number): number {
   if (!Number.isFinite(value)) return 1;
   return Math.min(SPEED_MAX, Math.max(SPEED_MIN, value));
 }
-function deviceOptions(options: SetupOption[] | undefined, current: string): SetupOption[] {
-  const available = options?.length ? options : [{ id: "auto", label: "Auto" }];
-  return available.some((option) => option.id === current)
-    ? available : [...available, { id: current, label: `${current} (saved)` }];
-}
-
 export function VoiceSettingsDialog({ onClose, onSaved }: {
   onClose: () => void;
   onSaved: (result: AgentEditSetupResponse) => void;
@@ -28,20 +23,31 @@ export function VoiceSettingsDialog({ onClose, onSaved }: {
   const [voice, setVoice] = useState("");
   const [speed, setSpeed] = useState(1);
   const [interruptions, setInterruptions] = useState(false);
-  const [audioInput, setAudioInput] = useState("auto");
-  const [audioOutput, setAudioOutput] = useState("auto");
   const [apiKey, setApiKey] = useState("");
   const [changingKey, setChangingKey] = useState(false);
-  const [moreOpen, setMoreOpen] = useState(false);
-  const [devices, setDevices] = useState<VoiceAudioDevices | null>(null);
-  const [loadingDevices, setLoadingDevices] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [previewState, setPreviewState] = useState<VoicePreviewState>('idle');
+  const [previewError, setPreviewError] = useState('');
+  const preview = useRef<VoicePreviewPlayer | null>(null);
   const dirty = Boolean(settings && (voice !== settings.voice || speed !== settings.speed
-    || interruptions !== settings.interruptions || audioInput !== deviceValue(settings.audio_input)
-    || audioOutput !== deviceValue(settings.audio_output) || apiKey.trim()));
+    || interruptions !== settings.interruptions || apiKey.trim()));
   const speeds = [...new Set([...SPEED_PRESETS, clampSpeed(speed)])].sort((a, b) => a - b);
+
+  useEffect(() => {
+    let active = true;
+    const player = new VoicePreviewPlayer(previewAgentVoice,
+      (state) => { if (active) setPreviewState(state); },
+      (message) => { if (active) setPreviewError(message); });
+    preview.current = player;
+    return () => { active = false; player.stop(); preview.current = null; };
+  }, []);
+
+  useEffect(() => {
+    preview.current?.stop();
+    setPreviewError('');
+  }, [voice, speed, apiKey]);
 
   useEffect(() => {
     let cancelled = false;
@@ -51,26 +57,12 @@ export function VoiceSettingsDialog({ onClose, onSaved }: {
       setVoice(data.voice);
       setSpeed(clampSpeed(data.speed));
       setInterruptions(data.interruptions);
-      setAudioInput(deviceValue(data.audio_input));
-      setAudioOutput(deviceValue(data.audio_output));
       setChangingKey(!data.has_api_key);
     }).catch((err: unknown) => {
       if (!cancelled) setError(err instanceof Error ? err.message : String(err));
     }).finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, []);
-
-  useEffect(() => {
-    if (!moreOpen || devices) { setLoadingDevices(false); return; }
-    let cancelled = false;
-    setLoadingDevices(true);
-    void getVoiceAudioDevices().then((data) => {
-      if (!cancelled) setDevices(data);
-    }).catch(() => {
-      if (!cancelled) setDevices({ input: [], output: [], error: "unavailable" });
-    }).finally(() => { if (!cancelled) setLoadingDevices(false); });
-    return () => { cancelled = true; };
-  }, [moreOpen, devices]);
 
   const save = async () => {
     if (!settings || saving || !dirty) return;
@@ -79,14 +71,13 @@ export function VoiceSettingsDialog({ onClose, onSaved }: {
       return;
     }
     setSaving(true);
+    preview.current?.stop();
     setError("");
     const changes: Partial<VoicePreferences> & { voice_api_key?: string } = {};
     if (apiKey.trim()) changes.voice_api_key = apiKey.trim();
     if (voice !== settings.voice) changes.voice = voice;
     if (speed !== settings.speed) changes.speed = speed;
     if (interruptions !== settings.interruptions) changes.interruptions = interruptions;
-    if (audioInput !== deviceValue(settings.audio_input)) changes.audio_input = audioInput;
-    if (audioOutput !== deviceValue(settings.audio_output)) changes.audio_output = audioOutput;
     try {
       const result = await updateAgentVoiceSettings(changes);
       onSaved(result);
@@ -128,32 +119,31 @@ export function VoiceSettingsDialog({ onClose, onSaved }: {
             </select>
           </WizardField>
         </div>
-        <details className="voice-more-options" onToggle={(event) => setMoreOpen(event.currentTarget.open)}>
-          <summary>More options</summary>
-          <div className="voice-more-fields">
-            <label className="voice-interruptions-row">
-              <span>Allow interruptions</span>
-              <input type="checkbox" role="switch" checked={interruptions} disabled={saving}
-                onChange={(event) => setInterruptions(event.target.checked)} />
-            </label>
-            <div className="voice-host-devices">
-              <p className="wizard-hint">Audio devices on the Agent’s computer</p>
-              <div className="voice-device-row">
-                <WizardField label="Microphone">
-                  <select value={audioInput} onChange={(event) => setAudioInput(event.target.value)} disabled={saving || loadingDevices}>
-                    {deviceOptions(devices?.input, audioInput).map((option) => <option key={option.id} value={option.id}>{option.label || option.id}</option>)}
-                  </select>
-                </WizardField>
-                <WizardField label="Speaker">
-                  <select value={audioOutput} onChange={(event) => setAudioOutput(event.target.value)} disabled={saving || loadingDevices}>
-                    {deviceOptions(devices?.output, audioOutput).map((option) => <option key={option.id} value={option.id}>{option.label || option.id}</option>)}
-                  </select>
-                </WizardField>
-              </div>
-              {devices?.error ? <p className="wizard-hint">Device list unavailable. Auto and saved selections remain available.</p> : null}
-            </div>
+        <div className="voice-preview">
+          <div className="voice-preview-controls">
+            <Button type="button" variant="secondary" disabled={saving || (!settings.has_api_key && !apiKey.trim())}
+              onClick={() => previewState === 'idle'
+                ? void preview.current?.play({ voice, speed, ...(apiKey.trim() ? { voice_api_key: apiKey.trim() } : {}) })
+                : preview.current?.stop()}>
+              {previewState === 'loading' ? <LoaderCircle size={14} className="voice-preview-spinner" />
+                : previewState === 'playing' ? <Square size={13} /> : <Play size={14} />}
+              {previewState === 'loading' ? 'Cancel preview' : previewState === 'playing' ? 'Stop preview' : 'Preview voice'}
+            </Button>
+            <span className="voice-preview-hint" role="status">
+              {previewState === 'loading' ? 'Preparing your sample…' : previewState === 'playing' ? 'Playing sample…' : 'Try your current voice and speed.'}
+            </span>
           </div>
-        </details>
+          {previewError ? <p className="voice-preview-error" role="alert">{previewError}</p> : null}
+        </div>
+        <label className="voice-interruptions-row">
+          <span className="voice-interruptions-copy">
+            <span>Allow interruptions</span>
+            <span className="voice-interruptions-hint" id="voice-interruptions-hint">Speak to interrupt a reply.</span>
+          </span>
+          <input type="checkbox" role="switch" aria-label="Allow interruptions" aria-describedby="voice-interruptions-hint"
+            checked={interruptions} disabled={saving}
+            onChange={(event) => setInterruptions(event.target.checked)} />
+        </label>
       </div> : null}
     </SetupWizardShell>
   );

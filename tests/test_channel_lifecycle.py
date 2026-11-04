@@ -231,7 +231,7 @@ class ChannelLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.host.state, "running")
 
     async def test_control_validation_and_shutdown_admission(self):
-        for name, code in (("unknown", 404), ("voice", 422)):
+        for name, code in (("unknown", 404), ("voice", 410)):
             with self.assertRaises(HTTPException) as error:
                 await self.host.connect_channel(name)
             self.assertEqual(error.exception.status_code, code)

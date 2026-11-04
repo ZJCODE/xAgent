@@ -263,6 +263,7 @@ class DeviceEventOwnershipTests(unittest.IsolatedAsyncioTestCase):
     async def test_buffered_event_from_replaced_connection_is_not_ingested(self):
         class BufferedSocket(device_test.FakeSocket):
             headers = {"authorization": "Bearer desk-secret"}
+            query_params = {}
 
             def __init__(self):
                 super().__init__()

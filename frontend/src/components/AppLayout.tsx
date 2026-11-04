@@ -22,6 +22,7 @@ import { classNames } from "../lib/format";
 import type { RoutePath } from "../types";
 import { AgentSwitcher } from "./AgentSwitcher";
 import { HelpDialog } from "./HelpDialog";
+import { DeviceConnectionHelp } from "./DeviceConnectionHelp";
 import { Button, IconButton } from "./ui";
 
 interface AppLayoutProps {
@@ -47,7 +48,7 @@ export function AppLayout({ route, onNavigate, children }: AppLayoutProps) {
   const { dark, toggleTheme } = useTheme();
   const { agents, selectedAgent } = useAgentSession();
   const { webStatus, retry } = useConnectivity();
-  const [helpOpen, setHelpOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState<"api" | "device" | null>(null);
   const showConnectivityBanner = webStatus === "offline";
   const currentAgent = agents.find((agent) => agent.name === selectedAgent) || agents[0];
 
@@ -72,7 +73,7 @@ export function AppLayout({ route, onNavigate, children }: AppLayoutProps) {
           ))}
         </nav>
         <div className="sidebar-footer">
-          <IconButton type="button" onClick={() => setHelpOpen(true)} title="API Help" aria-label="Open API Help">
+          <IconButton type="button" onClick={() => setHelpOpen("api")} title="API Help" aria-label="Open API Help">
             <CircleHelp size={16} />
           </IconButton>
           <IconButton type="button" onClick={toggleTheme} title="Toggle theme" aria-label="Toggle theme">
@@ -95,10 +96,17 @@ export function AppLayout({ route, onNavigate, children }: AppLayoutProps) {
       </div>
 
       <HelpDialog
-        open={helpOpen}
+        open={helpOpen === "api"}
         currentAgent={currentAgent?.name || ""}
         directApiUrl={currentAgent?.api_url || ""}
-        onClose={() => setHelpOpen(false)}
+        onOpenDeviceHelp={() => setHelpOpen("device")}
+        onClose={() => setHelpOpen(null)}
+      />
+      <DeviceConnectionHelp
+        open={helpOpen === "device"}
+        currentAgent={currentAgent?.name || ""}
+        apiUrl={currentAgent?.api_url || ""}
+        onClose={() => setHelpOpen(null)}
       />
     </div>
   );

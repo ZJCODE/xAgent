@@ -16,7 +16,6 @@ from ..cli.channels import (
     CHANNEL_WEIXIN,
     api_config,
     load_config_file,
-    voice_config,
     weixin_config,
 )
 from ..cli.processes import (
@@ -24,20 +23,18 @@ from ..cli.processes import (
     running_pid,
     tail_text,
 )
-from ..voice.config import VoiceChannelConfig
 from .qr_sessions import get_qr_session_manager
 from .session import WebAgentSession
 
-ChannelId = Literal["api", "voice", "weixin"]
-SetupChannelId = Literal["voice", "weixin"]
+ChannelId = Literal["api", "weixin"]
+SetupChannelId = Literal["weixin"]
 
 CHANNEL_LABELS: dict[str, str] = {
     CHANNEL_API: "API",
-    CHANNEL_VOICE: "Host voice",
     CHANNEL_WEIXIN: "Weixin",
 }
-MANAGED_CHANNELS: tuple[str, ...] = (CHANNEL_API, CHANNEL_VOICE, CHANNEL_WEIXIN)
-SETUP_CHANNELS: tuple[str, ...] = (CHANNEL_VOICE, CHANNEL_WEIXIN)
+MANAGED_CHANNELS: tuple[str, ...] = (CHANNEL_API, CHANNEL_WEIXIN)
+SETUP_CHANNELS: tuple[str, ...] = (CHANNEL_WEIXIN,)
 
 class ChannelSetupInput(BaseModel):
     force: bool = False
@@ -119,7 +116,7 @@ def register_channel_routes(
     if session is not None:
         @app.get("/api/channels/{channel}/setup-schema", tags=["Channels"])
         async def channel_setup_schema(channel: str):
-            return session.channel_setup_schema(channel)
+            return session.channel_setup_schema(_normalize_setup_channel(channel))
 
         @app.post("/api/channels/{channel}/setup", tags=["Channels"])
         async def channel_setup(channel: str, input_data: ChannelSetupInput):
@@ -210,6 +207,8 @@ def register_channel_routes(
 
 def _normalize_channel(channel: str) -> str:
     normalized = str(channel or "").strip().lower()
+    if normalized == CHANNEL_VOICE:
+        raise HTTPException(410, "Host voice has been removed. Use the Voice page or a paired WebSocket voice device.")
     if normalized not in MANAGED_CHANNELS:
         raise HTTPException(status_code=404, detail=f"Unknown channel: {channel}")
     return normalized
@@ -217,6 +216,8 @@ def _normalize_channel(channel: str) -> str:
 
 def _normalize_setup_channel(channel: str) -> str:
     normalized = str(channel or "").strip().lower()
+    if normalized == CHANNEL_VOICE:
+        raise HTTPException(410, "Configure voice in Agent preferences or with xagent voice setup.")
     if normalized not in SETUP_CHANNELS:
         raise HTTPException(status_code=404, detail=f"Unknown channel: {channel}")
     return normalized
@@ -261,18 +262,6 @@ def _readiness(config: dict[str, Any], channel: str) -> tuple[bool, bool, str, s
         data = api_config(config)
         detail = _api_target(data)
         return True, True, detail, ""
-
-    if channel == CHANNEL_VOICE:
-        data = voice_config(config)
-        configured = bool(data)
-        if not configured:
-            return False, False, "", ""
-        try:
-            voice = VoiceChannelConfig.from_dict(data)
-            voice.resolved_api_key()
-        except ValueError as exc:
-            return True, False, str(exc), ""
-        return True, True, "soniox half-duplex", ""
 
     if channel == CHANNEL_WEIXIN:
         data = weixin_config(config)

@@ -522,8 +522,6 @@ def prepare_voice_preset_update(
     voice: str | None = None,
     speed: float | None = None,
     interruptions: bool | None = None,
-    audio_input: str | int | None = None,
-    audio_output: str | int | None = None,
 ) -> ConfigUpdate:
     normalized_provider = provider.strip().lower()
     if normalized_provider not in VOICE_PRESETS:
@@ -552,16 +550,7 @@ def prepare_voice_preset_update(
                 updated["speed"] = speed
             if interruptions is not None:
                 updated["interruptions"] = interruptions
-            if audio_input is not None or audio_output is not None:
-                audio = dict(updated.get("audio") or {})
-                if audio_input is not None:
-                    audio["input"] = audio_input
-                if audio_output is not None:
-                    audio["output"] = audio_output
-                updated["audio"] = audio
             channels["voice"] = VoiceChannelConfig.from_dict(updated).to_public_dict()
-            if "enabled" in current:
-                channels["voice"]["enabled"] = current["enabled"]
         else:
             payload = VoiceChannelConfig.default_public_dict(api_key=resolved_api_key or SONIOX_KEY_PLACEHOLDER)
             if voice is not None:
@@ -570,11 +559,6 @@ def prepare_voice_preset_update(
                 payload["speed"] = speed
             if interruptions is not None:
                 payload["interruptions"] = interruptions
-            if audio_input is not None or audio_output is not None:
-                payload["audio"] = {
-                    key: value for key, value in (("input", audio_input), ("output", audio_output))
-                    if value is not None
-                }
             channels["voice"] = VoiceChannelConfig.from_dict(payload).to_public_dict()
 
     return prepare_update(
@@ -788,8 +772,6 @@ def apply_agent_edit_setup(
             voice=selection.get("voice"),
             speed=selection.get("speed"),
             interruptions=selection.get("interruptions"),
-            audio_input=selection.get("audio_input"),
-            audio_output=selection.get("audio_output"),
         )
     elif normalized == "search":
         update = prepare_search_provider_update(
@@ -833,7 +815,7 @@ def apply_agent_edit_setup(
         "status": "ok",
         "feature": normalized,
         "restart_required": normalized in {"model", "search", "image_generation", "observability", "voice"},
-        "restart_channel": "voice" if normalized == "voice" else "api",
+        "restart_channel": "api",
         "changed": bool(update.changes),
         "changes": [
             {"path": change.path, "before": change.before, "after": change.after}

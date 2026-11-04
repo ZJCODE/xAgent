@@ -53,7 +53,7 @@ _PLAYBACK_MICROPHONE_COOLDOWN_SECONDS = 0.5
 
 @dataclass(frozen=True)
 class VoiceRuntimeOptions:
-    """Runtime options controlled by the CLI command."""
+    """Runtime options supplied by the voice session."""
 
     user_id: str = "local_voice"
     stream: bool = True
@@ -196,6 +196,7 @@ class VoiceRuntime:
         self._floor = ConversationFloor()
         self._utterance_queue: asyncio.Queue[VoiceUtterance | Exception | None] | None = None
         self._steer_result: asyncio.Future[str] | None = None
+        self._active_steer_event: asyncio.Event | None = None
         self._active_voice_turn_id: str | None = None
         self._active_voice_user_id: str | None = None
         self._preemptive_turn_id: str | None = None
@@ -255,7 +256,9 @@ class VoiceRuntime:
     async def run_forever(self) -> None:
         """Run until stopped or a non-recoverable STT error is raised."""
         self._event_loop = asyncio.get_running_loop()
+        self.logger.info('Voice recognition preparing context')
         await self._refresh_stt_context_terms()
+        self.logger.info('Voice recognition context ready')
         self.output("xAgent voice ready. Speak to the microphone; press Ctrl+C to stop.")
         audio_chunks = self.microphone.iter_chunks(
             pause_event=self.pause_event,
@@ -416,16 +419,14 @@ class VoiceRuntime:
     def _active_spoken_ledger(self) -> SpokenLedger | None:
         return getattr(self, "_current_spoken_ledger", None)
 
-    def note_remote_playback_progress(self, played_bytes: int) -> None:
-        """Record client-confirmed playback progress for remote WebSocket voice sessions."""
+    def note_remote_playback_samples(self, played_samples: int, sample_rate: int) -> None:
+        """Record rendered media time in the canonical PCM spoken ledger."""
         ledger = self._active_spoken_ledger()
-        if ledger is None or played_bytes <= 0:
+        if ledger is None or sample_rate <= 0:
             return
-        previous = int(getattr(self, "_current_remote_played_bytes", 0))
-        delta = max(0, int(played_bytes) - previous)
-        if delta > 0:
-            self._current_remote_played_bytes = int(played_bytes)
-            ledger.note_playback_bytes(delta)
+        seconds = played_samples / sample_rate
+        if seconds > ledger.playback_seconds:
+            ledger.playback_seconds = seconds
 
     @property
     def _duplex_capture_enabled(self) -> bool:
@@ -498,7 +499,6 @@ class VoiceRuntime:
                 channels=SONIOX_TTS_CHANNELS,
             )
             self._current_spoken_ledger = spoken_ledger
-            self._current_remote_played_bytes = 0
             await self._execute_floor_commands(
                 self._floor.handle(FloorEvent(FloorEventKind.STT_ENDPOINT, text=transcript))
             )
@@ -535,7 +535,6 @@ class VoiceRuntime:
                 raise
             finally:
                 self._current_spoken_ledger = None
-                self._current_remote_played_bytes = 0
                 steer_event.set()
                 self._active_steer_event = None
                 if steer_task is not None:

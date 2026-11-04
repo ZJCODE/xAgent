@@ -41,7 +41,7 @@ class RuntimeRestartTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(state=state):
                 before = {name: {"state": state} for name in ("api", "weixin", "voice")}
                 result, start, _ = await self.restart(before)
-                start.assert_called_once_with(self.root, ["api", "weixin", "voice"])
+                start.assert_called_once_with(self.root, ["api", "weixin"])
                 self.assertNotIn("restart_warnings", result)
 
     async def test_closed_failed_and_disconnecting_channels_stay_offline(self):
@@ -74,16 +74,16 @@ class RuntimeRestartTests(unittest.IsolatedAsyncioTestCase):
             agent_runtime, "start_runtime", return_value={"status": "running", "channels": {}},
         ) as start:
             result = await agent_runtime.restart_runtime(self.root)
-        start.assert_called_once_with(self.root, ["voice"])
+        start.assert_called_once_with(self.root, [])
         self.assertEqual(len(result["restart_warnings"]), 2)
         self.assertTrue(all("disabled" in warning for warning in result["restart_warnings"]))
 
     async def test_explicit_selection_overrides_snapshot_and_disabled_configuration(self):
         (self.root / "config.yaml").write_text("channels:\n  voice:\n    enabled: false\n")
         result, start, status = await self.restart(
-            {"api": {"state": "connected"}}, acknowledged=["api"], channels=["voice"],
+            {"api": {"state": "connected"}}, acknowledged=["api"], channels=["weixin"],
         )
-        start.assert_called_once_with(self.root, ["voice"])
+        start.assert_called_once_with(self.root, ["weixin"])
         status.assert_not_awaited()
         self.assertNotIn("restart_warnings", result)
 
@@ -179,11 +179,11 @@ class RuntimeStartupHandoffTests(unittest.TestCase):
     def test_cli_restart_uses_shared_flow_and_displays_warnings(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
-            args = argparse.Namespace(config_dir=str(root), channels=["weixin,voice"])
+            args = argparse.Namespace(config_dir=str(root), channels=["weixin"])
             with patch.object(agent_runtime, "restart_runtime", new_callable=AsyncMock, return_value={
                 "channels": {"weixin": {"state": "connecting"}}, "restart_warnings": ["voice: connection failed"],
             }) as restart, patch("sys.stdout", io.StringIO()) as output:
                 self.assertEqual(agent_runtime.handle_restart(args), 0)
-            restart.assert_awaited_once_with(root, ["weixin", "voice"])
+            restart.assert_awaited_once_with(root, ["weixin"])
             self.assertIn("weixin: connecting", output.getvalue())
             self.assertIn("voice: connection failed", output.getvalue())

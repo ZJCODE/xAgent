@@ -1513,14 +1513,14 @@ channels:
             runner = BaseAgentRunner(config_dir=tmpdir)
 
             self.assertEqual(runner.config["channels"]["voice"]["api_key"], "test-soniox-key")
-            self.assertEqual(enabled_channels_from_config(runner.config), ["api", "voice"])
+            self.assertEqual(enabled_channels_from_config(runner.config), ["api"])
 
     def test_voice_dependencies_are_main_project_dependencies(self):
         pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
 
         dependencies = "\n".join(pyproject["project"]["dependencies"])
         self.assertNotIn("optional-dependencies", pyproject["project"])
-        self.assertIn("sounddevice", dependencies)
+        self.assertNotIn("sounddevice", dependencies)
         self.assertIn("python-socks", dependencies)
         self.assertIn("websockets", dependencies)
         self.assertIn("soniox>=2.8,<3", dependencies)

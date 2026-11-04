@@ -99,7 +99,7 @@ class RuntimeHost:
         self._startup_fingerprint = None
         self.channel_drain_timeout = 10.0
         self.channel_cleanup_timeout = 5.0
-        self._channel_locks = {name: asyncio.Lock() for name in ("api", "weixin", "voice")}
+        self._channel_locks = {name: asyncio.Lock() for name in ("api", "weixin")}
         self._channel_generation = {name: 0 for name in self._channel_locks}
         self._channel_activity: dict[str, ChannelActivity] = {}
         self._channel_operations: dict[str, asyncio.Task] = {}
@@ -192,7 +192,9 @@ class RuntimeHost:
             channels = self.requested_channels if self.requested_channels is not None else default_runtime_channels(self.runner.config)
             self.channel_status = {name: {"state": "disconnected"} for name in self._channel_locks}
             for channel in channels:
-                if channel not in {"api", "weixin", "voice"}:
+                if channel == "voice":
+                    raise ValueError("Host voice has been removed. Use the Voice page or a paired WebSocket voice device.")
+                if channel not in {"api", "weixin"}:
                     raise ValueError(f"Unknown channel: {channel}")
                 self.channel_status[channel] = {"state": "starting"}
 
@@ -379,6 +381,8 @@ class RuntimeHost:
         return operation
 
     def _require_channel_control(self, channel: str) -> None:
+        if channel == "voice":
+            raise HTTPException(410, "Host voice has been removed. Use the Voice page or a paired WebSocket voice device.")
         if channel not in self._channel_locks:
             raise HTTPException(404, "Unknown channel")
         if not self.runtime_ready or self._stop_event.is_set():
@@ -591,16 +595,7 @@ class RuntimeHost:
             self.adapters[channel] = adapter
             run = adapter.run()
         else:
-            from ...interfaces.voice.config import VoiceChannelConfig
-            from ...interfaces.voice.factory import create_local_voice_runtime
-            from ...interfaces.voice.runtime import VoiceRuntimeOptions
-            from ...interfaces.cli.channels import voice_config
-
-            adapter = create_local_voice_runtime(agent=self.agent,
-                config=VoiceChannelConfig.from_dict(voice_config(config)),
-                options=VoiceRuntimeOptions(tasks_dir=self.runner.tasks_dir))
-            self.adapters[channel] = adapter
-            run = adapter.run_forever()
+            raise ValueError(f"Unknown channel: {channel}")
         if channel != "api":
             adapter.runtime_activity = activity
             loop = asyncio.get_running_loop()
@@ -621,19 +616,11 @@ class RuntimeHost:
 
     def _resolve_voice_adapter(self, target: Any, *, user_id: str = ""):
         target_dict = target if isinstance(target, dict) else {}
-        if self.device_service is not None and self.device_service.voice_sessions:
-            if target_dict.get("device_id") or target_dict.get("room_name") or str(user_id or "").startswith("device:"):
-                session = self.device_service.resolve_voice_session(target_dict, user_id=user_id)
-                if session is not None and getattr(session, "runtime", None) is not None:
-                    return session.runtime
-        local_voice = self.adapters.get("voice")
-        if local_voice is not None and self.channel_status.get("voice", {}).get("state") == "connected":
-            return local_voice
-        if self.device_service is not None and self.device_service.voice_sessions:
+        if self.device_service is not None:
             session = self.device_service.resolve_voice_session(target_dict, user_id=user_id)
-            if session is not None and getattr(session, "runtime", None) is not None:
-                return session.runtime
-        return local_voice
+            if session is not None:
+                return getattr(session, "runtime", None)
+        return None
 
     def _task_adapter(self, task):
         channel = task.delivery_channel

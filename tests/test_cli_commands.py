@@ -557,11 +557,11 @@ class CLICommandTests(unittest.TestCase):
 
     def test_voice_command_points_to_the_shared_runtime(self):
         args = argparse.Namespace(config_dir="/tmp/xagent", list_devices=False)
-        with patch("xagent.interfaces.voice.factory.create_local_voice_runtime") as factory:
+        with patch("xagent.interfaces.voice.factory.create_websocket_voice_runtime") as factory:
             with patch("sys.stdout", new_callable=io.StringIO) as output:
                 self.assertEqual(handle_voice(args), 0)
         factory.assert_not_called()
-        self.assertIn("xagent run", output.getvalue())
+        self.assertIn("Voice page", output.getvalue())
 
     def test_interactive_chat_exit_does_not_flush_memory(self):
         class FakeAgent:
@@ -928,7 +928,7 @@ class CLICommandTests(unittest.TestCase):
                     subtitle = _launcher_overview_subtitle(build_runtime_overview(Path(tmpdir)))
 
         self.assertIn("Runtime    ready  pid 26807", subtitle)
-        self.assertIn("Voice      running  soniox voice", subtitle)
+        self.assertIn("Voice      configured", subtitle)
         self.assertIn("API        running  127.0.0.1:8010", subtitle)
         self.assertIn("Web        running", subtitle)
         self.assertIn("99999", subtitle)
@@ -945,7 +945,7 @@ class CLICommandTests(unittest.TestCase):
             options = _launcher_channel_options(Path(tmpdir))
         titles = [option.title for option in options]
 
-        self.assertEqual(titles, ["Chat", "API", "Weixin", "Voice", "Back"])
+        self.assertEqual(titles, ["Chat", "API", "Weixin", "Back"])
         self.assertNotIn("All", titles)
         self.assertNotIn("Web", titles)
 
@@ -1124,14 +1124,14 @@ class CLICommandTests(unittest.TestCase):
                     running = build_runtime_overview(Path(tmpdir))
 
         stopped_voice = next(item for item in stopped.items if item.name == "Voice")
-        self.assertEqual(stopped_voice.status, "idle")
-        self.assertEqual(stopped_voice.value, "stopped")
-        self.assertEqual(stopped_voice.detail, "soniox voice")
+        self.assertEqual(stopped_voice.status, "ok")
+        self.assertEqual(stopped_voice.value, "configured")
+        self.assertEqual(stopped_voice.detail, "Browser / WebSocket devices")
 
         running_voice = next(item for item in running.items if item.name == "Voice")
         self.assertEqual(running_voice.status, "ok")
-        self.assertEqual(running_voice.value, "running")
-        self.assertEqual(running_voice.detail, "soniox voice")
+        self.assertEqual(running_voice.value, "configured")
+        self.assertEqual(running_voice.detail, "Browser / WebSocket devices")
 
     def test_config_editor_updates_search_provider_with_validation(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1390,7 +1390,7 @@ class CLICommandTests(unittest.TestCase):
 
         self.assertEqual(saved["channels"]["voice"]["api_key"], "new-key")
         self.assertNotIn("languages", saved["channels"]["voice"])
-        self.assertEqual(saved["channels"]["voice"]["audio"]["input"], "Mic")
+        self.assertNotIn("audio", saved["channels"]["voice"])
         self.assertNotIn("provider", saved["channels"]["voice"])
 
     def test_partial_update_launcher_includes_observability_and_routes(self):
@@ -1637,85 +1637,14 @@ class CLICommandTests(unittest.TestCase):
 
         self.assertEqual(
             set(fake_ui.options_by_key),
-            {"api_key", "voice", "interruptions", "input_device", "output_device", "disable", "back"},
+            {"api_key", "voice", "interruptions", "disable", "back"},
         )
         self.assertFalse(fake_ui.options_by_key["api_key"].disabled)
         self.assertTrue(fake_ui.options_by_key["disable"].disabled)
-        for key in ("voice", "interruptions", "input_device", "output_device"):
+        for key in ("voice", "interruptions"):
             self.assertTrue(fake_ui.options_by_key[key].disabled)
 
-    def test_voice_channel_launcher_shows_setup_when_voice_not_enabled(self):
-        class FakeUI:
-            def __init__(self):
-                self.options_by_key = {}
 
-            def select_menu(self, *, title, subtitle, options, footer):
-                del subtitle, footer
-                if title != "xAgent Channel / Voice":
-                    raise AssertionError(f"Unexpected menu: {title}")
-                self.options_by_key = {option.key: option for option in options}
-                return SimpleNamespace(key="back")
-
-            def clear(self):
-                return None
-
-            def print_panel(self, *args, **kwargs):
-                raise AssertionError("No panel expected")
-
-        fake_ui = FakeUI()
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            _write_runtime(tmpdir)
-
-            from xagent.interfaces.cli.launcher import _run_voice_channel_launcher
-
-            _run_voice_channel_launcher(fake_ui, Path(tmpdir))
-
-        self.assertEqual(fake_ui.options_by_key["configure"].title, "Set up")
-        self.assertFalse(fake_ui.options_by_key["configure"].disabled)
-        self.assertNotIn("start", fake_ui.options_by_key)
-        self.assertNotIn("stop", fake_ui.options_by_key)
-        self.assertNotIn("foreground", fake_ui.options_by_key)
-        self.assertFalse(fake_ui.options_by_key["devices"].disabled)
-
-    def test_voice_channel_launcher_configure_routes_to_voice_config(self):
-        class FakeUI:
-            def __init__(self):
-                self.choices = iter([
-                    SimpleNamespace(key="configure"),
-                    SimpleNamespace(key="back"),
-                ])
-
-            def select_menu(self, *, title, subtitle, options, footer):
-                del subtitle, options, footer
-                if title != "xAgent Channel / Voice":
-                    raise AssertionError(f"Unexpected menu: {title}")
-                return next(self.choices)
-
-            def clear(self):
-                return None
-
-            def pause(self, message="Press Enter to continue"):
-                del message
-                return None
-
-            def print_panel(self, *args, **kwargs):
-                raise AssertionError("No panel expected")
-
-        fake_ui = FakeUI()
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            _write_runtime(tmpdir)
-            config_dir = Path(tmpdir)
-
-            from xagent.interfaces.cli.launcher import _run_voice_channel_launcher
-
-            with patch("xagent.interfaces.cli.launcher._run_voice_config_launcher") as voice_config_launcher:
-                with patch("xagent.interfaces.cli.launcher.handle_voice") as handle_voice:
-                    _run_voice_channel_launcher(fake_ui, config_dir)
-
-        voice_config_launcher.assert_called_once_with(fake_ui, config_dir)
-        handle_voice.assert_not_called()
 
     def test_managed_channel_actions_disable_start_until_channel_is_configured(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1966,7 +1895,7 @@ class CLICommandTests(unittest.TestCase):
 
         self.assertIn("xagent setup", setup_help)
         self.assertIn("xagent setup --force", resetup_help)
-        self.assertIn("xagent channel <api|weixin|voice> connect|disconnect", setup_help)
+        self.assertIn("xagent channel <api|weixin> connect|disconnect", setup_help)
         self.assertIn("xagent channel weixin connect", setup_help)
         self.assertIn("restart the Agent to apply changes", setup_help)
         self.assertNotIn("--dir", setup_help)
@@ -2352,7 +2281,7 @@ class CLICommandTests(unittest.TestCase):
             }
         }
 
-        self.assertEqual(enabled_channels_from_config(config), ["api", "voice"])
+        self.assertEqual(enabled_channels_from_config(config), ["api"])
 
     def test_enabled_channels_do_not_implicitly_add_api_when_channels_are_explicit(self):
         config = {
@@ -2373,7 +2302,7 @@ class CLICommandTests(unittest.TestCase):
     def test_enabled_channels_can_select_voice_without_api(self):
         config = {"channels": {"voice": {"api_key": "key"}}}
 
-        self.assertEqual(enabled_channels_from_config(config), ["voice"])
+        self.assertEqual(enabled_channels_from_config(config), [])
 
     def test_web_client_config_ignores_agent_scoped_host_and_port(self):
         config = {
@@ -2547,13 +2476,14 @@ class CLICommandTests(unittest.TestCase):
                 self.assertEqual(handle_start(args), 0)
             starter.assert_called_once_with(Path(tmpdir).resolve(), ['api', 'weixin'])
 
-    def test_start_voice_selects_channel_on_the_shared_runtime(self):
+    def test_start_voice_reports_ws_migration_without_starting_runtime(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             _write_runtime(tmpdir)
             args = argparse.Namespace(config_dir=tmpdir, channels=['voice'])
-            with patch("xagent.interfaces.cli.agent_runtime.start_runtime", return_value={"status": "running"}) as starter:
-                self.assertEqual(handle_start(args), 0)
-            starter.assert_called_once_with(Path(tmpdir).resolve(), ['voice'])
+            with patch("xagent.interfaces.cli.agent_runtime.start_runtime") as starter, patch("sys.stdout", new_callable=io.StringIO) as output:
+                self.assertEqual(handle_start(args), 1)
+            starter.assert_not_called()
+            self.assertIn("Host voice has been removed", output.getvalue())
 
     def test_stop_calls_authoritative_runtime(self):
         with tempfile.TemporaryDirectory() as tmpdir:

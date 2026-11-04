@@ -22,12 +22,14 @@ from ...integrations.devices.service import (
     VoiceDeviceSession,
     load_message,
 )
-from ..voice.config import SONIOX_TTS_CHANNELS, SONIOX_TTS_SAMPLE_RATE, VoiceChannelConfig
+from ..voice.config import VoiceChannelConfig
 from ..voice.factory import create_websocket_voice_runtime
 from ..voice.runtime import VoiceRuntimeOptions
+from ..voice.transport_audio import AudioCodecError
 from ..voice.ws import (
     MAX_VOICE_AUDIO_CHUNK_BYTES,
-    VoiceClientControl,
+    AudioInputBackpressure,
+    parse_client_control,
     VoiceSessionHello,
     WebSocketVoiceBridge,
     parse_voice_control_frame,
@@ -196,7 +198,10 @@ def register_device_routes(
                 await websocket.close(code=1013, reason="Device voice API is unavailable")
                 return
             raw_hello = await asyncio.wait_for(websocket.receive_text(), timeout=5)
-            hello = VoiceSessionHello.model_validate(parse_voice_control_frame(raw_hello))
+            hello_data = parse_voice_control_frame(raw_hello)
+            if hello_data.get('audio_protocol') != 2:
+                raise ValueError('Audio protocol 2 required. Update the voice client.')
+            hello = VoiceSessionHello.model_validate(hello_data)
             raw_voice_cfg = voice_config_provider() if callable(voice_config_provider) else {}
             voice_cfg = VoiceChannelConfig.from_dict(raw_voice_cfg)
             voice_cfg.resolved_api_key()
@@ -207,7 +212,7 @@ def register_device_routes(
                 location=hello.location,
             )
             room_name = "Browser voice" if browser else service.resolve_room_name(device_id)
-            bridge = WebSocketVoiceBridge(
+            bridge = await asyncio.to_thread(WebSocketVoiceBridge,
                 websocket=websocket,
                 loop=asyncio.get_running_loop(),
                 hello=hello,
@@ -245,16 +250,30 @@ def register_device_routes(
                 "room_name": room_name,
                 "input_sample_rate": hello.input_sample_rate,
                 "input_channels": hello.input_channels,
-                "output_sample_rate": hello.output_sample_rate or SONIOX_TTS_SAMPLE_RATE,
-                "output_channels": hello.output_channels or SONIOX_TTS_CHANNELS,
+                "output_sample_rate": hello.output_sample_rate,
+                "output_channels": hello.output_channels,
             }
+            ready_frame.update(audio_protocol=2, codec=hello.codec)
             if issued is not None:
                 ready_frame["credential"] = issued
+            session.runtime_task = asyncio.create_task(runtime.run_forever())
+            # Do not authorize browser/device capture until the real STT sender
+            # pulls audio. Context refresh and provider connection can take >500ms.
+            deadline = asyncio.get_running_loop().time() + 7.0
+            while not microphone.consuming.is_set():
+                if session.runtime_task.done():
+                    await session.runtime_task
+                    return
+                if bridge.closed.is_set():
+                    return
+                if asyncio.get_running_loop().time() >= deadline:
+                    await websocket.close(code=1013, reason='Speech recognition is still connecting. Please retry.')
+                    return
+                await asyncio.sleep(0.01)
             await asyncio.wait_for(
                 websocket.send_json(ready_frame),
                 timeout=5,
             )
-            session.runtime_task = asyncio.create_task(runtime.run_forever())
             while service.voice_sessions.get(device_id) is session and not session.runtime_task.done():
                 receive_task = asyncio.create_task(websocket.receive())
                 done, _ = await asyncio.wait(
@@ -278,12 +297,25 @@ def register_device_routes(
                     continue
                 raw_text = frame.get("text")
                 if raw_text is not None:
-                    control = VoiceClientControl.model_validate(parse_voice_control_frame(raw_text))
+                    control = parse_client_control(raw_text)
                     if control.type == "playback_progress":
                         if player.accepts_playback(control.playback_id):
-                            runtime.note_remote_playback_progress(control.played_bytes)
+                            if control.sample_rate != player.stream_sample_rate:
+                                raise ValueError('Playback sample rate does not match the selected profile')
+                            if control.rendered_samples is not None and control.played_samples > control.rendered_samples:
+                                raise ValueError("Played samples exceed rendered playback audio")
+                            player.note_playback_progress(control.playback_id,
+                                control.rendered_samples if control.rendered_samples is not None else min(control.played_samples, player.sent_samples),
+                                queue_samples=control.queue_samples, underruns=control.underruns,
+                                max_arrival_gap_ms=control.max_arrival_gap_ms)
+                            runtime.note_remote_playback_samples(min(control.played_samples, player.sent_samples), control.sample_rate)
                     elif control.type == "playback_finished":
                         player.note_playback_finished(control.playback_id)
+                    elif control.type in {"input_start", "input_end"}:
+                        if control.type == 'input_start':
+                            microphone.start_input(control.stream_id)
+                        else:
+                            microphone.end_input(control.stream_id)
                     elif control.type == "ping":
                         await websocket.send_json({"type": "pong"})
                     elif control.type == "stop":
@@ -292,6 +324,14 @@ def register_device_routes(
                 exc = session.runtime_task.exception()
                 if exc is not None:
                     raise exc
+        except AudioInputBackpressure:
+            await websocket.close(code=1013, reason='Speech recognition is not keeping up. Reconnecting.')
+        except AudioCodecError as exc:
+            try:
+                await websocket.send_json({'type': 'error', 'code': 'audio_codec', 'message': str(exc)})
+                await websocket.close(code=1011, reason='Voice codec initialization failed')
+            except RuntimeError:
+                pass
         except WebSocketDisconnect:
             pass
         except asyncio.CancelledError:

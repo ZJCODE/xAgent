@@ -41,8 +41,9 @@ a user, room, subscription, or immediate chat reply.
 
 For hardware implementation, open **Agent → Devices → Connection Help**.
 It uses the same dialog interaction as API Help and includes the selected
-Agent's device WebSocket address, pairing steps, and registration/command/result
-examples. **Copy for Agent** copies the complete guide for another Agent to
+Agent's device WebSocket address, pairing steps, registration/command/result
+examples, and the complete hardware voice contract (section 6). API Help also
+opens this same Device Connection Help directly. **Copy for Agent** copies the complete guide for another Agent to
 write ESP32, Raspberry Pi, or other device code. Pairing codes and credentials
 remain placeholders; supply the real code directly on the device when pairing.
 
@@ -156,7 +157,7 @@ device lists. Independent tabs use separate session IDs.
 
 The hello profile is `headset` with `echo_managed: true`. The page requests
 microphone permission only when holding the talk button or starting continuous
-conversation, sends PCM16 uplink and plays TTS downlink. Continuous conversation
+conversation, sends microphone audio and plays TTS downlink over the same WebSocket. Continuous conversation
 supports mute/unmute, ends on mode switches, and pauses when the page is hidden.
 Returning requires Continue conversation; ordinary window blur does not pause it.
 It retries failed connections three times with increasing delays, restoring the
@@ -164,15 +165,199 @@ continuous session's mute state. Permission errors stop without automatic retry.
 Leaving the page closes the session and audio resources. Browser speech is treated
 as directed conversation, independently of the room attention window.
 
-New browser clients declare `playback_ack: true` in hello (optional, default false).
-For these clients, `playback_start`, `playback_done` and `clear_playback` include
-`playback_id`. Clients send `playback_progress` with that ID and `played_bytes`,
-then `playback_finished` with the ID once all scheduled audio has actually played.
-The server waits for the matching confirmation before ending the playback phase;
-late IDs are ignored. Interruptions and disconnects cancel the wait. A missing
-confirmation closes the connection after the sent audio duration plus five seconds.
-Clients omitting this capability retain the original protocol behavior.
-If the Agent is stopped, Start Agent prepares it before connecting.
+If the Agent is stopped, Start Agent prepares it before connecting. There is no
+separate Host voice channel to start. Shared voice settings live in Agent;
+microphone and speaker selection belongs to the browser or device.
+
+### Audio protocol 2
+
+Browser and paired-device voice use one explicit protocol. Send
+`{"type":"hello","audio_protocol":2,"codec":"opus","profile":"headset"}`
+(or `codec: "pcm_s16le"`). The codec selects a complete mono profile:
+
+| Codec | Microphone | Playback |
+| --- | --- | --- |
+| `opus` | 48 kHz, 20 ms, 24 kbps | 48 kHz, 20 ms, 32 kbps |
+| `pcm_s16le` | 16 kHz, 20 ms | 24 kHz, 20 ms |
+
+`ready` confirms `audio_protocol`, `codec`, both sample rates and both channel
+counts before audio starts. Standard installations require PyAV 14–16; a server
+codec initialization failure ends the session explicitly. Soniox and the internal
+voice runtime continue using PCM16. No REST or configuration fields are added.
+
+The browser self-tests native WebCodecs encoding and decoding at startup, including
+Opus priming and tail trimming. It selects Opus only when the complete contract
+works; otherwise it selects the PCM profile. Runtime codec failures end the session
+and require user retry. A session never changes codec. Transient network failures
+retain the three retries after 1, 2 and 4 seconds. Permission errors and playback
+confirmation timeouts stop and require user action.
+
+`ready` is sent only after the recognition sender begins consuming microphone
+audio. Browser recognition disconnects and input overload close with retryable
+code 1013, releasing capture before the next connection. Explicit browser
+conversations keep recognition awake until the session ends or the page hides;
+Paired room devices retain their idle sleep policy. Host audio capture is retired;
+use the browser Voice page or a paired voice device.
+
+### Hardware voice implementation
+
+Hardware connects to `/ws/devices/{device_id}/voice`, sharing the browser Voice
+tab's audio protocol and server speech/Agent pipeline. It uses a persistent device
+credential instead of a temporary browser ticket. A voice-only device can pair
+directly on this socket: authenticate with a pairing code, send `hello` within
+five seconds, and durably save the credential returned in `ready`. No `register`
+or capability manifest is needed on the voice socket. Subsequent connections
+authenticate with that saved credential and repeat `hello` → `ready`. A device
+with control and voice uses two sockets with the same ID/credential; complete
+pairing on one before opening the other. A second voice connection replaces the
+first for that device ID.
+
+For initial hardware bring-up, use:
+
+```json
+{"type":"hello","audio_protocol":2,"codec":"pcm_s16le","profile":"room","echo_managed":false,"interruptions":false}
+```
+
+Wait for `ready` before sending microphone audio. PCM requires 16 kHz input and
+24 kHz output, both mono signed 16-bit little-endian. A full 20 ms input payload
+is 320 samples / 640 bytes; output is 480 samples / 960 bytes. Convert locally
+when the audio hardware uses another rate. PCM needs no audio codec on the device;
+the server installation still requires its normal voice codec dependencies.
+
+Start each capture with `{"type":"input_start","stream_id":1}` and end it with
+`{"type":"input_end","stream_id":1}`. Use increasing nonzero uint32 input stream
+IDs per connection. Each binary WebSocket message is one 28-byte header plus one
+payload. The header uses unsigned big-endian integers, `!4sIIQII`:
+
+| Offset | Bytes | Field |
+| --- | --- | --- |
+| 0 | 4 | ASCII `XAV2` |
+| 4 | 4 | Stream ID |
+| 8 | 4 | Packet sequence, starting at zero per stream |
+| 12 | 8 | Timestamp: `floor(previous_valid_samples * 1000000 / sample_rate)` |
+| 20 | 4 | Valid mono sample count |
+| 24 | 4 | Leading decoded samples to discard (zero for PCM) |
+| 28 | remaining | PCM16LE bytes or one raw Opus packet |
+
+For uplink, valid samples plus discard must not exceed 20 ms; a final partial
+frame is allowed. Sequence increments by one, timestamps advance by valid samples,
+and PCM payload length equals twice the valid sample count. For Opus, trim priming
+and tail padding using `discard` and the valid sample count. Start a fresh encoder
+per input capture and a fresh decoder per downlink playback stream. Audio is raw
+payload, without WAV/Ogg/WebM containers or Base64. Pace uplink to real capture time;
+more than 500 ms of queued microphone audio causes a retryable 1013 close.
+
+On `playback_start`, use its `playback_id`, `stream_id`, codec, sample rate and
+channels; reset playback counters and route matching binary packets into a bounded
+speaker queue. Input/output stream ID counters are independent. Keep the network
+receive loop running while playing. Report cumulative actual speaker-consumed
+media samples using `playback_progress` with `playback_id`, `played_samples`, and
+`sample_rate` (24000 for PCM, 48000 for Opus), periodically and after draining.
+Exclude underrun silence, discarded samples and unplayed queued audio. Do not
+estimate playback from reception, decoding or elapsed time. After `playback_done`
+and hardware/DMA output has drained, send final progress followed by
+`{"type":"playback_finished","playback_id":"..."}`. Missing completion causes
+a playback timeout. Paired hardware currently supports confirmation at end of
+playback; periodic progress also keeps the server's spoken-history accounting
+current. The browser additionally uses a 1 s progress-driven send window.
+
+On `clear_playback`, stop the matching playback immediately and flush both
+software/hardware queues. Ignore stale packets and controls. `transcript` and
+`state` messages are optional display data, not playback completion signals.
+
+For hardware without validated echo cancellation/isolation, explicitly disable
+interruptions and stop forwarding microphone audio during playback. End capture
+on playback start and resume with a new input stream ID after the speaker drains
+and the acoustic tail settles. `echo_managed` is client metadata; it does not
+activate server acoustic echo cancellation. Enable interruptions only after
+simultaneous capture/playback works without self-triggering. `room` uses room
+attention/wake rules; `headset` selects directed speech attention and does not
+provide echo cancellation.
+
+Voice control JSON is limited to 16 KiB and binary messages to 256 KiB. Application
+`ping` receives `pong`; `stop` ends the whole voice session. After transient
+disconnect/1013, clear queues and reconnect with bounded backoff/jitter, then
+negotiate again before fresh capture. Never replay old audio. A 1008 close may
+indicate invalid credentials or malformed protocol; inspect the reason. Diagnose
+codec failures/playback timeouts instead of retrying indefinitely. Hardware
+acceptance should cover persistent pairing, multiple turns, long reply completion,
+network loss during playback, speaker echo, and audio clearing on interruption.
+
+Binary messages consist of a 28-byte network-byte-order header followed by one
+raw Opus packet or PCM16 little-endian payload. The header layout is `!4sIIQII`:
+magic `XAV2`, uint32 stream ID, uint32 sequence, uint64 timestamp in microseconds,
+uint32 valid mono samples and uint32 leading samples to discard. Timestamps refer
+to valid media time from the beginning of the stream. Opus initialization metadata
+supplies priming trim; final padding is excluded from valid samples. Packets have
+no WebM/Ogg container. Each packet covers at most 20 ms, including leading discard.
+
+`input_start` / `input_end` carry `stream_id`; IDs increase each time the microphone
+opens. Each new stream resets decoder and resampler state. Older/ended-stream
+audio is ignored; active-stream sequence/time gaps are rejected. `playback_start`
+includes `playback_id`, numeric `stream_id`, `codec`, `sample_rate` and `channels`.
+`playback_done` and `clear_playback` carry the same playback identity. Cleared
+stream audio and callbacks cannot affect the next reply.
+
+Playback confirmation is required. Clients send `playback_progress` with
+`playback_id`, `played_samples` and `sample_rate`; the server clamps progress to
+sent media. Browser progress also carries `rendered_samples`, the monotonic
+count actually consumed by the render worklet before output-device latency.
+It releases send capacity; `played_samples` remains the latency-adjusted spoken
+ledger input. Neither network arrival nor decoding earns render credit. Counts
+from old playback IDs are ignored; rendered counts beyond sent media are rejected.
+After draining the renderer, clients send `playback_finished` with
+the matching ID. Network delivery and decoder completion do not confirm playback.
+The browser accounts for reported audio output latency plus one render quantum;
+this is an estimate of output completion, not a hardware audibility guarantee.
+The server waits for confirmation before ending playback and applying microphone
+cooldown. Late IDs are ignored; interruption/disconnect cancels the wait. Missing
+confirmation closes the connection after sent media duration plus five seconds.
+
+A dedicated Worker owns the socket and codecs, with direct MessagePorts to capture
+and playback AudioWorklets. The page owns resource lifecycle and conversation
+intent through one session controller. Both worklets use fixed-capacity sample
+rings and persistent resampling. Playback starts or resumes after accumulating
+200 ms of audio; subsequent packets play continuously on the media clock. EOS
+releases a shorter final buffer immediately. Underruns output silence without
+advancing media progress; interruption clears buffered audio immediately. Capture
+uses a pool of eight reusable 20 ms buffers and keeps its 500 ms upload/server
+queue limits. Browser playback and decoder queues allow up to 1.2 s of media;
+the server limits outstanding output to 1 s across the network, decoder and
+render queue. This window allows a 500 ms feedback round trip with headroom for
+prebuffering, 50 ms reports and arrival jitter; it is a finite budget, not a
+guarantee for arbitrary WAN stalls. Decoder capacity is measured in media samples,
+so legitimate catch-up bursts do not trip a smaller packet-count limit.
+The worklet reports progress every 50 ms. A paused renderer earns
+no capacity from wall time; network stalls cannot cause catch-up bursts exceeding
+the window. Missing render progress for five seconds ends the session explicitly.
+Existing paired devices retain 200 ms wall-clock pacing and their existing
+playback confirmation contract. Overload still ends the session explicitly.
+
+Browser `playback_progress` also includes optional diagnostics: `queue_samples`
+(pending render samples), `underruns` (rebuffer events in the current reply) and
+`max_arrival_gap_ms` (largest gap between audio packets received by the worker).
+These fields do not release send credit or advance spoken history. The server
+logs one `Voice playback` summary per reply with underruns, sampled maximum queue
+duration, maximum arrival gap, maximum server send gap and total time waiting
+for send capacity. Send timestamps measure origin enqueueing, not edge delivery;
+compare these values to distinguish origin/flow-control pauses from downstream
+delivery pauses. Missing diagnostics from other clients are shown as
+`underruns=None`. Deploy the server and rebuilt browser assets together.
+
+To validate public-path playback, run frontend tests (including deterministic
+20/500 ms RTT and 150 ms arrival-jitter traces), rebuild the frontend, and test a
+multi-second reply over cellular using the public HTTPS admin page. Compare
+underruns and first-audio delay with home Wi-Fi through the same hostname. A
+1.5 s outage test verifies bounded recovery and exact sample delivery, not
+continuous playback through an outage longer than the available audio reserve.
+
+Voice requires HTTPS/localhost, AudioWorklet, module Workers and current Web Audio
+support. There is no ScriptProcessor or prefixed AudioContext path. Protocol 1,
+raw PCM messages, independent per-direction codec lists, `playback_ack` and
+`played_bytes` are removed: existing device clients must migrate to protocol 2.
+Update the server and shipped browser assets together. Both conversation modes
+share this transport.
+
 
 ```json
 {
@@ -517,3 +702,12 @@ memory; the following identity, sharing, and attribution boundaries still apply.
 | Agent-governed sharing | Tools discover this Agent's paired devices; the Agent retains its execution and sharing judgment. |
 | Diary as memory carrier | Connection state is operational data, not a competing long-term memory store. |
 | Attribution and continuity | Device IDs and command IDs identify actions; saved credentials preserve device binding across restarts without replaying uncertain work. |
+
+
+### Playback flow-control goal check
+
+The Agent's identity, multi-user attribution, 1:1/group behavior, unified memory,
+sharing rules and diary authority are unchanged. Render credit controls transport
+only; latency-adjusted played samples still govern the first-person spoken ledger.
+Playback IDs isolate sessions, and interruption/disconnect cancels blocked sends.
+This preserves attribution and continuity without recording queued audio as heard.

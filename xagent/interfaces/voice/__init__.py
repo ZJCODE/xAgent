@@ -1,11 +1,11 @@
-"""Local Soniox voice runtime for xAgent."""
+"""WebSocket Soniox voice runtime for xAgent."""
 from __future__ import annotations
 
-from .config import VoiceAudioConfig, VoiceChannelConfig
+from .config import VoiceChannelConfig
 from .runtime import VoiceRuntime, VoiceRuntimeOptions
 from .types import VoiceUtterance
 from .ws import (
-    VoiceClientControl,
+    parse_client_control,
     VoiceSessionHello,
     WebSocketMicrophone,
     WebSocketPlayer,
@@ -14,11 +14,10 @@ from .ws import (
 
 __all__ = [
     "VoiceChannelConfig",
-    "VoiceAudioConfig",
     "VoiceRuntime",
     "VoiceRuntimeOptions",
     "VoiceUtterance",
-    "VoiceClientControl",
+    "parse_client_control",
     "VoiceSessionHello",
     "WebSocketMicrophone",
     "WebSocketPlayer",

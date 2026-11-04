@@ -1,5 +1,8 @@
 # Voice conversation: implementation plan
 
+> Historical design notes. Host audio capture has since been retired. See
+> [current voice configuration and WS sessions](voice-config-surface.md).
+
 Status: proposal. Companion to `voice-conversation-design.md`, which argues
 *what is wrong and why*. This document is *what to build, in what order, and how
 we will know it worked*.

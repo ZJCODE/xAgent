@@ -167,8 +167,8 @@ async def restart_runtime(root: Path, channels: list[str] | None = None) -> dict
 
     if channels is None:
         acknowledged = stopped.get("restart_channels")
-        if isinstance(acknowledged, list) and all(isinstance(name, str) and name in VALID_CHANNELS for name in acknowledged):
-            snapshot = list(dict.fromkeys(acknowledged))
+        if isinstance(acknowledged, list) and all(isinstance(name, str) and name in VALID_CHANNELS | {"voice"} for name in acknowledged):
+            snapshot = list(dict.fromkeys(name for name in acknowledged if name in VALID_CHANNELS))
         if snapshot is not None:
             configured = load_config_file(root).get("channels", {})
             configured = configured if isinstance(configured, Mapping) else {}
@@ -241,6 +241,9 @@ def handle_restart(args: argparse.Namespace) -> int:
 
 
 def handle_channel_connection(args: argparse.Namespace) -> int:
+    if args.channel == "voice":
+        print("Host voice has been removed. Use the Voice page or a paired WebSocket voice device.")
+        return 1
     async def control():
         client = RuntimeClient(runtime_dir(args))
         action = args.channel_action

@@ -16,8 +16,6 @@ from xagent.interfaces.cli.launcher import (
     _run_managed_channel_action,
     _run_managed_channel_launcher,
     _run_runtime_launcher,
-    _run_voice_channel_launcher,
-    _voice_channel_options,
 )
 from xagent.interfaces.cli.overview import build_runtime_overview, runtime_snapshot
 
@@ -113,8 +111,6 @@ class ChannelMenuTests(unittest.TestCase):
 
     def actions(self, root, channel, runtime):
         with patch("xagent.interfaces.cli.launcher._channel_runtime_snapshot", return_value=runtime):
-            if channel == "voice":
-                return {row.key: row for row in _voice_channel_options({}, root, runtime)}
             return {row.key: row for row in _managed_channel_actions(root, channel)}
 
     def test_every_channel_uses_runtime_capabilities_for_connection_controls(self):
@@ -129,7 +125,7 @@ class ChannelMenuTests(unittest.TestCase):
             ("failed", True, True, False, "connect", False),
             ("failed", True, False, True, "disconnect", False),
         )
-        for channel in ("api", "weixin", "voice"):
+        for channel in ("api", "weixin"):
             for state, ready, connect, disconnect, key, disabled in cases:
                 with self.subTest(channel=channel, state=state, cleanup=disconnect):
                     actions = self.actions(root, channel, self.snapshot(
@@ -142,7 +138,7 @@ class ChannelMenuTests(unittest.TestCase):
 
     def test_unavailable_runtime_disables_operations_even_with_stale_capabilities(self):
         for agent_state in ("stopped", "starting", "stopping"):
-            for channel in ("api", "weixin", "voice"):
+            for channel in ("api", "weixin"):
                 with self.subTest(agent_state=agent_state, channel=channel):
                     runtime = self.snapshot(channel, "connected", connect=True, disconnect=True)
                     runtime.update(state=agent_state, runtime_ready=False)
@@ -152,14 +148,6 @@ class ChannelMenuTests(unittest.TestCase):
                     if agent_state == "stopped":
                         self.assertIn("Start the Agent", control.description)
 
-    def test_running_configuration_is_authoritative_even_after_saved_config_changes(self):
-        runtime = self.snapshot("voice", "disconnected", ready=False, connect=False,
-                                config_error="Configure voice before connecting")
-        with patch("xagent.interfaces.cli.launcher.channel_readiness",
-                   side_effect=AssertionError("must use running configuration")):
-            actions = self.actions(Path("/tmp/menu-agent"), "voice", runtime)
-        self.assertTrue(actions["connect"].disabled)
-        self.assertIn("Configure voice", actions["connect"].description)
 
     def test_list_displays_channel_states_instead_of_inferring_connection_from_agent(self):
         runtime = {"state": "running", "runtime_ready": True, "channels": {
@@ -169,13 +157,11 @@ class ChannelMenuTests(unittest.TestCase):
         }}
         with patch("xagent.interfaces.cli.launcher._channel_runtime_snapshot", return_value=runtime):
             options = {row.key: row for row in _launcher_channel_options(Path("/tmp/menu-agent"))}
-        self.assertEqual(list(options), ["chat", "api", "weixin", "voice", "back"])
+        self.assertEqual(list(options), ["chat", "api", "weixin", "back"])
         self.assertEqual(options["api"].badge, "● Connected")
         self.assertEqual(options["api"].badge_style, "bold green")
         self.assertIn("Needs configuration", options["weixin"].badge)
-        self.assertIn("Failed", options["voice"].badge)
-        self.assertEqual(options["voice"].badge_style, "bold red")
-        self.assertIn("Retry cleanup", options["voice"].description)
+        self.assertNotIn("voice", options)
 
     def test_degraded_agent_can_still_connect_healthy_channel(self):
         runtime = self.snapshot("api", "disconnected", connect=True)
@@ -193,7 +179,7 @@ class ChannelMenuTests(unittest.TestCase):
             with patch("xagent.interfaces.cli.agent_runtime.RuntimeClient", return_value=client) as factory:
                 with patch("xagent.interfaces.cli.paths.resolve_agent_runtime_dir",
                            side_effect=AssertionError("must not follow active Agent changes")):
-                    for channel in ("api", "weixin", "voice"):
+                    for channel in ("api", "weixin"):
                         for action in ("connect", "disconnect"):
                             self.assertEqual(_run_managed_channel_action(root, channel, action), 0)
                             self.assertEqual(factory.call_args.args[0], root.resolve())
@@ -201,7 +187,7 @@ class ChannelMenuTests(unittest.TestCase):
                             self.assertEqual(method.await_args.args, (channel,))
 
     def test_menus_refresh_after_operations_and_voice_does_not_start_foreground_audio(self):
-        for channel in ("api", "weixin", "voice"):
+        for channel in ("api", "weixin"):
             with self.subTest(channel=channel):
                 snapshots = [self.snapshot(channel, "disconnected", connect=True),
                              self.snapshot(channel, "connecting", disconnect=True),
@@ -225,10 +211,7 @@ class ChannelMenuTests(unittest.TestCase):
                 with patch("xagent.interfaces.cli.launcher._channel_runtime_snapshot", side_effect=snapshots):
                     with patch("xagent.interfaces.cli.launcher.handle_channel_connection", return_value=0) as control:
                         with patch("xagent.interfaces.cli.launcher.handle_voice") as voice:
-                            if channel == "voice":
-                                _run_voice_channel_launcher(UI(), root)
-                            else:
-                                _run_managed_channel_launcher(UI(), root, channel, channel_title=channel.title())
+                            _run_managed_channel_launcher(UI(), root, channel, channel_title=channel.title())
                 self.assertEqual([call.args[0].channel_action for call in control.call_args_list],
                                  ["connect", "disconnect"])
                 self.assertTrue(all(call.args[0].channel == channel and call.args[0].config_dir == str(root)
@@ -238,7 +221,7 @@ class ChannelMenuTests(unittest.TestCase):
                 self.assertIn("Channel: Disconnected", subtitles[2])
 
     def test_refresh_exposes_failed_cleanup_and_operation_error_keeps_menu_available(self):
-        for channel in ("weixin", "voice"):
+        for channel in ("weixin",):
             with self.subTest(channel=channel):
                 snapshots = [self.snapshot(channel, "connected", disconnect=True),
                              self.snapshot(channel, "failed", disconnect=True, error="Cleanup timed out"),
@@ -259,10 +242,7 @@ class ChannelMenuTests(unittest.TestCase):
                 ui = UI()
                 with patch("xagent.interfaces.cli.launcher._channel_runtime_snapshot", side_effect=snapshots):
                     with patch("xagent.interfaces.cli.launcher.handle_channel_connection", return_value=1) as control:
-                        if channel == "voice":
-                            _run_voice_channel_launcher(ui, Path("/tmp/menu-agent"))
-                        else:
-                            _run_managed_channel_launcher(ui, Path("/tmp/menu-agent"), channel, channel_title="Weixin")
+                        _run_managed_channel_launcher(ui, Path("/tmp/menu-agent"), channel, channel_title="Weixin")
                 control.assert_called_once()
                 self.assertEqual(control.call_args.args[0].channel_action, "disconnect")
                 self.assertEqual(len(panels), 1)

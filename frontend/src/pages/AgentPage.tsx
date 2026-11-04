@@ -1,5 +1,6 @@
-import { RefreshCw, Save, RotateCcw, Trash2 } from "lucide-react";
+import { ChevronRight, Save, RotateCcw, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { AgentRuntimeOverview } from "../components/AgentRuntimeOverview";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { FeatureSetupModal } from "../components/FeatureSetupModal";
 import { VoiceSettingsDialog } from "../components/VoiceSettingsDialog";
@@ -15,7 +16,6 @@ import {
   getAgentIdentity,
   getAgentInfo,
   getAgentVoiceSettings,
-  restartRuntime,
   updateAgentConfig,
   updateAgentIdentity,
 } from "../lib/api";
@@ -29,15 +29,7 @@ import type {
   AgentInfo,
 } from "../types";
 
-function stringValue(value: unknown): string {
-  return typeof value === "string" && value.trim() ? value : "";
-}
-
-function RuntimeValue({ value, fallback = "Unavailable" }: { value?: unknown; fallback?: string }) {
-  return <span className="data-chip path-chip">{stringValue(value) || fallback}</span>;
-}
-
-function SetupFeatureTile({
+function SetupFeatureRow({
   feature,
   onEdit,
 }: {
@@ -47,19 +39,20 @@ function SetupFeatureTile({
   return (
     <button
       type="button"
-      className={`setup-tile${feature.disabled ? " is-disabled" : ""}`}
+      className="agent-setting-row"
       disabled={feature.disabled}
-      title={feature.disabled ? feature.disabled_reason || undefined : `Edit ${feature.label}`}
+      aria-label={`Edit ${feature.label}: ${feature.status}`}
+      title={feature.disabled ? feature.disabled_reason || undefined : feature.description}
       onClick={() => onEdit(feature.id)}
     >
-      <span className="setup-tile-top">
-        <span className="setup-tile-label">{feature.label}</span>
-        <span className="setup-tile-action">Edit</span>
+      <span className="agent-setting-label">{feature.label}</span>
+      <span className="agent-setting-copy">
+        <span className="agent-setting-value">{feature.status}</span>
+        {feature.disabled && feature.disabled_reason ? (
+          <span className="agent-setting-hint">{feature.disabled_reason}</span>
+        ) : null}
       </span>
-      <span className="setup-tile-value">{feature.status}</span>
-      {feature.disabled && feature.disabled_reason ? (
-        <span className="setup-tile-reason">{feature.disabled_reason}</span>
-      ) : null}
+      <ChevronRight size={16} className="agent-setting-chevron" aria-hidden="true" />
     </button>
   );
 }
@@ -145,7 +138,6 @@ export function AgentPage() {
   const [setupSchema, setSetupSchema] = useState<AgentEditSetupSchema | null>(null);
   const [setupFeature, setSetupFeature] = useState<AgentEditSetupFeatureId | null>(null);
   const [setupNotice, setSetupNotice] = useState("");
-  const [restarting, setRestarting] = useState(false);
   const [restartRequired, setRestartRequired] = useState(false);
   const [voiceSettingsOpen, setVoiceSettingsOpen] = useState(false);
   const [voiceConfigured, setVoiceConfigured] = useState<boolean | null>(null);
@@ -218,6 +210,8 @@ export function AgentPage() {
   useEffect(() => {
     setVoiceSettingsOpen(window.location.hash === "#voice");
     setVoiceConfigured(null);
+    setRestartRequired(false);
+    setSetupNotice("");
     setConfigData(null);
     setConfigEditorValue("");
     setConfigNotice("");
@@ -242,7 +236,7 @@ export function AgentPage() {
       const updated = await updateAgentIdentity(value);
       setIdentity(updated);
       setEditorValue(updated.identity);
-      setSetupNotice("Identity saved. Restart the Agent to apply it.");
+      setSetupNotice("Identity saved.");
       setRestartRequired(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -265,7 +259,7 @@ export function AgentPage() {
       setConfigData(updated);
       setConfigEditorValue(updated.config);
       setConfigNotice(
-        "Settings saved. Restart the Agent to apply them.",
+        "Settings saved.",
       );
       setRestartRequired(true);
       await load();
@@ -284,32 +278,12 @@ export function AgentPage() {
     setSetupFeature(null);
     if (!result.changed) {
       setSetupNotice("No config values changed.");
-      setRestartRequired(false);
       return;
     }
-    setRestartRequired(result.restart_required);
-    setSetupNotice(
-      result.restart_required
-        ? "Settings saved. Restart the Agent to apply them."
-        : "Setup saved.",
-    );
+    setRestartRequired((previous) => previous || result.restart_required);
+    setSetupNotice("Settings saved.");
     await load();
     if (activeTab === "config") await loadConfig();
-  };
-
-  const restartAgent = async () => {
-    setRestarting(true);
-    setError("");
-    try {
-      await restartRuntime();
-      setSetupNotice("Agent restarted.");
-      setRestartRequired(false);
-      await load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setRestarting(false);
-    }
   };
 
   const runMaintenanceClear = async () => {
@@ -359,46 +333,47 @@ export function AgentPage() {
     <PageShell className="agent-page">
       <PageToolbar
         title="Agent"
-        subtitle="Identity, preferences and local data."
+        subtitle="Status, configuration, identity and local data."
       />
       {error ? <div className="error-strip">{error}</div> : null}
-      {setupNotice ? (
-        <div className="success-strip setup-notice-strip">
-          <span>{setupNotice}</span>
-          {restartRequired ? (
-            <Button type="button" variant="secondary" disabled={restarting} onClick={() => void restartAgent()}>
-              <RefreshCw size={14} />
-              {restarting ? "Restarting..." : "Restart Agent"}
-            </Button>
-          ) : null}
-        </div>
-      ) : null}
 
       <div className="agent-grid">
-        <Panel className="info-panel">
-          <PanelHeader title="Model & capabilities" />
-          <dl>
-            <dt>Provider</dt>
-            <dd className="chip-list">
-              <RuntimeValue value={info?.provider} />
-            </dd>
-            <dt>Model</dt>
-            <dd className="chip-list">
-              <RuntimeValue value={info?.model} />
-            </dd>
-            <dt>Tools</dt>
-            <dd>
-              <div className="chip-list">
-                {info?.tools?.length
-                  ? info.tools.map((tool) => <span key={tool} className="data-chip">{tool}</span>)
-                  : info ? "No tools loaded" : "Loading…"}
-              </div>
-              {info?.tools_source === "configured" ? (
-                <p className="agent-tools-note">Shown from configuration</p>
-              ) : null}
-            </dd>
-          </dl>
-        </Panel>
+        <AgentRuntimeOverview key={selectedAgent} restartRequired={restartRequired} settingsNotice={setupNotice} onSettingsApplied={() => {
+          setRestartRequired(false);
+          setSetupNotice("");
+          setConfigNotice("");
+          void getAgentInfo().then(setInfo).catch((err) => setError(err instanceof Error ? err.message : String(err)));
+        }}>
+          <div className="agent-configuration">
+            <div className="agent-configuration-heading">
+              <h4>Configuration</h4>
+              <a className="runtime-detail-link" href="/channels">Channels <ChevronRight size={14} aria-hidden="true" /></a>
+            </div>
+            <div className="agent-setting-list">
+              {(setupSchema?.features || []).filter((feature) => feature.id !== "observability").map((feature) => (
+                <SetupFeatureRow key={feature.id} feature={feature} onEdit={openSetupFeature} />
+              ))}
+              <button type="button" className="agent-setting-row" onClick={() => setVoiceSettingsOpen(true)}>
+                <span className="agent-setting-label">Voice</span>
+                <span className="agent-setting-value">{voiceConfigured === null ? "Loading…" : voiceConfigured ? "Configured" : "Needs setup"}</span>
+                <ChevronRight size={16} className="agent-setting-chevron" aria-hidden="true" />
+              </button>
+              {(setupSchema?.features || []).filter((feature) => feature.id === "observability").map((feature) => (
+                <SetupFeatureRow key={feature.id} feature={feature} onEdit={openSetupFeature} />
+              ))}
+            </div>
+            {!setupSchema ? <p className="wizard-hint">Loading configuration…</p> : null}
+          </div>
+          <details className="agent-tools">
+            <summary>Tools <span>{info ? `${info.tools?.length || 0} ${info.tools_source === "configured" ? "configured" : "loaded"}` : "Loading…"}</span></summary>
+            <div className="chip-list">
+              {info?.tools?.length
+                ? info.tools.map((tool) => <span key={tool} className="data-chip">{tool}</span>)
+                : info ? "No tools available" : "Loading…"}
+            </div>
+            {info?.tools_source === "configured" ? <p className="agent-tools-note">Shown from configuration. Loaded tools will be available when the Agent starts.</p> : null}
+          </details>
+        </AgentRuntimeOverview>
 
         <Panel className="identity-panel">
           <div className="agent-tab-bar">
@@ -480,20 +455,6 @@ export function AgentPage() {
               />
             </>
           )}
-        </Panel>
-
-        <Panel className="setup-panel">
-          <PanelHeader title="Preferences" meta="Manage connections in Channels." />
-          <div className="setup-tile-grid">
-            {(setupSchema?.features || []).map((feature) => (
-              <SetupFeatureTile key={feature.id} feature={feature} onEdit={openSetupFeature} />
-            ))}
-            <button type="button" className="setup-tile" onClick={() => setVoiceSettingsOpen(true)}>
-              <span className="setup-tile-top"><span className="setup-tile-label">Voice</span><span className="setup-tile-action">Edit</span></span>
-              <span className="setup-tile-value">{voiceConfigured === null ? "Loading…" : voiceConfigured ? "Configured" : "Needs setup"}</span>
-            </button>
-          </div>
-          {!setupSchema ? <p className="wizard-hint">Loading setup options...</p> : null}
         </Panel>
 
         <Panel className="danger-panel">
@@ -625,9 +586,7 @@ export function AgentPage() {
             }
           }}
           onSaved={(result) => {
-            setSetupNotice(!result.changed ? "Voice settings are up to date." : result.restart_required
-              ? "Voice settings saved. Restart the Agent to apply them."
-              : "Voice settings saved. They will apply when the Agent starts.");
+            setSetupNotice(!result.changed ? "Voice settings are up to date." : "Voice settings saved.");
             setRestartRequired((previous) => previous || result.restart_required);
             void loadSetupSchema();
             void refreshAgents();

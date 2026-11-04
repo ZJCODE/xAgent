@@ -73,7 +73,7 @@ class WebChannelRouteTests(unittest.IsolatedAsyncioTestCase):
         rows = {row["id"]: row for row in payload["channels"]}
         self.assertEqual(rows["api"]["status"], "disconnected")
         self.assertTrue(rows["api"]["ready"])
-        self.assertEqual(rows["voice"]["status"], "disabled")
+        self.assertNotIn("voice", rows)
         self.assertEqual(rows["weixin"]["setup_hint"], "")
         for row in rows.values():
             self.assertFalse(row["can_start"])
@@ -213,8 +213,7 @@ class WebChannelRouteTests(unittest.IsolatedAsyncioTestCase):
         rows = {row["id"]: row for row in result.json()["channels"]}
         self.assertEqual(rows["weixin"]["status"], "disconnected")
         self.assertTrue(rows["weixin"]["can_connect"])
-        self.assertFalse(rows["voice"]["ready"])
-        self.assertFalse(rows["voice"]["can_connect"])
+        self.assertNotIn("voice", rows)
 
     async def test_channels_and_runtime_report_degraded_state_and_task_review_count(self):
         runtime = {"status": "degraded", "runtime_running": True, "runtime_ready": True,
@@ -239,7 +238,7 @@ class WebChannelRouteTests(unittest.IsolatedAsyncioTestCase):
         with patch("xagent.interfaces.web.channel_routes.tail_text", return_value="Agent startup complete") as tail:
             async with await self._client() as client:
                 runtime_response = await client.get("/api/runtime/logs?lines=15")
-                channel_response = await client.get("/api/channels/voice/logs?lines=15")
+                channel_response = await client.get("/api/channels/api/logs?lines=15")
         expected_path = self.agent_b_path.resolve() / "logs" / "runtime.log"
         self.assertEqual(runtime_response.json()["log_path"], str(expected_path))
         self.assertEqual(channel_response.json()["log_path"], str(expected_path))
@@ -247,148 +246,12 @@ class WebChannelRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(tail.call_args.args, (expected_path,))
         self.assertEqual(tail.call_args.kwargs, {"max_lines": 15})
 
-    async def test_voice_setup_schema_reports_unconfigured_state(self):
-        async with await self._client() as client:
-            response = await client.get("/api/channels/voice/setup-schema")
 
-        self.assertEqual(response.status_code, 200)
-        payload = response.json()
-        self.assertFalse(payload["configured"])
-        self.assertEqual(payload["defaults"]["voice_api_key"], "")
-        self.assertNotIn("languages", payload["defaults"])
-        self.assertNotIn("voice_providers", payload)
-        self.assertNotIn("qwen_voice_api_key", payload["placeholders"])
 
-    async def test_voice_setup_writes_config_for_selected_agent(self):
-        async with await self._client() as client:
-            response = await client.post(
-                "/api/channels/voice/setup",
-                json={
-                    "force": False,
-                    "selection": {
-                        "voice_api_key": "voice-test-key",
-                    },
-                },
-            )
 
-        self.assertEqual(response.status_code, 200)
-        body = response.json()
-        self.assertEqual(body["status"], "ok")
-        self.assertTrue(body["channel"]["ready"])
 
-        config = yaml.safe_load((self.agent_a_path / "config.yaml").read_text(encoding="utf-8"))
-        voice_cfg = config["channels"]["voice"]
-        self.assertEqual(voice_cfg["api_key"], "voice-test-key")
-        self.assertNotIn("profile", voice_cfg)
 
-    async def test_voice_setup_edit_preserves_flat_advanced_options(self):
-        config_path = self.agent_a_path / "config.yaml"
-        config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-        config["channels"]["voice"] = {
-            "api_key": "old-key",
-            "languages": ["en", "zh"],
-            "audio": {"input": "Mic", "output": "Speaker"},
-        }
-        config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
 
-        async with await self._client() as client:
-            response = await client.post(
-                "/api/channels/voice/setup",
-                json={
-                    "force": True,
-                    "selection": {"voice_api_key": "new-key"},
-                },
-            )
-
-        self.assertEqual(response.status_code, 200)
-        saved = yaml.safe_load(config_path.read_text(encoding="utf-8"))["channels"]["voice"]
-        self.assertEqual(saved["api_key"], "new-key")
-        self.assertNotIn("languages", saved)
-        self.assertEqual(saved["audio"]["input"], "Mic")
-
-    async def test_voice_setup_always_configures_channel(self):
-        config_path = self.agent_a_path / "config.yaml"
-        config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-        config["channels"]["voice"] = {"api_key": "old-key"}
-        config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
-
-        async with await self._client() as client:
-            response = await client.post(
-                "/api/channels/voice/setup",
-                json={"force": True, "selection": {"voice_api_key": "new-key"}},
-            )
-
-        self.assertEqual(response.status_code, 200)
-        self.assertTrue(response.json()["channel"]["configured"])
-        saved = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-        self.assertEqual(saved["channels"]["voice"]["api_key"], "new-key")
-
-    async def test_voice_settings_round_trip_and_reset_defaults(self):
-        self.server.session.select("agent_b")
-        config_path = self.agent_b_path / "config.yaml"
-        original = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-        async with await self._client() as client:
-            for selection in (
-                {"voice": "Maya", "interruptions": True, "audio_input": "Test microphone", "audio_output": "Test speaker"},
-                {"voice": "Daniel", "interruptions": False, "audio_input": "auto", "audio_output": "auto"},
-            ):
-                with self.subTest(selection=selection):
-                    response = await client.post(
-                        "/api/channels/voice/setup",
-                        json={"force": True, "selection": {"voice_api_key": "", "speed": 1.0, **selection}},
-                    )
-                    self.assertEqual(response.status_code, 200)
-                    self.assertTrue(response.json()["channel"]["ready"])
-                    schema_response = await client.get("/api/channels/voice/setup-schema")
-                    self.assertEqual(schema_response.status_code, 200)
-                    schema = schema_response.json()
-                    self.assertTrue(schema["configured"])
-                    self.assertEqual(schema["defaults"], {"voice_api_key": "", "speed": 1.0, **selection})
-                    self.assertEqual(
-                        [option["id"] for option in schema["voice_options"]],
-                        ["Maya", "Daniel", "Adrian", "Claire", "Oliver", "Isla"],
-                    )
-                    saved = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-                    self.assertEqual(saved["channels"]["voice"]["api_key"], "soniox-key")
-                    for channel in ("api", "weixin"):
-                        self.assertEqual(saved["channels"][channel], original["channels"][channel])
-                    self.assertEqual(saved["provider"], original["provider"])
-                    other_agent = yaml.safe_load((self.agent_a_path / "config.yaml").read_text(encoding="utf-8"))
-                    self.assertNotIn("voice", other_agent["channels"])
-
-    async def test_voice_setup_conflict_without_force_returns_409(self):
-        async with await self._client() as client:
-            first = await client.post(
-                "/api/channels/voice/setup",
-                json={"force": False, "selection": {"voice_api_key": "one"}},
-            )
-            second = await client.post(
-                "/api/channels/voice/setup",
-                json={"force": False, "selection": {"voice_api_key": "two"}},
-            )
-
-        self.assertEqual(first.status_code, 200)
-        self.assertEqual(second.status_code, 409)
-
-    async def test_voice_setup_invalidates_cached_admin_config(self):
-        async with await self._client() as client:
-            initial = await client.get("/api/agent/config")
-            self.assertEqual(initial.status_code, 200)
-            self.assertNotIn("voice:", initial.json()["config"])
-
-            await client.post(
-                "/api/channels/voice/setup",
-                json={
-                    "force": False,
-                    "selection": {
-                        "voice_api_key": "voice-test-key",
-                    },
-                },
-            )
-
-            updated = await client.get("/api/agent/config")
-            self.assertEqual(updated.status_code, 200)
-            self.assertIn("voice:", updated.json()["config"])
 
     async def test_start_channel_qr_returns_session_payload(self):
         with patch(
@@ -411,7 +274,7 @@ class WebChannelRouteTests(unittest.IsolatedAsyncioTestCase):
         from xagent.interfaces.web.qr_sessions import get_qr_session_manager
 
         manager = get_qr_session_manager()
-        with patch.object(manager, "_run_weixin_login", lambda session, cancel_event, config_dir, options: None):
+        with patch.object(manager, "_run_weixin_login", lambda session, cancel_event, config_dir: None):
             session = manager.start_weixin(config_dir=self.root)
         async with await self._client() as client:
             response = await client.delete(f"/api/channels/weixin/qr/{session.id}")

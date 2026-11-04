@@ -86,13 +86,11 @@ class WeixinInitSelection:
 
 @dataclass(frozen=True)
 class VoiceInitSelection:
-    """Interactive choices used to configure the local voice channel."""
+    """Interactive choices used to configure shared voice preferences."""
 
     voice_api_key: str = ""
     voice: str = "Daniel"
     interruptions: bool = False
-    audio_input: str | int | None = "auto"
-    audio_output: str | int | None = "auto"
     speed: float = 1.0
 
 
@@ -310,7 +308,6 @@ def _channel_configured(config: dict[str, Any], channel: str) -> bool:
 
 def build_voice_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
     """Return wizard metadata for the web voice channel setup client."""
-    from ..voice.audio import list_audio_device_options
     from ..voice.config import SONIOX_SHARED_VOICE_OPTIONS, VoiceChannelConfig
 
     defaults = {
@@ -318,8 +315,6 @@ def build_voice_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
         "voice": "Daniel",
         "speed": 1.0,
         "interruptions": False,
-        "audio_input": "auto",
-        "audio_output": "auto",
     }
     channels_cfg = config.get("channels")
     if isinstance(channels_cfg, dict):
@@ -331,8 +326,6 @@ def build_voice_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
                     "voice": parsed.speaking_voice,
                     "speed": parsed.speaking_speed,
                     "interruptions": parsed.interruptions,
-                    "audio_input": parsed.audio.input,
-                    "audio_output": parsed.audio.output,
                 })
             except ValueError:
                 pass
@@ -340,20 +333,6 @@ def build_voice_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
         {"id": voice_id, "label": f"{voice_id} · {description}", "description": description}
         for voice_id, description in SONIOX_SHARED_VOICE_OPTIONS
     ]
-    audio_devices = list_audio_device_options()
-    for direction, key in (("input", "audio_input"), ("output", "audio_output")):
-        current = defaults[key]
-        current_id = str(current if current is not None else "auto")
-        options = audio_devices.get(direction) or []
-        if current_id and not any(str(item.get("id")) == current_id for item in options):
-            options.append(
-                {
-                    "id": current_id,
-                    "label": f"{current_id} (current/unavailable)",
-                    "description": "This value is saved but was not reported by the local audio system.",
-                }
-            )
-        audio_devices[direction] = options
     try:
         VoiceChannelConfig.from_dict((config.get("channels") or {}).get("voice") or {}).resolved_api_key()
         configured = True
@@ -362,7 +341,6 @@ def build_voice_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
     return {
         "defaults": defaults,
         "voice_options": voice_options,
-        "audio_devices": audio_devices,
         "placeholders": {"soniox_api_key": SONIOX_KEY_PLACEHOLDER},
         "configured": configured,
         "can_force": True,
@@ -411,8 +389,6 @@ def voice_init_selection_from_mapping(
         voice=str(data.get("voice", schema_defaults.get("voice", "Daniel")) or "Daniel").strip(),
         speed=data.get("speed", schema_defaults.get("speed", 1.0)),
         interruptions=interruption_value,
-        audio_input=data.get("audio_input", schema_defaults.get("audio_input", "auto")),
-        audio_output=data.get("audio_output", schema_defaults.get("audio_output", "auto")),
     )
 
 
@@ -548,7 +524,6 @@ def _voice_channel_config(
         "voice": selection.voice,
         "speed": selection.speed,
         "interruptions": selection.interruptions,
-        "audio": {"input": selection.audio_input, "output": selection.audio_output},
     })
     return VoiceChannelConfig.from_dict(merged).to_public_dict()
 
@@ -1246,7 +1221,6 @@ def _print_init_next_steps(*, config_dir: Path, agent_name: str | None = None) -
     ]
 
     voice_init = _format_init_command("xagent voice setup", config_dir=config_dir, agent_name=agent_name)
-    voice_start = _format_init_command("xagent channel voice connect", config_dir=config_dir, agent_name=agent_name)
     weixin_init = _format_init_command("xagent weixin setup", config_dir=config_dir, agent_name=agent_name)
     weixin_start = _format_init_command("xagent channel weixin connect", config_dir=config_dir, agent_name=agent_name)
 
@@ -1260,9 +1234,7 @@ def _print_init_next_steps(*, config_dir: Path, agent_name: str | None = None) -
     content.append("\nOptional:\n")
     content.append("voice   ", style="")
     content.append(voice_init, style="cyan")
-    content.append("\n        Configure the microphone/speaker channel, then connect it with ")
-    content.append(voice_start, style="cyan")
-    content.append(".")
+    content.append("\n        Configure shared voice settings, then open Voice in the web UI or connect a paired voice device.")
     content.append("\n")
     content.append("weixin  ", style="")
     content.append(weixin_init, style="cyan")
@@ -1372,7 +1344,7 @@ def _print_voice_post_setup(
     next_steps.append("Run next:\n")
     next_steps.append("start   ")
     next_steps.append(start, style="cyan")
-    next_steps.append("\n        Start the Agent with API, then connect other channels as needed.\n")
+    next_steps.append("\n        Start the Agent with API, then open Voice in the web UI or connect a paired voice device.\n")
     next_steps.append("status  ")
     next_steps.append(status, style="cyan")
     next_steps.append("\n        Check Agent readiness and channel health.\n")
