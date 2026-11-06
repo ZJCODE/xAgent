@@ -369,6 +369,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       const remoteToLocalMessageId = new Map<string, string>();
       let claimedPlaceholder = false;
       let steeredStream = false;
+      let activeToolCalls = 0;
       const followup = Boolean(options?.followup);
       const followupUserId = options?.userMessageId;
 
@@ -423,6 +424,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           return {
             ...panel,
             sending: followup ? panel.sending : false,
+            progress: followup ? panel.progress : undefined,
             messages: messages.flatMap((message) => {
               if (!localMessageIds.has(message.id) || !message.pending) return [message];
               if ((aborted || steeredStream) && !message.content) return [];
@@ -485,12 +487,26 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           return;
         }
 
+        if (!followup && parsed.type === "tool_call") {
+          activeToolCalls += 1;
+          patchPanel(panelId, (panel) => ({ ...panel, progress: "Working with tools…" }));
+          return;
+        }
+        if (!followup && parsed.type === "tool_result") {
+          activeToolCalls = Math.max(0, activeToolCalls - 1);
+          if (!activeToolCalls) {
+            patchPanel(panelId, (panel) => ({ ...panel, progress: "Reviewing results…" }));
+          }
+          return;
+        }
+
         if (parsed.type === "error" || parsed.error) {
           finish(new Error(parsed.error || "WebSocket chat failed."));
           return;
         }
 
         if (parsed.type === "message_start") {
+          if (!followup) patchPanel(panelId, (panel) => ({ ...panel, progress: "Writing a response…" }));
           const localId = ensureAssistantMessage(parsed);
           if (!textByMessageId.has(localId)) {
             textByMessageId.set(localId, "");
@@ -512,6 +528,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         }
 
         if (parsed.type === "message_done") {
+          if (!followup && parsed.phase === "preface") {
+            patchPanel(panelId, (panel) => ({ ...panel, progress: "Continuing…" }));
+          }
           const localId = ensureAssistantMessage(parsed);
           const nextText = parsed.content == null ? (textByMessageId.get(localId) || "") : String(parsed.content);
           const attachments = Array.isArray(parsed.attachments) ? parsed.attachments : undefined;
@@ -621,6 +640,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         ...current,
         pendingAttachments: [],
         sending: true,
+        progress: "Thinking…",
         messages: [...current.messages, userMessage, assistantMessage],
       }));
       await runSocket(panelId, payload, assistantMessage.id).catch(() => undefined);

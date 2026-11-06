@@ -51,12 +51,12 @@ function FilePreviewBubble({ attachment }: { attachment: AttachmentAsset }) {
   );
 }
 
-function ChatMessageView({ message }: { message: ChatPanelState["messages"][number] }) {
+function ChatMessageView({ message, showProgress }: { message: ChatPanelState["messages"][number]; showProgress: boolean }) {
   const isUser = message.role === "user";
   const isObservation = message.role === "observation";
   const images = imageUrlsForMessage(message);
   const files = fileAttachments(message.attachments);
-  const hasTextBubble = Boolean(message.content || message.pending);
+  const hasTextBubble = Boolean(message.content || (message.pending && !showProgress));
   const persistedImageCount = !images.length ? message.imageCount || 0 : 0;
   const persistedAttachmentCount = !message.attachments?.length ? message.attachmentCount || 0 : 0;
   return (
@@ -187,7 +187,7 @@ function ChatPanel({
   useEffect(() => {
     const node = scrollRef.current;
     if (node) node.scrollTop = node.scrollHeight;
-  }, [panel.messages.length, panel.messages[panel.messages.length - 1]?.content, panel.messages[panel.messages.length - 1]?.meta]);
+  }, [panel.messages.length, panel.messages[panel.messages.length - 1]?.content, panel.messages[panel.messages.length - 1]?.meta, panel.progress]);
 
   useEffect(() => {
     if (!chatEnabled) setUserIdOpen(false);
@@ -245,7 +245,7 @@ function ChatPanel({
 
       <div ref={scrollRef} className={classNames("chat-message-list fade-mask flex-1 min-h-0 overflow-y-auto px-3 sm:px-6 py-4 sm:py-6 space-y-4", !panel.messages.length && "is-empty")}>
         {panel.messages.length ? (
-          panel.messages.map((message) => <ChatMessageView key={message.id} message={message} />)
+          panel.messages.map((message) => <ChatMessageView key={message.id} message={message} showProgress={Boolean(panel.sending && panel.progress)} />)
         ) : !statusReady ? (
           <EmptyState icon={<RadioTower size={24} />} title="Checking API channel">
             Loading channel status...
@@ -257,6 +257,12 @@ function ChatPanel({
         ) : (
           channelBlock
         )}
+        {panel.sending && panel.progress ? (
+          <div className="chat-progress" role="status" aria-live="polite">
+            <RefreshCw size={13} className="chat-progress-icon" aria-hidden="true" />
+            <span>{panel.progress}</span>
+          </div>
+        ) : null}
       </div>
 
       {panel.pendingAttachments.length ? (

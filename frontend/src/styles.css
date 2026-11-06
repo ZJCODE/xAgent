@@ -1472,6 +1472,27 @@ input::placeholder {
   padding: 0 4px;
 }
 
+.chat-progress {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 4px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.chat-progress-icon {
+  flex: none;
+  animation: spin 1.4s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-progress-icon {
+    animation: none;
+  }
+}
+
 .typing-cursor::after {
   display: inline-block;
   width: 6px;

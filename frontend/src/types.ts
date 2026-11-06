@@ -69,6 +69,7 @@ export interface ChatPanelState {
   pendingAttachments: AttachmentAsset[];
   settings: ChatSettings;
   sending: boolean;
+  progress?: string;
 }
 
 export interface AgentCapabilities {

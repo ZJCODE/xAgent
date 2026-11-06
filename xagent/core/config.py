@@ -267,6 +267,9 @@ class AgentConfig:
         "- Obtain explicit approval before destructive or sensitive shell operations, "
         "or mutations outside the workspace. Never expose secrets.\n"
         "- Do not claim a tool action succeeded unless its result confirms success.\n"
+        "- For work involving tools, briefly tell the user what you are about to do "
+        "before calling them, and share meaningful progress between tool calls when useful. "
+        "Do not invent progress or repeat status without new information.\n"
         "</tool_policy>"
     )
 
