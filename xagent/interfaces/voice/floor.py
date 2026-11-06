@@ -137,10 +137,7 @@ def _on_speaking_playback_stopped(floor: ConversationFloor, _event: FloorEvent) 
     floor.state = FloorState.IDLE
     floor.in_flight_transcript = ""
     floor.pending_transcript = ""
-    mic = FloorCommand(FloorCommandKind.MIC_OPEN)
-    if not floor.allow_duplex_capture:
-        return _commands(mic)
-    return _commands(mic)
+    return _commands(FloorCommand(FloorCommandKind.MIC_OPEN))
 
 
 def _on_any_stt_lost(floor: ConversationFloor, _event: FloorEvent) -> list[FloorCommand]:

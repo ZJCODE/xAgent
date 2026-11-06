@@ -124,7 +124,7 @@ class Agent:
         self.model_api = normalize_model_api(model_api)
         self.model_max_tokens = AgentConfig.DEFAULT_MAX_TOKENS if model_max_tokens is None else model_max_tokens
         self.reasoning = reasoning
-        self.maintenance_reasoning = maintenance_reasoning_config(reasoning, provider_name=self.provider_name)
+        self.maintenance_reasoning = maintenance_reasoning_config(reasoning, provider_name=self.provider_name, model=self.model)
         self.supports_vision = bool(supports_vision)
         self.recent_messages = recent_messages
         self.max_agent_loops = max_agent_loops
@@ -1449,7 +1449,6 @@ class Agent:
         context: str,
         source: str = "environment",
         event_type: str = "observation",
-        metadata: Optional[Dict[str, Any]] = None,
     ) -> ParticipationDecision:
         """Decide whether an observed event deserves an outward reply.
 
@@ -1488,7 +1487,6 @@ class Agent:
                 messages=input_messages,
                 tool_specs=None,
                 instructions=instructions,
-                stream=False,
             )
             if reply_type == ReplyType.SIMPLE_REPLY:
                 return self._parse_participation_decision(str(payload))

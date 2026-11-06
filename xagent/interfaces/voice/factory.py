@@ -31,13 +31,11 @@ def create_websocket_voice_runtime(
     config: VoiceChannelConfig,
     bridge: WebSocketVoiceBridge,
     options: VoiceRuntimeOptions,
-    device_id: str = "",
 ) -> tuple[VoiceRuntime, WebSocketMicrophone, WebSocketPlayer]:
     """Construct a VoiceRuntime backed by a paired device WebSocket audio stream."""
     runtime_profile = VoiceRuntimeProfile(
         name=bridge.hello.profile,
         echo_managed=bridge.hello.echo_managed,
-        source=f"websocket:{device_id or 'device'}",
         interruptions_override=bridge.hello.interruptions,
         room_name=bridge.room_name,
     )

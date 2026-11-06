@@ -1,5 +1,4 @@
 import logging
-import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
@@ -244,7 +243,6 @@ class MessageHandler:
             max_messages=max_messages,
             covers_through_cursor=covers_through_cursor,
         )
-        budgeted_messages = [msg for msg, _ in budgeted_entries]
         budgeted_observations, omitted_observation_count = MessageHandler._budget_context_events(
             observation_messages,
             max_events=max_context_events,
@@ -724,20 +722,6 @@ class MessageHandler:
         return str((source.metadata or {}).get("sender_name") or "")
 
     @staticmethod
-    def _speaker_label_for(
-        messages: List[Message],
-        user_id: str,
-        current_message: Optional[Message] = None,
-    ) -> str:
-        """Stable id plus display name when the current speaker has one."""
-        from ...components.memory import format_speaker_label
-
-        return format_speaker_label(
-            user_id,
-            MessageHandler._speaker_display_name(messages, user_id, current_message),
-        ) or user_id
-
-    @staticmethod
     def _speaker_address_for(
         messages: List[Message],
         user_id: str,
@@ -972,37 +956,6 @@ class MessageHandler:
         if image_format == "gif":
             return "image/gif"
         return "image/png"
-
-    def build_instructions(
-        self,
-        tool_names: Optional[List[str]] = None,
-        skills_catalog: str = "",
-        workspace_context: str = "",
-    ) -> str:
-        """Build the static instructions string for the model.
-
-        Contains only behavioural rules that do not change per-turn:
-          1. Core Principles — foundational behaviour guidelines
-          2. Tool Policy — short cross-tool floor rules when tools are active
-          3. User System Prompt — developer-supplied customisation
-        """
-        instruction_messages = self.build_instruction_messages(
-            tool_names=tool_names,
-            skills_catalog=skills_catalog,
-            workspace_context=workspace_context,
-        )
-        instructions = "\n\n".join(
-            message["content"] for message in instruction_messages if message.get("content")
-        )
-
-        if len(instructions) > AgentConfig.MAX_SYSTEM_PROMPT_LENGTH:
-            logger.warning(
-                "Instructions length (%d chars) exceeds soft limit (%d). "
-                "Consider shortening the user system prompt.",
-                len(instructions), AgentConfig.MAX_SYSTEM_PROMPT_LENGTH,
-            )
-
-        return instructions
 
     def build_instruction_messages(
         self,

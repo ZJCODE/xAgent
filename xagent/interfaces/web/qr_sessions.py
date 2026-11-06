@@ -7,7 +7,6 @@ import secrets
 import threading
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Dict, Optional
 
 
@@ -73,7 +72,7 @@ class ChannelQrSessionManager:
             session.status = "cancelled"
             return True
 
-    def start_weixin(self, *, config_dir: Path) -> ChannelQrSession:
+    def start_weixin(self) -> ChannelQrSession:
         cancel_event = threading.Event()
         session = ChannelQrSession(
             id=secrets.token_urlsafe(16),
@@ -86,7 +85,7 @@ class ChannelQrSessionManager:
 
         thread = threading.Thread(
             target=self._run_weixin_login,
-            args=(session, config_dir, cancel_event),
+            args=(session, cancel_event),
             daemon=True,
         )
         thread.start()
@@ -95,10 +94,8 @@ class ChannelQrSessionManager:
     def _run_weixin_login(
         self,
         session: ChannelQrSession,
-        config_dir: Path,
         cancel_event: threading.Event,
     ) -> None:
-        del config_dir
         from xagent.integrations.weixin.client import QrLoginCancelled, qr_login
         from xagent.integrations.weixin.config import ILINK_BASE_URL, WEIXIN_CDN_BASE_URL
 

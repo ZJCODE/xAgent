@@ -17,7 +17,6 @@ from typing import Optional, Sequence
 
 from .chat import (
     AgentCLI,
-    _default_cli_user_id,
     _format_cli_attachments,
     _format_cli_workspace_links,
 )
@@ -27,7 +26,6 @@ from .launcher import (
     _launcher_help_content,
     _launcher_options,
     _launcher_overview_subtitle,
-    _run_agent_launcher,
     _run_channel_launcher,
     _run_web_launcher,
     _run_inspect_launcher,
@@ -124,7 +122,6 @@ __all__ = [
     "init_agent_directory",
     "main",
     "print_quick_start",
-    "_run_agent_launcher",
     "rich_terminal_available",
 ]
 

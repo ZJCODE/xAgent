@@ -25,7 +25,7 @@ class VoiceConfigSurfaceTests(unittest.TestCase):
     def test_detected_headset_profile_disables_diarization(self):
         config = VoiceChannelConfig.from_dict({"api_key": "k"})
         config.apply_runtime_profile(
-            VoiceRuntimeProfile(name="headset", echo_managed=True, source="test")
+            VoiceRuntimeProfile(name="headset", echo_managed=True)
         )
         self.assertFalse(config.enable_diarization)
         self.assertFalse(config.attention.use_decide_participation)

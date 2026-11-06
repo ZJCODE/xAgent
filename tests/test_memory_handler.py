@@ -76,10 +76,6 @@ class _FakeMessageStorage:
             return []
         return self.messages[start:end]
 
-    async def cursor_for_message_count(self, message_count):
-        normalized = max(0, int(message_count or 0))
-        return normalized if normalized <= len(self.messages) else 0
-
     def append(self, message: Message) -> None:
         cursor = len(self.messages) + 1
         metadata = dict(message.metadata or {})

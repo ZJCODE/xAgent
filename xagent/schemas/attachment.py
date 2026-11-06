@@ -238,8 +238,6 @@ def save_workspace_attachment_bytes(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     safe_name = safe_attachment_filename(file_name)
-    guessed_mime_type, _ = mimetypes.guess_type(safe_name)
-    normalized_mime_type = str(mime_type or guessed_mime_type or "application/octet-stream").split(";", 1)[0].strip().lower()
     digest = hashlib.sha1(data).hexdigest()[:12]
     identity = hashlib.sha1(
         f"{source_channel or ''}:{source_message_id or ''}:{source_resource_id or ''}:{source_resource_type or ''}:{digest}".encode("utf-8")

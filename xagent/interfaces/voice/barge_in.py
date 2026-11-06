@@ -57,14 +57,9 @@ class BargeInEvaluator:
     def reset(self) -> None:
         self._state = BargeInState()
 
-    def observe_vad(self, *, active: bool, block_ms: float) -> None:
-        if active:
-            self._state.speech_ms += block_ms
-            if self._state.speech_ms >= self.config.min_speech_ms:
-                self._state.armed = True
-        else:
-            self._state.speech_ms = 0.0
-            self._state.armed = False
+    def arm(self) -> None:
+        """Mark that enough speech has been heard to consider an interrupt."""
+        self._state.armed = True
 
     def evaluate_partial(self, partial_text: str) -> str:
         """Return ``none``, ``backchannel``, or ``interrupt``."""

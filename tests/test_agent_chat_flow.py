@@ -58,9 +58,6 @@ class InMemoryMessageStorage:
     async def clear_messages(self) -> None:
         self.messages.clear()
 
-    async def pop_message(self):
-        return self.messages.pop() if self.messages else None
-
 
 class FakeToolManager:
     def __init__(self, tools=None):
@@ -826,9 +823,10 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
         )
 
         events = [
-            event async for event in model.stream_turn(
+            event async for event in model.model_turn_events(
                 messages=[{"role": "user", "content": "lookup"}],
                 tool_specs=[{"type": "function", "function": {"name": "lookup"}}],
+                stream=True,
             )
         ]
 
@@ -1058,7 +1056,6 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
         await model.call(
             messages=[{"role": "user", "content": "hello"}],
             tool_specs=None,
-            stream=False,
         )
 
         self.assertNotIn("stream_options", client.chat_completions.calls[0])
@@ -1423,7 +1420,6 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
             context="[room context]\nroom_id: oc_group\n\nAlice 2026-06-18 10:00: should we ship?\n[/room context]",
             source="weixin",
             event_type="group_message",
-            metadata={"chat_id": "oc_group", "sender_name": "Alice"},
         )
 
         self.assertTrue(decision.should_reply)

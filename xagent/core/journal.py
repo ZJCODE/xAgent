@@ -38,7 +38,7 @@ class JournalLLMService:
         self.provider_name = provider_name
         self.model_api = model_api
         self.max_tokens = AgentConfig.JOURNAL_MAX_TOKENS if max_tokens is None else max_tokens
-        self.reasoning = maintenance_reasoning_config(reasoning, provider_name=provider_name)
+        self.reasoning = maintenance_reasoning_config(reasoning, provider_name=provider_name, model=model)
         self._model_client: Optional[Any] = None
 
     async def format_diary_entry(
@@ -84,7 +84,7 @@ class JournalLLMService:
         if not source_content.strip():
             return ""
 
-        system_prompt = self.build_summary_system_prompt(period_type, period_label)
+        system_prompt = self.build_summary_system_prompt(period_type)
         user_prompt = self.build_summary_user_prompt(period_type, period_label, source_content)
 
         try:
@@ -152,7 +152,7 @@ Rules:
         return "\n".join(parts)
 
     @staticmethod
-    def build_summary_system_prompt(period_type: str, period_label: str) -> str:
+    def build_summary_system_prompt(period_type: str) -> str:
         return f"""Write a concise {period_type} summary of my diary entries in first person.
 
 Rules:

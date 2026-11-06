@@ -33,7 +33,6 @@ ITEM_VOICE = 3
 ITEM_FILE = 4
 ITEM_VIDEO = 5
 
-_AUDIO_EXTENSIONS = {".ogg", ".opus", ".mp3", ".wav", ".m4a", ".flac", ".aac", ".silk"}
 _VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".3gp"}
 _IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"}
 
@@ -52,10 +51,6 @@ class InboundMedia:
 class OutboundMedia:
     item: dict[str, Any]
     client_id_suffix: str
-
-
-def aes_padded_size(size: int) -> int:
-    return ((int(size) + 1 + 15) // 16) * 16
 
 
 def aes128_ecb_encrypt(plaintext: bytes, key: bytes) -> bytes:

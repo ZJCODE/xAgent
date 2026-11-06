@@ -183,6 +183,19 @@ class ProviderConfigTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, message):
                     normalize_reasoning_config(provider_cfg)
 
+    def test_gpt6_reasoning_compatibility_and_maintenance(self):
+        for model in ("gpt-6-astra", "gpt-6.1-sol"):
+            with self.subTest(model=model):
+                for reasoning in ({"enabled": False}, {"enabled": True, "effort": "minimal"}):
+                    with self.assertRaises(ValueError):
+                        normalize_reasoning_config({"name": "openai", "model": model, "reasoning": reasoning})
+                self.assertEqual(
+                    maintenance_reasoning_config(ReasoningConfig(enabled=True, effort="high"), provider_name="openai", model=model),
+                    ReasoningConfig(enabled=True, effort="low"),
+                )
+        self.assertNotIn("minimal", reasoning_capability("openai", model="gpt-6.1-terra").effort_values)
+        self.assertEqual(normalize_reasoning_config({"name": "openai", "model": "gpt-6.1-terra", "reasoning": {"enabled": False}}), ReasoningConfig(enabled=False))
+
     def test_provider_reasoning_is_disabled_only_for_maintenance_clients(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             (Path(tmpdir) / "config.yaml").write_text(

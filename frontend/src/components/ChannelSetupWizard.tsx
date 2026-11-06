@@ -1,7 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { QrAuthPanel } from "./QrAuthPanel";
 import { SetupWizardShell } from "./SetupWizardShell";
-import { WizardField } from "./WizardField";
 import { getChannelSetupSchema, setupChannel } from "../lib/api";
 import type { WeixinSetupSchema } from "../types";
 
@@ -17,12 +16,9 @@ export function ChannelSetupWizard({ channel, open, onClose, onComplete }: Chann
   const [loadingSchema, setLoadingSchema] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
-  const [stepIndex, setStepIndex] = useState(0);
-  const [force, setForce] = useState(false);
+  const submittingRef = useRef(false);
+  const schemaReadyRef = useRef(false);
   const [weixinSelection, setWeixinSelection] = useState({
-    owner_only: true,
-    allow_users: "",
-    media_enabled: true,
     account_id: "",
     owner_user_id: "",
     base_url: "",
@@ -31,21 +27,11 @@ export function ChannelSetupWizard({ channel, open, onClose, onComplete }: Chann
   });
   const [qrReady, setQrReady] = useState(false);
 
-  const steps = useMemo(() => {
-    return [
-      { id: "qr", label: "QR login" },
-      { id: "access", label: "Access" },
-    ];
-  }, [channel]);
-
-  const currentStepId = steps[stepIndex]?.id ?? steps[0]?.id ?? "qr";
+  const steps = [{ id: "qr", label: "QR login" }];
   const isDirty = useMemo(() => {
-    if (!schema || loadingSchema || force || qrReady) return Boolean(force || qrReady);
+    if (!schema || loadingSchema || qrReady) return qrReady;
     const defaults = schema.defaults;
     return (
-      weixinSelection.owner_only !== defaults.owner_only ||
-      weixinSelection.allow_users !== "" ||
-      weixinSelection.media_enabled !== defaults.media_enabled ||
       weixinSelection.account_id !== "" ||
       weixinSelection.owner_user_id !== "" ||
       weixinSelection.base_url !== defaults.base_url ||
@@ -54,7 +40,6 @@ export function ChannelSetupWizard({ channel, open, onClose, onComplete }: Chann
     );
   }, [
     channel,
-    force,
     loadingSchema,
     qrReady,
     schema,
@@ -64,20 +49,17 @@ export function ChannelSetupWizard({ channel, open, onClose, onComplete }: Chann
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
+    schemaReadyRef.current = false;
     setLoadingSchema(true);
     setError("");
-    setStepIndex(0);
-    setForce(false);
     setQrReady(false);
     void getChannelSetupSchema(channel)
       .then((data) => {
         if (cancelled) return;
+        schemaReadyRef.current = true;
         const weixinSchema = data;
         setSchema(weixinSchema);
         setWeixinSelection({
-          owner_only: weixinSchema.defaults.owner_only,
-          allow_users: "",
-          media_enabled: weixinSchema.defaults.media_enabled,
           account_id: "",
           owner_user_id: "",
           base_url: weixinSchema.defaults.base_url,
@@ -90,39 +72,15 @@ export function ChannelSetupWizard({ channel, open, onClose, onComplete }: Chann
         setError(err instanceof Error ? err.message : String(err));
       })
       .finally(() => { if (!cancelled) setLoadingSchema(false); });
-    return () => { cancelled = true; };
+    return () => { cancelled = true; schemaReadyRef.current = false; };
   }, [channel, open]);
-
-  useEffect(() => {
-    if (stepIndex >= steps.length) {
-      setStepIndex(Math.max(steps.length - 1, 0));
-    }
-  }, [stepIndex, steps.length]);
 
   const validateStep = (): string => {
     if (!schema || loadingSchema) return "Load the setup options before saving.";
-    if (currentStepId === "qr" && !qrReady) {
-      return "Complete Weixin QR login before continuing.";
-    }
-    if (stepIndex === steps.length - 1 && schema?.configured && !force) {
-      return "Confirm overwriting the existing channel configuration.";
+    if (!qrReady) {
+      return "Complete Weixin QR login before saving.";
     }
     return "";
-  };
-
-  const goNext = () => {
-    const message = validateStep();
-    if (message) {
-      setError(message);
-      return;
-    }
-    setError("");
-    setStepIndex((current) => Math.min(current + 1, steps.length - 1));
-  };
-
-  const goBack = () => {
-    setError("");
-    setStepIndex((current) => Math.max(current - 1, 0));
   };
 
   const buildSelection = (): Record<string, unknown> => {
@@ -131,31 +89,32 @@ export function ChannelSetupWizard({ channel, open, onClose, onComplete }: Chann
       owner_user_id: weixinSelection.owner_user_id,
       base_url: weixinSelection.base_url,
       cdn_base_url: weixinSelection.cdn_base_url,
-      owner_only: weixinSelection.owner_only,
-      allow_users: weixinSelection.allow_users
-        .split(",")
-        .map((part) => part.trim())
-        .filter(Boolean),
-      media_enabled: weixinSelection.media_enabled,
+      owner_only: true,
+      allow_users: [],
+      media_enabled: true,
       ...(weixinSelection.credentials ? { credentials: weixinSelection.credentials } : {}),
     };
   };
 
   const submit = async () => {
+    if (submittingRef.current) return;
     const message = validateStep();
     if (message) {
       setError(message);
       return;
     }
+    submittingRef.current = true;
     setSubmitting(true);
     setError("");
     try {
-      await setupChannel(channel, { force, selection: buildSelection() });
+      await setupChannel(channel, { force: true, selection: buildSelection() });
       onComplete();
       onClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setSubmitting(false);
+    } finally {
+      submittingRef.current = false;
     }
   };
 
@@ -172,68 +131,32 @@ export function ChannelSetupWizard({ channel, open, onClose, onComplete }: Chann
     setError("");
   };
 
+  useEffect(() => {
+    if (open && schemaReadyRef.current && qrReady && schema && !loadingSchema) {
+      void submit();
+    }
+  }, [open, qrReady, schema, loadingSchema]);
+
   return (
     <SetupWizardShell
       open={open}
       title="Weixin setup"
       subtitle=""
       steps={steps}
-      stepIndex={stepIndex}
+      stepIndex={0}
       loading={loadingSchema}
       submitting={submitting}
       isDirty={isDirty}
       error={error}
       submitLabel="Save setup"
+      submitDisabled={!qrReady}
       onClose={onClose}
-      onBack={goBack}
-      onNext={goNext}
+      onBack={() => {}}
+      onNext={() => {}}
       onSubmit={submit}
     >
-      {currentStepId === "qr" ? (
-        <QrAuthPanel channel="weixin" onConfirmed={handleWeixinQrConfirmed} onError={setError} />
-      ) : null}
+      <QrAuthPanel channel="weixin" onConfirmed={handleWeixinQrConfirmed} onError={setError} />
 
-      {currentStepId === "access" ? (
-        <div className="wizard-grid">
-          <label className="wizard-checkbox">
-            <input
-              type="checkbox"
-              checked={weixinSelection.owner_only}
-              onChange={(event) =>
-                setWeixinSelection((current) => ({ ...current, owner_only: event.target.checked }))
-              }
-            />
-            <span>Owner only</span>
-          </label>
-          {!weixinSelection.owner_only ? (
-            <WizardField label="Allowed users" hint="Comma-separated user IDs.">
-              <input
-                value={weixinSelection.allow_users}
-                onChange={(event) =>
-                  setWeixinSelection((current) => ({ ...current, allow_users: event.target.value }))
-                }
-              />
-            </WizardField>
-          ) : null}
-          <label className="wizard-checkbox">
-            <input
-              type="checkbox"
-              checked={weixinSelection.media_enabled}
-              onChange={(event) =>
-                setWeixinSelection((current) => ({ ...current, media_enabled: event.target.checked }))
-              }
-            />
-            <span>Enable media</span>
-          </label>
-        </div>
-      ) : null}
-
-      {schema?.configured && stepIndex === steps.length - 1 ? (
-        <label className="wizard-checkbox wizard-warning">
-          <input type="checkbox" checked={force} onChange={(event) => setForce(event.target.checked)} />
-          <span>Overwrite existing {channel} channel settings</span>
-        </label>
-      ) : null}
     </SetupWizardShell>
   );
 }

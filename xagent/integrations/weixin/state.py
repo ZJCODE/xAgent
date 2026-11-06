@@ -48,9 +48,6 @@ class WeixinStateStore:
     def context_path(self, account_id: str) -> Path:
         return self.accounts_dir / f"{_safe_account_id(account_id)}.context-tokens.json"
 
-    def last_active_path(self) -> Path:
-        return self.root / "state.json"
-
     def save_credentials(self, credentials: WeixinCredentials) -> None:
         saved_at = credentials.saved_at or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         payload = {**asdict(credentials), "saved_at": saved_at}
@@ -98,21 +95,6 @@ class WeixinStateStore:
 
     def clear_context_tokens(self, account_id: str) -> None:
         _unlink_if_exists(self.context_path(account_id))
-
-    def save_last_active_user(self, *, account_id: str, user_id: str, context_token: str = "") -> None:
-        payload = {
-            "account_id": account_id,
-            "user_id": user_id,
-            "context_token": context_token,
-            "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        }
-        _atomic_write_json(self.last_active_path(), payload, mode=0o600)
-
-    def load_last_active_user(self) -> dict[str, str]:
-        payload = _load_json(self.last_active_path())
-        if not isinstance(payload, dict):
-            return {}
-        return {key: str(value) for key, value in payload.items() if value is not None}
 
 
 def _safe_account_id(account_id: str) -> str:

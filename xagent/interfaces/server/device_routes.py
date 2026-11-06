@@ -232,7 +232,6 @@ def register_device_routes(
                 config=voice_cfg,
                 bridge=bridge,
                 options=options,
-                device_id=device_id,
             )
             session = VoiceDeviceSession(
                 device_id=device_id,

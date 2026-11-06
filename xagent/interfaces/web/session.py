@@ -35,9 +35,8 @@ from ..cli.setup import (
     build_setup_schema,
     init_selection_from_mapping,
 )
-from ..cli.channels import CHANNEL_API, load_config_file
+from ..cli.channels import load_config_file
 from ..cli.web_client import web_client_config
-from ..cli.processes import managed_paths, running_pid
 from ..server.admin_service import AdminService
 
 
@@ -71,7 +70,6 @@ class WebAgentSession:
         registry_root: Optional[Path] = None,
     ) -> None:
         self._registry_root = registry_root
-        self._initial_config_dir = Path(initial_config_dir).expanduser().resolve()
         self._initial_agent_name = initial_agent_name
         self._initial_api_url = initial_api_url
         self._current_name: Optional[str] = initial_agent_name

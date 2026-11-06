@@ -339,18 +339,6 @@ def _weixin_channel_is_configured(config_dir: Path) -> bool:
     return bool(data.get("account_id"))
 
 
-def _api_channel_is_enabled(config_dir: Path) -> bool:
-    config = _launcher_config_snapshot(config_dir)
-    if not config:
-        return False
-    data = api_config(config)
-    return bool(data.get("enabled", True))
-
-
-def _api_channel_is_running(config_dir: Path) -> bool:
-    return runtime_snapshot(config_dir).get("channels", {}).get(CHANNEL_API, {}).get("state") in {"running", "connected"}
-
-
 def _api_channel_url(config_dir: Path) -> str:
     config = _launcher_config_snapshot(config_dir)
     data = api_config(config)
@@ -950,9 +938,10 @@ def _prompt_model_reasoning(
     *,
     provider: str,
     model_api: Optional[str],
+    model: str,
     current_provider_config: dict[str, Any],
 ) -> tuple[bool, Optional[ReasoningConfig]]:
-    capability = reasoning_capability(provider, model_api)
+    capability = reasoning_capability(provider, model_api, model)
     if not capability.supported:
         return True, None
 
@@ -1109,6 +1098,7 @@ def _run_model_config_launcher(ui: TerminalUI, config_dir: Path) -> bool:
         ui,
         provider=provider,
         model_api=model_api,
+        model=model,
         current_provider_config=provider_config,
     )
     if not reasoning_completed:
@@ -2055,8 +2045,6 @@ def _run_web_launcher(config_dir: Path) -> int:
 
 
 def _run_interactive_launcher() -> int:
-    from .runtime import _runtime_is_initialized, print_quick_start  # noqa: F401
-
     ui = TerminalUI()
 
     while True:

@@ -205,7 +205,7 @@ class ModelLimitsTests(unittest.IsolatedAsyncioTestCase):
                 recovered = LocalStream(api, text="recovered")
                 endpoint = SimpleNamespace(create=AsyncMock(side_effect=[failed, recovered]))
                 model = ModelClient(client=fake_client(endpoint), model="test", model_api=api)
-                events = [event async for event in model.stream_turn([], None)]
+                events = [event async for event in model.model_turn_events([], None, stream=True)]
                 self.assertEqual([event.delta for event in events], ["recovered"])
                 self.assertEqual(endpoint.create.await_count, 2)
                 self.assertTrue(failed.closed and recovered.closed)
@@ -216,7 +216,7 @@ class ModelLimitsTests(unittest.IsolatedAsyncioTestCase):
                 response = LocalStream(api, error=ConnectionError("disconnected"))
                 endpoint = SimpleNamespace(create=AsyncMock(return_value=response))
                 model = ModelClient(client=fake_client(endpoint), model="test", model_api=api)
-                events = [event async for event in model.stream_turn([], None)]
+                events = [event async for event in model.model_turn_events([], None, stream=True)]
                 self.assertEqual([event.type for event in events], ["delta", "error"])
                 self.assertEqual(events[0].delta, "first")
                 self.assertEqual(endpoint.create.await_count, 1)
@@ -264,7 +264,7 @@ class ModelLimitsTests(unittest.IsolatedAsyncioTestCase):
         response = LocalStream(MODEL_API_OPENAI_RESPONSES, count=10)
         endpoint = SimpleNamespace(create=AsyncMock(return_value=response))
         model = ModelClient(client=fake_client(endpoint), model="test", model_api=MODEL_API_OPENAI_RESPONSES)
-        events = model.stream_turn([], None)
+        events = model.model_turn_events([], None, stream=True)
         self.assertEqual((await events.__anext__()).type, "delta")
         await events.aclose()
         self.assertTrue(response.closed)
@@ -276,7 +276,7 @@ class ModelLimitsTests(unittest.IsolatedAsyncioTestCase):
         model = ModelClient(client=fake_client(endpoint), model="test", model_api=MODEL_API_OPENAI_RESPONSES,
                             request_timeout=0.06)
         started = time.monotonic()
-        events = [event async for event in model.stream_turn([], None)]
+        events = [event async for event in model.model_turn_events([], None, stream=True)]
         self.assertEqual(events[-1].type, "error")
         self.assertTrue(any(event.type == "delta" for event in events))
         self.assertLess(time.monotonic() - started, 0.4)

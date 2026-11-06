@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any, Optional, Protocol
+from typing import Any, Optional
 
 
 class ToolDecision(str, Enum):
@@ -66,22 +66,6 @@ def resolve_workspace_cwd(
             f"working_directory {str(resolved)!r} is outside the agent workspace {str(root)!r}"
         ) from exc
     return str(resolved)
-
-
-class ToolGuard(Protocol):
-    async def pre_execute(self, ctx: ToolCallContext) -> ToolGuardResult:
-        ...
-
-    async def post_execute(self, ctx: ToolCallContext, result: Any) -> Any:
-        ...
-
-
-class AllowAllGuard:
-    async def pre_execute(self, ctx: ToolCallContext) -> ToolGuardResult:
-        return ToolGuardResult.allow()
-
-    async def post_execute(self, ctx: ToolCallContext, result: Any) -> Any:
-        return result
 
 
 class WorkspaceShellGuard:

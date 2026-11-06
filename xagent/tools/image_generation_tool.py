@@ -618,12 +618,6 @@ def _extract_image_responses(response: Any) -> list[tuple[str, str]]:
     return image_responses
 
 
-def _extract_image_response(response: Any) -> tuple[str, str]:
-    for image_base64, revised_prompt in _extract_image_responses(response):
-        return image_base64, revised_prompt
-    return "", ""
-
-
 def _extract_qwen_image_urls(response: Any) -> list[str]:
     output = _field(response, "output", {}) or {}
     image_urls: list[str] = []

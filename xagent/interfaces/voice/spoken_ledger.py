@@ -15,11 +15,6 @@ class SpokenLedger:
     _characters: list[str] = field(default_factory=list)
     _char_end_times: list[float] = field(default_factory=list)
 
-    def reset(self) -> None:
-        self.playback_seconds = 0.0
-        self._characters.clear()
-        self._char_end_times.clear()
-
     def ingest_timestamps(
         self,
         *,

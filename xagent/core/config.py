@@ -275,10 +275,6 @@ class AgentConfig:
     # Assembled by the static builder methods below. Each template
     # corresponds to one context layer injected into the system prompt.
     # ============================================================
-    DEFAULT_SYSTEM_PROMPT = (
-        "**Context:**\n"
-    )
-
     TURN_REPLY_PROMPT_TEMPLATE = (
         "Focus on what {current_user_id} just said. "
         "Use {current_user_id}'s language from the current conversation; if languages are mixed, follow their latest message's dominant language. "
@@ -571,10 +567,8 @@ class AgentConfig:
         current_user_id: str,
         current_time: str = "",
         current_date: str = "",
-        channel_instructions: str = "",
         inbox_kind: str = "",
     ) -> str:
-        del channel_instructions  # assembled as its own prompt section
         resolved_current_time = current_time or current_date
         if str(inbox_kind or "").strip() == "scheduled_turn":
             return AgentConfig.CURRENT_SCHEDULED_TASK_TEMPLATE.format(

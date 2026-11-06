@@ -72,8 +72,6 @@ def channel_readiness(config: Mapping[str, Any], channel: str, root: Path) -> tu
             cfg = WeixinAdapterConfig.from_dict(weixin_config(config))
             if WeixinStateStore(root, create=False).load_credentials(cfg.account_id) is None:
                 raise ValueError("Weixin credentials are missing; run setup")
-        elif channel == CHANNEL_VOICE:
-            return False, "Host voice has been removed. Use the Voice page or a paired WebSocket voice device."
         else:
             return False, "Unknown channel"
     except (ValueError, TypeError, OSError, ImportError):
@@ -107,10 +105,8 @@ def normalize_channel_values(
     values: Optional[Sequence[str]],
     *,
     default: str,
-    config: Optional[Mapping[str, Any]] = None,
 ) -> list[str]:
     """Normalize comma-separated/repeated channel values into public channels."""
-    del config
     raw_values: Iterable[str] = values if values else (default,)
     selected: list[str] = []
     for raw_value in raw_values:

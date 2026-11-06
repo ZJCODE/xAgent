@@ -1,7 +1,6 @@
 """Launcher runtime overview aggregation."""
 from __future__ import annotations
 
-import sqlite3
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -308,49 +307,3 @@ def _web_client_target(web_cfg: dict[str, Any]) -> str:
     if ":" in browse_host and not browse_host.startswith("["):
         browse_host = f"[{browse_host}]"
     return f"{browse_host}:{port}"
-
-
-def _data_item(config_dir: Path) -> OverviewItem:
-    memory_count = _memory_count(config_dir / BaseAgentConfig.MEMORY_DIRNAME)
-    message_count = _message_count(config_dir / BaseAgentConfig.MESSAGE_DIRNAME / BaseAgentConfig.MESSAGE_DB_FILENAME)
-    active_tasks, failed_tasks = _task_counts(config_dir / BaseAgentConfig.TASKS_DIRNAME)
-    status = STATUS_WARNING if failed_tasks else STATUS_OK
-    value = f"{memory_count} memory / {message_count} messages"
-    detail = "no active tasks" if active_tasks == 0 else _count_phrase(active_tasks, "active task")
-    if failed_tasks:
-        detail += f", {_count_phrase(failed_tasks, 'failed task')}"
-    return OverviewItem("Data", value, status, detail)
-
-
-def _count_phrase(count: int, singular: str, plural: str | None = None) -> str:
-    plural_form = plural or f"{singular}s"
-    return f"{count} {singular if count == 1 else plural_form}"
-
-
-def _memory_count(root: Path) -> int:
-    if not root.exists():
-        return 0
-    return sum(1 for path in root.rglob("*.md") if path.is_file())
-
-
-def _message_count(path: Path) -> int:
-    if not path.is_file():
-        return 0
-    try:
-        with sqlite3.connect(str(path)) as connection:
-            row = connection.execute("SELECT COUNT(*) FROM messages").fetchone()
-    except sqlite3.Error:
-        return 0
-    return int(row[0]) if row else 0
-
-
-def _task_counts(root: Path) -> tuple[int, int]:
-    if not root.exists():
-        return 0, 0
-    try:
-        records = list_task_records(root, include_failed=True)
-    except Exception:
-        return 0, 0
-    active = sum(1 for record in records if record.status == "active")
-    failed = sum(1 for record in records if record.state == "failed")
-    return active, failed

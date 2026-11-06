@@ -736,21 +736,6 @@ class MemoryHandler:
     # Summary auto-generation
     # ------------------------------------------------------------------
 
-    async def check_and_generate_summaries(self) -> None:
-        """Check if any completed periods need summary generation.
-
-        Only generates summaries for periods that are fully in the past and
-        whose summary file does not yet exist.
-        """
-        async with self._maintenance_guard():
-            await self._check_and_generate_summaries_locked()
-
-    async def _check_and_generate_summaries_locked(self) -> None:
-        today = date.today()
-        await self._generate_previous_weekly_summary_if_missing_locked(today=today)
-        await self._generate_previous_monthly_summary_if_missing_locked(today=today)
-        await self._generate_previous_yearly_summary_if_missing_locked(today=today)
-
     async def generate_previous_weekly_summary_if_missing(
         self,
         today: Optional[date] = None,

@@ -10,9 +10,7 @@ import yaml
 
 from ...core.providers import (
     KNOWN_PROVIDERS,
-    MODEL_API_ANTHROPIC_MESSAGES,
     MODEL_API_OPENAI_CHAT_COMPLETIONS,
-    MODEL_API_OPENAI_RESPONSES,
     PROVIDER_CUSTOM,
     PROVIDER_DEEPSEEK,
     PROVIDER_OPENAI,
@@ -49,11 +47,6 @@ IMAGE_GENERATION_PROVIDERS = (
     IMAGE_GENERATION_PROVIDER_NONE,
     IMAGE_GENERATION_PROVIDER_OPENAI,
     IMAGE_GENERATION_PROVIDER_QWEN,
-)
-MODEL_APIS = (
-    MODEL_API_OPENAI_CHAT_COMPLETIONS,
-    MODEL_API_OPENAI_RESPONSES,
-    MODEL_API_ANTHROPIC_MESSAGES,
 )
 VOICE_PRESETS = ("none", "soniox")
 MODEL_PLACEHOLDER = "your_model_here"
@@ -568,13 +561,6 @@ def prepare_voice_preset_update(
          "channels.voice.interruptions", "channels.voice.audio.input", "channels.voice.audio.output",
          "channels.voice.enabled"),
     )
-
-
-def validate_voice_config(data: dict[str, Any]) -> None:
-    channels = data.get("channels")
-    if not isinstance(channels, dict) or "voice" not in channels:
-        return
-    VoiceChannelConfig.from_dict(channels["voice"])
 
 
 AGENT_SETUP_FEATURES = ("model", "search", "image_generation", "observability", "voice")

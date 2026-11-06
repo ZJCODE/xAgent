@@ -38,11 +38,7 @@ TASK_STATUS_COMPLETED = "completed"
 TASK_STATUS_FAILED = "failed"
 TASK_STATUS_NEEDS_REVIEW = "needs_review"
 TASK_STATE_PENDING = "pending"
-TASK_STATE_FAILED = "failed"
-TASK_STATE_RUNNING = "running"
 TASK_STATE_COMPLETED = "completed"
-DEFAULT_RUNTIME_POLL_INTERVAL_SECONDS = 1.0
-DEFAULT_MAX_CONCURRENT_TASK_DISPATCHES = 4
 SUPPORTED_TASK_TYPES = {TASK_TYPE_MESSAGE, TASK_TYPE_AGENT}
 @dataclass(frozen=True)
 class ScheduledDeliveryContext:
@@ -484,7 +480,7 @@ def resume_scheduled_task(
     payload.pop("paused_at", None)
     payload["updated_at"] = stamp(aware(current, payload["timezone"]))
     payload["run_at"] = next_run_at.isoformat(sep=" ")
-    return _rewrite_pending_task(tasks_dir, record, payload, next_run_at)
+    return _rewrite_pending_task(tasks_dir, record, payload)
 
 
 def update_scheduled_task(
@@ -623,9 +619,9 @@ def update_scheduled_task(
     payload["run_at"] = next_run_at.isoformat(sep=" ")
     if "status" not in payload:
         payload["status"] = TASK_STATUS_PAUSED if record.is_paused else TASK_STATUS_ACTIVE
-    return _rewrite_pending_task(tasks_dir, record, payload, next_run_at)
+    return _rewrite_pending_task(tasks_dir, record, payload)
 
-def _rewrite_pending_task(tasks_dir, record, payload, next_run_at):
+def _rewrite_pending_task(tasks_dir, record, payload):
     TaskStore(tasks_dir).update_task(record.task_id, payload, record.payload["revision"])
     return get_scheduled_task(tasks_dir, record.task_id)
 

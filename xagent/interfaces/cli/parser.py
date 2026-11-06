@@ -6,7 +6,6 @@ import argparse
 import sys
 
 from . import agent_runtime, agents, processes_status, runtime, setup, update
-from .channels import CHANNEL_API, CHANNEL_WEIXIN
 
 
 class XAgentArgumentParser(argparse.ArgumentParser):
@@ -127,29 +126,6 @@ def _add_channel_argument(
     )
 
 
-def _add_api_runtime_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--host", default=None, help="API host override")
-    parser.add_argument("--port", type=int, default=None, help="API port override")
-    parser.add_argument(
-        "--max-concurrent-chats",
-        type=int,
-        default=None,
-        help="Maximum concurrent chat/observe requests",
-    )
-    parser.add_argument(
-        "--queue-timeout",
-        type=float,
-        default=None,
-        help="Seconds to wait for a chat slot",
-    )
-    parser.add_argument(
-        "--chat-timeout",
-        type=float,
-        default=None,
-        help="Seconds before a chat or observe request times out",
-    )
-
-
 def _add_web_client_arguments(parser: argparse.ArgumentParser, *, open_by_default: bool = False) -> None:
     parser.add_argument("--host", default=None, help="Web client host override")
     parser.add_argument("--port", type=int, default=None, help="Web client port override")
@@ -198,52 +174,6 @@ def _add_voice_setup_arguments(parser: argparse.ArgumentParser) -> None:
     _add_agent_argument(parser)
     parser.add_argument("--api-key", dest="api_key", default=None, help="Soniox API key")
     parser.add_argument("--force", action="store_true", help="Overwrite existing channels.voice config")
-
-
-def _add_channel_lifecycle_subparsers(
-    parent_parser: argparse.ArgumentParser,
-    channel: str,
-    *,
-    dest: str,
-    has_setup: bool = False,
-) -> None:
-    """Register start / stop / status / logs / restart (and optionally setup)
-    as sub-actions under a top-level channel parser."""
-
-    sub = parent_parser.add_subparsers(dest=dest, metavar="<action>")
-    sub.required = True
-
-    if has_setup and channel == CHANNEL_WEIXIN:
-        setup_parser = sub.add_parser("setup", help="Enable or reconfigure the Weixin DM channel")
-        _add_weixin_setup_arguments(setup_parser)
-        setup_parser.set_defaults(handler=setup.handle_init_weixin)
-
-    start_parser = sub.add_parser("start", help=f"Start the {channel} channel in the background")
-    _add_agent_argument(start_parser)
-    if channel == CHANNEL_API:
-        _add_api_runtime_arguments(start_parser)
-    start_parser.set_defaults(handler=runtime.handle_start, channels=[channel])
-
-    stop_parser = sub.add_parser("stop", help=f"Stop the background {channel} channel")
-    _add_agent_argument(stop_parser)
-    stop_parser.set_defaults(handler=runtime.handle_stop, channels=[channel])
-
-    restart_parser = sub.add_parser("restart", help=f"Restart the background {channel} channel")
-    _add_agent_argument(restart_parser)
-    if channel == CHANNEL_API:
-        _add_api_runtime_arguments(restart_parser)
-    restart_parser.set_defaults(handler=runtime.handle_restart, channels=[channel])
-
-    status_parser = sub.add_parser("status", help=f"Show {channel} channel status")
-    _add_agent_argument(status_parser)
-    status_parser.add_argument("--json", action="store_true", dest="json_output", help="Print machine-readable JSON")
-    status_parser.set_defaults(handler=runtime.handle_status, channels=[channel])
-
-    logs_parser = sub.add_parser("logs", help=f"Show {channel} channel logs")
-    _add_agent_argument(logs_parser)
-    logs_parser.add_argument("--lines", type=int, default=80, help="Number of trailing log lines to print")
-    logs_parser.add_argument("--follow", "-f", action="store_true", help="Follow log output")
-    logs_parser.set_defaults(handler=runtime.handle_logs, channels=[channel])
 
 
 def _add_web_lifecycle_subparsers(parent_parser: argparse.ArgumentParser) -> None:

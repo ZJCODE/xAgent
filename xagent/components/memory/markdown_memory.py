@@ -204,14 +204,6 @@ class MarkdownMemory:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def current_week_range() -> Tuple[date, date]:
-        """Return (monday, sunday) of the current ISO week."""
-        today = date.today()
-        monday = today - timedelta(days=today.weekday())
-        sunday = monday + timedelta(days=6)
-        return monday, sunday
-
-    @staticmethod
     def week_range_for(target_date: date) -> Tuple[date, date]:
         """Return (monday, sunday) of the ISO week containing *target_date*."""
         monday = target_date - timedelta(days=target_date.weekday())
@@ -438,20 +430,6 @@ class MarkdownMemory:
             if len(blocks) >= max_results:
                 break
         return "\n---\n".join(blocks)
-
-    def _search_keyword_sync(
-        self,
-        terms: list[str],
-        search_dir: Path,
-        context_lines: int,
-        max_results: int = _DEFAULT_SEARCH_MAX_RESULTS,
-        max_chars: int = _DEFAULT_SEARCH_MAX_CHARS,
-    ) -> str:
-        return self._format_scored_blocks(
-            self._collect_scored_blocks(terms, search_dir, context_lines),
-            max_results,
-            max_chars,
-        )
 
     def _search_keyword_many_sync(
         self,

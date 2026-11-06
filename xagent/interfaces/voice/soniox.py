@@ -16,9 +16,6 @@ from soniox.types import RealtimeSTTConfig, RealtimeTTSConfig
 
 from .config import (
     SONIOX_AUDIO_FORMAT,
-    SONIOX_ENDPOINT_LATENCY_LEVEL,
-    SONIOX_ENDPOINT_SENSITIVITY,
-    SONIOX_MAX_ENDPOINT_DELAY_MS,
     SONIOX_STT_CHANNELS,
     SONIOX_STT_MODEL,
     SONIOX_STT_SAMPLE_RATE,
@@ -130,7 +127,6 @@ class SonioxRealtimeSTT:
         callbacks: SonioxSTTCallbacks | None = None,
         lifecycle: SttLifecycleController | None = None,
     ) -> None:
-        self.api_key = api_key
         self.config = config
         self._client = client or SonioxClient(api_key=api_key)
         self._callbacks = callbacks or SonioxSTTCallbacks()
@@ -446,7 +442,6 @@ class SonioxRealtimeTTS:
         config: VoiceChannelConfig,
         client: Any | None = None,
     ) -> None:
-        self.api_key = api_key
         self.config = config
         self._client = client or SonioxClient(api_key=api_key)
         self._cancel_event = threading.Event()

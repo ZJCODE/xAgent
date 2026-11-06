@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import uvicorn
-from fastapi import Body, FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict
 from ...interfaces.server.models import ChatInput, ObserveInput

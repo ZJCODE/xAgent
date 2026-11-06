@@ -5,7 +5,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any, AsyncGenerator, Awaitable, Callable, Optional, Union
+from typing import Any, AsyncGenerator, Callable, Optional, Union
 
 import httpx
 from anthropic import AsyncAnthropic
@@ -173,8 +173,6 @@ class ModelClient:
         messages: list,
         tool_specs: Optional[list],
         instructions: Optional[Union[str, list[dict]]] = None,
-        stream: bool = False,
-        store_reply: Optional[Callable[..., Awaitable]] = None,
     ) -> tuple[ReplyType, object]:
         """
         Call the AI model with prepared messages.
@@ -183,8 +181,6 @@ class ModelClient:
             messages: Input message list (user/assistant/tool content only).
             tool_specs: Tool specifications for the model.
             instructions: Static behavioural instructions (system prompt).
-            stream: Whether to stream the response.
-            store_reply: Async callback to store the final reply text.
         Returns:
             Tuple of (ReplyType, response_object).
         """
@@ -290,24 +286,6 @@ class ModelClient:
         if self.model_api == MODEL_API_OPENAI_RESPONSES:
             return self._handle_responses_non_stream(response)
         return self._handle_non_stream(response)
-
-    async def stream_turn(
-        self,
-        messages: list,
-        tool_specs: Optional[list],
-        instructions: Optional[Union[str, list[dict]]] = None,
-    ) -> AsyncGenerator[ModelStreamEvent, None]:
-        events = self.model_turn_events(
-            messages=messages,
-            tool_specs=tool_specs,
-            instructions=instructions,
-            stream=True,
-        )
-        try:
-            async for event in events:
-                yield event
-        finally:
-            await events.aclose()
 
     async def model_turn_events(
         self,
@@ -495,13 +473,13 @@ class ModelClient:
                 continue
 
             if role in {"user", "assistant", "system"}:
-                content = cls._to_responses_message_content(message.get("content"), role=role)
+                content = cls._to_responses_message_content(message.get("content"))
                 if content:
                     input_items.append({"role": role, "content": content})
         return input_items
 
     @classmethod
-    def _to_responses_message_content(cls, content: Any, *, role: str) -> Any:
+    def _to_responses_message_content(cls, content: Any) -> Any:
         if isinstance(content, str):
             return content
         if not isinstance(content, list):

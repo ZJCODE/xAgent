@@ -39,8 +39,6 @@ class SttLifecycleController:
         self.config = config
         self._lock = threading.Lock()
         self._sleeping = False
-        self._wake = threading.Event()
-        self._wake.set()
         self._last_activity = time.monotonic()
         # "Never heard yet": the STT session may have just opened, but no
         # endpoint has been noted. require_recent_speech must block until
@@ -53,7 +51,6 @@ class SttLifecycleController:
             self._last_activity = now
             self._last_heard_endpoint = now
             self._sleeping = False
-        self._wake.set()
 
     def observe_audio(self, chunk: bytes) -> None:
         if not chunk:
@@ -63,7 +60,6 @@ class SttLifecycleController:
             with self._lock:
                 self._last_activity = now
                 self._sleeping = False
-            self._wake.set()
 
     def should_close_session(self) -> bool:
         if self.config.close_stt_after_idle_seconds <= 0:
@@ -75,16 +71,10 @@ class SttLifecycleController:
     def enter_sleep(self) -> None:
         with self._lock:
             self._sleeping = True
-        self._wake.clear()
 
     def is_sleeping(self) -> bool:
         with self._lock:
             return self._sleeping
-
-    def wait_until_awake(self, stop_event: threading.Event, *, poll_seconds: float = 0.2) -> None:
-        while not stop_event.is_set():
-            if self._wake.wait(timeout=poll_seconds):
-                return
 
     def heard_recently(self) -> bool:
         hours = max(0.0, self.config.recent_speech_hours)

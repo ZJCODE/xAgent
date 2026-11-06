@@ -275,12 +275,9 @@ class WebSocketMicrophone:
         # First pull comes from the STT sender, after its connection has opened.
         # Merely constructing this generator does not mean it can consume audio.
         self.consuming.set()
-        converter = _PCMInputConverter(
-            source_channels=self.stream_channels,
-            source_rate=self.stream_sample_rate,
-            target_channels=self.channels,
-            target_rate=self.sample_rate,
-        )
+        # The converter is created when the ('start', stream_id) marker
+        # arrives; no audio packet precedes that marker.
+        converter: _PCMInputConverter | None = None
         decoder = None
         while not stop_event.is_set() and not self.bridge.closed.is_set():
             try:
@@ -314,6 +311,8 @@ class WebSocketMicrophone:
                         raise ValueError('Invalid PCM packet length')
                     raw_chunk = raw_chunk.payload
             if pause_event.is_set() or stop_event.is_set():
+                continue
+            if converter is None:
                 continue
             yield converter.convert(raw_chunk)
 

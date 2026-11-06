@@ -269,15 +269,12 @@ class VoiceRuntime:
             pause_event=self.pause_event,
             stop_event=self._capture_stop,
         )
-        if self.config.aggregate_utterances:
-            utterances = iter_aggregated_utterances(
-                raw_utterances,
-                stop_event=self._capture_stop,
-                grace_scale=self.config.aggregation_grace_scale,
-                on_worker=self._register_capture_thread,
-            )
-        else:
-            utterances = raw_utterances
+        utterances = iter_aggregated_utterances(
+            raw_utterances,
+            stop_event=self._capture_stop,
+            grace_scale=self.config.aggregation_grace_scale,
+            on_worker=self._register_capture_thread,
+        )
         self._capture_sources = (utterances, raw_utterances, audio_chunks)
         self._sources_closed = False
         self._utterance_queue = asyncio.Queue()
@@ -616,7 +613,7 @@ class VoiceRuntime:
                 if partial_since is None:
                     partial_since = time.monotonic()
                 elif (time.monotonic() - partial_since) * 1000 >= cfg.min_speech_ms:
-                    evaluator._state.armed = True
+                    evaluator.arm()
                 verdict = evaluator.evaluate_partial(partial)
                 if verdict == "interrupt":
                     spoken_so_far = sanitize_spoken_text("".join(reply_buffer))
@@ -1261,12 +1258,6 @@ class VoiceRuntime:
             )
         except Exception:
             self.logger.debug("Failed to persist voice subconscious delivery", exc_info=True)
-
-    def _schedule_notice(self, category: str) -> None:
-        loop = self._event_loop
-        if loop is None or not loop.is_running():
-            return
-        asyncio.run_coroutine_threadsafe(self._speak_notice(category), loop)
 
     async def _speak_notice(self, category: str) -> None:
         if self.stop_event.is_set():

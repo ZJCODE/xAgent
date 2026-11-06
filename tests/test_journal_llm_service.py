@@ -46,10 +46,7 @@ class JournalLLMServicePromptTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("Return JSON only", prompt)
 
     def test_summary_system_prompt_preserves_core_behavior_constraints(self):
-        prompt = JournalLLMService.build_summary_system_prompt(
-            period_type="weekly",
-            period_label="2026-03-16 to 2026-03-22",
-        )
+        prompt = JournalLLMService.build_summary_system_prompt(period_type="weekly")
 
         self.assertIn("in first person", prompt)
         self.assertIn("my memory as an independent individual", prompt)

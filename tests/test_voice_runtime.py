@@ -118,7 +118,7 @@ def voice_config(data=None, *, profile="headset", echo_managed=False):
     payload = {"api_key": "test-key", **(data or {})}
     config = VoiceChannelConfig.from_dict(payload)
     config.apply_runtime_profile(
-        VoiceRuntimeProfile(name=profile, echo_managed=echo_managed, source="test")
+        VoiceRuntimeProfile(name=profile, echo_managed=echo_managed)
     )
     return config
 
@@ -187,7 +187,7 @@ class VoiceConfigTests(unittest.TestCase):
         config = VoiceChannelConfig.from_dict({"api_key": "key"})
         self.assertFalse(config.enable_interruptions)
         config.apply_runtime_profile(
-            VoiceRuntimeProfile(name="room", echo_managed=True, source="test")
+            VoiceRuntimeProfile(name="room", echo_managed=True)
         )
         self.assertFalse(config.enable_interruptions)
         config = VoiceChannelConfig.from_dict({"api_key": "key", "interruptions": True})

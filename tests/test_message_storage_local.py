@@ -14,11 +14,13 @@ class MessageStorageTests(unittest.IsolatedAsyncioTestCase):
             storage = MessageStorage(path=str(db_path))
             await storage.add_messages([
                 Message.create("first", role=RoleType.USER, sender_id="alice"),
+            ])
+            first_cursor = await storage.get_latest_message_cursor()
+
+            await storage.add_messages([
                 Message.create("second", role=RoleType.USER, sender_id="alice"),
                 Message.create("third", role=RoleType.USER, sender_id="alice"),
             ])
-
-            first_cursor = await storage.cursor_for_message_count(1)
             snapshot_cursor = await storage.get_latest_message_cursor()
 
             await storage.add_messages([
@@ -32,18 +34,6 @@ class MessageStorageTests(unittest.IsolatedAsyncioTestCase):
             )
 
             self.assertEqual([message.content for message in messages], ["second", "third"])
-
-    async def test_cursor_for_message_count_returns_zero_when_stream_shrinks(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / "messages.sqlite3"
-            storage = MessageStorage(path=str(db_path))
-            await storage.add_messages([
-                Message.create("first", role=RoleType.USER, sender_id="alice"),
-                Message.create("second", role=RoleType.USER, sender_id="alice"),
-            ])
-
-            self.assertGreater(await storage.cursor_for_message_count(2), 0)
-            self.assertEqual(await storage.cursor_for_message_count(3), 0)
 
     async def test_clear_messages_resets_stream(self):
         with tempfile.TemporaryDirectory() as tmpdir:

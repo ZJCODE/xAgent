@@ -291,18 +291,8 @@ class SubconsciousLoop:
     def contacts_file(self) -> Path:
         return self._contacts_file
 
-    @property
-    def state_file(self) -> Path:
-        return self._state_file
-
     def set_deliverable_channels(self, channels: Iterable[str]) -> None:
         self._deliverable_channels = self._normalize_deliverable_channels(channels)
-
-    def set_contact_deliverable(
-        self,
-        predicate: Optional[Callable[[ContactEntry], bool]],
-    ) -> None:
-        self._contact_deliverable = predicate
 
     def record_interaction(
         self,
@@ -565,6 +555,7 @@ class SubconsciousLoop:
             reasoning=maintenance_reasoning_config(
                 getattr(model_client, "reasoning", None),
                 provider_name=getattr(model_client, "provider_name", None),
+                model=getattr(model_client, "model", None),
             ),
         ):
             if model_event.type in {"delta", "text"} and model_event.delta:

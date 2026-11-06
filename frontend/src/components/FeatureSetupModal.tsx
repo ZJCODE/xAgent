@@ -23,11 +23,16 @@ function reasoningCapabilityFor(
   schema: AgentEditSetupSchema,
   provider: string,
   modelApi: string,
+  model: string,
 ): ReasoningCapability | null {
   if (provider === "custom") {
     return schema.model.reasoning.custom_model_apis[modelApi] || null;
   }
-  return schema.model.reasoning.providers[provider] || null;
+  const capability = schema.model.reasoning.providers[provider] || null;
+  if (capability && provider === "openai" && ["gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-luna", "gpt-6-sol"].includes(model)) {
+    return { ...capability, effort_values: capability.effort_values.filter((effort) => effort !== "minimal") };
+  }
+  return capability;
 }
 
 function buildCustomReasoning(capability: ReasoningCapability): ReasoningConfigInput {
@@ -156,8 +161,8 @@ export function FeatureSetupModal({ open, feature, schema, onClose, onSaved }: F
 
   const models = schema.model.models[provider] || [];
   const capability = useMemo(
-    () => (feature === "model" ? reasoningCapabilityFor(schema, provider, modelApi) : null),
-    [feature, schema, provider, modelApi],
+    () => (feature === "model" ? reasoningCapabilityFor(schema, provider, modelApi, modelName) : null),
+    [feature, schema, provider, modelApi, modelName],
   );
   const reasoningMode = reasoning?.enabled ? "custom" : "default";
   const reasoningControl = reasoning?.budget_tokens !== undefined ? "budget_tokens" : "effort";
@@ -342,7 +347,7 @@ export function FeatureSetupModal({ open, feature, schema, onClose, onSaved }: F
           </WizardField>
           {provider !== "custom" ? (
             <WizardField label="Model">
-              <select value={modelName} onChange={(event) => setModelName(event.target.value)}>
+              <select value={modelName} onChange={(event) => { setModelName(event.target.value); setReasoning(null); }}>
                 {models.map((model) => (
                   <option key={model} value={model}>
                     {model}

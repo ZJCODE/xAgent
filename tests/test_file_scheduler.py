@@ -444,28 +444,6 @@ class ScheduledTaskTests(unittest.TestCase):
         )
         self.assertEqual(next_run, datetime(2026, 6, 1, 11, 10, 0))
 
-    def test_align_overdue_interval_run_at_keeps_active_slot(self):
-        from xagent.core.runtime.scheduler import align_overdue_interval_run_at
-
-        rule = {"kind": "interval", "every_seconds": 600, "end_at": "2026-06-01 12:00:00"}
-        aligned = align_overdue_interval_run_at(
-            datetime(2026, 6, 1, 10, 0, 0),
-            rule,
-            now=datetime(2026, 6, 1, 10, 0, 1),
-        )
-        self.assertEqual(aligned, datetime(2026, 6, 1, 10, 0, 0))
-
-    def test_align_overdue_interval_run_at_jumps_to_next_future_grid(self):
-        from xagent.core.runtime.scheduler import align_overdue_interval_run_at
-
-        rule = {"kind": "interval", "every_seconds": 600, "end_at": "2026-06-01 12:00:00"}
-        aligned = align_overdue_interval_run_at(
-            datetime(2026, 6, 1, 10, 0, 0),
-            rule,
-            now=datetime(2026, 6, 1, 11, 3, 0),
-        )
-        self.assertEqual(aligned, datetime(2026, 6, 1, 11, 10, 0))
-
     def test_async_scheduler_skips_missed_interval_ticks_after_downtime(self):
         async def run_test():
             with tempfile.TemporaryDirectory() as tmpdir:

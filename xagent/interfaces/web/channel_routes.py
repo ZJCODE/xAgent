@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import Any, Callable, Literal
+from typing import Any, Callable
 
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -25,9 +25,6 @@ from ..cli.processes import (
 )
 from .qr_sessions import get_qr_session_manager
 from .session import WebAgentSession
-
-ChannelId = Literal["api", "weixin"]
-SetupChannelId = Literal["weixin"]
 
 CHANNEL_LABELS: dict[str, str] = {
     CHANNEL_API: "API",
@@ -140,8 +137,7 @@ def register_channel_routes(
             if normalized != CHANNEL_WEIXIN:
                 raise HTTPException(status_code=400, detail=f"{normalized} does not use QR setup")
             manager = get_qr_session_manager()
-            config_dir = resolve_config_dir().expanduser().resolve()
-            qr_session = manager.start_weixin(config_dir=config_dir)
+            qr_session = manager.start_weixin()
             return qr_session.to_dict()
 
         @app.get("/api/channels/{channel}/qr/{session_id}", tags=["Channels"])
@@ -233,7 +229,7 @@ def _safe_load_config(config_dir: Path) -> dict[str, Any]:
 def _channel_status(config_dir: Path, config: dict[str, Any], channel: str) -> dict[str, Any]:
     paths = managed_paths(config_dir, "runtime")
     pid = running_pid(paths.pid_path)
-    configured, ready, detail, _setup_hint = _readiness(config, channel)
+    configured, ready, detail, _ = _readiness(config, channel)
     runtime_status = "running" if pid is not None else "stopped"
     if not ready:
         runtime_status = "disabled" if not configured else "error"

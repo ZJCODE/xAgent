@@ -20,7 +20,6 @@ from .state import WeixinCredentials
 ILINK_APP_CLIENT_VERSION = "1"
 AUTHORIZATION_TYPE = "ilink_bot_token"
 SESSION_EXPIRED_ERRCODE = -14
-RATE_LIMIT_ERRCODE = -2
 
 
 class WeixinApiError(RuntimeError):
@@ -31,10 +30,6 @@ class WeixinApiError(RuntimeError):
         self.status_code = status_code
         self.code = code
         self.payload = payload
-
-    @property
-    def is_session_expired(self) -> bool:
-        return self.code == SESSION_EXPIRED_ERRCODE
 
 
 class WeixinSessionExpired(WeixinApiError):

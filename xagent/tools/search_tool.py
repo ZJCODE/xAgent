@@ -731,10 +731,6 @@ def is_placeholder_api_key(api_key: str) -> bool:
     return not normalized or normalized in PLACEHOLDER_API_KEYS
 
 
-def _is_placeholder_api_key(api_key: str) -> bool:
-    return is_placeholder_api_key(api_key)
-
-
 def _field(obj: Any, name: str, default: Any = None) -> Any:
     if isinstance(obj, dict):
         return obj.get(name, default)

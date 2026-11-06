@@ -112,7 +112,6 @@ class MessageStorage:
     async def add_messages(
         self,
         messages: MessageBatch,
-        **kwargs,
     ) -> List[Message]:
         normalized_messages = self.normalize_messages(messages)
         if not normalized_messages:
@@ -276,37 +275,6 @@ class MessageStorage:
             connection.execute(f"DELETE FROM {MessageStorageConfig.TABLE_NAME}")
             connection.commit()
 
-    async def pop_message(self) -> Optional[Message]:
-        return await asyncio.to_thread(self._pop_message_sync)
-
-    def _pop_message_sync(self) -> Optional[Message]:
-        with self._connect() as connection:
-            while True:
-                row = connection.execute(
-                    f"""
-                    SELECT id, message_json
-                    FROM {MessageStorageConfig.TABLE_NAME}
-                    ORDER BY id DESC
-                    LIMIT 1
-                    """
-                ).fetchone()
-                if row is None:
-                    return None
-
-                connection.execute(
-                    f"DELETE FROM {MessageStorageConfig.TABLE_NAME} WHERE id = ?",
-                    (row["id"],),
-                )
-                connection.commit()
-
-                try:
-                    message = Message.model_validate_json(row["message_json"])
-                except Exception as exception:
-                    self.logger.warning("Skipping invalid popped local message: %s", exception)
-                    continue
-
-                return message
-
     async def get_message_count(self) -> int:
         return await asyncio.to_thread(self._get_message_count_sync)
 
@@ -388,29 +356,6 @@ class MessageStorage:
             ).fetchall()
         return self._messages_from_rows(rows)
 
-    async def cursor_for_message_count(self, message_count: int) -> int:
-        try:
-            normalized_count = max(0, int(message_count))
-        except (TypeError, ValueError):
-            normalized_count = 0
-
-        if normalized_count <= 0:
-            return 0
-        return await asyncio.to_thread(self._cursor_for_message_count_sync, normalized_count)
-
-    def _cursor_for_message_count_sync(self, message_count: int) -> int:
-        with self._connect() as connection:
-            row = connection.execute(
-                f"""
-                SELECT id
-                FROM {MessageStorageConfig.TABLE_NAME}
-                ORDER BY id ASC
-                LIMIT 1 OFFSET ?
-                """,
-                (message_count - 1,),
-            ).fetchone()
-        return int(row["id"]) if row is not None else 0
-
     async def search_messages(
         self,
         terms: list[str],
@@ -442,8 +387,6 @@ class MessageStorage:
         max_results: int,
         max_chars: int,
     ) -> str:
-        from datetime import datetime, timezone
-
         like_clauses = []
         params: list = []
         for term in terms:
@@ -545,10 +488,6 @@ class MessageStorage:
 
     def __str__(self) -> str:
         return f"MessageStorage(path='{self.path}')"
-
-    async def has_messages(self) -> bool:
-        """Return whether the stream contains at least one message."""
-        return await self.get_message_count() > 0
 
     @staticmethod
     def normalize_messages(messages: MessageBatch) -> List[Message]:

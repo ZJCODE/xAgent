@@ -6,7 +6,6 @@ import argparse
 import asyncio
 import json
 import os
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -16,12 +15,10 @@ from ..base import BaseAgentConfig
 from .agents import AgentRegistryError, management_root, resolve_agent_name
 from .channels import (
     CHANNEL_API,
-    CHANNEL_VOICE,
     CHANNEL_WEIXIN,
     ChannelSelectionError,
     enabled_channels_from_config,
     normalize_channel_values,
-    voice_config,
     weixin_config,
 )
 from .chat import AgentCLI
@@ -545,7 +542,7 @@ def handle_doctor(args: argparse.Namespace) -> int:
         config = load_runtime_config(args)
         raw_channels = getattr(args, "channels", None)
         channels = (
-            normalize_channel_values(raw_channels, default=CHANNEL_API, config=config)
+            normalize_channel_values(raw_channels, default=CHANNEL_API)
             if raw_channels
             else enabled_channels_from_config(config)
         )
@@ -560,19 +557,6 @@ def handle_doctor(args: argparse.Namespace) -> int:
             print("Weixin: configured")
         else:
             print("Weixin: missing account_id")
-            ok = False
-    if CHANNEL_VOICE in channels:
-        try:
-            from ..voice.config import VoiceChannelConfig
-
-            data = voice_config(config)
-            if not data:
-                raise ValueError("channels.voice is not configured")
-            voice_runtime_config = VoiceChannelConfig.from_dict(data)
-            voice_runtime_config.resolved_api_key()
-            print("Voice: configured")
-        except Exception as exc:
-            print(f"Voice: {exc}")
             ok = False
     if args.online:
         online_ok, online_message = _provider_online_check(config)

@@ -118,11 +118,13 @@ class ReasoningConfig:
 
 def maintenance_reasoning_config(
     reasoning: Optional[ReasoningConfig],
-    *, provider_name: Optional[str] = None,
+    *, provider_name: Optional[str] = None, model: Optional[str] = None,
 ) -> Optional[ReasoningConfig]:
     """Disable configured reasoning and DeepSeek's default thinking for maintenance."""
     if reasoning is None and normalize_provider_name(provider_name) != PROVIDER_DEEPSEEK:
         return None
+    if normalize_provider_name(provider_name) == PROVIDER_OPENAI and model in {"gpt-6-astra", "gpt-6.1-sol"}:
+        return ReasoningConfig(enabled=True, effort="low")
     return ReasoningConfig(enabled=False)
 
 
@@ -231,6 +233,7 @@ def resolved_provider_name(provider_cfg: dict[str, Any]) -> str:
 def reasoning_capability(
     provider_name: str,
     model_api: Optional[str] = None,
+    model: Optional[str] = None,
 ) -> ReasoningCapability:
     """Return the framework-supported reasoning controls for one endpoint."""
     provider = normalize_provider_name(provider_name)
@@ -238,7 +241,9 @@ def reasoning_capability(
         return ReasoningCapability(
             supported=True,
             controls=("effort",),
-            effort_values=OPENAI_RESPONSES_REASONING_EFFORTS,
+            effort_values=tuple(e for e in OPENAI_RESPONSES_REASONING_EFFORTS if e != "minimal")
+            if model in {"gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-luna", "gpt-6-sol"}
+            else OPENAI_RESPONSES_REASONING_EFFORTS,
         )
     if provider == PROVIDER_DEEPSEEK:
         return ReasoningCapability(
@@ -285,6 +290,7 @@ def provider_reasoning_capability(provider_cfg: dict[str, Any]) -> ReasoningCapa
     return reasoning_capability(
         resolved_provider_name(provider_cfg),
         provider_model_api(provider_cfg),
+        provider_cfg.get("model"),
     )
 
 
@@ -332,6 +338,8 @@ def normalize_reasoning_config(provider_cfg: dict[str, Any]) -> Optional[Reasoni
 
     capability = provider_reasoning_capability(provider_cfg)
     provider = resolved_provider_name(provider_cfg)
+    if not enabled and provider == PROVIDER_OPENAI and provider_cfg.get("model") in {"gpt-6-astra", "gpt-6.1-sol"}:
+        raise ValueError("provider.reasoning cannot be disabled for this model; use low effort instead")
     if not capability.supported:
         raise ValueError(f"provider.reasoning is not supported for provider {provider}")
     if effort is not None:

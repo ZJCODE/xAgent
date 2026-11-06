@@ -20,7 +20,7 @@ from pydantic import (
 from .presence import VOICE_STT_IDLE_SHUTDOWN_SECONDS
 
 SONIOX_KEY_PLACEHOLDER = "your_soniox_api_key_here"
-SONIOX_STT_MODEL = "stt-rt-v5"
+SONIOX_STT_MODEL = "stt-rt-v6"
 SONIOX_STT_SAMPLE_RATE = 16_000
 SONIOX_STT_CHANNELS = 1
 SONIOX_TTS_MODEL = "tts-rt-v2"
@@ -73,7 +73,6 @@ class VoiceRuntimeProfile:
 
     name: VoiceProfileName = "room"
     echo_managed: bool = False
-    source: str = "default"
     # A session preference does not overwrite detected hardware capability.
     interruptions_override: bool | None = None
     room_name: str = "local_room"
@@ -92,21 +91,17 @@ _VOICE_KEY_PLACEHOLDERS = {
     "your_api_key_here",
 }
 
+# Retired keys ("audio", "enabled", "languages") are still stripped silently
+# in from_dict for migration tolerance, but are deliberately absent here so a
+# typo is never suggested as a valid setting.
 _VOICE_TOP_LEVEL_KEYS = frozenset(
     {
         "api_key",
         "voice",
         "speed",
         "interruptions",
-        "audio",
     }
 )
-
-VOICE_CONFIG_EXAMPLE = """channels:
-  voice:
-    api_key: your_soniox_api_key_here
-    voice: Daniel
-    interruptions: false"""
 
 
 def _suggest_voice_key(bad_key: str) -> str:
@@ -163,7 +158,6 @@ class VoicePerformanceConfigModel(BaseModel):
     # Keep speculative execution off until candidates can be committed after STT finalization.
     preemptive_generation: bool = False
     preemptive_min_chars: int = Field(default=8, ge=3, le=500)
-    warm_output_device: bool = True
     max_agent_loops: int = Field(default=12, ge=1, le=50)
 
 
@@ -323,10 +317,6 @@ class VoiceChannelConfig(BaseModel):
         return True
 
     @property
-    def aggregate_utterances(self) -> bool:
-        return True
-
-    @property
     def enable_interruptions(self) -> bool:
         """Requested capture mode; the runtime echo guard can still disable it."""
         override = self._runtime_profile.interruptions_override
@@ -398,9 +388,6 @@ class VoiceChannelConfig(BaseModel):
     def fallback_language(self) -> str:
         """The language to speak when the reply language is unclear."""
         return VOICE_LANGUAGES[0]
-
-    def tts_language_for(self, stt_language: str | None) -> str:
-        return (stt_language or "").strip() or self.fallback_language
 
     def merged_stt_context_terms(self, extra_terms: list[str] | None = None) -> list[str]:
         terms: list[str] = []

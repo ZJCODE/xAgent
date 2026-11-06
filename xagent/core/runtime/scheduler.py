@@ -215,26 +215,6 @@ def is_interval_recurrence(value: Any) -> bool:
     return len(rules) == 1 and rules[0].get("kind") == RECURRENCE_KIND_INTERVAL
 
 
-def interval_end_at(value: Any) -> datetime | None:
-    """Return the absolute end_at for a single interval recurrence, if present."""
-    if not is_interval_recurrence(value):
-        return None
-    rules = normalize_recurrence_rules(value)
-    end_text = str(rules[0].get("end_at") or "").strip()
-    if not end_text:
-        return None
-    return parse_run_at(end_text)
-
-
-def is_interval_window_closed(value: Any, *, now: datetime | None = None) -> bool:
-    """True when wall-clock time is strictly after the interval end_at."""
-    end_at = interval_end_at(value)
-    if end_at is None:
-        return False
-    current = (now or datetime.now()).replace(microsecond=0)
-    return current > end_at
-
-
 def align_interval_next_run(
     *,
     now: datetime,
@@ -312,52 +292,6 @@ def calculate_next_interval_run_at(
     next_run_at = parse_run_at(current_run_at) + timedelta(seconds=every_seconds)
     while next_run_at <= current:
         next_run_at += timedelta(seconds=every_seconds)
-    if next_run_at > end_at:
-        return None
-    return next_run_at
-
-
-def align_overdue_interval_run_at(
-    current_run_at: datetime,
-    rule: Mapping[str, Any],
-    *,
-    now: datetime | None = None,
-) -> datetime | None:
-    """Skip missed pending interval ticks after a gap; keep the active slot if open.
-
-    If ``now`` is still inside ``[run_at, run_at + every)``, keep ``run_at`` so small
-    scheduler latency still delivers the current tick. Once at least one full interval
-    late, jump to the next grid point at or after ``now`` (no historical catch-up).
-    """
-    normalized = _normalize_interval_rule(rule)
-    every_seconds = int(normalized["every_seconds"])
-    end_at = parse_run_at(str(normalized["end_at"]))
-    current = (now or datetime.now()).replace(microsecond=0)
-    candidate = parse_run_at(current_run_at)
-    if candidate > end_at:
-        return None
-    if candidate > current:
-        return candidate
-    if current < candidate + timedelta(seconds=every_seconds):
-        return candidate
-
-    start_at_text = str(normalized.get("start_at") or "").strip()
-    if start_at_text:
-        return align_interval_next_run(
-            now=current,
-            start_at=parse_run_at(start_at_text),
-            every_seconds=every_seconds,
-            end_at=end_at,
-        )
-
-    elapsed = int((current - candidate).total_seconds())
-    steps = elapsed // every_seconds
-    on_or_before = candidate + timedelta(seconds=steps * every_seconds)
-    if on_or_before > end_at:
-        return None
-    if on_or_before == current:
-        return on_or_before
-    next_run_at = on_or_before + timedelta(seconds=every_seconds)
     if next_run_at > end_at:
         return None
     return next_run_at

@@ -10,7 +10,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import unquote, urlparse
 
 from ...core.agent import Agent
 from ...core.config import AgentConfig
@@ -36,6 +36,7 @@ from ...utils.image_utils import (
     DEFAULT_IMAGE_TRANSPORT_MAX_BYTES,
     DEFAULT_IMAGE_TRANSPORT_MAX_EDGE,
     compress_image_bytes_for_transport,
+    workspace_blob_relative_path,
     workspace_blob_url,
 )
 from .client import SESSION_EXPIRED_ERRCODE, WeixinClient, _error_code, raise_for_api_error
@@ -46,7 +47,6 @@ from .state import WeixinCredentials, WeixinStateStore
 
 
 WEIXIN_INBOUND_IMAGE_DIR = "assets/inbound/weixin/images"
-WEIXIN_OUTBOUND_IMAGE_DIR = "assets/derived/weixin/outbound/images"
 WEIXIN_ATTACHMENT_DIR = "assets/inbound/weixin/files"
 _MARKDOWN_IMAGE_RE = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
 _MARKDOWN_LINK_RE = re.compile(r"(?<!!)\[[^\]]+\]\(([^)]+)\)")
@@ -453,11 +453,6 @@ class WeixinAdapter:
         assert self._credentials is not None
         self._context_tokens[user_id] = context_token
         self.state_store.save_context_tokens(self._credentials.account_id, self._context_tokens)
-        self.state_store.save_last_active_user(
-            account_id=self._credentials.account_id,
-            user_id=user_id,
-            context_token=context_token,
-        )
 
     async def _build_inbound_payload(self, message: dict[str, Any]) -> _WeixinInboundPayload:
         item_list = [item for item in message.get("item_list") or [] if isinstance(item, dict)]
@@ -905,7 +900,7 @@ class WeixinAdapter:
         if workspace_root is None:
             return None
         source = source.strip().strip("<>")
-        relative_path = _workspace_blob_relative_path(source)
+        relative_path = workspace_blob_relative_path(source)
         if relative_path:
             candidate = (workspace_root / relative_path).resolve()
         else:
@@ -977,14 +972,6 @@ def _media_failure_note(item: dict[str, Any]) -> str:
     if item_type == ITEM_VOICE:
         return "[Received voice message - download failed]"
     return "[Received media - download failed]"
-
-
-def _workspace_blob_relative_path(source: str) -> str:
-    parsed = urlparse(source)
-    if parsed.path != "/api/workspace/blob":
-        return ""
-    values = parse_qs(parsed.query).get("path") or []
-    return unquote(values[0]).strip("/") if values else ""
 
 
 def _remove_spans(text: str, spans: list[tuple[int, int]]) -> str:

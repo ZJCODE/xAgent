@@ -117,13 +117,14 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
             self.assertEqual((Path(tmpdir) / attachment["path"]).read_bytes(), image_bytes)
             self.assertEqual(storage.messages, [msg])
     
-    def test_build_instructions_includes_tool_policy_baseline(self):
-        """build_instructions includes the short cross-tool baseline when tools are active."""
+    def test_instruction_messages_include_tool_policy_baseline(self):
+        """Instruction messages include the short cross-tool baseline when tools are active."""
         handler = MessageHandler(
             system_prompt="",
             message_storage=_FakeMessageStorage(),
         )
-        instructions = handler.build_instructions(tool_names=["search_memory"])
+        messages = handler.build_instruction_messages(tool_names=["search_memory"])
+        instructions = "\n\n".join(msg["content"] for msg in messages if msg.get("content"))
         self.assertIn("<tool_policy>", instructions)
         self.assertIn("never invent unavailable tools", instructions)
         self.assertIn("Do not claim a tool action succeeded", instructions)

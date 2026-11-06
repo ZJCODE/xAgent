@@ -28,7 +28,3 @@ __all__ = [
     "create_web_fetch_tool",
     "create_device_tool",
 ]
-
-TOOL_REGISTRY = {
-    "run_command": run_command,
-}
