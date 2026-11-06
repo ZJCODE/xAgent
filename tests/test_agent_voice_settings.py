@@ -39,17 +39,18 @@ class AgentVoiceSettingsTests(unittest.TestCase):
             self.assertFalse(settings["restart_required"])
             self.assertEqual(set(settings), {"configured", "has_api_key", "voice", "speed", "interruptions",
                                              "voice_options", "restart_required"})
-            response = self.client.patch("/api/agent/voice", json={"voice_api_key": "secret-soniox-key", "voice": "Maya"})
+            self.assertEqual([option["id"] for option in settings["voice_options"]], ["Nina", "Daniel"])
+            response = self.client.patch("/api/agent/voice", json={"voice_api_key": "secret-soniox-key", "voice": "Nina"})
             self.assertEqual(response.status_code, 200, response.text)
             self.assertNotIn("secret-soniox-key", response.text)
             state = self.client.get("/api/agent/voice")
             self.assertTrue(state.json()["configured"])
             self.assertTrue(state.json()["has_api_key"])
-            self.assertEqual(state.json()["voice"], "Maya")
+            self.assertEqual(state.json()["voice"], "Nina")
             self.assertFalse(response.json()["restart_required"])
             self.assertNotIn("secret-soniox-key", state.text)
         config = load_config(self.agent_dir)
-        self.assertEqual(config["channels"]["voice"]["voice"], "Maya")
+        self.assertEqual(config["channels"]["voice"]["voice"], "Nina")
         self.assertNotIn("speed", config["channels"]["voice"])
         self.assertFalse((self.agent_dir / ".devices.json").exists())
 
@@ -59,10 +60,10 @@ class AgentVoiceSettingsTests(unittest.TestCase):
                                           "speed": 1.25, "enabled": False,
                                           "audio": {"input": "Desk mic", "output": "Desk speaker"}}
         (self.agent_dir / "config.yaml").write_text(yaml.safe_dump(config))
-        response = self.client.patch("/api/agent/voice", json={"voice_api_key": "", "voice": "Maya"})
+        response = self.client.patch("/api/agent/voice", json={"voice_api_key": "", "voice": "Nina"})
         self.assertEqual(response.status_code, 200, response.text)
         changed = load_config(self.agent_dir)
-        expected = {"api_key": "keep-key", "voice": "Maya", "interruptions": True, "speed": 1.25}
+        expected = {"api_key": "keep-key", "voice": "Nina", "interruptions": True, "speed": 1.25}
         self.assertEqual(changed["channels"]["voice"], expected)
         self.assertEqual(changed["channels"]["api"], config["channels"]["api"])
         schema = build_voice_setup_schema(changed)
@@ -77,19 +78,23 @@ class AgentVoiceSettingsTests(unittest.TestCase):
                 self.assertEqual(response.status_code, 422, response.text)
                 self.assertEqual((self.agent_dir / "config.yaml").read_text(), original)
 
+    def test_removed_voice_is_rejected(self):
+        response = self.client.patch("/api/agent/voice", json={"voice_api_key": "key", "voice": "Maya"})
+        self.assertEqual(response.status_code, 400, response.text)
+
     def test_preferences_round_trip_and_reset_without_losing_the_saved_key(self):
         response = self.client.patch("/api/agent/voice", json={
-            "voice_api_key": "keep-key", "voice": "Maya", "speed": 1.25, "interruptions": True,
+            "voice_api_key": "keep-key", "voice": "Nina", "speed": 1.25, "interruptions": True,
         })
         self.assertEqual(response.status_code, 200, response.text)
         state = self.client.get("/api/agent/voice").json()
-        self.assertEqual((state["voice"], state["speed"], state["interruptions"]), ("Maya", 1.25, True))
+        self.assertEqual((state["voice"], state["speed"], state["interruptions"]), ("Nina", 1.25, True))
         response = self.client.patch("/api/agent/voice", json={
             "speed": 1, "interruptions": False,
         })
         self.assertEqual(response.status_code, 200, response.text)
         saved = load_config(self.agent_dir)["channels"]["voice"]
-        self.assertEqual(saved, {"api_key": "keep-key", "voice": "Maya", "interruptions": False})
+        self.assertEqual(saved, {"api_key": "keep-key", "voice": "Nina", "interruptions": False})
 
 
     def test_invalid_preference_types_leave_the_file_unchanged(self):
@@ -102,10 +107,10 @@ class AgentVoiceSettingsTests(unittest.TestCase):
 
     def test_restart_is_needed_only_for_changed_settings_on_the_runtime_owner(self):
         self.server.session.get_current_admin().is_runtime_owner = True
-        changed = self.client.patch("/api/agent/voice", json={"voice_api_key": "key", "voice": "Maya"})
+        changed = self.client.patch("/api/agent/voice", json={"voice_api_key": "key", "voice": "Nina"})
         self.assertEqual(changed.status_code, 200, changed.text)
         self.assertTrue(changed.json()["restart_required"])
-        unchanged = self.client.patch("/api/agent/voice", json={"voice": "Maya"})
+        unchanged = self.client.patch("/api/agent/voice", json={"voice": "Nina"})
         self.assertFalse(unchanged.json()["changed"])
         self.assertFalse(unchanged.json()["restart_required"])
 
@@ -125,7 +130,7 @@ class AgentVoiceSettingsTests(unittest.TestCase):
     def test_environment_credentials_work_without_copying_them_to_config(self):
         with patch.dict("os.environ", {"SONIOX_API_KEY": "environment-key"}):
             self.assertTrue(self.client.get("/api/agent/voice").json()["configured"])
-            response = self.client.post("/api/agent/setup/voice", json={"voice": "Maya", "speed": 1.25})
+            response = self.client.post("/api/agent/setup/voice", json={"voice": "Nina", "speed": 1.25})
             self.assertEqual(response.status_code, 200, response.text)
         self.assertNotIn("environment-key", (self.agent_dir / "config.yaml").read_text())
 

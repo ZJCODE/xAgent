@@ -127,7 +127,7 @@ class VoiceConfigTests(unittest.TestCase):
     def test_minimal_configuration_uses_fixed_defaults(self):
         config = VoiceChannelConfig.from_dict({"api_key": "key"})
 
-        self.assertEqual(config.voice, "Daniel")
+        self.assertEqual(config.voice, "Nina")
         self.assertEqual(config.languages, ["zh", "en"])
         self.assertEqual(config.fallback_language, "zh")
         self.assertEqual(config.speed, 1.0)

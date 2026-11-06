@@ -77,7 +77,7 @@ class WebAgentSessionTests(unittest.TestCase):
             self.assertFalse(initial["agent_b"]["voice_configured"])
             config_file = self.agent_a_path / "config.yaml"
             config = yaml.safe_load(config_file.read_text())
-            config["channels"]["voice"] = {"api_key": "configured-key", "voice": "Maya"}
+            config["channels"]["voice"] = {"api_key": "configured-key", "voice": "Nina"}
             config_file.write_text(yaml.safe_dump(config))
             updated = {row["name"]: row for row in session.list_agents()}
             self.assertTrue(updated["agent_a"]["voice_configured"])

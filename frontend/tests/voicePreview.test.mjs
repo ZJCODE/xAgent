@@ -21,7 +21,7 @@ function harness(t){
 }
 
 test('preview primes audio from the gesture, uses draft settings and cleans up after completion',async t=>{
-  const h=harness(t),selection={voice:'Maya',speed:1.25,voice_api_key:'draft-key'};
+  const h=harness(t),selection={voice:'Nina',speed:1.25,voice_api_key:'draft-key'};
   const play=h.player.play(selection);
   assert.equal(h.contexts[0].resumed,true);
   assert.equal(h.states.at(-1),'loading');
@@ -35,7 +35,7 @@ test('preview primes audio from the gesture, uses draft settings and cleans up a
 });
 
 test('stopping cancels a pending request and its late response cannot play',async t=>{
-  const h=harness(t),play=h.player.play({voice:'Maya',speed:1});
+  const h=harness(t),play=h.player.play({voice:'Nina',speed:1});
   h.player.stop();assert.equal(h.requests[0].signal.aborted,true);
   h.requests[0].resolve(new ArrayBuffer(48));await play;
   assert.equal(h.contexts[0].sources.length,0);assert.equal(h.states.at(-1),'idle');
@@ -43,7 +43,7 @@ test('stopping cancels a pending request and its late response cannot play',asyn
 });
 
 test('a cancelled old request cannot overwrite a new preview or report an old error',async t=>{
-  const h=harness(t),first=h.player.play({voice:'Maya',speed:1});
+  const h=harness(t),first=h.player.play({voice:'Nina',speed:1});
   const second=h.player.play({voice:'Daniel',speed:1.3});
   assert.equal(h.requests[0].signal.aborted,true);
   h.requests[1].resolve(new ArrayBuffer(48));await second;
@@ -53,7 +53,7 @@ test('a cancelled old request cannot overwrite a new preview or report an old er
 });
 
 test('stopping during audio decoding prevents late playback',async t=>{
-  const h=harness(t),play=h.player.play({voice:'Maya',speed:1});
+  const h=harness(t),play=h.player.play({voice:'Nina',speed:1});
   let decoded;h.contexts[0].decodeGate=new Promise(resolve=>{decoded=resolve;});
   h.requests[0].resolve(new ArrayBuffer(48));await flush();
   h.player.stop();decoded({duration:1});await play;
@@ -61,10 +61,10 @@ test('stopping during audio decoding prevents late playback',async t=>{
 });
 
 test('provider failure releases audio resources and remains retryable',async t=>{
-  const h=harness(t),first=h.player.play({voice:'Maya',speed:1});
+  const h=harness(t),first=h.player.play({voice:'Nina',speed:1});
   h.requests[0].reject(new Error('Try another key.'));await first;
   assert.equal(h.contexts[0].closed,true);assert.equal(h.states.at(-1),'idle');
   assert.equal(h.errors.at(-1),'Try another key.');
-  const retry=h.player.play({voice:'Maya',speed:1});h.requests[1].resolve(new ArrayBuffer(48));await retry;
+  const retry=h.player.play({voice:'Nina',speed:1});h.requests[1].resolve(new ArrayBuffer(48));await retry;
   assert.equal(h.states.at(-1),'playing');assert.equal(h.errors.at(-1),'');
 });

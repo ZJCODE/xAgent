@@ -69,7 +69,7 @@ class VoicePreviewTests(unittest.TestCase):
         self.addCleanup(mocked.stop)
 
     def preview(self, **kwargs):
-        return self.client.post('/api/agent/voice/preview', json={'voice': 'Maya', 'speed': 1.25, **kwargs})
+        return self.client.post('/api/agent/voice/preview', json={'voice': 'Nina', 'speed': 1.25, **kwargs})
 
     def test_preview_is_wav_with_draft_voice_speed_and_saved_key_without_a_write(self):
         with patch('xagent.interfaces.server.admin_access.RuntimeClient') as runtime, patch(
@@ -85,7 +85,7 @@ class VoicePreviewTests(unittest.TestCase):
             self.assertEqual((wav.getframerate(), wav.getnchannels(), wav.getsampwidth()), (24000, 1, 2))
             self.assertEqual(wav.readframes(wav.getnframes()), FakePreviewTTS.audio)
         synth = FakePreviewTTS.instances[0]
-        self.assertEqual((synth.config.voice, synth.config.speed, synth.key), ('Maya', 1.25, 'saved-key'))
+        self.assertEqual((synth.config.voice, synth.config.speed, synth.key), ('Nina', 1.25, 'saved-key'))
         self.assertEqual(synth.calls[0][0], [VOICE_PREVIEW_TEXT])
         self.assertNotIn('spoken_ledger', synth.calls[0][1])
         self.assertTrue(synth.closed and synth.cancelled)
@@ -144,6 +144,6 @@ class VoicePreviewDisconnectTests(unittest.IsolatedAsyncioTestCase):
             FakePreviewTTS.instances = []
             with patch('xagent.interfaces.voice.soniox.SonioxRealtimeTTS', FakePreviewTTS):
                 with self.assertRaises(HTTPException) as error:
-                    await endpoint(VoicePreviewInput(voice='Maya', speed=1), SimpleNamespace(is_disconnected=AsyncMock(return_value=True)))
+                    await endpoint(VoicePreviewInput(voice='Nina', speed=1), SimpleNamespace(is_disconnected=AsyncMock(return_value=True)))
             self.assertEqual(error.exception.status_code, 499)
             self.assertTrue(FakePreviewTTS.instances[0].closed)

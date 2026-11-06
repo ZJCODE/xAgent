@@ -88,11 +88,11 @@ class AgentEditSetupHelperTests(unittest.TestCase):
             result = apply_agent_edit_setup(
                 agent_dir,
                 "voice",
-                {"voice": "Maya", "interruptions": True},
+                {"voice": "Nina", "interruptions": True},
             )
             updated = load_config(agent_dir)["channels"]["voice"]
         self.assertTrue(result["changed"])
-        self.assertEqual(updated["voice"], "Maya")
+        self.assertEqual(updated["voice"], "Nina")
         self.assertIs(updated["interruptions"], True)
         self.assertNotIn("languages", updated)
 
@@ -216,7 +216,7 @@ class AgentEditSetupRouteTests(unittest.TestCase):
                 "/api/agent/setup/voice",
                 json={
                     "voice_api_key": "voice-key",
-                    "voice": "Maya",
+                    "voice": "Nina",
                     "interruptions": True,
                 },
             )
@@ -238,7 +238,7 @@ class AgentEditSetupRouteTests(unittest.TestCase):
             self.assertEqual(voice_response.json()["restart_channel"], "api")
             self.assertEqual(load_config(agent_dir)["image_generation"]["provider"], "openai")
             voice = load_config(agent_dir)["channels"]["voice"]
-            self.assertEqual(voice["voice"], "Maya")
+            self.assertEqual(voice["voice"], "Nina")
             self.assertIs(voice["interruptions"], True)
 
 

@@ -53,7 +53,7 @@ class VoiceWSMigrationTests(unittest.TestCase):
 
     def test_legacy_audio_is_ignored_even_if_the_host_selection_is_invalid(self):
         config = VoiceChannelConfig.from_dict({"api_key": "key", "audio": "retired", "enabled": True})
-        self.assertEqual(config.to_public_dict(), {"api_key": "key", "voice": "Daniel", "interruptions": False})
+        self.assertEqual(config.to_public_dict(), {"api_key": "key", "voice": "Nina", "interruptions": False})
 
     def test_delivery_requires_matching_target_and_never_falls_back_to_host(self):
         session = SimpleNamespace(device_id="desk", room_name="Office",
@@ -92,7 +92,7 @@ class VoiceWSMigrationTests(unittest.TestCase):
                 make_websocket_output_sink=lambda *a: object(),
             ):
                 create_websocket_voice_runtime(agent=FakeAgent(),
-                    config=VoiceChannelConfig.from_dict({"api_key": "key", "voice": "Maya", "speed": 1.25}),
+                    config=VoiceChannelConfig.from_dict({"api_key": "key", "voice": "Nina", "speed": 1.25}),
                     bridge=bridge, options=VoiceRuntimeOptions(direct_conversation=direct))
-        self.assertEqual(seen, [("headset", False, "Maya", 1.25, True, True),
-                                ("room", True, "Maya", 1.25, True, True)])
+        self.assertEqual(seen, [("headset", False, "Nina", 1.25, True, True),
+                                ("room", True, "Nina", 1.25, True, True)])

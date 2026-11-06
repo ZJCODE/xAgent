@@ -89,7 +89,7 @@ class VoiceInitSelection:
     """Interactive choices used to configure shared voice preferences."""
 
     voice_api_key: str = ""
-    voice: str = "Daniel"
+    voice: str = "Nina"
     interruptions: bool = False
     speed: float = 1.0
 
@@ -314,7 +314,7 @@ def build_voice_setup_schema(config: dict[str, Any]) -> dict[str, Any]:
 
     defaults = {
         "voice_api_key": "",
-        "voice": "Daniel",
+        "voice": "Nina",
         "speed": 1.0,
         "interruptions": False,
     }
@@ -388,7 +388,7 @@ def voice_init_selection_from_mapping(
         raise ChannelSetupError("interruptions must be true or false")
     return VoiceInitSelection(
         voice_api_key=str(data.get("voice_api_key") or "").strip(),
-        voice=str(data.get("voice", schema_defaults.get("voice", "Daniel")) or "Daniel").strip(),
+        voice=str(data.get("voice", schema_defaults.get("voice", "Nina")) or "Nina").strip(),
         speed=data.get("speed", schema_defaults.get("speed", 1.0)),
         interruptions=interruption_value,
     )

@@ -2148,7 +2148,7 @@ class CLICommandTests(unittest.TestCase):
             config["channels"]["voice"],
             {
                 "api_key": "voice-key",
-                "voice": "Daniel",
+                "voice": "Nina",
                 "interruptions": False,
             },
         )

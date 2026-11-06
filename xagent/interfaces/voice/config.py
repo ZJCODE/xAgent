@@ -45,15 +45,10 @@ def clamp_soniox_tts_speed(speed: float) -> float:
     """Bring a speaking rate into the range Soniox realtime TTS accepts."""
     return min(SONIOX_TTS_SPEED_MAX, max(SONIOX_TTS_SPEED_MIN, float(speed)))
 
-# Six representative English voices from Soniox's shared catalogue. Keeping a
-# small fixed set makes the first setup decision quick and predictable.
+# Two voices from Soniox's shared catalogue.
 SONIOX_SHARED_VOICE_OPTIONS = (
-    ("Maya", "Female · American English"),
-    ("Daniel", "Male · American English"),
-    ("Adrian", "Male · British English"),
-    ("Claire", "Female · British English"),
-    ("Oliver", "Male · Australian English"),
-    ("Isla", "Female · Australian English"),
+    ("Nina", "Female · Bright and expressive"),
+    ("Daniel", "Male · Steady and reassuring"),
 )
 SONIOX_SHARED_VOICE_IDS = frozenset(voice_id for voice_id, _ in SONIOX_SHARED_VOICE_OPTIONS)
 VOICE_LANGUAGES = ("zh", "en")
@@ -82,7 +77,7 @@ class VoiceRuntimeProfile:
 class VoiceSpeechStyle:
     """Shared speaking defaults, with optional per-session overrides."""
 
-    voice: str = "Daniel"
+    voice: str = "Nina"
     speed: float = 1.0
 
 _VOICE_KEY_PLACEHOLDERS = {
@@ -190,7 +185,7 @@ class VoiceChannelConfig(BaseModel):
     api_key: str | None = None
     # Shared preferences edited in Agent. The persisted channels.voice block
     # stays compatible with CLI configuration and all voice transports.
-    speaking_voice: str = Field(default="Daniel", alias="voice")
+    speaking_voice: str = Field(default="Nina", alias="voice")
     speaking_speed: float = Field(
         default=1.0,
         alias="speed",

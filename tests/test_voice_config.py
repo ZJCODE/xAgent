@@ -74,7 +74,7 @@ class VoiceConfigSurfaceTests(unittest.TestCase):
             public,
             {
                 "api_key": "secret",
-                "voice": "Daniel",
+                "voice": "Nina",
                 "interruptions": False,
             },
         )
@@ -89,7 +89,7 @@ class VoiceConfigSurfaceTests(unittest.TestCase):
     def test_voice_setup_preserves_tier1_when_rotating_key(self):
         existing = {
             "api_key": "old",
-            "voice": "Maya",
+            "voice": "Nina",
             "interruptions": True,
             "audio": {"input": "Mic", "output": "Speaker"},
         }
@@ -98,7 +98,7 @@ class VoiceConfigSurfaceTests(unittest.TestCase):
         )
         merged = _voice_channel_config(selection, existing=existing)
         self.assertEqual(merged["api_key"], "new-key")
-        self.assertEqual(merged["voice"], "Maya")
+        self.assertEqual(merged["voice"], "Nina")
         self.assertIs(merged["interruptions"], True)
         self.assertNotIn("audio", merged)
 
@@ -148,7 +148,7 @@ class VoiceConfigSurfaceTests(unittest.TestCase):
             with self.subTest(saved=saved):
                 config = VoiceChannelConfig.from_dict({"api_key": "k", "speed": saved})
                 self.assertEqual(config.speaking_speed, expected)
-                config.apply_speech_style(VoiceSpeechStyle(voice="Maya", speed=saved))
+                config.apply_speech_style(VoiceSpeechStyle(voice="Nina", speed=saved))
                 self.assertEqual(config.speed, expected)
 
     def test_speeds_outside_the_old_web_range_are_still_rejected(self):
