@@ -187,7 +187,7 @@ function ChatPanel({
   useEffect(() => {
     const node = scrollRef.current;
     if (node) node.scrollTop = node.scrollHeight;
-  }, [panel.messages.length, panel.messages[panel.messages.length - 1]?.content, panel.messages[panel.messages.length - 1]?.meta, panel.progress]);
+  }, [panel.messages.length, panel.messages[panel.messages.length - 1]?.content, panel.messages[panel.messages.length - 1]?.meta]);
 
   useEffect(() => {
     if (!chatEnabled) setUserIdOpen(false);
@@ -257,12 +257,6 @@ function ChatPanel({
         ) : (
           channelBlock
         )}
-        {panel.sending && panel.progress ? (
-          <div className="chat-progress" role="status" aria-live="polite">
-            <RefreshCw size={13} className="chat-progress-icon" aria-hidden="true" />
-            <span>{panel.progress}</span>
-          </div>
-        ) : null}
       </div>
 
       {panel.pendingAttachments.length ? (
@@ -345,6 +339,12 @@ function ChatPanel({
       {!chatEnabled && statusReady && panel.messages.length ? channelBlock : null}
 
       <form onSubmit={submitMessage} className={classNames("composer-row", (!statusReady || !chatEnabled) && "is-disabled")}>
+        {panel.sending && panel.progress ? (
+          <div className="chat-progress" role="status" aria-live="polite">
+            <RefreshCw size={13} className="chat-progress-icon" aria-hidden="true" />
+            <span>{panel.progress}</span>
+          </div>
+        ) : null}
         <textarea
           rows={1}
           placeholder={

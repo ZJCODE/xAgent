@@ -310,7 +310,12 @@ class WebSocketMicrophone:
                     if raw_chunk.discard or len(raw_chunk.payload) != raw_chunk.samples * 2:
                         raise ValueError('Invalid PCM packet length')
                     raw_chunk = raw_chunk.payload
-            if pause_event.is_set() or stop_event.is_set():
+            if stop_event.is_set():
+                return
+            if pause_event.is_set():
+                # Keep the STT sender running while continuous capture is
+                # muted. Otherwise it never sees the pause or starts keepalive.
+                yield b""
                 continue
             if converter is None:
                 continue

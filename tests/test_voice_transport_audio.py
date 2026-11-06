@@ -82,6 +82,26 @@ class AudioProtocolTests(unittest.TestCase):
         self.assertEqual(mic._sequence, 25)
         mic.close()
 
+    def test_paused_capture_yields_control_ticks_before_consuming_more_audio(self):
+        mic = WebSocketMicrophone(bridge(VoiceSessionHello(type='hello', audio_protocol=2, codec='pcm_s16le')))
+        mic.start_input(1)
+        for sequence in range(2):
+            mic.push_audio(AudioPacket(1, sequence, sequence * 20000, 320, 0, b'\1\0' * 320).pack())
+        # End the finite source without marking the bridge closed, so a missing
+        # control tick fails immediately instead of waiting for the queue timeout.
+        mic._chunks.put_nowait(None)
+        paused = threading.Event()
+        paused.set()
+        chunks = mic.iter_chunks(pause_event=paused, stop_event=threading.Event())
+        try:
+            self.assertEqual(next(chunks, None), b'')
+            self.assertEqual(mic._queued_samples, 320)
+            paused.clear()
+            self.assertEqual(next(chunks, None), b'\1\0' * 320)
+        finally:
+            chunks.close()
+            mic.close()
+
 
 class RealOpusTests(unittest.TestCase):
     def test_sample_exact_round_trip_for_tiny_and_partial_frames(self):

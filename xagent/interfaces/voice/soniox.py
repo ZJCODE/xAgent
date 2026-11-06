@@ -413,7 +413,9 @@ class SonioxRealtimeSTT:
                         except Exception:
                             pass
                         return
-                should_pause = pause_event.is_set()
+                # Empty input is a control tick (hold released / mic muted),
+                # not PCM silence. Keep the provider alive until audio resumes.
+                should_pause = pause_event.is_set() or not chunk
                 if should_pause and not paused:
                     session.pause(finalize=False)
                     paused = True

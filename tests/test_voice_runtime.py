@@ -572,6 +572,19 @@ class SonioxSDKAdapterTests(unittest.TestCase):
             list(stt._iter_session([], pause_event=threading.Event(), stop_event=threading.Event(), session_stop=threading.Event()))
         self.assertEqual(order[:2], ['unavailable', 'close'])
 
+    def test_stt_keeps_idle_input_alive_and_resumes_with_the_first_audio_chunk(self):
+        session = FakeSTTSession([])
+        errors = queue.Queue()
+        SonioxRealtimeSTT._send_audio_loop(
+            session,
+            [b'', b'', b'first', b'', b'', b'next'],
+            threading.Event(), threading.Event(), threading.Event(), errors, None,
+        )
+        self.assertTrue(errors.empty())
+        self.assertEqual(session.pause_calls, [False, False])
+        self.assertEqual(session.resume_calls, 2)
+        self.assertEqual(session.sent, [b'first', b'next'])
+
     def test_stt_reconnects_for_service_and_max_duration_errors(self):
         stt = SonioxRealtimeSTT(
             api_key="key",
