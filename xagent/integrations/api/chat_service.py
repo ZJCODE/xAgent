@@ -118,17 +118,6 @@ class ChatService:
         finally:
             self.release_slot()
 
-    async def send_websocket_chat_events(
-        self,
-        websocket: WebSocket,
-        input_data: AgentInput,
-        *,
-        client: str = CLIENT_WS,
-    ) -> None:
-        async with aclosing(self.chat_event_stream(input_data, client=client)) as events:
-            async for event in events:
-                await websocket.send_json(event)
-
     async def send_websocket_observe_events(self, websocket: WebSocket, input_data: ObserveInput) -> None:
         try:
             response = await self.run_observe(input_data)

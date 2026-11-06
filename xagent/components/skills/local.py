@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import hashlib
-import mimetypes
 import os
 import re
 import shutil
@@ -17,6 +16,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 
+from ...utils.file_metadata import file_metadata
 from ...utils.text_file import is_binary_file
 from .base import SkillMetadata, SkillsStorageBase, SkillValidationIssue
 
@@ -711,19 +711,7 @@ class SkillsStorageLocal(SkillsStorageBase):
         return entries
 
     def _file_metadata(self, path: Path) -> Dict[str, Any]:
-        resolved = path.resolve()
-        stat = resolved.stat()
-        is_dir = resolved.is_dir()
-        mime_type, _ = mimetypes.guess_type(resolved.name)
-        return {
-            "name": resolved.name,
-            "path": str(resolved.relative_to(self.root)),
-            "type": "dir" if is_dir else "file",
-            "size": stat.st_size,
-            "modified": stat.st_mtime,
-            "mime_type": mime_type or "application/octet-stream",
-            "binary": False if is_dir else is_binary_file(resolved),
-        }
+        return file_metadata(path, root=self.root)
 
     @staticmethod
     def _read_text_file(path: Path, limit: int) -> str:

@@ -1713,11 +1713,11 @@ class CLICommandTests(unittest.TestCase):
 
             with patch("xagent.interfaces.cli.web_client.web_client_runtime_root", return_value=root):
                 with patch("xagent.interfaces.cli.runtime.running_pid", return_value=None) as stopped_pid_check:
-                    with patch("xagent.interfaces.cli.launcher.webbrowser.open") as stopped_browser_open:
+                    with patch("webbrowser.open") as stopped_browser_open:
                         stopped_exit = _run_web_action(config_dir, "open")
 
                 with patch("xagent.interfaces.cli.runtime.running_pid", return_value=4321) as running_pid_check:
-                    with patch("xagent.interfaces.cli.launcher.webbrowser.open", return_value=True) as browser_open:
+                    with patch("webbrowser.open", return_value=True) as browser_open:
                         running_exit = _run_web_action(config_dir, "open")
 
         self.assertEqual(stopped_exit, 1)

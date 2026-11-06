@@ -64,7 +64,6 @@ export interface ChatSettings {
 }
 
 export interface ChatPanelState {
-  id: "single";
   messages: ChatMessage[];
   pendingAttachments: AttachmentAsset[];
   settings: ChatSettings;
@@ -588,13 +587,6 @@ export interface MessagesResponse {
   count: number;
   offset: number;
   has_more: boolean;
-}
-
-export interface MessagesStats {
-  total: number;
-  storage?: Record<string, unknown>;
-  earliest_timestamp?: number;
-  latest_timestamp?: number;
 }
 
 export interface MessageSearchResponse {

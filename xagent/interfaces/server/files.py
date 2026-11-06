@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import mimetypes
 import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
 
+from ...utils.file_metadata import file_metadata
 from ...utils.image_utils import workspace_blob_url
 from ...utils.text_file import is_binary_file
 
@@ -40,19 +40,7 @@ class WorkspaceFileService:
         return requested
 
     def metadata(self, path: Path) -> Dict[str, Any]:
-        resolved = path.resolve()
-        stat = resolved.stat()
-        is_dir = resolved.is_dir()
-        mime_type, _ = mimetypes.guess_type(resolved.name)
-        return {
-            "name": resolved.name,
-            "path": str(resolved.relative_to(self.root)),
-            "type": "dir" if is_dir else "file",
-            "size": stat.st_size,
-            "modified": stat.st_mtime,
-            "mime_type": mime_type or "application/octet-stream",
-            "binary": False if is_dir else is_binary_file(resolved),
-        }
+        return file_metadata(path, root=self.root)
 
     def scan_tree(self, directory: Optional[Path] = None) -> List[Dict[str, Any]]:
         current = directory or self.root

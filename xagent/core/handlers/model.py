@@ -93,16 +93,6 @@ class ChatToolCall:
             type="function",
         )
 
-    def to_chat_dict(self) -> dict:
-        return {
-            "id": self.call_id,
-            "type": "function",
-            "function": {
-                "name": self.name,
-                "arguments": self.arguments or "{}",
-            },
-        }
-
 
 @dataclass(frozen=True)
 class ModelErrorEvent:

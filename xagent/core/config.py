@@ -135,7 +135,6 @@ class AgentConfig:
     # ============================================================
     MAX_COMMAND_TIMEOUT = 300  # hard upper bound for timeout parameter (seconds)
     MAX_COMMAND_OUTPUT_SIZE = 51200  # 50 KB per stream
-    MAX_SYSTEM_PROMPT_LENGTH = 16000  # soft limit for assembled instructions (chars)
     MAX_SKILLS_CATALOG_CHARS = 8000  # max characters for injected skill catalog
 
     # ============================================================

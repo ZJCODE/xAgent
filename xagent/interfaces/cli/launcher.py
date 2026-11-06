@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import webbrowser  # noqa: F401 - retained as the launcher browser patch point
 from pathlib import Path
 from copy import deepcopy
 from typing import Any, Callable, Optional, Sequence
@@ -71,7 +70,6 @@ from .runtime import (
     handle_start,
     handle_status,
     handle_stop,
-    handle_voice,
     handle_web_logs,
     handle_web_open,
     handle_web_restart,

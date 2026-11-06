@@ -363,11 +363,6 @@ class BaseAgentRunner:
             raise ValueError(f"{name} must be a positive number")
 
     @staticmethod
-    def _validate_non_negative_number(value: Any, name: str) -> None:
-        if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
-            raise ValueError(f"{name} must be a non-negative number")
-
-    @staticmethod
     def _validate_provider_config(provider_cfg: Dict[str, Any]) -> None:
         allowed_provider_keys = {
             "name",

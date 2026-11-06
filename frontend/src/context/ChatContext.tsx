@@ -16,14 +16,13 @@ import { makeId } from "../lib/format";
 export const DEFAULT_WEB_USER_ID = "web_user";
 
 const GLOBAL_SETTINGS_KEY = "xagent_web_settings";
-const HISTORY_KEY = "xagent_chat_history";
+const LEGACY_HISTORY_KEY = "xagent_chat_history_single";
 const DEFAULT_CAPABILITIES: AgentCapabilities = {
   vision: true,
   vision_input: true,
   web_search: false,
   generate_image: false,
 };
-const MAX_IMAGES_PER_MESSAGE = 5;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_ATTACHMENTS_PER_MESSAGE = 10;
 const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024;
@@ -33,32 +32,20 @@ type SocketOptions = {
   userMessageId?: string;
 };
 
-type PanelId = ChatPanelState["id"];
-
 interface ChatContextValue {
   panel: ChatPanelState;
   status: "idle" | "sending";
   capabilities: AgentCapabilities;
   currentTurnId: string | null;
-  updateSettings: (panelId: PanelId, settings: Partial<ChatSettings>) => void;
-  addAttachments: (panelId: PanelId, files: FileList | File[]) => void;
-  removeAttachment: (panelId: PanelId, index: number) => void;
-  sendMessage: (panelId: PanelId, text: string) => Promise<void>;
+  updateSettings: (settings: Partial<ChatSettings>) => void;
+  addAttachments: (files: FileList | File[]) => void;
+  removeAttachment: (index: number) => void;
+  sendMessage: (text: string) => Promise<void>;
   stopTurn: () => Promise<void>;
-  sendObservation: (panelId: PanelId, text: string) => Promise<void>;
-  clearPanel: (panelId: PanelId) => void;
-  clearVisiblePanels: () => void;
+  sendObservation: (text: string) => Promise<void>;
 }
 
 const ChatContext = createContext<ChatContextValue | null>(null);
-
-function defaultSettings(panelId: PanelId): ChatSettings {
-  void panelId;
-  return {
-    userId: DEFAULT_WEB_USER_ID,
-    stream: true,
-  };
-}
 
 function readJson<T>(key: string, fallback: T): T {
   try {
@@ -69,13 +56,9 @@ function readJson<T>(key: string, fallback: T): T {
   }
 }
 
-function historyKey(panelId: PanelId): string {
-  return `${HISTORY_KEY}_${panelId}`;
-}
-
-function clearPersistedHistory(panelId: PanelId) {
+function clearLegacyHistory() {
   try {
-    localStorage.removeItem(historyKey(panelId));
+    localStorage.removeItem(LEGACY_HISTORY_KEY);
   } catch {
     // Browser storage is best-effort; stale chat history should not block the UI.
   }
@@ -123,7 +106,7 @@ function pushMessageMeta(event: ChatEvent): string {
   return event.task?.title || "Scheduled";
 }
 
-function appendPushMessage(patchPanel: (panelId: PanelId, updater: (panel: ChatPanelState) => ChatPanelState) => void, event: ChatEvent) {
+function appendPushMessage(setPanel: (updater: (panel: ChatPanelState) => ChatPanelState) => void, event: ChatEvent) {
   if (event.type !== "scheduled_message" && event.type !== "subconscious_message") return;
   const scheduledMessage = scheduledMessagePayload(event.message);
   const fallbackMessageContent = typeof event.message === "string" ? event.message : scheduledMessage?.content;
@@ -141,7 +124,7 @@ function appendPushMessage(patchPanel: (panelId: PanelId, updater: (panel: ChatP
   const imageCount = imageUrls ? imageUrls.length || undefined : scheduledMessage?.image_count;
   const attachmentCount = attachments ? attachments.length || undefined : scheduledMessage?.attachment_count;
   if (!content && !imageUrls?.length && !attachments?.length && !imageCount && !attachmentCount) return;
-  patchPanel("single", (current) => ({
+  setPanel((current) => ({
     ...current,
     messages: [
       ...current.messages,
@@ -161,14 +144,14 @@ function appendPushMessage(patchPanel: (panelId: PanelId, updater: (panel: ChatP
 
 const TASKS_WS_MAX_RECONNECT_MS = 30_000;
 
-function createPanel(panelId: PanelId): ChatPanelState {
+function createPanel(): ChatPanelState {
   const savedSettings = readJson<Partial<ChatSettings>>(GLOBAL_SETTINGS_KEY, {});
   return {
-    id: panelId,
     messages: [],
     pendingAttachments: [],
     settings: {
-      ...defaultSettings(panelId),
+      userId: DEFAULT_WEB_USER_ID,
+      stream: true,
       ...savedSettings,
     },
     sending: false,
@@ -192,20 +175,14 @@ function persistSettings(panel: ChatPanelState) {
 }
 
 export function ChatProvider({ children }: { children: ReactNode }) {
-  const [panel, setPanel] = useState<ChatPanelState>(() => createPanel("single"));
+  const [panel, setPanel] = useState<ChatPanelState>(createPanel);
   const [capabilities, setCapabilities] = useState<AgentCapabilities>(DEFAULT_CAPABILITIES);
   const [currentTurnId, setCurrentTurnId] = useState<string | null>(null);
-  const socketsRef = useRef<Record<string, WebSocket>>({});
   const sendingRef = useRef(false);
   const turnIdRef = useRef<string | null>(null);
 
-  const patchPanel = useCallback((panelId: PanelId, updater: (panel: ChatPanelState) => ChatPanelState) => {
-    void panelId;
-    setPanel((current) => updater(current));
-  }, []);
-
   useEffect(() => {
-    clearPersistedHistory("single");
+    clearLegacyHistory();
   }, []);
 
   useEffect(() => {
@@ -269,7 +246,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         } catch {
           return;
         }
-        appendPushMessage(patchPanel, parsed);
+        appendPushMessage(setPanel, parsed);
       });
 
       socket.addEventListener("close", () => {
@@ -291,11 +268,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         socket.close(1000);
       }
     };
-  }, [panel.settings.userId, patchPanel]);
+  }, [panel.settings.userId]);
 
   const updateSettings = useCallback(
-    (panelId: PanelId, settings: Partial<ChatSettings>) => {
-      void panelId;
+    (settings: Partial<ChatSettings>) => {
       setPanel((current) => {
         const updatedPanel = {
           ...current,
@@ -308,7 +284,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     [],
   );
 
-  const addAttachments = useCallback((panelId: PanelId, files: FileList | File[]) => {
+  const addAttachments = useCallback((files: FileList | File[]) => {
     const remainingSlots = Math.max(0, MAX_ATTACHMENTS_PER_MESSAGE - panel.pendingAttachments.length);
     const selectedFiles = Array.from(files)
       .filter((file) => {
@@ -336,7 +312,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           original_name: file.name,
           client: "web",
         };
-        patchPanel(panelId, (panel) => {
+        setPanel((panel) => {
           if (panel.pendingAttachments.length >= MAX_ATTACHMENTS_PER_MESSAGE) return panel;
           return {
             ...panel,
@@ -345,23 +321,21 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         });
       }),
     ).catch(() => undefined);
-  }, [panel.pendingAttachments.length, patchPanel]);
+  }, [panel.pendingAttachments.length]);
 
   const removeAttachment = useCallback(
-    (panelId: PanelId, index: number) => {
-      patchPanel(panelId, (panel) => ({
+    (index: number) => {
+      setPanel((panel) => ({
         ...panel,
         pendingAttachments: panel.pendingAttachments.filter((_, itemIndex) => itemIndex !== index),
       }));
     },
-    [patchPanel],
+    [],
   );
 
-  const runSocket = useCallback((panelId: PanelId, payload: Record<string, unknown>, assistantId: string, options?: SocketOptions) => {
+  const runSocket = useCallback((payload: Record<string, unknown>, assistantId: string, options?: SocketOptions) => {
     return new Promise<void>((resolve, reject) => {
-      const socketKey = `${panelId}-${assistantId}`;
       const socket = new WebSocket(webSocketUrl("/ws/chat"));
-      socketsRef.current[socketKey] = socket;
       let settled = false;
       let aborted = false;
       const textByMessageId = new Map<string, string>();
@@ -384,7 +358,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           remoteToLocalMessageId.set(remoteMessageId, localId);
           localMessageIds.add(localId);
 
-          patchPanel(panelId, (panel) => {
+          setPanel((panel) => {
             if (panel.messages.some((message) => message.id === localId)) return panel;
             return {
               ...panel,
@@ -402,7 +376,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       const finish = (error?: Error) => {
         if (settled) return;
         settled = true;
-        delete socketsRef.current[socketKey];
         if (!followup) {
           turnIdRef.current = null;
           sendingRef.current = false;
@@ -411,7 +384,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
           socket.close(1000);
         }
-        patchPanel(panelId, (panel) => {
+        setPanel((panel) => {
           let messages = panel.messages;
           if (followup && error && !steeredStream && followupUserId) {
             messages = placeQueuedFollowup(messages, followupUserId, {
@@ -465,7 +438,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               content: "",
               pending: true,
             };
-            patchPanel(panelId, (panel) => ({
+            setPanel((panel) => ({
               ...panel,
               messages: placeQueuedFollowup(panel.messages, followupUserId, queuedAssistant),
             }));
@@ -475,7 +448,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         if (parsed.type === "steered") {
           steeredStream = true;
           if (followupUserId) {
-            patchPanel(panelId, (panel) => ({
+            setPanel((panel) => ({
               ...panel,
               messages: placeSteeredUser(panel.messages, followupUserId),
             }));
@@ -489,13 +462,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
         if (!followup && parsed.type === "tool_call") {
           activeToolCalls += 1;
-          patchPanel(panelId, (panel) => ({ ...panel, progress: "Working with tools…" }));
+          setPanel((panel) => ({ ...panel, progress: "Working with tools…" }));
           return;
         }
         if (!followup && parsed.type === "tool_result") {
           activeToolCalls = Math.max(0, activeToolCalls - 1);
           if (!activeToolCalls) {
-            patchPanel(panelId, (panel) => ({ ...panel, progress: "Reviewing results…" }));
+            setPanel((panel) => ({ ...panel, progress: "Reviewing results…" }));
           }
           return;
         }
@@ -506,7 +479,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         }
 
         if (parsed.type === "message_start") {
-          if (!followup) patchPanel(panelId, (panel) => ({ ...panel, progress: "Writing a response…" }));
+          if (!followup) setPanel((panel) => ({ ...panel, progress: "Writing a response…" }));
           const localId = ensureAssistantMessage(parsed);
           if (!textByMessageId.has(localId)) {
             textByMessageId.set(localId, "");
@@ -518,7 +491,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           const localId = ensureAssistantMessage(parsed);
           const nextText = `${textByMessageId.get(localId) || ""}${parsed.delta}`;
           textByMessageId.set(localId, nextText);
-          patchPanel(panelId, (panel) => ({
+          setPanel((panel) => ({
             ...panel,
             messages: panel.messages.map((message) =>
               message.id === localId ? { ...message, content: nextText } : message,
@@ -529,14 +502,14 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
         if (parsed.type === "message_done") {
           if (!followup && parsed.phase === "preface") {
-            patchPanel(panelId, (panel) => ({ ...panel, progress: "Continuing…" }));
+            setPanel((panel) => ({ ...panel, progress: "Continuing…" }));
           }
           const localId = ensureAssistantMessage(parsed);
           const nextText = parsed.content == null ? (textByMessageId.get(localId) || "") : String(parsed.content);
           const attachments = Array.isArray(parsed.attachments) ? parsed.attachments : undefined;
           const imageUrls = attachments ? attachmentImageUrls(attachments) : undefined;
           textByMessageId.set(localId, nextText);
-          patchPanel(panelId, (panel) => ({
+          setPanel((panel) => ({
             ...panel,
             messages: panel.messages.map((message) =>
               message.id === localId
@@ -559,7 +532,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           const localId = ensureAssistantMessage(parsed);
           const nextText = typeof parsed.message === "string" ? parsed.message : JSON.stringify(parsed.message, null, 2);
           textByMessageId.set(localId, nextText);
-          patchPanel(panelId, (panel) => ({
+          setPanel((panel) => ({
             ...panel,
             messages: panel.messages.map((message) =>
               message.id === localId ? { ...message, content: nextText, pending: false } : message,
@@ -579,10 +552,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         if (!settled) finish(new Error("WebSocket connection closed before completion."));
       });
     });
-  }, [patchPanel]);
+  }, []);
 
   const sendMessage = useCallback(
-    async (panelId: PanelId, rawText: string) => {
+    async (rawText: string) => {
       const text = rawText.trim();
       const currentPanel = panel;
       const attachments = [...currentPanel.pendingAttachments];
@@ -617,12 +590,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           content: "",
           pending: true,
         };
-        patchPanel(panelId, (current) => ({
+        setPanel((current) => ({
           ...current,
           pendingAttachments: [],
           messages: insertUserBeforeRunningReply(current.messages, userMessage),
         }));
-        await runSocket(panelId, payload, assistantMessage.id, {
+        await runSocket(payload, assistantMessage.id, {
           followup: true,
           userMessageId: userMessage.id,
         }).catch(() => undefined);
@@ -636,16 +609,16 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         pending: true,
       };
       sendingRef.current = true;
-      patchPanel(panelId, (current) => ({
+      setPanel((current) => ({
         ...current,
         pendingAttachments: [],
         sending: true,
         progress: "Thinking…",
         messages: [...current.messages, userMessage, assistantMessage],
       }));
-      await runSocket(panelId, payload, assistantMessage.id).catch(() => undefined);
+      await runSocket(payload, assistantMessage.id).catch(() => undefined);
     },
-    [capabilities, panel, patchPanel, runSocket],
+    [capabilities, panel, runSocket],
   );
 
   const stopTurn = useCallback(async () => {
@@ -655,7 +628,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const sendObservation = useCallback(
-    async (panelId: PanelId, rawText: string) => {
+    async (rawText: string) => {
       const text = rawText.trim();
       if (!text || panel.sending) return;
       const observationMessage: ChatMessage = {
@@ -663,7 +636,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         role: "observation",
         content: text,
       };
-      patchPanel(panelId, (panel) => ({
+      setPanel((panel) => ({
         ...panel,
         sending: true,
         messages: [...panel.messages, observationMessage],
@@ -703,28 +676,16 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        patchPanel(panelId, (panel) => ({
+        setPanel((panel) => ({
           ...panel,
           messages: [...panel.messages, { id: makeId("error"), role: "assistant", content: `Error: ${message}`, error: true }],
         }));
       } finally {
-        patchPanel(panelId, (panel) => ({ ...panel, sending: false }));
+        setPanel((panel) => ({ ...panel, sending: false }));
       }
     },
-    [panel.sending, patchPanel],
+    [panel.sending],
   );
-
-  const clearPanel = useCallback(
-    (panelId: PanelId) => {
-      patchPanel(panelId, (panel) => ({ ...panel, messages: [], pendingAttachments: [] }));
-      clearPersistedHistory(panelId);
-    },
-    [patchPanel],
-  );
-
-  const clearVisiblePanels = useCallback(() => {
-    clearPanel("single");
-  }, [clearPanel]);
 
   const status: "idle" | "sending" = panel.sending ? "sending" : "idle";
 
@@ -740,8 +701,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       sendMessage,
       stopTurn,
       sendObservation,
-      clearPanel,
-      clearVisiblePanels,
     }),
     [
       panel,
@@ -754,8 +713,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       sendMessage,
       stopTurn,
       sendObservation,
-      clearPanel,
-      clearVisiblePanels,
     ],
   );
 

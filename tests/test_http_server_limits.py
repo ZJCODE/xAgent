@@ -276,7 +276,7 @@ class AgentWebSocketServerTests(unittest.TestCase):
         heartbeat = FakeHeartbeat()
         server = AgentHTTPServer(agent=agent)
 
-        with patch("xagent.interfaces.server.app.create_runtime_heartbeat", return_value=heartbeat) as factory:
+        with patch("xagent.core.runtime.create_runtime_heartbeat", return_value=heartbeat) as factory:
             with TestClient(server.app):
                 pass
 

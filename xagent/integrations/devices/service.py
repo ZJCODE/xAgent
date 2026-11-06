@@ -312,10 +312,6 @@ class DeviceService:
         )
         await self._idle.wait()
 
-    def authenticate_paired(self, device_id: str, credential: str) -> bool:
-        """Authenticate an already-paired device credential (rejects one-time pairing codes)."""
-        return credential.startswith("Bearer ") and self.credentials.authenticate(device_id, credential[7:])
-
     def resolve_room_name(self, device_id: str) -> str:
         """Resolve a human-meaningful room/location name for a paired device."""
         fields = self.profile_fields(device_id)

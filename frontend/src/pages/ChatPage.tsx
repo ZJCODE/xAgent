@@ -199,7 +199,7 @@ function ChatPanel({
     const text = messageText.trim();
     if (!text && !panel.pendingAttachments.length) return;
     setMessageText("");
-    void sendMessage(panel.id, text);
+    void sendMessage(text);
   };
 
   const submitObservation = (event?: FormEvent) => {
@@ -208,7 +208,7 @@ function ChatPanel({
     const text = observeText.trim();
     if (!text) return;
     setObserveText("");
-    void sendObservation(panel.id, text);
+    void sendObservation(text);
     setObserveOpen(false);
   };
 
@@ -271,7 +271,7 @@ function ChatPanel({
             <PendingAttachmentPreview
               key={`${attachmentUrl(attachment).slice(0, 24)}-${index}`}
               attachment={attachment}
-              onRemove={() => removeAttachment(panel.id, index)}
+              onRemove={() => removeAttachment(index)}
             />
           ))}
         </div>
@@ -280,9 +280,9 @@ function ChatPanel({
       {userIdOpen && chatEnabled ? (
         <div className="observe-panel">
           <input
-            id={`user-id-${panel.id}`}
+            id="chat-user-id"
             value={panel.settings.userId}
-            onChange={(event) => updateSettings(panel.id, { userId: event.target.value })}
+            onChange={(event) => updateSettings({ userId: event.target.value })}
             className="user-id-panel-input"
             placeholder="web_user by default — change only to test another API user."
             spellCheck={false}
@@ -295,7 +295,7 @@ function ChatPanel({
               variant="secondary"
               disabled={!statusReady || panel.sending || !customUserId}
               title={`Reset to ${DEFAULT_WEB_USER_ID}`}
-              onClick={() => updateSettings(panel.id, { userId: DEFAULT_WEB_USER_ID })}
+              onClick={() => updateSettings({ userId: DEFAULT_WEB_USER_ID })}
             >
               Reset
             </Button>
@@ -405,7 +405,7 @@ function ChatPanel({
             className="hidden"
             multiple
             onChange={(event) => {
-              if (event.target.files) addAttachments(panel.id, event.target.files);
+              if (event.target.files) addAttachments(event.target.files);
               event.currentTarget.value = "";
             }}
           />

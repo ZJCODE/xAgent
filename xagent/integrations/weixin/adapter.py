@@ -146,7 +146,6 @@ class WeixinAdapter:
         self._typing_cache = _TypingTicketCache(config.typing_ticket_ttl_seconds)
         self._dedup = _MessageDeduplicator()
         self._stop_event = asyncio.Event()
-        self._tasks_dir = self.runtime_dir / AgentConfig.TASKS_DIRNAME
         self._contacts_file = resolve_contacts_path(self.runtime_dir)
         self._accepting = True
         self._client_closed = False

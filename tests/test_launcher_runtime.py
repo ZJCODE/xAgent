@@ -210,7 +210,7 @@ class ChannelMenuTests(unittest.TestCase):
                 root = Path("/tmp/menu-agent")
                 with patch("xagent.interfaces.cli.launcher._channel_runtime_snapshot", side_effect=snapshots):
                     with patch("xagent.interfaces.cli.launcher.handle_channel_connection", return_value=0) as control:
-                        with patch("xagent.interfaces.cli.launcher.handle_voice") as voice:
+                        with patch("xagent.interfaces.voice.runtime.VoiceRuntime.run_forever") as voice:
                             _run_managed_channel_launcher(UI(), root, channel, channel_title=channel.title())
                 self.assertEqual([call.args[0].channel_action for call in control.call_args_list],
                                  ["connect", "disconnect"])

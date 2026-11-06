@@ -1,5 +1,4 @@
 import logging
-from contextlib import asynccontextmanager
 from typing import Optional
 
 import uvicorn
@@ -13,7 +12,6 @@ from ...core.agent import Agent
 from ...core.config import AgentConfig
 from ...core.runtime import (
     SubconsciousDelivery,
-    create_runtime_heartbeat,
     resolve_contacts_path,
 )
 from ...integrations.api import ApiChannelAdapter, ChatLimits
@@ -73,15 +71,9 @@ class AgentHTTPServer(AdminService):
             title="xAgent HTTP Agent Server",
             description="HTTP and WebSocket API for xAgent",
             version="1.0.0",
-            lifespan=self._lifespan,
         )
         self._add_routes(app)
         return app
-
-    @asynccontextmanager
-    async def _lifespan(self, app: FastAPI):
-        """HTTP transport never owns agent background work or maintenance."""
-        yield
 
     def _add_routes(self, app: FastAPI) -> None:
         self.api.register_routes(app)

@@ -67,14 +67,6 @@ class RuntimeOverview:
     headline: str
     items: tuple[OverviewItem, ...]
 
-    @property
-    def has_errors(self) -> bool:
-        return any(item.status == STATUS_ERROR for item in self.items)
-
-    @property
-    def has_warnings(self) -> bool:
-        return any(item.status == STATUS_WARNING for item in self.items)
-
 
 def build_runtime_overview(config_dir: Path) -> RuntimeOverview:
     config_path = config_dir / BaseAgentConfig.CONFIG_FILENAME

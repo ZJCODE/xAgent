@@ -24,7 +24,6 @@ import type {
   FileNode,
   MessageSearchResponse,
   MessagesResponse,
-  MessagesStats,
   SearchResult,
   SkillCreateInput,
   SkillCreateResponse,
@@ -376,10 +375,6 @@ export async function searchMessages(query: string): Promise<MessageSearchRespon
   return requestJson(`/api/messages/search?query=${encodeURIComponent(query)}`);
 }
 
-export async function getMessagesStats(): Promise<MessagesStats> {
-  return requestJson("/api/messages/stats");
-}
-
 export async function getTasks(
   scope: TaskScope = "current",
   query = "",
@@ -404,10 +399,6 @@ export async function pauseTask(taskId: string): Promise<{ status: string; task:
 
 export async function resumeTask(taskId: string): Promise<{ status: string; task: ScheduledTaskItem }> {
   return requestJson(`/api/tasks/${encodeURIComponent(taskId)}/resume`, { method: "POST" });
-}
-
-export async function retryTask(taskId: string): Promise<{ status: string; task: ScheduledTaskItem }> {
-  return requestJson(`/api/tasks/${encodeURIComponent(taskId)}/retry`, { method: "POST" });
 }
 
 export async function updateTask(taskId: string, input: TaskUpdateInput): Promise<{ status: string; task: ScheduledTaskItem }> {
@@ -460,10 +451,6 @@ export async function restartRuntime(): Promise<AgentRuntimeStatus> {
 
 export async function getRuntimeLogs(lines = 80): Promise<Omit<ChannelLogsResponse, "channel">> {
   return requestJson(`/api/runtime/logs?lines=${lines}`);
-}
-
-export async function getChannelLogs(channel: ChannelId, lines = 80): Promise<ChannelLogsResponse> {
-  return requestJson(`/api/channels/${channel}/logs?lines=${lines}`);
 }
 
 export async function getChannelSetupSchema(channel: SetupChannelId): Promise<ChannelSetupSchema> {

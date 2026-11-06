@@ -192,7 +192,6 @@ class VoiceRuntime:
             play=self._play_notice_audio,
             language_for=self._language_tracker.language_before_turn,
         )
-        self._event_loop: asyncio.AbstractEventLoop | None = None
         self._floor = ConversationFloor()
         self._utterance_queue: asyncio.Queue[VoiceUtterance | Exception | None] | None = None
         self._steer_result: asyncio.Future[str] | None = None
@@ -255,7 +254,6 @@ class VoiceRuntime:
 
     async def run_forever(self) -> None:
         """Run until stopped or a non-recoverable STT error is raised."""
-        self._event_loop = asyncio.get_running_loop()
         self.logger.info('Voice recognition preparing context')
         await self._refresh_stt_context_terms()
         self.logger.info('Voice recognition context ready')

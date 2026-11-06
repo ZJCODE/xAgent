@@ -103,7 +103,6 @@ class RuntimeHost:
         self._channel_generation = {name: 0 for name in self._channel_locks}
         self._channel_activity: dict[str, ChannelActivity] = {}
         self._channel_operations: dict[str, asyncio.Task] = {}
-        self._api_app = None
         self._restarting = False
         self._restart_channels: list[str] | None = None
         self.lifecycle_timings: dict[str, float] = {}
@@ -563,7 +562,6 @@ class RuntimeHost:
             cfg = api_config(config)
             service = AgentHTTPServer(config_dir=str(self.config_dir), agent=self.agent,
                 runtime_managed=True, api_adapter=self.api)
-            self._api_app = service.app
             class PublicAdmission:
                 def __init__(self, app):
                     self.app = app
