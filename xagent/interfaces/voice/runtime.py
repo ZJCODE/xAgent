@@ -944,7 +944,7 @@ class VoiceRuntime:
         utterance: VoiceUtterance,
         attribution: SpeakerAttribution,
     ) -> bool:
-        if self.options.direct_conversation:
+        if self.options.direct_conversation or not self._attention.wake_terms:
             return True
         tier = self._attention.attention_tier(transcript)
         if tier < 3:
@@ -972,19 +972,11 @@ class VoiceRuntime:
             transcript=transcript,
             speaker_label=attribution.speaker_label or utterance.speaker_label,
         )
-        metadata = {
-            "source": "voice",
-            "event_type": "room_speech",
-            "attention_tier": tier,
-            "addressed_to_agent": False,
-            **self._voice_turn_metadata(utterance, attribution),
-        }
         try:
             decision = await decider(
                 context=context,
                 source="voice",
                 event_type="room_speech",
-                metadata=metadata,
             )
         except Exception:
             self.logger.exception("Voice participation decision failed")

@@ -195,6 +195,13 @@ class VoiceChannelConfig(BaseModel):
         allow_inf_nan=False,
     )
     interruptions: StrictBool = False
+    wake_terms: list[str] = Field(default_factory=list)
+
+    @field_validator("wake_terms")
+    @classmethod
+    def _normalize_wake_terms(cls, value: list[str]) -> list[str]:
+        from .attention import normalize_terms
+        return normalize_terms(value)
 
     _runtime_profile: VoiceRuntimeProfile = PrivateAttr(default_factory=VoiceRuntimeProfile)
     _speech_style: VoiceSpeechStyle = PrivateAttr(default_factory=VoiceSpeechStyle)
@@ -260,6 +267,8 @@ class VoiceChannelConfig(BaseModel):
         }
         if self.speaking_speed != 1.0:
             public["speed"] = self.speaking_speed
+        if self.wake_terms:
+            public["wake_terms"] = self.wake_terms
         return public
 
     def resolved_api_key(self) -> str:
@@ -323,10 +332,12 @@ class VoiceChannelConfig(BaseModel):
             return VoiceAttentionConfigModel(
                 open_window_seconds=120.0,
                 use_decide_participation=False,
+                wake_terms=self.wake_terms,
             )
         return VoiceAttentionConfigModel(
             open_window_seconds=25.0,
             use_decide_participation=True,
+            wake_terms=self.wake_terms,
         )
 
     @property

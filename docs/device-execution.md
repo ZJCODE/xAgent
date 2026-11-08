@@ -169,6 +169,15 @@ If the Agent is stopped, Start Agent prepares it before connecting. There is no
 separate Host voice channel to start. Shared voice settings live in Agent;
 microphone and speaker selection belongs to the browser or device.
 
+In Agent → Voice, wake words apply to paired devices. Leave the list empty to
+send every non-empty transcript into conversation. With words configured, a
+session begins with an attention window (25 seconds for `room`, 120 for
+`headset`), renewed after a completed turn. Speech in that window or containing
+a configured word enters conversation; matching ignores case and uses
+substrings. Outside the window, `room` asks the Agent whether to join, while
+`headset` records the speech as environmental context. Browser voice remains
+direct conversation. Settings changes require an Agent restart.
+
 ### Audio protocol 2
 
 Browser and paired-device voice use one explicit protocol. Send
@@ -270,9 +279,9 @@ interruptions and stop forwarding microphone audio during playback. End capture
 on playback start and resume with a new input stream ID after the speaker drains
 and the acoustic tail settles. `echo_managed` is client metadata; it does not
 activate server acoustic echo cancellation. Enable interruptions only after
-simultaneous capture/playback works without self-triggering. `room` uses room
-attention/wake rules; `headset` selects directed speech attention and does not
-provide echo cancellation.
+simultaneous capture/playback works without self-triggering. `room` and
+`headset` use the attention rules described above; neither profile provides
+echo cancellation.
 
 Voice control JSON is limited to 16 KiB and binary messages to 256 KiB. Application
 `ping` receives `pong`; `stop` ends the whole voice session. After transient

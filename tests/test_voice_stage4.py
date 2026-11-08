@@ -134,13 +134,46 @@ class ObservingAgent(FakeAgent):
 
 
 class VoiceAttentionRuntimeTests(unittest.TestCase):
+    def test_empty_wake_terms_dispatch_outside_window(self):
+        agent = ObservingAgent()
+        runtime = VoiceRuntime(
+            agent=agent, config=voice_config(), microphone=FakeMicrophone(),
+            recognizer=FakeRecognizer([VoiceUtterance("background chatter")]),
+            synthesizer=FakeSynthesizer(), player=FakePlayer(),
+            options=VoiceRuntimeOptions(user_id="alice"), output=lambda *args, **kwargs: None,
+            attention_gate=VoiceAttentionGate(config=VoiceAttentionConfig(open_window_seconds=0)),
+        )
+        with patch("xagent.interfaces.voice.runtime._PLAYBACK_MICROPHONE_COOLDOWN_SECONDS", 0.0):
+            asyncio.run(runtime.run_forever())
+        self.assertEqual(agent.kwargs["user_message"], "background chatter")
+        self.assertFalse(hasattr(agent, "observed"))
+
+    def test_room_participation_decider_receives_supported_arguments(self):
+        class DecidingAgent(ObservingAgent):
+            async def decide_participation(self, context, source, event_type):
+                self.decision_context = context
+                return {"should_reply": True}
+
+        agent = DecidingAgent()
+        runtime = VoiceRuntime(
+            agent=agent, config=voice_config(), microphone=FakeMicrophone(),
+            recognizer=FakeRecognizer([VoiceUtterance("hello there")]),
+            synthesizer=FakeSynthesizer(), player=FakePlayer(),
+            options=VoiceRuntimeOptions(user_id="alice"), output=lambda *args, **kwargs: None,
+            attention_gate=VoiceAttentionGate(config=VoiceAttentionConfig(open_window_seconds=0, wake_terms=["xBot"])),
+        )
+        with patch("xagent.interfaces.voice.runtime._PLAYBACK_MICROPHONE_COOLDOWN_SECONDS", 0.0):
+            asyncio.run(runtime.run_forever())
+        self.assertIn("hello there", agent.decision_context)
+        self.assertEqual(agent.kwargs["user_message"], "hello there")
+
     def test_tier_three_observes_without_chat(self):
         agent = ObservingAgent()
         config = voice_config()
         attention_gate = VoiceAttentionGate(
             config=VoiceAttentionConfig(
                 open_window_seconds=0.0,
-                wake_terms=[],
+                wake_terms=["xBot"],
                 use_decide_participation=False,
             )
         )

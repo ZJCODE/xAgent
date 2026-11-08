@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from .attention import VoiceAttentionConfig, VoiceAttentionGate, normalize_terms
-from .context_terms import agent_identity_terms, startup_context_terms
+from .context_terms import startup_context_terms
 from .config import (
     SONIOX_STT_CHANNELS,
     SONIOX_STT_SAMPLE_RATE,
@@ -78,7 +78,7 @@ def create_websocket_voice_runtime(
         channels=SONIOX_TTS_CHANNELS,
         playback_flow_control=options.direct_conversation,
     )
-    wake_terms = normalize_terms(list(config.attention.wake_terms) + agent_identity_terms(agent))
+    wake_terms = normalize_terms(list(config.attention.wake_terms))
     attention_gate = VoiceAttentionGate(
         config=VoiceAttentionConfig(
             open_window_seconds=config.attention.open_window_seconds,

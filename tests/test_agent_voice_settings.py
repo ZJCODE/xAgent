@@ -37,7 +37,7 @@ class AgentVoiceSettingsTests(unittest.TestCase):
             self.assertFalse(settings["configured"])
             self.assertFalse(settings["has_api_key"])
             self.assertFalse(settings["restart_required"])
-            self.assertEqual(set(settings), {"configured", "has_api_key", "voice", "speed", "interruptions",
+            self.assertEqual(set(settings), {"configured", "has_api_key", "voice", "speed", "interruptions", "wake_terms",
                                              "voice_options", "restart_required"})
             self.assertEqual([option["id"] for option in settings["voice_options"]], ["Nina", "Daniel"])
             response = self.client.patch("/api/agent/voice", json={"voice_api_key": "secret-soniox-key", "voice": "Nina"})
@@ -96,6 +96,16 @@ class AgentVoiceSettingsTests(unittest.TestCase):
         saved = load_config(self.agent_dir)["channels"]["voice"]
         self.assertEqual(saved, {"api_key": "keep-key", "voice": "Nina", "interruptions": False})
 
+
+    def test_wake_terms_round_trip_and_clear(self):
+        response = self.client.patch("/api/agent/voice", json={"voice_api_key": "key", "wake_terms": [" 小明 ", "hey bot", "小明", " "]})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(self.client.get("/api/agent/voice").json()["wake_terms"], ["小明", "hey bot"])
+        self.assertEqual(load_config(self.agent_dir)["channels"]["voice"]["wake_terms"], ["小明", "hey bot"])
+        response = self.client.patch("/api/agent/voice", json={"wake_terms": []})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(self.client.get("/api/agent/voice").json()["wake_terms"], [])
+        self.assertNotIn("wake_terms", load_config(self.agent_dir)["channels"]["voice"])
 
     def test_invalid_preference_types_leave_the_file_unchanged(self):
         original = (self.agent_dir / "config.yaml").read_text()

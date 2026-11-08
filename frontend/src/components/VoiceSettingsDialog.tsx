@@ -23,6 +23,7 @@ export function VoiceSettingsDialog({ onClose, onSaved }: {
   const [voice, setVoice] = useState("");
   const [speed, setSpeed] = useState(1);
   const [interruptions, setInterruptions] = useState(false);
+  const [wakeTerms, setWakeTerms] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [changingKey, setChangingKey] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -31,8 +32,9 @@ export function VoiceSettingsDialog({ onClose, onSaved }: {
   const [previewState, setPreviewState] = useState<VoicePreviewState>('idle');
   const [previewError, setPreviewError] = useState('');
   const preview = useRef<VoicePreviewPlayer | null>(null);
+  const parsedWakeTerms = [...new Set(wakeTerms.split(/\r?\n/).map((term) => term.trim()).filter(Boolean))];
   const dirty = Boolean(settings && (voice !== settings.voice || speed !== settings.speed
-    || interruptions !== settings.interruptions || apiKey.trim()));
+    || interruptions !== settings.interruptions || JSON.stringify(parsedWakeTerms) !== JSON.stringify(settings.wake_terms) || apiKey.trim()));
   const speeds = [...new Set([...SPEED_PRESETS, clampSpeed(speed)])].sort((a, b) => a - b);
 
   useEffect(() => {
@@ -57,6 +59,7 @@ export function VoiceSettingsDialog({ onClose, onSaved }: {
       setVoice(data.voice);
       setSpeed(clampSpeed(data.speed));
       setInterruptions(data.interruptions);
+      setWakeTerms(data.wake_terms.join("\n"));
       setChangingKey(!data.has_api_key);
     }).catch((err: unknown) => {
       if (!cancelled) setError(err instanceof Error ? err.message : String(err));
@@ -78,6 +81,7 @@ export function VoiceSettingsDialog({ onClose, onSaved }: {
     if (voice !== settings.voice) changes.voice = voice;
     if (speed !== settings.speed) changes.speed = speed;
     if (interruptions !== settings.interruptions) changes.interruptions = interruptions;
+    if (JSON.stringify(parsedWakeTerms) !== JSON.stringify(settings.wake_terms)) changes.wake_terms = parsedWakeTerms;
     try {
       const result = await updateAgentVoiceSettings(changes);
       onSaved(result);
@@ -135,6 +139,10 @@ export function VoiceSettingsDialog({ onClose, onSaved }: {
           </div>
           {previewError ? <p className="voice-preview-error" role="alert">{previewError}</p> : null}
         </div>
+        <WizardField label="Wake words" hint="Enter one phrase per line. Leave empty to treat all device speech as conversation. When set, speech during the conversation window or containing a wake word enters the conversation; other speech may be recorded as context.">
+          <textarea rows={3} value={wakeTerms} disabled={saving} placeholder="One phrase per line"
+            onChange={(event) => setWakeTerms(event.target.value)} />
+        </WizardField>
         <label className="voice-interruptions-row">
           <span className="voice-interruptions-copy">
             <span>Allow interruptions</span>
