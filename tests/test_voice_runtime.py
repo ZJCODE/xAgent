@@ -620,12 +620,13 @@ class SonioxSDKAdapterTests(unittest.TestCase):
         seen_chunks = []
         session_calls = 0
         reconnecting = Mock()
+        wake_connecting = Mock()
         utterance = VoiceUtterance("awake", "en")
         stt = SonioxRealtimeSTT(
             api_key="key",
             config=voice_config(),
             client=FakeClient(stt_session=FakeSTTSession([])),
-            callbacks=SonioxSTTCallbacks(on_reconnecting=reconnecting),
+            callbacks=SonioxSTTCallbacks(on_reconnecting=reconnecting, on_wake_connecting=wake_connecting),
             lifecycle=lifecycle,
         )
 
@@ -650,6 +651,7 @@ class SonioxSDKAdapterTests(unittest.TestCase):
 
         self.assertEqual(seen_chunks, [wake_chunk, following_chunk])
         self.assertEqual(session_calls, 2)
+        wake_connecting.assert_called_once_with()
         self.assertFalse(lifecycle.is_sleeping())
         reconnecting.assert_not_called()
 

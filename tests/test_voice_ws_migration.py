@@ -84,10 +84,10 @@ class VoiceWSMigrationTests(unittest.TestCase):
                          config.enable_interruptions, config.runtime_profile.echo_managed))
             return object(), object()
         for direct, profile in ((True, "headset"), (False, "room")):
-            bridge = SimpleNamespace(hello=SimpleNamespace(profile=profile, echo_managed=True, interruptions=True),
+            bridge = SimpleNamespace(hello=SimpleNamespace(profile=profile, echo_managed=True, interruptions=True, playback_buffer_ms=None),
                                      room_name="Test room", recognition_unavailable=lambda: None)
             with patch("xagent.interfaces.voice.factory.create_soniox_adapters", side_effect=adapters), patch.multiple(
-                "xagent.interfaces.voice.factory", WebSocketMicrophone=lambda *a, **k: object(),
+                "xagent.interfaces.voice.factory", WebSocketMicrophone=lambda *a, **k: SimpleNamespace(begin_wake_buffer=lambda: None),
                 WebSocketPlayer=lambda *a, **k: object(), VoiceRuntime=lambda **k: object(),
                 make_websocket_output_sink=lambda *a: object(),
             ):

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import time
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -32,6 +33,25 @@ class Bridge:
 
 
 class PlaybackAcknowledgementTests(unittest.IsolatedAsyncioTestCase):
+    async def test_legacy_device_does_not_receive_catchup_burst_after_tts_pause(self):
+        bridge = Bridge()
+        sent_at = []
+        def send(data):
+            sent_at.append(time.monotonic())
+        bridge.send_bytes = send
+        player = WebSocketPlayer(bridge)
+        def chunks():
+            yield b'\0\0' * 480
+            time.sleep(.15)
+            yield b'\0\0' * (480 * 5)
+        task = asyncio.create_task(asyncio.to_thread(player.play_chunks, chunks(), stop_event=threading.Event()))
+        self.addAsyncCleanup(self.cleanup_playback, bridge, task)
+        self.assertTrue(await asyncio.to_thread(bridge.done.wait, 2))
+        player.note_playback_finished(bridge.frames[0]['playback_id'])
+        await asyncio.wait_for(task, 1)
+        self.assertEqual(len(sent_at), 6)
+        self.assertTrue(all(b-a >= .015 for a,b in zip(sent_at[1:], sent_at[2:])), sent_at)
+
     async def begin(self, bridge, player=None):
         player = player or WebSocketPlayer(bridge)
         stop = threading.Event()
@@ -103,13 +123,13 @@ class PlaybackAcknowledgementTests(unittest.IsolatedAsyncioTestCase):
 
 
 class PlaybackFlowControlTests(unittest.IsolatedAsyncioTestCase):
-    async def start_playback(self, *, seconds=2, codec='pcm_s16le'):
+    async def start_playback(self, *, seconds=2, codec='pcm_s16le', buffer_ms=None):
         from xagent.interfaces.voice.transport_audio import AudioPacket
         from xagent.interfaces.voice.ws import PLAYBACK_WINDOW_SECONDS
         class Receiver(Bridge):
             def __init__(self):
                 super().__init__()
-                self.hello = VoiceSessionHello(type='hello', audio_protocol=2, codec=codec)
+                self.hello = VoiceSessionHello(type='hello', audio_protocol=2, codec=codec, playback_buffer_ms=buffer_ms)
                 self.received = 0
                 self.max_pending = 0
                 self.rendered = 0
@@ -136,9 +156,24 @@ class PlaybackFlowControlTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.gather(task, return_exceptions=True)
         self.addAsyncCleanup(cleanup)
         # Opus priming can leave <20 ms unused in the first window.
+        window = min(PLAYBACK_WINDOW_SECONDS, buffer_ms / 1000 * .8) if buffer_ms else PLAYBACK_WINDOW_SECONDS
         self.assertTrue(await asyncio.to_thread(bridge.wait_samples,
-            int(player.stream_sample_rate * (min(seconds, PLAYBACK_WINDOW_SECONDS) - .02))))
+            int(player.stream_sample_rate * (min(seconds, window) - .02))))
         return bridge, player, stop, task
+
+    async def test_device_buffer_uses_real_playback_credit_during_consumer_stall(self):
+        bridge, player, _, task = await self.start_playback(seconds=3, buffer_ms=1000)
+        window = int(24000 * .8)
+        await asyncio.sleep(.15)
+        self.assertLessEqual(bridge.received, window)
+        while bridge.received < 72000:
+            consumed = bridge.received
+            bridge.consume(player, consumed)
+            self.assertTrue(await asyncio.to_thread(bridge.wait_samples, min(72000, consumed + 4800)))
+            self.assertLessEqual(bridge.max_pending, window)
+        self.assertTrue(await asyncio.to_thread(bridge.done.wait, 1))
+        player.note_playback_finished(bridge.frames[0]['playback_id'])
+        await asyncio.wait_for(task, 1)
 
     async def test_renderer_stalls_do_not_earn_wall_clock_credit_or_overflow(self):
         from xagent.interfaces.voice.ws import PLAYBACK_WINDOW_SECONDS

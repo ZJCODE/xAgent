@@ -51,6 +51,7 @@ class VoiceSessionHello(BaseModel):
     user_id: str | None = Field(default=None, max_length=128)
     name: str = Field(default="", max_length=256)
     location: str = Field(default="", max_length=256)
+    playback_buffer_ms: int | None = Field(default=None, ge=200, le=5000, strict=True)
 
     @property
     def input_sample_rate(self) -> int:
@@ -194,7 +195,7 @@ class WebSocketMicrophone:
         self.channels = int(channels)
         self.stream_sample_rate = int(bridge.hello.input_sample_rate)
         self.stream_channels = int(bridge.hello.input_channels)
-        self._chunks: "queue.Queue[AudioPacket | tuple[str, int] | None]" = queue.Queue(maxsize=64)
+        self._chunks: "queue.Queue[AudioPacket | tuple[str, int] | None]" = queue.Queue(maxsize=160)
         self._closed = False
         self._stream = 0
         self._accepting_input = False
@@ -205,6 +206,12 @@ class WebSocketMicrophone:
         self._queue_lock = threading.Lock()
         self.consuming = threading.Event()
         self._last_consumed_at: float | None = None
+        self._wake_buffer_until = 0.0
+
+    def begin_wake_buffer(self) -> None:
+        """Allow bounded capture while a sleeping recognizer reconnects."""
+        with self._queue_lock:
+            self._wake_buffer_until = time.monotonic() + 5.0
 
     def start_input(self, stream_id: int) -> None:
         if stream_id <= self._stream:
@@ -238,11 +245,12 @@ class WebSocketMicrophone:
         if packet.sequence != self._sequence or abs(packet.timestamp - self._samples * 1_000_000 // self.stream_sample_rate) > 1:
             raise ValueError('Discontinuous input audio')
         with self._queue_lock:
-            if self._queued_samples + packet.samples > self.stream_sample_rate // 2:
+            limit = 3 * self.stream_sample_rate if time.monotonic() < self._wake_buffer_until else self.stream_sample_rate // 2
+            if self._queued_samples + packet.samples > limit:
                 logger.warning('Voice input overload codec=%s stream=%d queue_ms=%.1f packets=%d consumer_idle_ms=%s',
                                self.bridge.hello.codec, self._stream, self._queued_samples * 1000 / self.stream_sample_rate,
                                self._chunks.qsize(), None if self._last_consumed_at is None else round((time.monotonic() - self._last_consumed_at) * 1000))
-                raise AudioInputBackpressure('Audio input queue exceeded 500 ms')
+                raise AudioInputBackpressure(f'Audio input queue exceeded {limit * 1000 // self.stream_sample_rate} ms')
             self._put(packet)
             self._queued_samples += packet.samples
         self._sequence += 1
@@ -300,6 +308,8 @@ class WebSocketMicrophone:
                 with self._queue_lock:
                     self._queued_samples -= raw_chunk.samples
                     self._last_consumed_at = time.monotonic()
+                    if self._queued_samples <= self.stream_sample_rate // 2:
+                        self._wake_buffer_until = 0.0
                 if self.bridge.hello.codec == 'opus':
                     try:
                         raw_chunk = decoder.decode(raw_chunk)
@@ -406,16 +416,18 @@ class WebSocketPlayer:
     def _playback_timeout(self) -> None:
         self.bridge.send_json({"type": "error", "code": "playback_timeout", "message": "Playback confirmation timed out. Please try again."})
         async def close_timed_out():
-            await self.bridge.websocket.close(code=1011, reason="Playback confirmation timed out. Please try again.")
+            await self.bridge.websocket.close(code=1013, reason="Playback confirmation timed out. Please try again.")
         self.bridge._schedule_send(close_timed_out)
         self.bridge.closed.set()
-        raise TimeoutError("Browser playback confirmation timed out")
+        raise TimeoutError("Playback confirmation timed out")
 
     def _wait_for_capacity(self, samples: int, stop_event: threading.Event) -> None:
         # The receiver's media clock is the authority. A stalled renderer,
         # decoder burst or jitter-buffer refill must not earn wall-clock credit.
         with self._playback_lock:
-            window = int(self.stream_sample_rate * PLAYBACK_WINDOW_SECONDS)
+            buffer_ms = self.bridge.hello.playback_buffer_ms
+            window_seconds = min(PLAYBACK_WINDOW_SECONDS, buffer_ms / 1000 * 0.8) if buffer_ms else PLAYBACK_WINDOW_SECONDS
+            window = int(self.stream_sample_rate * window_seconds)
             rendered = self._rendered_samples
             wait_started = time.monotonic()
             deadline = wait_started + PLAYBACK_PROGRESS_TIMEOUT_SECONDS
@@ -461,6 +473,7 @@ class WebSocketPlayer:
         identity = {"playback_id": playback_id}
         self._stream += 1
         media_started = None
+        next_send_at = 0.0
         sent_bytes = 0
         last_send_time = None
         max_send_gap_ms = 0.0
@@ -487,7 +500,9 @@ class WebSocketPlayer:
                     interrupted = stop_event.is_set()
                 else:
                     # Existing paired-device clients may only confirm at EOS.
-                    while self.sent_samples / self.stream_sample_rate - (time.monotonic() - media_started) > 0.2:
+                    # Idle time is not playback credit: a delayed TTS chunk must
+                    # not burst all missing audio into a finite device queue.
+                    while time.monotonic() < next_send_at:
                         if stop_event.is_set() or self.bridge.closed.wait(0.02):
                             interrupted = stop_event.is_set()
                             break
@@ -498,6 +513,7 @@ class WebSocketPlayer:
                     self.sent_samples += chunk.samples
                 self.bridge.send_bytes(wire)
                 now = time.monotonic()
+                next_send_at = max(now, next_send_at) + chunk.samples / self.stream_sample_rate
                 if last_send_time is not None:
                     max_send_gap_ms = max(max_send_gap_ms, (now - last_send_time) * 1000)
                 last_send_time = now

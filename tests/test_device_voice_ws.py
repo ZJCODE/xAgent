@@ -232,6 +232,35 @@ class DeviceVoiceWebSocketTests(unittest.IsolatedAsyncioTestCase):
                 await host.device_service.revoke('desk')
                 await self.wait_for(lambda: not host.device_service.voice_sessions)
 
+    async def test_device_negotiates_playback_credit_and_reports_progress(self):
+        from xagent.interfaces.voice.transport_audio import AudioPacket
+        class BurstSynthesizer(_FakeWSSynthesizer):
+            def synthesize_chunks(self, *args, **kwargs):
+                yield b'\0\0' * (24000 * 3)
+        host, _, _, url = await self.start_host([(ReplyType.SIMPLE_REPLY, '好的。')])
+        with patch('xagent.interfaces.voice.factory.create_soniox_adapters', return_value=(_FakeWSRecognizer(), BurstSynthesizer())):
+            async with websockets.connect(url + '/ws/devices/living-speaker/voice', additional_headers={'Authorization': 'Bearer speaker-secret'}, **self.connection_options) as ws:
+                await ws.send(json.dumps(dict(type='hello', audio_protocol=2, codec='pcm_s16le', playback_buffer_ms=1000)))
+                self.assertEqual(json.loads(await ws.recv())['type'], 'ready')
+                self.assertTrue(host.device_service.voice_sessions['living-speaker'].player.playback_flow_control)
+                await self.send_audio(ws)
+                samples = 0
+                identity = None
+                while True:
+                    message = await asyncio.wait_for(ws.recv(), 4)
+                    if isinstance(message, bytes):
+                        samples += AudioPacket.unpack(message).samples
+                        await ws.send(json.dumps(dict(type='playback_progress', playback_id=identity, played_samples=samples, sample_rate=24000)))
+                    else:
+                        frame = json.loads(message)
+                        if frame['type'] == 'playback_start':
+                            identity = frame['playback_id']
+                        if frame['type'] == 'playback_done':
+                            await ws.send(json.dumps(dict(type='playback_finished', playback_id=identity)))
+                            break
+                self.assertEqual(samples, 72000)
+                await ws.send(json.dumps(dict(type='stop')))
+
     async def test_browser_three_turns_in_both_profiles_and_single_use_tickets(self):
         from xagent.core.runtime.client import RuntimeClient
         for codec in ('pcm_s16le', 'opus'):

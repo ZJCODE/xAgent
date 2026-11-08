@@ -65,6 +65,7 @@ class SonioxSTTCallbacks:
     on_recovered: _STT_RECOVERED | None = None
     on_connected: Callable[[], None] | None = None
     on_disconnected: Callable[[], None] | None = None
+    on_wake_connecting: Callable[[], None] | None = None
 
 
 class SonioxVoiceError(RuntimeError):
@@ -186,6 +187,8 @@ class SonioxRealtimeSTT:
                 if wake_chunk is None:
                     return
                 _logger.info("Voice activity detected; reopening Soniox STT session")
+                if self._callbacks.on_wake_connecting is not None:
+                    self._callbacks.on_wake_connecting()
                 # The chunk that crossed the wake threshold is speech, not just
                 # a trigger. Replay it into the new STT session so the first
                 # syllable is not lost.

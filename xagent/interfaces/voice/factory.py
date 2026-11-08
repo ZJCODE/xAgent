@@ -53,6 +53,11 @@ def create_websocket_voice_runtime(
         recent_speech_hours=config.presence.recent_speech_hours,
     )
     lifecycle = SttLifecycleController(presence_cfg)
+    microphone = WebSocketMicrophone(
+        bridge,
+        sample_rate=SONIOX_STT_SAMPLE_RATE,
+        channels=SONIOX_STT_CHANNELS,
+    )
     recognizer, synthesizer = create_soniox_adapters(
         config,
         # Browser capture must stop while STT is unavailable. Closing this
@@ -60,6 +65,7 @@ def create_websocket_voice_runtime(
         stt_callbacks=SonioxSTTCallbacks(
             on_reconnecting=bridge.recognition_unavailable if options.direct_conversation else None,
             on_disconnected=bridge.recognition_unavailable if options.direct_conversation else None,
+            on_wake_connecting=microphone.begin_wake_buffer,
         ),
         lifecycle=lifecycle,
     )
@@ -67,16 +73,11 @@ def create_websocket_voice_runtime(
     set_terms = getattr(recognizer, "set_extra_context_terms", None)
     if callable(set_terms):
         set_terms(extra_terms)
-    microphone = WebSocketMicrophone(
-        bridge,
-        sample_rate=SONIOX_STT_SAMPLE_RATE,
-        channels=SONIOX_STT_CHANNELS,
-    )
     player = WebSocketPlayer(
         bridge,
         sample_rate=SONIOX_TTS_SAMPLE_RATE,
         channels=SONIOX_TTS_CHANNELS,
-        playback_flow_control=options.direct_conversation,
+        playback_flow_control=options.direct_conversation or bridge.hello.playback_buffer_ms is not None,
     )
     wake_terms = normalize_terms(list(config.attention.wake_terms))
     attention_gate = VoiceAttentionGate(

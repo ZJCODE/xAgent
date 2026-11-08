@@ -102,6 +102,37 @@ class AudioProtocolTests(unittest.TestCase):
             chunks.close()
             mic.close()
 
+    def test_wake_buffer_preserves_audio_and_restores_normal_limit(self):
+        mic = WebSocketMicrophone(bridge(VoiceSessionHello(type='hello', audio_protocol=2, codec='pcm_s16le')))
+        mic.start_input(1)
+        mic.begin_wake_buffer()
+        for n in range(75):
+            mic.push_audio(AudioPacket(1, n, n * 20000, 320, 0, bytes([n, 0]) * 320).pack())
+        chunks = mic.iter_chunks(pause_event=threading.Event(), stop_event=threading.Event())
+        try:
+            self.assertEqual([next(chunks) for _ in range(75)], [bytes([n, 0]) * 320 for n in range(75)])
+            for n in range(75, 100):
+                mic.push_audio(AudioPacket(1, n, n * 20000, 320, 0, b'\0\0' * 320).pack())
+            with self.assertRaisesRegex(ValueError, '500 ms'):
+                mic.push_audio(AudioPacket(1, 100, 2000000, 320, 0, b'\0\0' * 320).pack())
+        finally:
+            chunks.close()
+            mic.close()
+
+    def test_wake_buffer_is_bounded_and_expires(self):
+        for expire in (False, True):
+            mic = WebSocketMicrophone(bridge(VoiceSessionHello(type='hello', audio_protocol=2, codec='pcm_s16le')))
+            mic.start_input(1)
+            with patch('xagent.interfaces.voice.ws.time.monotonic', return_value=10):
+                mic.begin_wake_buffer()
+                count = 25 if expire else 150
+                for n in range(count):
+                    mic.push_audio(AudioPacket(1, n, n * 20000, 320, 0, b'\0\0' * 320).pack())
+            with patch('xagent.interfaces.voice.ws.time.monotonic', return_value=16 if expire else 10):
+                with self.assertRaises(ValueError):
+                    mic.push_audio(AudioPacket(1, count, count * 20000, 320, 0, b'\0\0' * 320).pack())
+            mic.close()
+
 
 class RealOpusTests(unittest.TestCase):
     def test_sample_exact_round_trip_for_tiny_and_partial_frames(self):
