@@ -5,7 +5,7 @@ import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from xagent.interfaces.voice.attention import VoiceAttentionConfig, VoiceAttentionGate
 from xagent.interfaces.voice.presence import SttLifecycleController, VoicePresenceConfig, pcm16_rms
@@ -134,6 +134,25 @@ class ObservingAgent(FakeAgent):
 
 
 class VoiceAttentionRuntimeTests(unittest.TestCase):
+    def test_sleep_term_closes_window_and_wake_reopens_it(self):
+        config = voice_config()
+        config.wake_terms = ["xBot"]
+        config.sleep_terms = ["休息吧"]
+        runtime = VoiceRuntime(
+            agent=FakeAgent(), config=config, microphone=FakeMicrophone(),
+            recognizer=FakeRecognizer([]), synthesizer=FakeSynthesizer(), player=FakePlayer(),
+            options=VoiceRuntimeOptions(user_id="alice"), output=lambda *args, **kwargs: None,
+        )
+        runtime._reply_to_utterance = AsyncMock()
+        async def exercise():
+            await runtime._handle_utterance(VoiceUtterance("xBot 休息吧"))
+            self.assertEqual(runtime._attention.attention_tier("ordinary speech"), 3)
+            runtime._reply_to_utterance.assert_not_awaited()
+            await runtime._handle_utterance(VoiceUtterance("hey xBot"))
+            self.assertEqual(runtime._attention.attention_tier("ordinary speech"), 1)
+            runtime._reply_to_utterance.assert_awaited_once()
+        asyncio.run(exercise())
+
     def test_empty_wake_terms_dispatch_outside_window(self):
         agent = ObservingAgent()
         runtime = VoiceRuntime(

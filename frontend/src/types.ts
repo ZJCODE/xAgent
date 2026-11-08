@@ -293,6 +293,7 @@ export interface VoicePreferences {
   speed: number;
   interruptions: boolean;
   wake_terms: string[];
+  sleep_terms: string[];
 }
 
 export interface AgentVoiceSettings extends VoicePreferences {

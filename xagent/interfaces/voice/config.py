@@ -133,6 +133,7 @@ class VoiceAttentionConfigModel(BaseModel):
 
     open_window_seconds: float = Field(default=25.0, ge=0.0, le=120.0)
     wake_terms: list[str] = Field(default_factory=list)
+    sleep_terms: list[str] = Field(default_factory=list)
     use_decide_participation: bool = True
 
 
@@ -196,8 +197,9 @@ class VoiceChannelConfig(BaseModel):
     )
     interruptions: StrictBool = False
     wake_terms: list[str] = Field(default_factory=list)
+    sleep_terms: list[str] = Field(default_factory=list)
 
-    @field_validator("wake_terms")
+    @field_validator("wake_terms", "sleep_terms")
     @classmethod
     def _normalize_wake_terms(cls, value: list[str]) -> list[str]:
         from .attention import normalize_terms
@@ -269,6 +271,8 @@ class VoiceChannelConfig(BaseModel):
             public["speed"] = self.speaking_speed
         if self.wake_terms:
             public["wake_terms"] = self.wake_terms
+        if self.sleep_terms:
+            public["sleep_terms"] = self.sleep_terms
         return public
 
     def resolved_api_key(self) -> str:
@@ -333,11 +337,13 @@ class VoiceChannelConfig(BaseModel):
                 open_window_seconds=120.0,
                 use_decide_participation=False,
                 wake_terms=self.wake_terms,
+                sleep_terms=self.sleep_terms,
             )
         return VoiceAttentionConfigModel(
             open_window_seconds=25.0,
             use_decide_participation=True,
             wake_terms=self.wake_terms,
+            sleep_terms=self.sleep_terms,
         )
 
     @property
@@ -401,7 +407,7 @@ class VoiceChannelConfig(BaseModel):
             cleaned = term.strip()
             if cleaned and cleaned not in terms:
                 terms.append(cleaned)
-        for term in self.attention.wake_terms:
+        for term in self.attention.wake_terms + self.attention.sleep_terms:
             if term not in terms:
                 terms.append(term)
         return terms

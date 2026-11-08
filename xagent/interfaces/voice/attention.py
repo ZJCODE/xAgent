@@ -50,6 +50,9 @@ class VoiceAttentionGate:
     def mark_dispatched(self) -> None:
         self._window_open_until = time.monotonic() + max(0.0, self.config.open_window_seconds)
 
+    def close_window(self) -> None:
+        self._window_open_until = 0.0
+
     def attention_tier(self, transcript: str) -> int:
         if time.monotonic() <= self._window_open_until:
             return 1

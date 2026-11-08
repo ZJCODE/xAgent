@@ -64,6 +64,7 @@ class VoiceSettingsInput(BaseModel):
     )
     interruptions: StrictBool | None = None
     wake_terms: list[str] | None = None
+    sleep_terms: list[str] | None = None
 
 
 def voice_settings_status(config: dict) -> dict:
@@ -89,6 +90,7 @@ def voice_settings_status(config: dict) -> dict:
         "speed": voice.speaking_speed,
         "interruptions": voice.interruptions,
         "wake_terms": voice.wake_terms,
+        "sleep_terms": voice.sleep_terms,
         "voice_options": [{"id": name, "label": f"{name} · {description}"}
                           for name, description in SONIOX_SHARED_VOICE_OPTIONS],
     }

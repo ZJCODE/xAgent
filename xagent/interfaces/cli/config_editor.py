@@ -516,6 +516,7 @@ def prepare_voice_preset_update(
     speed: float | None = None,
     interruptions: bool | None = None,
     wake_terms: list[str] | None = None,
+    sleep_terms: list[str] | None = None,
 ) -> ConfigUpdate:
     normalized_provider = provider.strip().lower()
     if normalized_provider not in VOICE_PRESETS:
@@ -546,6 +547,8 @@ def prepare_voice_preset_update(
                 updated["interruptions"] = interruptions
             if wake_terms is not None:
                 updated["wake_terms"] = wake_terms
+            if sleep_terms is not None:
+                updated["sleep_terms"] = sleep_terms
             channels["voice"] = VoiceChannelConfig.from_dict(updated).to_public_dict()
         else:
             payload = VoiceChannelConfig.default_public_dict(api_key=resolved_api_key or SONIOX_KEY_PLACEHOLDER)
@@ -557,13 +560,15 @@ def prepare_voice_preset_update(
                 payload["interruptions"] = interruptions
             if wake_terms is not None:
                 payload["wake_terms"] = wake_terms
+            if sleep_terms is not None:
+                payload["sleep_terms"] = sleep_terms
             channels["voice"] = VoiceChannelConfig.from_dict(payload).to_public_dict()
 
     return prepare_update(
         config,
         mutate,
         ("channels.voice.api_key", "channels.voice.voice", "channels.voice.speed",
-         "channels.voice.interruptions", "channels.voice.wake_terms", "channels.voice.audio.input", "channels.voice.audio.output",
+         "channels.voice.interruptions", "channels.voice.wake_terms", "channels.voice.sleep_terms", "channels.voice.audio.input", "channels.voice.audio.output",
          "channels.voice.enabled"),
     )
 
@@ -764,6 +769,7 @@ def apply_agent_edit_setup(
             speed=selection.get("speed"),
             interruptions=selection.get("interruptions"),
             wake_terms=selection.get("wake_terms"),
+            sleep_terms=selection.get("sleep_terms"),
         )
     elif normalized == "search":
         update = prepare_search_provider_update(

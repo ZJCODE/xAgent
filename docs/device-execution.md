@@ -175,7 +175,11 @@ session begins with an attention window (25 seconds for `room`, 120 for
 `headset`), renewed after a completed turn. Speech in that window or containing
 a configured word enters conversation; matching ignores case and uses
 substrings. Outside the window, `room` asks the Agent whether to join, while
-`headset` records the speech as environmental context. Browser voice remains
+`headset` records the speech as environmental context. Configured sleep words
+close the attention window immediately without sending that utterance to the
+Agent; subsequent speech follows the same rules as after a normal timeout.
+Sleep words apply to paired devices and are most useful with wake words set.
+Browser voice remains
 direct conversation. Settings changes require an Agent restart.
 
 ### Audio protocol 2

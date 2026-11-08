@@ -27,7 +27,7 @@ from xagent.core.runtime import (
 )
 
 from .aggregator import iter_aggregated_utterances
-from .attention import VoiceAttentionConfig, VoiceAttentionGate
+from .attention import VoiceAttentionConfig, VoiceAttentionGate, transcript_mentions_term
 from .barge_in import BargeInConfig, BargeInEvaluator
 from .context_terms import refreshed_context_terms
 from .echo_guard import SelfInterruptionGuard
@@ -342,6 +342,9 @@ class VoiceRuntime:
             return
         if self._stt_lifecycle is not None:
             self._stt_lifecycle.note_endpoint()
+        if not self.options.direct_conversation and transcript_mentions_term(transcript, self.config.attention.sleep_terms):
+            self._attention.close_window()
+            return
         attribution = self._resolve_speaker(utterance)
         if not await self._should_reply_to_utterance(transcript, utterance, attribution):
             return
