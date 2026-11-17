@@ -27,6 +27,7 @@ except ImportError:  # pragma: no cover - POSIX platforms
     msvcrt = None
 
 from ..schemas import Message, MessageType, RoleType
+from ..schemas.message import is_internal_autonomous_message
 from .config import AgentConfig
 from .journal import JournalLLMService
 
@@ -46,6 +47,7 @@ class WorkingContextState:
             "covers_through_cursor": int(self.covers_through_cursor),
             "updated_at": float(self.updated_at),
             "summary": str(self.summary or ""),
+            "context_version": 2,
         }
 
     @classmethod
@@ -98,10 +100,23 @@ class WorkingContextStore:
             return WorkingContextState()
         if not isinstance(payload, dict):
             return WorkingContextState()
+        if payload.get("context_version") != 2:
+            # Old summaries may contain internal JSON. Reset coverage together
+            # with summary so real history is eligible for rebuilding.
+            return WorkingContextState()
         return WorkingContextState.from_dict(payload)
 
     def write(self, state: WorkingContextState) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        if self.path.exists():
+            raw = self.path.read_text(encoding="utf-8")
+            try:
+                legacy = json.loads(raw).get("context_version") != 2
+            except (ValueError, AttributeError):
+                legacy = True
+            backup = self.path.with_name(self.path.name + ".legacy")
+            if legacy and not backup.exists():
+                backup.write_text(raw, encoding="utf-8")
         payload = json.dumps(state.to_dict(), ensure_ascii=False, indent=2)
         tmp_path = self.path.with_suffix(self.path.suffix + ".tmp")
         tmp_path.write_text(payload + "\n", encoding="utf-8")
@@ -325,6 +340,18 @@ class WorkingContextCompactor:
         covers = max(0, int(state.covers_through_cursor))
         pending = latest - covers
         threshold = self.hot_window + self.roll_slack
+        # Legacy internal rows leave cursor gaps. Count eligible messages, not
+        # raw cursor distance, and preserve a full hot window of real history.
+        roll_boundary = None
+        get_recent = getattr(self.message_storage, "get_messages", None)
+        if callable(get_recent):
+            recent = await get_recent(count=threshold + 1)
+            recent = [m for m in recent if self._is_summarizable(m)]
+            cursors = [int((m.metadata or {}).get(AgentConfig.MESSAGE_STORAGE_CURSOR_KEY, 0)) for m in recent]
+            if cursors and all(cursors):
+                pending = sum(cursor > covers for cursor in cursors)
+                if len(cursors) > self.hot_window:
+                    roll_boundary = cursors[-self.hot_window - 1]
         if pending <= threshold:
             self._clear_retry()
             return WorkingContextView(
@@ -332,7 +359,7 @@ class WorkingContextCompactor:
                 covers_through_cursor=covers,
             )
 
-        roll_end = latest - self.hot_window
+        roll_end = roll_boundary if roll_boundary is not None else latest - self.hot_window
         if roll_end <= covers:
             self._clear_retry()
             return WorkingContextView(
@@ -439,7 +466,7 @@ class WorkingContextCompactor:
 
     @staticmethod
     def _is_summarizable(message: Message) -> bool:
-        if not str(message.content or "").strip():
+        if is_internal_autonomous_message(message) or not str(message.content or "").strip():
             return False
         if message.type == MessageType.MESSAGE:
             return message.role in (RoleType.USER, RoleType.ASSISTANT)

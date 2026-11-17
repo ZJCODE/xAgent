@@ -25,6 +25,7 @@ from ..config import AgentConfig
 from ..inbox import is_scheduled_work
 from ..journal_commits import JournalCommitStore, atomic_write_bytes, read_bytes
 from ...schemas import Message, MessageType, RoleType
+from ...schemas.message import is_internal_autonomous_message
 
 if TYPE_CHECKING:
     from ...components.memory import MarkdownMemory, Note, NoteStore, RelationshipStore
@@ -373,6 +374,7 @@ class MemoryHandler:
             start_exclusive=start_exclusive,
             end_inclusive=end_inclusive,
         )
+        recent_messages = [m for m in recent_messages if not is_internal_autonomous_message(m)]
         # Flush a full batch or a small tail that has waited long enough.
         new_messages = [m for m in recent_messages
                         if (self._storage_cursor_from_metadata(m.metadata) or 0)
@@ -389,10 +391,9 @@ class MemoryHandler:
         today = date.today()
         old_content = await asyncio.to_thread(read_bytes, self.memory.daily_path(today))
         if not recent_messages:
-            # Jump checkpoint forward.  If messages were deleted (id gap),
-            # leap to just before latest so the next cycle catches real data
-            # instead of inching forward one window at a time.
-            jump_to = max(end_inclusive, latest_message_id - self.diary_write_batch)
+            # A window may contain only internal legacy rows. Advancing beyond
+            # the inspected boundary could skip real messages in the next one.
+            jump_to = end_inclusive
             await self._prepare_and_commit_window(
                 today, old_content, "", start_exclusive, jump_to,
             )
@@ -481,6 +482,8 @@ class MemoryHandler:
 
         participants: dict[str, dict] = {}
         for message in messages:
+            if is_internal_autonomous_message(message):
+                continue
             if message.type != MessageType.MESSAGE:
                 continue
             if message.role != RoleType.USER:
@@ -635,6 +638,8 @@ class MemoryHandler:
 
     @staticmethod
     def _is_memory_worthy_experience(message: Message) -> bool:
+        if is_internal_autonomous_message(message):
+            return False
         if message.type == MessageType.MESSAGE:
             return bool(message.content.strip())
         if message.type != MessageType.CONTEXT_EVENT:

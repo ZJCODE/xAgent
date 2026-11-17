@@ -14,6 +14,14 @@ from ..utils.image_utils import (
 )
 
 
+def is_internal_autonomous_message(message) -> bool:
+    """Internal orchestration data, never ordinary conversation or diary input."""
+    metadata = message.metadata or {}
+    return (metadata.get("inbox_kind") == "autonomous_turn"
+            or metadata.get("source") == "autonomous"
+            or message.channel == "autonomous")
+
+
 class ImageContent(BaseModel):
     """Represents image content in a message."""
     format: str = Field(..., description="Image format (e.g., png, jpeg)")

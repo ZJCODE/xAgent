@@ -47,7 +47,9 @@ class AutonomousTests(unittest.IsolatedAsyncioTestCase):
         record = (await agent.turn_store.list_records())[0]
         self.assertEqual(record["source"], "autonomous")
         self.assertEqual(record["autonomous_tool_results"], 1)
-        self.assertIn("not a human instruction", MessageHandler._format_transcript_message_header(storage.messages[0]))
+        self.assertEqual(storage.messages, [])
+        self.assertIn("available_recipients", record["internal_input"])
+        self.assertIn("previous_wake", str(model.calls[0]))
         self.assertIsNone(agent.memory_handler.experience_messages)
         self.assertNotIn("No tools", str(model.instructions_calls))
 

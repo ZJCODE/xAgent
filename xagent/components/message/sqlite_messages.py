@@ -17,6 +17,13 @@ from ...schemas import Message, RoleType
 from ...utils.search_terms import normalize_terms, score_text
 
 
+# Filter before pagination so internal legacy rows cannot displace real messages.
+_PUBLIC_MESSAGE_SQL = """CASE WHEN json_valid(message_json) THEN
+    COALESCE(json_extract(message_json, '$.channel'), '') != 'autonomous'
+    AND COALESCE(json_extract(message_json, '$.metadata.source'), '') != 'autonomous'
+    AND COALESCE(json_extract(message_json, '$.metadata.inbox_kind'), '') != 'autonomous_turn'
+    ELSE 1 END"""
+
 MessageBatch = Union[Message, Sequence[Message]]
 
 
@@ -194,6 +201,7 @@ class MessageStorage:
                 f"""
                 SELECT id, message_json
                 FROM {MessageStorageConfig.TABLE_NAME}
+                WHERE {_PUBLIC_MESSAGE_SQL}
                 ORDER BY id DESC
                 LIMIT ? OFFSET ?
                 """,
@@ -284,6 +292,7 @@ class MessageStorage:
                 f"""
                 SELECT COUNT(*) AS message_count
                 FROM {MessageStorageConfig.TABLE_NAME}
+                WHERE {_PUBLIC_MESSAGE_SQL}
                 """
             ).fetchone()
         return int(row["message_count"]) if row is not None else 0
@@ -349,7 +358,7 @@ class MessageStorage:
                 f"""
                 SELECT id, message_json
                 FROM {MessageStorageConfig.TABLE_NAME}
-                WHERE id > ? AND id <= ?
+                WHERE id > ? AND id <= ? AND ({_PUBLIC_MESSAGE_SQL})
                 ORDER BY id ASC
                 """,
                 (start_exclusive, end_inclusive),
@@ -399,7 +408,7 @@ class MessageStorage:
                 ")"
             )
             params.extend([pattern, pattern, pattern])
-        conditions = [f"({' OR '.join(like_clauses)})"]
+        conditions = [f"({_PUBLIC_MESSAGE_SQL})", f"({' OR '.join(like_clauses)})"]
 
         if date_start:
             try:

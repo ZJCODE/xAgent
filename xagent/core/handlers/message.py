@@ -7,6 +7,7 @@ from ..config import AgentConfig
 from ..inbox import INBOX_KIND_METADATA_KEY, is_scheduled_work
 from ...components import MessageStorage
 from ...schemas import Message, RoleType, MessageType
+from ...schemas.message import is_internal_autonomous_message
 from ...schemas.attachment import (
     ATTACHMENT_METADATA_KEY,
     attachment_image_sources,
@@ -184,6 +185,8 @@ class MessageHandler:
         return await self._persist_message(event_msg)
 
     async def _persist_message(self, message: Message) -> Message:
+        if is_internal_autonomous_message(message):
+            return message
         stored = await self.message_storage.add_messages(message)
         if stored:
             return stored[0]
@@ -193,7 +196,14 @@ class MessageHandler:
         self,
         limit: int,
     ) -> List[Message]:
-        return await self.message_storage.get_messages(limit)
+        messages = await self.message_storage.get_messages(limit)
+        visible = [m for m in messages if not is_internal_autonomous_message(m)]
+        offset = len(messages)
+        while len(visible) < limit and len(messages) == limit:
+            messages = await self.message_storage.get_messages(limit, offset=offset)
+            offset += len(messages)
+            visible = [m for m in messages if not is_internal_autonomous_message(m)] + visible
+        return visible[-limit:] if limit > 0 else []
 
     @staticmethod
     def filter_conversation_messages(messages: List[Message]) -> List[Message]:
@@ -202,12 +212,13 @@ class MessageHandler:
             msg for msg in messages
             if msg.type == MessageType.MESSAGE
             and msg.role in (RoleType.USER, RoleType.ASSISTANT)
+            and not is_internal_autonomous_message(msg)
         ]
 
     @staticmethod
     def filter_context_events(messages: List[Message]) -> List[Message]:
         """Keep persisted environment observations/context events."""
-        return [msg for msg in messages if msg.type == MessageType.CONTEXT_EVENT]
+        return [msg for msg in messages if msg.type == MessageType.CONTEXT_EVENT and not is_internal_autonomous_message(msg)]
 
     @staticmethod
     def build_turn_context_messages(

@@ -97,7 +97,14 @@ same reflection call, with no separate novelty model or additional note database
 the existing exact-repeat check remains a small runtime safeguard.
 
 Autonomous turns share the normal tool catalog, workspace rules and turn lock.
-They are labelled as internal wakes rather than human messages. Foreground and
+Wake inputs, process text and control JSON are transient inputs/outputs,
+like tool-process data. They are retained in turn receipts, not written as
+user/assistant conversation messages. Only actual outward notifications enter
+chat history. Legacy internal rows are hidden before history pagination and
+excluded from search, working summaries, diary consolidation and people extraction.
+Old working summaries are rebuilt with their coverage cursor reset; their original
+file is retained with a `.legacy` suffix on replacement. Existing diary prose is
+not automatically rewritten. Foreground and
 scheduled requests interrupt them and wait for tool cleanup before taking over.
 Each wake uses at most 12 model iterations (or the agent's lower configured
 limit) and 180 seconds (or the agent's lower turn timeout), plus cleanup time.

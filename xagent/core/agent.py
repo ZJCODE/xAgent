@@ -523,6 +523,8 @@ class Agent:
             covers_through_cursor=working_context.covers_through_cursor,
             prompt_registry=getattr(msg_handler, "prompt_registry", None),
         )
+        if (user_msg.metadata or {}).get("inbox_kind") == InboxKind.AUTONOMOUS_TURN.value:
+            iteration_messages.append({"role": "user", "content": user_msg.content})
         input_messages = msg_handler.sanitize_input_messages(list(iteration_messages))
         return tool_specs, instructions, iteration_messages, input_messages
 
@@ -776,6 +778,7 @@ class Agent:
                 event_key=event_key, turn_id=ticket.turn_id, event_id=event_id,
                 channel=item.channel, user_id=item.user_id, room_name=item.room_name,
                 request_id=request_id, source=metadata.get("source"), inbox_kind=item.kind.value,
+                **({"internal_input": item.content} if item.kind is InboxKind.AUTONOMOUS_TURN else {}),
             )
             if not fresh:
                 self.inbox.discard(ticket)
