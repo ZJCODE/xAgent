@@ -1,7 +1,7 @@
 import asyncio
 import tempfile
 import unittest
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -125,6 +125,90 @@ class WeixinAdapterTests(unittest.TestCase):
         adapter._credentials = credentials
         adapter._context_tokens = state.load_context_tokens(credentials.account_id)
         return adapter, agent, client, state
+
+
+    def test_scheduled_rejection_waits_for_new_inbound_context(self):
+        from xagent.core.runtime.tasks import AsyncTaskScheduler
+        from xagent.integrations.weixin.client import WeixinApiError
+
+        async def run_case():
+            with tempfile.TemporaryDirectory() as root:
+                adapter, _, client, _ = self._adapter(root, text_max_chars=12)
+                now = datetime(2026, 6, 1, 10, tzinfo=timezone.utc)
+                task = enqueue_scheduled_task(task_type="message", content="first line\nsecond line",
+                    run_at=now, timezone_name="UTC", tasks_dir=root, channel="weixin",
+                    target={"user_id": "owner@im.wechat"})
+                adapter._context_tokens["owner@im.wechat"] = "old"
+                calls = []
+                async def send(**kwargs):
+                    calls.append((kwargs["text"], kwargs["context_token"]))
+                    if kwargs["text"] == "second line" and kwargs["context_token"] == "old":
+                        raise WeixinApiError("prepare failed", code=-99, payload={"ret": -99})
+                    return {}
+                client.send_text_message = send
+                scheduler = AsyncTaskScheduler(root, can_handle=lambda task: True,
+                    execute=adapter.execute_scheduled_task, deliver=adapter.deliver_scheduled_task,
+                    now_provider=lambda: now)
+                adapter.delivery_context_updated = scheduler.notify_delivery_context
+                await scheduler.tick()
+                self.assertEqual(scheduler.store.list_runs(task.task_id)[0]["status"], "waiting_context")
+                await scheduler.tick()
+                self.assertEqual(len(calls), 2)
+                adapter._remember_context("owner@im.wechat", "new")
+                await scheduler.tick()
+                self.assertEqual(scheduler.store.list_runs(task.task_id)[0]["status"], "succeeded")
+                self.assertEqual(calls, [("first line", "old"), ("second line", "old"), ("second line", "new")])
+        asyncio.run(run_case())
+
+    def test_context_arriving_during_rejection_is_not_lost(self):
+        from xagent.core.runtime.tasks import AsyncTaskScheduler
+        from xagent.integrations.weixin.client import WeixinApiError
+
+        async def run_case():
+            with tempfile.TemporaryDirectory() as root:
+                adapter, _, client, _ = self._adapter(root)
+                now = datetime(2026, 6, 1, 10, tzinfo=timezone.utc)
+                task = enqueue_scheduled_task(task_type="message", content="hello", run_at=now,
+                    timezone_name="UTC", tasks_dir=root, channel="weixin", target={"user_id": "owner@im.wechat"})
+                adapter._context_tokens["owner@im.wechat"] = "old"
+                async def send(**kwargs):
+                    if kwargs["context_token"] == "old":
+                        adapter._remember_context("owner@im.wechat", "new")
+                        raise WeixinApiError("prepare failed", code=-99)
+                    return {}
+                client.send_text_message = send
+                scheduler = AsyncTaskScheduler(root, can_handle=lambda task: True,
+                    execute=adapter.execute_scheduled_task, deliver=adapter.deliver_scheduled_task,
+                    now_provider=lambda: now)
+                adapter.delivery_context_updated = scheduler.notify_delivery_context
+                await scheduler.tick()
+                await scheduler.tick()
+                self.assertEqual(scheduler.store.list_runs(task.task_id)[0]["status"], "succeeded")
+        asyncio.run(run_case())
+
+
+    def test_permanent_rejection_and_lost_acknowledgement_stay_distinct(self):
+        from xagent.core.runtime.tasks import AsyncTaskScheduler
+        from xagent.integrations.weixin.client import WeixinApiError
+
+        async def run_case(error, expected):
+            with tempfile.TemporaryDirectory() as root:
+                adapter, _, client, _ = self._adapter(root)
+                now = datetime(2026, 6, 1, 10, tzinfo=timezone.utc)
+                task = enqueue_scheduled_task(task_type="message", content="hello", run_at=now,
+                    timezone_name="UTC", tasks_dir=root, channel="weixin", target={"user_id": "owner@im.wechat"})
+                adapter._context_tokens["owner@im.wechat"] = "old"
+                client.send_text_message = AsyncMock(side_effect=error)
+                scheduler = AsyncTaskScheduler(root, can_handle=lambda task: True,
+                    execute=adapter.execute_scheduled_task, deliver=adapter.deliver_scheduled_task,
+                    now_provider=lambda: now)
+                await scheduler.tick()
+                self.assertEqual(scheduler.store.list_runs(task.task_id)[0]["status"], expected)
+                self.assertEqual(client.send_text_message.await_count, 1)
+        for error, expected in [(WeixinApiError("invalid recipient", code=-99), "failed"),
+                                (TimeoutError("lost acknowledgement"), "needs_review")]:
+            with self.subTest(expected=expected):
+                asyncio.run(run_case(error, expected))
 
 
 def _process_until_idle(adapter, message):

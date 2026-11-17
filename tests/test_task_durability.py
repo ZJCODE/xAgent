@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from xagent.core.runtime.tasks import AsyncTaskScheduler, enqueue_scheduled_task, get_scheduled_task
 from xagent.core.runtime.task_store import TaskStore, aware, next_due
-from xagent.core.runtime.task_receipts import journal_delivery, note_task_tool
+from xagent.core.runtime.task_receipts import DeliveryContextRequired, journal_delivery, note_task_tool
 
 UTC = timezone.utc
 
@@ -40,6 +40,55 @@ class TaskDurabilityTests(unittest.IsolatedAsyncioTestCase):
 
     def runs(self, task):
         return TaskStore(self.root).list_runs(task.task_id)
+
+    async def test_context_wait_survives_restart_and_resumes_only_unsent_parts(self):
+        task = self.enqueue()
+        scheduler = self.scheduler()
+        accepted = []
+        ready = False
+        async def send(part):
+            if part == "image" and not ready:
+                raise DeliveryContextRequired("prepare failed", account_id="bot", user_id="alice", context_key="old")
+            accepted.append(part)
+            return {"accepted": True}
+        async def deliver(*args):
+            for part in ("text", "image"):
+                await journal_delivery(part, lambda part=part: send(part), payload=part)
+            return {"accepted": True}
+        scheduler.deliver = deliver
+        await scheduler.tick()
+        run_id = self.runs(task)[0]["id"]
+        self.assertEqual(self.runs(task)[0]["status"], "waiting_context")
+        self.assertEqual(accepted, ["text"])
+        scheduler = self.scheduler()
+        scheduler.deliver = deliver
+        scheduler.recover_running_tasks()
+        for channel, account, user, key in [("weixin", "bot", "alice", "new"),
+                ("api", "other", "alice", "new"), ("api", "bot", "bob", "new"),
+                ("api", "bot", "alice", "old")]:
+            scheduler.notify_delivery_context(channel, account, user, key)
+            await scheduler.tick()
+            self.assertEqual(self.runs(task)[0]["status"], "waiting_context")
+        ready = True
+        scheduler.notify_delivery_context("api", "bot", "alice", "new")
+        scheduler.notify_delivery_context("api", "bot", "alice", "new")
+        await scheduler.tick()
+        self.assertEqual(self.runs(task)[0]["status"], "succeeded")
+        self.assertEqual(accepted, ["text", "image"])
+        self.assertEqual(len(self.executed), 1)
+        self.assertEqual(scheduler.store.get_run(task.task_id, run_id)["deliveries"][1]["status"], "accepted")
+
+    async def test_context_wait_expires_without_sending(self):
+        task = self.enqueue(execution={"max_lateness_seconds": 60})
+        scheduler = self.scheduler()
+        async def reject(*args):
+            raise DeliveryContextRequired("no context", account_id="bot", user_id="alice", context_key="old")
+        scheduler.deliver = reject
+        await scheduler.tick()
+        self.now += timedelta(seconds=61)
+        await scheduler.tick()
+        self.assertEqual(self.runs(task)[0]["status"], "skipped")
+        self.assertEqual(len(self.executed), 1)
 
     async def test_uncertain_delivery_retained_and_tomorrow_still_runs(self):
         task = self.enqueue([{"kind": "daily", "time": "10:00:00"}])

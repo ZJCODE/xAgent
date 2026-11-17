@@ -222,7 +222,7 @@ class TaskStore:
                   payload["status"], task_id, revision))
             if cursor.rowcount != 1:
                 raise ValueError("Task changed while editing; refresh and retry")
-            for row in c.execute("SELECT data FROM runs WHERE task_id=? AND status IN ('pending','waiting_channel','retry_wait','result_ready')", (task_id,)).fetchall():
+            for row in c.execute("SELECT data FROM runs WHERE task_id=? AND status IN ('pending','waiting_channel','waiting_context','retry_wait','result_ready')", (task_id,)).fetchall():
                 run = json.loads(row[0])
                 if rescheduled:
                     run.update(status="skipped", error="Task was rescheduled before this execution resumed", finished_at=payload["updated_at"])
@@ -268,7 +268,7 @@ class TaskStore:
                 if rules and rules[0]["kind"] == "interval" and aware(rules[0]["end_at"], payload["timezone"]) < now:
                     if paused["next_due"]:
                         self._insert_run(c, payload, aware(paused["next_due"]), "skipped", now, error="Interval window ended while paused")
-                    for row in c.execute("SELECT data FROM runs WHERE task_id=? AND status IN ('pending','waiting_channel','retry_wait','result_ready')", (paused["id"],)).fetchall():
+                    for row in c.execute("SELECT data FROM runs WHERE task_id=? AND status IN ('pending','waiting_channel','waiting_context','retry_wait','result_ready')", (paused["id"],)).fetchall():
                         run = json.loads(row[0])
                         run.update(status="skipped", finished_at=stamp(now), error="Interval window ended while paused")
                         self.put_run(c, run)
@@ -317,9 +317,27 @@ class TaskStore:
             run["finished_at"] = stamp(now)
         c.execute("INSERT OR IGNORE INTO runs VALUES(?,?,?,?,?,?)", (run_id, payload["id"], stamp(due), status, "prepare", encode(run)))
 
+    def count_waiting_context(self):
+        with self.connect() as c:
+            return c.execute("SELECT count(*) FROM runs WHERE status='waiting_context'").fetchone()[0]
+
+    def resume_context(self, channel, account_id, user_id, context_key):
+        """Only fresh context for the same account and recipient releases a send."""
+        with self.transaction() as c:
+            for row in c.execute("SELECT data FROM runs WHERE status='waiting_context'").fetchall():
+                run = json.loads(row[0])
+                context = run.get("waiting_context", {})
+                if (run["snapshot"].get("delivery", {}).get("channel") != channel
+                        or context.get("account_id") != account_id
+                        or context.get("user_id") != user_id
+                        or context.get("context_key") == context_key):
+                    continue
+                run.update(status="result_ready", retry_at=None)
+                self.put_run(c, run)
+
     def claim(self, now, can_handle=lambda payload: True):
         with self.transaction() as c:
-            rows = c.execute("SELECT r.* FROM runs r JOIN tasks t ON t.id=r.task_id WHERE t.status='active' AND r.status IN ('pending','result_ready','retry_wait','waiting_channel') ORDER BY r.due_at").fetchall()
+            rows = c.execute("SELECT r.* FROM runs r JOIN tasks t ON t.id=r.task_id WHERE t.status='active' AND r.status IN ('pending','result_ready','retry_wait','waiting_channel','waiting_context') ORDER BY r.due_at").fetchall()
             for row in rows:
                 run = json.loads(row["data"])
                 if run["status"] != "waiting_channel" and run.get("retry_at") and aware(run["retry_at"]) > now:
@@ -332,7 +350,7 @@ class TaskStore:
                     self._finish_task(c, run)
                     continue
                 if not can_handle(run["snapshot"]):
-                    if run["status"] != "waiting_channel":
+                    if run["status"] not in {"waiting_channel", "waiting_context"}:
                         run.update(status="waiting_channel", retry_at=None, error="Delivery channel is unavailable")
                         self.put_run(c, run)
                     continue
@@ -343,6 +361,8 @@ class TaskStore:
                 if not run.get("manual_retry") and c.execute("SELECT 1 FROM runs WHERE task_id=? AND due_at>? AND status NOT IN ('skipped')", (run["task_id"], run["due_at"])).fetchone():
                     run.update(status="skipped", finished_at=stamp(now), error="Superseded by a newer occurrence")
                     self.put_run(c, run)
+                    continue
+                if run["status"] == "waiting_context":
                     continue
                 run.update(status="delivering" if run.get("result") else "executing",
                            phase="deliver" if run.get("result") else "prepare",
@@ -367,7 +387,7 @@ class TaskStore:
     @staticmethod
     def _finish_task(c, run):
         row = c.execute("SELECT * FROM tasks WHERE id=?", (run["task_id"],)).fetchone()
-        if row and row["next_due"] is None and not c.execute("SELECT 1 FROM runs WHERE task_id=? AND status IN ('pending','executing','delivering','result_ready','retry_wait','waiting_channel')", (run["task_id"],)).fetchone():
+        if row and row["next_due"] is None and not c.execute("SELECT 1 FROM runs WHERE task_id=? AND status IN ('pending','executing','delivering','result_ready','retry_wait','waiting_channel','waiting_context')", (run["task_id"],)).fetchone():
             payload = json.loads(row["payload"])
             recurring = bool(payload.get("recurrence"))
             status = "completed" if recurring or run["status"] in {"succeeded", "skipped"} else run["status"]

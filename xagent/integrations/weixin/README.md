@@ -56,3 +56,20 @@ instruction to rerun setup. It does not auto-login in the background.
 Typing indicators use `getconfig` plus `sendtyping`; message streaming is sent
 as ordered final messages because normal WeChat bot chats do not reliably render
 `GENERATING` updates as editable bubbles.
+
+Scheduled delivery recovery:
+
+- A parsed API business rejection is recorded as unsent rather than an unknown
+  acknowledgement. `prepare failed` and explicit context-token rejections retain
+  the prepared result in `waiting_context`; missing cached context does the same.
+  This classification does not assert that `prepare failed` proves token expiry.
+- A fresh inbound context for the same bot account and recipient releases the
+  prepared result for delivery. Accepted text/media parts are not sent again.
+  Context tokens are not stored in task records; only their SHA-256 fingerprints
+  are used to detect a change. Cached context is checked again after restart.
+- Waiting results retain the task's existing execution deadline (normally 24
+  hours, bounded by interval end times), and newer occurrences supersede older
+  ones. They do not retry on a timer with the same context.
+- Lost acknowledgements and ambiguous transport errors still require review.
+  Historical review records are not automatically replayed. Runtime task status
+  includes a `waiting_context` count, and run details expose the waiting stage.

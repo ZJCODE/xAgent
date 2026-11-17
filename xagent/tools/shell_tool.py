@@ -1,6 +1,8 @@
 import asyncio
 import functools
 import logging
+import os
+import signal
 from typing import Optional
 
 from xagent.core.config import AgentConfig
@@ -71,6 +73,31 @@ def create_workspace_run_command_tool(default_working_directory: str):
     return workspace_run_command
 
 
+async def _stop_process_tree(process):
+    """Bound cleanup even when descendants retain the output pipes."""
+    def send(sig):
+        try:
+            if os.name == "posix":
+                os.killpg(process.pid, sig)
+            elif process.returncode is None:
+                process.kill()
+        except ProcessLookupError:
+            pass
+
+    send(signal.SIGTERM)
+    try:
+        await asyncio.wait_for(process.wait(), timeout=1)
+    except asyncio.TimeoutError:
+        pass
+    finally:
+        # The shell may have exited while its descendants are still alive.
+        send(signal.SIGKILL if os.name == "posix" else signal.SIGTERM)
+    try:
+        await asyncio.wait_for(process.communicate(), timeout=1)
+    except asyncio.TimeoutError:
+        pass
+
+
 async def _run_shell_command(
     command: str,
     working_directory: Optional[str] = None,
@@ -105,6 +132,7 @@ async def _run_shell_command(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=cwd,
+            start_new_session=os.name == "posix",
         )
         stdout_bytes, stderr_bytes = await asyncio.wait_for(
             process.communicate(), timeout=timeout
@@ -125,12 +153,7 @@ async def _run_shell_command(
         }
 
     except asyncio.TimeoutError:
-        # Kill the timed-out process
-        try:
-            process.kill()  # type: ignore[possibly-undefined]
-            await process.wait()  # type: ignore[possibly-undefined]
-        except Exception:
-            pass
+        await _stop_process_tree(process)
         return {
             "stdout": "",
             "stderr": (
@@ -140,6 +163,10 @@ async def _run_shell_command(
             ),
             "return_code": -1,
         }
+    except asyncio.CancelledError:
+        if "process" in locals():
+            await _stop_process_tree(process)
+        raise
     except Exception as e:
         logger.error("Command execution error: %s", e)
         return {

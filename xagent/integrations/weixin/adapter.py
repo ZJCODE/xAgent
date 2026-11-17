@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import hashlib
 import logging
 import mimetypes
 import re
@@ -14,7 +15,7 @@ from urllib.parse import unquote, urlparse
 
 from ...core.agent import Agent
 from ...core.config import AgentConfig
-from ...core.runtime.task_receipts import is_strict_task_delivery, journal_delivery
+from ...core.runtime.task_receipts import DeliveryContextRequired, DeliveryRejectedError, is_strict_task_delivery, journal_delivery
 from ...core.runtime import (
     ScheduledDeliveryContext,
     collect_scheduled_turn_events,
@@ -39,7 +40,7 @@ from ...utils.image_utils import (
     workspace_blob_relative_path,
     workspace_blob_url,
 )
-from .client import SESSION_EXPIRED_ERRCODE, WeixinClient, _error_code, raise_for_api_error
+from .client import SESSION_EXPIRED_ERRCODE, WeixinApiError, WeixinClient, _error_code, raise_for_api_error
 from .config import WeixinAdapterConfig
 from .media import ITEM_FILE, ITEM_IMAGE, ITEM_TEXT, ITEM_VIDEO, ITEM_VOICE, InboundMedia, download_inbound_media, upload_outbound_media
 from .send import extract_text, make_client_id, split_text
@@ -151,6 +152,7 @@ class WeixinAdapter:
         self._client_closed = False
         self._poll_task: asyncio.Task | None = None
         self.runtime_activity = None
+        self.delivery_context_updated = None
 
     async def run(self) -> None:
         credentials = self.state_store.load_credentials(self.config.account_id)
@@ -158,6 +160,8 @@ class WeixinAdapter:
             raise RuntimeError("Weixin channel credentials are missing. Run: xagent weixin setup")
         self._credentials = credentials
         self._context_tokens = self.state_store.load_context_tokens(credentials.account_id)
+        for user_id, token in self._context_tokens.items():
+            self._notify_delivery_context(user_id, token)
         if self.client is None:
             self.client = WeixinClient(
                 base_url=credentials.base_url or self.config.base_url,
@@ -448,10 +452,16 @@ class WeixinAdapter:
             if self.config.send_typing:
                 await self._stop_typing(user_id, context_token)
 
+    def _notify_delivery_context(self, user_id, token):
+        if self.delivery_context_updated and self._credentials:
+            self.delivery_context_updated("weixin", self._credentials.account_id, user_id,
+                                          hashlib.sha256(token.encode()).hexdigest())
+
     def _remember_context(self, user_id: str, context_token: str) -> None:
         assert self._credentials is not None
         self._context_tokens[user_id] = context_token
         self.state_store.save_context_tokens(self._credentials.account_id, self._context_tokens)
+        self._notify_delivery_context(user_id, context_token)
 
     async def _build_inbound_payload(self, message: dict[str, Any]) -> _WeixinInboundPayload:
         item_list = [item for item in message.get("item_list") or [] if isinstance(item, dict)]
@@ -696,6 +706,15 @@ class WeixinAdapter:
                 response = await call()
                 raise_for_api_error(response, label)
                 return response
+            except WeixinApiError as exc:
+                # Only a parsed business rejection is known unsent. HTTP failures,
+                # malformed replies and lost acknowledgements remain uncertain.
+                if exc.code is not None and exc.status_code == 0:
+                    raise DeliveryRejectedError(str(exc)) from exc
+                last_error = exc
+                if attempt >= attempts:
+                    break
+                await asyncio.sleep(self.config.send_retry_delay_seconds * attempt)
             except Exception as exc:
                 last_error = exc
                 if attempt >= attempts:
@@ -750,8 +769,12 @@ class WeixinAdapter:
         if not user_id:
             raise ValueError("scheduled Weixin task is missing user_id")
         context_token = self._context_tokens.get(user_id)
+        def waiting(message):
+            return DeliveryContextRequired(message,
+                account_id=self._credentials.account_id if self._credentials else self.config.account_id,
+                user_id=user_id, context_key=hashlib.sha256((context_token or "").encode()).hexdigest())
         if not context_token:
-            raise ValueError(f"scheduled Weixin task cannot send to {user_id}: no cached context_token")
+            raise waiting("No cached Weixin delivery context")
         result = _WeixinScheduledTaskResult(str(prepared.get("content") or ""), [
             _WeixinOutboundAttachment(kind=item["kind"], path=Path(item["path"]),
                                       caption=str(item.get("caption") or ""), blob_url=str(item.get("blob_url") or ""))
@@ -759,13 +782,23 @@ class WeixinAdapter:
         ])
         if not result.content and not result.attachments:
             raise ValueError("scheduled Weixin task produced no content")
-        await self._send_text_and_attachments(
-            user_id=user_id,
-            context_token=context_token,
-            content=result.content,
-            attachments=result.attachments,
-            stable_key=f"scheduled:{run_id}",
-        )
+        try:
+            await self._send_text_and_attachments(
+                user_id=user_id,
+                context_token=context_token,
+                content=result.content,
+                attachments=result.attachments,
+                stable_key=f"scheduled:{run_id}",
+            )
+        except DeliveryRejectedError as exc:
+            message = str(exc).lower()
+            if "prepare failed" not in message and not ("context" in message and "token" in message):
+                raise
+            # A message may arrive while the failed request is in flight. Notify
+            # after the scheduler has persisted waiting_context to avoid a lost wakeup.
+            asyncio.get_running_loop().call_soon(
+                self._notify_delivery_context, user_id, self._context_tokens.get(user_id, ""))
+            raise waiting(str(exc)) from exc
         return {"accepted": True, "transport": "weixin", "request_id": run_id}
 
     async def deliver_subconscious_message(self, delivery: SubconsciousDelivery) -> None:

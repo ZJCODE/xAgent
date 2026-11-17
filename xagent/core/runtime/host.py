@@ -199,16 +199,16 @@ class RuntimeHost:
 
             self.control_app = self._create_control_app()
             await self._start_control_server()
-            for channel in channels:
-                try:
-                    await self._start_channel(channel)
-                except Exception as exc:
-                    self._channel_failed(channel, exc)
             self.scheduler = AsyncTaskScheduler(
                 self.runner.tasks_dir, can_handle=self._can_handle_task,
                 execute=self._execute_task, deliver=self._deliver_task,
                 shutdown_timeout_seconds=10.0,
             )
+            for channel in channels:
+                try:
+                    await self._start_channel(channel)
+                except Exception as exc:
+                    self._channel_failed(channel, exc)
             await self.scheduler.start()
             self.heartbeat = create_runtime_heartbeat(
                 self.agent, self.runner.config.get("runtime"),
@@ -590,6 +590,7 @@ class RuntimeHost:
             from ...interfaces.cli.channels import weixin_config
 
             adapter = WeixinAdapter(agent=self.agent, config=WeixinAdapterConfig.from_dict(weixin_config(config)), runtime_dir=self.config_dir)
+            adapter.delivery_context_updated = self.scheduler.notify_delivery_context
             self.adapters[channel] = adapter
             run = adapter.run()
         else:

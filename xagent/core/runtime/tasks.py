@@ -15,7 +15,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterator, Optional
 
-from .task_receipts import DeliveryUncertainError, strict_task_delivery
+from .task_receipts import DeliveryContextRequired, DeliveryRejectedError, DeliveryUncertainError, strict_task_delivery
 
 
 from .scheduler import (
@@ -685,6 +685,10 @@ class AsyncTaskScheduler:
     def wake(self):
         self._wake_event.set()
 
+    def notify_delivery_context(self, channel, account_id, user_id, context_key):
+        self.store.resume_context(channel, account_id, user_id, context_key)
+        self.wake()
+
     def channel_tasks(self, channel):
         return {t for t, (r, _) in self._inflight_records.items() if r.delivery_channel == channel and not t.done()}
 
@@ -693,7 +697,8 @@ class AsyncTaskScheduler:
         return {"running": self.is_running, "inflight": len(self._inflight),
                 "pending": sum(r.status in {"active", "paused"} for r in records),
                 "failed": sum(r.status == "failed" or (r.payload.get("last_run_status") == "failed" and not r.payload.get("last_run_resolved")) for r in records),
-                "needs_review": sum(bool(r.payload.get("unresolved_runs")) for r in records)}
+                "needs_review": sum(bool(r.payload.get("unresolved_runs")) for r in records),
+                "waiting_context": self.store.count_waiting_context()}
 
     async def get_status(self):
         return self.status_snapshot()
@@ -807,17 +812,24 @@ class AsyncTaskScheduler:
             # handler has stopped. Do not overwrite accepted per-part receipts.
             raise
         except Exception as exc:
+            if isinstance(exc, DeliveryContextRequired):
+                run.update(status="waiting_context", waiting_context=exc.context,
+                           failure_stage="deliver", error=_safe_error_summary(exc),
+                           error_type=type(exc).__name__, retry_at=None,
+                           attempt_finished_at=stamp(self._now()), finished_at=None)
+                self.store.save_run(run)
+                return
             phase = run["phase"]
             parts = self.store.get_run(record.task_id, run["id"])["deliveries"]
             uncertain = isinstance(exc, DeliveryUncertainError) or (phase == "prepare" and run.get("unsafe_tools_started"))
             if phase == "deliver":
                 uncertain = uncertain or any(p["status"] in {"sending", "needs_review"} and p.get("uncertain_on_error", True) for p in parts)
-                if not parts and not isinstance(exc, ValueError):
+                if not parts and not isinstance(exc, (ValueError, DeliveryRejectedError)):
                     uncertain = True
             transient = isinstance(exc, (ConnectionError, TimeoutError)) or isinstance(exc, PreparationError) and exc.retryable
             # A failed upload is known unsent and may be retried. A network send
             # with an unknown acknowledgement always requires review instead.
-            transient = transient or phase == "deliver" and bool(parts) and not uncertain and not isinstance(exc, (ValueError, FileNotFoundError))
+            transient = transient or phase == "deliver" and bool(parts) and not uncertain and not isinstance(exc, (ValueError, FileNotFoundError, DeliveryRejectedError))
             retry = transient and not uncertain and run["attempt_count"] < 3
             delay = (30, 120)[min(run["attempt_count"] - 1, 1)]
             retry_at = self._now() + timedelta(seconds=delay)

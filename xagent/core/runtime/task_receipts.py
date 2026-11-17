@@ -11,6 +11,18 @@ class DeliveryUncertainError(RuntimeError):
     """A delivery may have reached its destination and must not be replayed."""
 
 
+class DeliveryRejectedError(RuntimeError):
+    """The transport explicitly rejected this part; it was not accepted."""
+
+
+class DeliveryContextRequired(DeliveryRejectedError):
+    """Retain prepared output until the recipient supplies fresh context."""
+
+    def __init__(self, message, *, account_id, user_id, context_key):
+        super().__init__(message)
+        self.context = dict(account_id=account_id, user_id=user_id, context_key=context_key)
+
+
 _strict_delivery = contextvars.ContextVar("xagent_strict_task_delivery", default=False)
 
 
@@ -88,7 +100,7 @@ async def journal_delivery(part_id, operation, *, description="", uncertain_on_e
     try:
         result = await operation()
     except BaseException as exc:
-        part.update(status="needs_review" if uncertain_on_error else "failed", error=type(exc).__name__)
+        part.update(status="needs_review" if uncertain_on_error and not isinstance(exc, DeliveryRejectedError) else "failed", error=type(exc).__name__)
         store.save_delivery(run["id"], part)
         raise
     part.update(status="accepted", receipt=result if isinstance(result, dict) else {}, finished_at=now().isoformat())
