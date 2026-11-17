@@ -225,10 +225,10 @@ class AgentConfig:
 
     # ============================================================
     # 10. Runtime Heartbeat
-    # Keepalive / liveness signal emitted by the agent loop.
+    # Wake background maintenance and reflection without waiting for model calls.
     # ============================================================
     RUNTIME_HEARTBEAT_ENABLED = True
-    RUNTIME_HEARTBEAT_INTERVAL_SECONDS = 300
+    RUNTIME_HEARTBEAT_INTERVAL_SECONDS = 60
 
     # Flush even a small pending diary batch once its oldest message has waited
     # this long. Heartbeat checks bound the polling granularity. 0 disables.

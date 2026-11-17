@@ -269,7 +269,8 @@ class BaseAgentRunner:
                 self._validate_non_negative_int(agent_cfg["subconscious_interval_seconds"], "agent.subconscious_interval_seconds")
             elif "subconscious_activity" in agent_cfg:
                 activity = agent_cfg["subconscious_activity"]
-                heartbeat = (config.get("runtime") or {}).get("heartbeat_interval_seconds", AgentConfig.RUNTIME_HEARTBEAT_INTERVAL_SECONDS)
+                # Preserve the old probability's cadence (legacy default: 300s).
+                heartbeat = (config.get("runtime") or {}).get("heartbeat_interval_seconds", 300)
                 agent_cfg["subconscious_interval_seconds"] = max(1, round(float(heartbeat) / activity)) if activity else 0
             agent_cfg.pop("subconscious_activity", None)
             if "diary_context_days" in agent_cfg:

@@ -4,7 +4,7 @@
 
 ## 调度
 
-配置 `agent.subconscious_interval_seconds`，默认 1800 秒，0 表示关闭。心跳负责检查，实际触发粒度受 `runtime.heartbeat_interval_seconds`（默认 300 秒）影响。日记与周期摘要在独立维护任务中执行，不阻塞潜意识检查。
+配置 `agent.subconscious_interval_seconds`，默认 1800 秒，0 表示关闭。心跳每 60 秒检查一次，可通过 `runtime.heartbeat_interval_seconds` 调整；这只决定检查频率，模型仍按潜意识间隔调用。日记与周期摘要在独立维护任务中执行，不阻塞潜意识检查。
 
 启动时从当前单调时钟安排首次思考；到期但前台忙就等后续心跳，不消耗本次机会。实际开始一次思考时安排下次时间，空结果、模型错误、投递错误均不改变间隔。不补跑错过的轮次，同一进程不会并发执行多个潜意识循环。
 
