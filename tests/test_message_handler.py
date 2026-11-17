@@ -188,7 +188,7 @@ class MessageHandlerMemoryContextTests(unittest.TestCase):
         self.assertNotIn("CORE INTERACTION RULES", core)
         self.assertIn("**Self and Memory:**", core)
         self.assertIn("Match the language used by the current human speaker", core)
-        self.assertIn("subconscious wording, and memory writing", core)
+        self.assertIn("For private reflection and memory, use the language natural to the relevant experience", core)
         self.assertEqual(messages[1]["content"], AgentConfig.TOOL_POLICY_BASELINE)
         self.assertNotIn("generate_memory_summary", messages[1]["content"])
         self.assertNotIn("<capability_limits>", messages[0]["content"])

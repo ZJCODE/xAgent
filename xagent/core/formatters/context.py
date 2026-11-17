@@ -71,3 +71,17 @@ def sanitize_room_context_field(value: Optional[str]) -> Optional[str]:
 
 def _room_context_sort_key(entry: RoomContextEntry) -> float:
     return entry.occurred_at.timestamp()
+
+
+def format_recipient_label(recipient_id: Optional[str], metadata: Optional[dict] = None) -> str:
+    """Describe an explicit outbound addressee, without inferring one from nearby speech."""
+    from ...components.memory import format_speaker_label
+
+    sub = (metadata or {}).get("subconscious")
+    recipient = sub.get("recipient") if isinstance(sub, dict) and sub.get("source") == "subconscious" else None
+    recipient = recipient if isinstance(recipient, dict) else {}
+    target = recipient.get("target") if isinstance(recipient.get("target"), dict) else {}
+    user_id = str(recipient_id or recipient.get("user_id") or target.get("user_id") or "").strip()
+    target_id = str(recipient.get("user_id") or target.get("user_id") or "").strip()
+    name = str(target.get("sender_name") or target.get("display_name") or "") if user_id == target_id else ""
+    return format_speaker_label(user_id, name) if user_id else ""

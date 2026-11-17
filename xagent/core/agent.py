@@ -581,6 +581,7 @@ class Agent:
         return await memory_handler.get_relationship_context(
             speaker_keys=[speaker_key],
             participant_keys=participant_keys,
+            include_routing_id=True,
         )
 
     async def __call__(
@@ -1462,7 +1463,7 @@ class Agent:
             "<participation_decision>\n"
             f"Source: {source}\n"
             f"Event type: {event_type}\n\n"
-            "Recent group conversation:\n"
+            "Recent conversation and observations:\n"
             f"{context.strip()}\n\n"
             "Decide whether to reply now to this unattended interval. Prefer joining when you have something to add. "
             "Return JSON only:\n"

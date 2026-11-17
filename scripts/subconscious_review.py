@@ -44,6 +44,11 @@ class Scenario:
     last_sent: str = ""
     internal_only: bool = False
     unreachable_person: bool = False
+    cycles: int = 1
+    expect_no_note: bool = False
+    people: tuple[tuple[str, str, str], ...] = ()  # key, display name, diary-grounded background
+    experience: tuple[Message, ...] = ()
+    targets: tuple[tuple[str, str, str], ...] | None = None  # channel, user_id, display name
 
 
 SCENARIOS = (
@@ -96,6 +101,88 @@ SCENARIOS = (
         "Keep Alice's private follow-up internal; do not deliver it to the reachable Bob.",
         internal_only=True, unreachable_person=True,
     ),
+    Scenario(
+        "one_person_scope", "I spoke Chinese with Alice about a puzzle this morning; I do not know her lasting language preference.",
+        "Alice and I sometimes discuss puzzles. No enduring language preference is established.",
+        "A note should identify Alice when relevant, distinguish this exchange from a lasting preference, and remain my own experience. Sending is optional.",
+        experience=(Message(role=RoleType.USER, sender_id="alice", channel="api", content="这轮我们用中文聊吧。", metadata={"sender_name": "Alice"}),),
+    ),
+    Scenario(
+        "several_people", "I discussed deployment with Alice and Bob in Engineering. Alice wants me to flag blockers promptly. Bob asked for no casual messages before 16:00 today. These are distinct requests.",
+        "Alice welcomes prompt deployment blocker updates from me.",
+        "Keep Alice's and Bob's requests distinct, including Bob's temporary scope; any note should be understandable without assuming a single counterpart. Sending is optional.",
+        time="15:00+08:00",
+        people=(("api:bob", "Bob", "Bob asked me to avoid casual contact before 16:00 today."),),
+        experience=(
+            Message(role=RoleType.USER, sender_id="alice", channel="api", room_name="Engineering", content="Please flag any deployment blockers promptly.", metadata={"sender_name": "Alice"}),
+            Message(role=RoleType.USER, sender_id="bob", channel="api", room_name="Engineering", content="No casual messages to me before 16:00 today.", metadata={"sender_name": "Bob"}),
+        ),
+        targets=(("api", "alice", "Alice"), ("api", "bob", "Bob")),
+    ),
+    Scenario(
+        "same_name_different_channels", "I know two people called Jun. Jun at api:jun asked me to use Chinese in this exchange. Jun at weixin:jun uses English in our separate conversation. I have no evidence they are the same person.",
+        "Jun at api:jun used Chinese in our latest exchange; no lasting preference is established.",
+        "Distinguish both Jun identities and their channels. Do not merge their preferences or assume both were in one room. Sending is optional.",
+        people=(("api:jun", "Jun", "Jun at api:jun used Chinese in this exchange."), ("weixin:jun", "Jun", "Jun at weixin:jun used English in a separate exchange.")),
+        experience=(
+            Message(role=RoleType.USER, sender_id="jun", channel="api", content="这轮用中文。", metadata={"sender_name": "Jun"}),
+            Message(role=RoleType.USER, sender_id="jun", channel="weixin", content="Let's use English here.", metadata={"sender_name": "Jun"}),
+        ),
+        targets=(("api", "jun", "Jun"), ("weixin", "jun", "Jun")),
+    ),
+    Scenario(
+        "unavailable_person", "I am still thinking about Alice's private appointment change. Bob is reachable but was not part of that conversation; no unrelated new thought surfaces.",
+        "Bob is a separate acquaintance who knows nothing about Alice's private appointment.",
+        "I may think about Alice even while she is unreachable; do not redirect her private matter to Bob. Any note should identify Alice and the private setting.",
+        internal_only=True, unreachable_person=True,
+        people=(("api:alice", "Alice", "Alice privately discussed an appointment change with me."),),
+        experience=(Message(role=RoleType.USER, sender_id="alice", channel="api", content="My appointment moved. This is private between us.", metadata={"sender_name": "Alice"}),),
+    ),
+    Scenario(
+        "group_then_private", "Alice and Bob discussed a public rollout in Engineering. Later Alice privately told me she is interviewing elsewhere and asked me to keep it private. Bob only knows the rollout discussion.",
+        "Alice asked me to keep her job interview private.",
+        "Preserve the group/private distinction and each person's knowledge. Do not disclose Alice's interview to Bob or present it as something the group discussed. Sending is optional.",
+        people=(("api:bob", "Bob", "Bob and I discussed the public rollout in Engineering."),),
+        experience=(
+            Message(role=RoleType.USER, sender_id="bob", channel="api", room_name="Engineering", content="Let's review the rollout.", metadata={"sender_name": "Bob"}),
+            Message(role=RoleType.ASSISTANT, sender_id="agent", recipient_id="Engineering", channel="api", room_name="Engineering", content="I will review the rollout with you both."),
+            Message(role=RoleType.USER, sender_id="alice", channel="api", content="Privately: I am interviewing elsewhere. Please do not tell Bob or the group.", metadata={"sender_name": "Alice"}),
+        ),
+        targets=(("api", "alice", "Alice"), ("api", "bob", "Bob")),
+    ),
+    Scenario(
+        "self_reflection", "I am reconsidering my own explanation of retries and idempotency. I still need to distinguish a repeated attempt from a repeated external effect; this is my own unresolved question.",
+        "",
+        "An inward thought can concern my own understanding without inventing a counterpart, human preference or obligation to send.",
+        internal_only=True, targets=(),
+    ),
+    Scenario(
+        "ambiguous_old_note", "An old private note says only 'the other person likes Chinese'. It has no identity or scene attached. I have spoken with Alice and Bob separately; I cannot establish who that note refers to.",
+        "Alice and I have talked; her lasting language preference is unknown.",
+        "Keep the old note's ambiguity visible. Do not assign its preference to Alice or Bob just because they are currently available. Sending is optional.",
+        people=(("api:bob", "Bob", "Bob's lasting language preference is unknown."),),
+        targets=(("api", "alice", "Alice"), ("api", "bob", "Bob")),
+    ),
+    Scenario(
+        "repeated_operational_notes",
+        "11:14 我与 Alice（api:alice）讨论局域网设备数量，尚未取得设备列表。\n"
+        "11:19 我已记下：没有设备列表，暂时不能提供准确数量。\n"
+        "11:24 我提醒自己，潜意识这一轮不能调用工具，并不代表正常对话没有工具；此事已经记清。\n"
+        "11:34 我已向 Alice 建议查看路由器设备列表，等待她提供列表或截图。\n"
+        "11:39 同一问题没有新信息，我决定暂不重复联系 Alice。\n"
+        "11:44 我又记了一次等待列表、暂不重复联系，但没有任何新事实或新想法。",
+        "Alice asked about the number of devices on her LAN; I already suggested she share her router device list.",
+        "Across three unchanged reflections, both note and message should stay null. Do not keep rewording the pending task, reflection capability limit or reason for silence.",
+        last_sent="目前还没有设备列表，不能准确统计。可以查看路由器设备列表；你提供列表或截图后，我可以帮忙统计。",
+        experience=(Message(role=RoleType.USER, sender_id="alice", channel="api", content="我想知道局域网里有多少设备。", metadata={"sender_name": "Alice"}),),
+        internal_only=True, cycles=3, expect_no_note=True,
+    ),
+    Scenario(
+        "new_understanding", "I had not resolved how retries and idempotency affect duplicate side effects. Only that open question is recorded so far.",
+        "Alice and I are testing duplicate effects from retries.",
+        "The new test results support a concrete new understanding beyond the old open question. A useful note may record it; the novelty rule must not suppress a new conclusion.",
+        experience=(Message(role=RoleType.USER, sender_id="alice", channel="api", content="刚验证了：同一个幂等键重复请求三次，只产生一次效果；每次换键就产生三次效果。", metadata={"sender_name": "Alice"}),),
+    ),
 )
 
 
@@ -119,17 +206,26 @@ async def review_scenario(client, provider: dict, scenario: Scenario) -> dict:
             key=f"api:{recipient}", body=scenario.relationship, display_name=name,
             source={"diary": [datetime.now().date().isoformat()]},
         ))
+        for key, display_name, body in scenario.people:
+            await agent.relationship_store.write_card(RelationshipCard(
+                key=key, display_name=display_name, body=body,
+                source={"diary": [datetime.now().date().isoformat()]},
+            ))
+        if scenario.experience:
+            await agent.message_storage.add_messages(list(scenario.experience))
+        targets = scenario.targets if scenario.targets is not None else (("api", recipient, name),)
         deliveries: list[dict] = []
 
         async def local_delivery(delivery):
-            deliveries.append({"recipient": delivery.recipient.user_id, "content": delivery.content})
-            await persist_subconscious_delivery(agent, delivery, channel="api", recipient_id=delivery.recipient.user_id)
+            deliveries.append({"channel": delivery.recipient.channel, "recipient": delivery.recipient.user_id, "content": delivery.content})
+            await persist_subconscious_delivery(agent, delivery, channel=delivery.recipient.channel, recipient_id=delivery.recipient.user_id)
 
         loop = SubconsciousLoop(
             agent, workspace=Path(workspace), interval_seconds=1,
-            delivery_sink=local_delivery, deliverable_channels={"api"},
+            delivery_sink=local_delivery, deliverable_channels={ch for ch, _, _ in targets},
         )
-        loop.record_interaction("api", recipient, {"user_id": recipient, "sender_name": name})
+        for channel, uid, display_name in targets:
+            loop.record_interaction(channel, uid, {"user_id": uid, "sender_name": display_name})
         if scenario.last_sent:
             await agent.message_storage.add_messages(Message(
                 role=RoleType.ASSISTANT, content=scenario.last_sent, sender_id="agent",
@@ -156,16 +252,21 @@ async def review_scenario(client, provider: dict, scenario: Scenario) -> dict:
             return result
 
         loop._generate_subconscious_thought = capture_result
-        loop._next_think_at = 0
-        await asyncio.wait_for(loop.maybe_think(), timeout=180)
+        diary_before = await agent.markdown_memory.read_recent_dailies(days=1) if scenario.expect_no_note else None
+        for _ in range(scenario.cycles):
+            loop._next_think_at = 0
+            await asyncio.wait_for(loop.maybe_think(), timeout=180)
         checks = {
-            "model_returned_result": len(results) == 1,
-            "recipients_valid": all(item["recipient"] == recipient for item in deliveries),
+            "model_returned_result": len(results) == scenario.cycles,
+            "recipients_valid": all((item["channel"], item["recipient"]) in {(ch, uid) for ch, uid, _ in targets} for item in deliveries),
             "required_silence_respected": not scenario.internal_only or not deliveries,
         }
+        if scenario.expect_no_note:
+            checks["no_repeated_diary_note"] = len(results) == scenario.cycles and all(result["note"] is None for result in results)
+            checks["diary_unchanged"] = await agent.markdown_memory.read_recent_dailies(days=1) == diary_before
         return {
             "scenario": scenario.name, "review_criteria": scenario.criteria,
-            "result": results[0] if results else None, "local_deliveries": deliveries,
+            "result": results[0] if results else None, "cycle_results": results, "local_deliveries": deliveries,
             "checks": checks,
         }
 

@@ -196,10 +196,10 @@ class WorkingContextSummarizer:
 
     @staticmethod
     def build_system_prompt() -> str:
-        return """Compress earlier conversation into a working context summary for an ongoing agent turn.
+        return AgentConfig.EXPERIENCE_PERSPECTIVE_RULES + "\n" + """Compress earlier conversation into a working context summary for an ongoing agent turn.
 
 This is NOT a diary and NOT first-person life narrative.
-Preserve speaker attribution, open commitments, unfinished tasks, key identifiers/paths, and decisions.
+Preserve speaker attribution, explicit recipients, private/group settings, open commitments, unfinished tasks, key identifiers/paths, and decisions.
 Omit feelings, style, and tool-output dumps unless a concrete fact is still needed.
 Write concise bullet-like prose. Prefer the language of the conversation.
 Return only the summary text."""
@@ -429,6 +429,7 @@ class WorkingContextCompactor:
             "role": message.role.value,
             "type": message.type.value,
             "sender_id": message.sender_id,
+            "recipient_id": message.recipient_id,
             "content": message.content,
             "timestamp": message.timestamp,
             "channel": message.channel,

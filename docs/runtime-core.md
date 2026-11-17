@@ -2,6 +2,12 @@
 
 Each canonical Agent data directory has one operating-system lock and one runtime. The lock is acquired before constructing the Agent or recovering any work. API, Weixin and local voice share its Agent, attention loop, task scheduler and memory maintenance. A channel failure appears in status and does not stop the other channels.
 
+The Agent represents one continuing individual. A direct conversation, a group exchange, an observation and a private thought are experiences of that same individual. The current speaker anchors a response; neither that speaker nor the hosting account defines a separate self or owns its memory.
+
+Conversation, participation decisions, working summaries, diary entries, period summaries, memory projections and reflection reuse `AgentConfig.EXPERIENCE_PERSPECTIVE_RULES`. These short rules preserve who said or did what, to whom, and in which setting; distinguish observations from interpretations; and retain uncertainty and temporary scope. Known names are used naturally, with stable identities or channels when necessary to disambiguate. Names alone never merge people.
+
+History, diary input and working-summary input preserve explicit outbound `recipient_id` alongside speaker, channel and room. An old reply with no recipient stays unknown. Person references in relationship context identify people; the separate available-recipient list describes delivery addresses, without implying presence or disclosure permission. Private memory may concern people who cannot currently be contacted. This uses existing message fields, memory budgets and output protocols, without a new identity registry or inference pass.
+
 ## Commands
 
 ```sh

@@ -424,7 +424,7 @@ class SubconsciousLoop:
             limit=AgentConfig.history_fetch_depth(hot_window)
         )
         memory_context = await self._collect_memory_context()
-        relationship_context = await self._collect_relationship_context(contacts)
+        relationship_context = await self._collect_relationship_context(contacts, recent_messages)
         notebook_query = self._extract_notebook_recall_query(memory_context, recent_messages)
         notebook_context = await self._collect_notebook_context(notebook_query)
 
@@ -454,7 +454,8 @@ class SubconsciousLoop:
                        "name": c.target.get("sender_name") or c.target.get("display_name") or c.user_id}
                       for c in contacts]
         iteration_messages.append({"role": "user", "content":
-            "Available recipients (select the exact recipient identifier):\n" +
+            "Available recipients: delivery addresses only, not a list of people present or a reason to contact them. "
+            "People in your memories may be absent from this list. Select an exact recipient identifier only if sending.\n" +
             json.dumps(recipients, ensure_ascii=False)})
         input_messages = message_handler.sanitize_input_messages(list(iteration_messages))
         return instructions, input_messages
@@ -584,13 +585,20 @@ class SubconsciousLoop:
         # into the prompt.
         return ctx.strip() if isinstance(ctx, str) else ""
 
-    async def _collect_relationship_context(self, contacts: List[ContactEntry]) -> str:
+    async def _collect_relationship_context(self, contacts: List[ContactEntry], recent_messages: List[Any]) -> str:
         handler = getattr(self._agent, "memory_handler", None)
-        if not contacts or not callable(getattr(handler, "get_relationship_context", None)):
+        if not callable(getattr(handler, "get_relationship_context", None)):
+            return ""
+        from ..handlers.memory import MemoryHandler
+
+        people = MemoryHandler._extract_participants(list(reversed(recent_messages)))
+        keys = list(dict.fromkeys([p["key"] for p in people] +
+                                  [self._contact_key(c.channel, c.user_id) for c in contacts]))
+        if not keys:
             return ""
         try:
             return await handler.get_relationship_context(
-                speaker_keys=[self._contact_key(c.channel, c.user_id) for c in contacts],
+                speaker_keys=keys,
                 max_cards=AgentConfig.RELATIONSHIP_SUBCONSCIOUS_MAX_CARDS,
                 include_routing_id=True,
             )

@@ -462,6 +462,7 @@ class MemoryHandler:
             "role": message.role.value,
             "type": message.type.value,
             "sender_id": message.sender_id,
+            "recipient_id": message.recipient_id,
             "content": message.content,
             "timestamp": message.timestamp,
             "channel": message.channel,
@@ -526,8 +527,8 @@ class MemoryHandler:
         ``speaker_keys`` (the current speaker) are always included first;
         ``participant_keys`` (other people in the room) fill remaining budget.
         ``include_routing_id`` appends each person's ``user_id`` to the header
-        for callers that need an explicit identity; reply
-        turns leave it off so the identifier is never exposed to users.
+        for callers that need unambiguous person references. These references
+        do not establish contact availability or permission to disclose.
         """
         ordered_keys: list[str] = []
         seen: set[str] = set()
@@ -563,7 +564,7 @@ class MemoryHandler:
             ) or anonymous_contact_label(card.channel)
             body = card.body.strip()
             if include_routing_id and card.user_id:
-                header = f"## {name} [user_id: {card.user_id}] [recipient: {card.key}]"
+                header = f"## {name} [user_id: {card.user_id}] [person: {card.key}]"
             else:
                 header = f"## {name}"
             blocks.append(f"{header}\n{body}")

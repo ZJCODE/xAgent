@@ -1,7 +1,11 @@
 # Diary-derived memory: people and topics
 
-The diary is the Agent's authoritative first-person experience stream. Two small,
-regenerable views make future recollection easier:
+The diary is the Agent's authoritative first-person experience stream across
+direct conversations, group exchanges, observations and private reflection.
+These share one perspective and one diary. Entries identify relevant people and
+settings well enough to remain understandable outside the current chat, while
+keeping statements, observations, interpretations and intentions distinct.
+Two small, regenerable views make future recollection easier:
 
 | View | Question | Content |
 | --- | --- | --- |

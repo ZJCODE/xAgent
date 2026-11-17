@@ -5,6 +5,8 @@
 
 xAgent is a local-first AI agent platform that gives each agent its own identity, memory, workspace, and ongoing life.
 
+An Agent remains the same individual across conversations with one or many people, observations, and private reflection. Its diary is one continuing experience stream, with clear attribution to people and settings; what it remembers and what it chooses to share with a particular audience are separate decisions.
+
 Interact with your agents through the terminal, Web UI, voice, or Weixin, and manage them from a unified interactive launcher.
 
 ## Features
