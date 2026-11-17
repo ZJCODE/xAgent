@@ -75,6 +75,16 @@ Prepared results are persisted before delivery. Weixin records each text chunk, 
 
 `GET /api/tasks/{task_id}/runs` lists execution history and `GET /api/tasks/{task_id}/runs/{run_id}` returns attempts and delivery parts. The corresponding `POST .../{prepare|deliver|resolve}` actions retry safe preparation, reuse prepared results for known-unsent delivery, or mark an occurrence reviewed without sending. Confirmed success cannot be replayed; unsafe preparation and unknown sends cannot be retried through these actions. The Tasks page exposes history, retry times, failure stages and review actions. Store failures return a visible error and never acknowledge an unpersisted task.
 
+## Background maintenance and reflection
+
+Heartbeat ticks only wake work; they do not wait for model calls. MemoryHandler owns one coalescing worker for message-triggered diary writes and heartbeat-triggered weekly/monthly/yearly summaries. Requests arriving during maintenance are handled by that same worker, and committed backlog drains in bounded batches. Due summary requests remain pending across a date change. Reflection runs independently with at most one active cycle, so slow journal or summary generations do not delay its checks. Observability flushes with the independent reflection worker.
+
+A diary window is eligible when enough new messages accumulate or its oldest unprocessed message has waited `AgentConfig.DIARY_MAX_WAIT_SECONDS` (default six hours). Zero disables the age trigger. This uses persisted message timestamps, including after restart; `.last_interaction` is no longer read or written. Existing files are left untouched. Shutdown cancels the background memory worker before final forced maintenance; restart cancels it without starting a new diary generation.
+
+Working context reads use only `view_for_turn() -> WorkingContextView`. A failed read is logged and returns an empty view; generation continues without guessing older interfaces or interpreting bare strings as summaries. The compactor retains its own bounded background refresh, coverage cursor and retry cooldown.
+
+Participation decisions contain only a strict JSON boolean `should_reply` and an optional string `reason`. Extra fields, string booleans, numbers and malformed JSON are rejected and logged; the Agent returns a silent decision. The unused `addressing` field and heuristic embedded-JSON/type conversions have been removed. Voice consumes the same typed decision.
+
 ## Diary recovery
 
 First-person Markdown remains the durable long-term memory. Each maintenance window generates all fragments before preparing its commit receipt, including source cursors, dates, original checksums and replacement bytes. It atomically replaces and syncs diary files before advancing the existing cursor.

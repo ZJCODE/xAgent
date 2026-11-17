@@ -470,24 +470,10 @@ class Agent:
         if compactor is None:
             return WorkingContextView()
         try:
-            view_for_turn = getattr(compactor, "view_for_turn", None)
-            if callable(view_for_turn):
-                view = await view_for_turn()
-            else:
-                view = await compactor.ensure_fresh()
-            if isinstance(view, WorkingContextView):
-                return view
-            # Older fakes may still return a bare summary string.
-            return WorkingContextView(summary=str(view or ""))
-        except Exception as exc:
-            logger.warning("Working context compaction failed; falling back: %s", exc)
-            try:
-                return await compactor.current_view()
-            except Exception:
-                try:
-                    return WorkingContextView(summary=await compactor.current_summary())
-                except Exception:
-                    return WorkingContextView()
+            return await compactor.view_for_turn()
+        except Exception:
+            logger.warning("Working context snapshot unavailable", exc_info=True)
+            return WorkingContextView()
 
     async def _build_turn_context(
         self,
@@ -597,34 +583,6 @@ class Agent:
             participant_keys=participant_keys,
         )
 
-    async def run_memory_maintenance(self, trigger: str = "count") -> None:
-        idle_timeout = AgentConfig.IDLE_DIARY_TIMEOUT_SECONDS
-        force = False
-        idle_seconds = 0.0
-        if idle_timeout > 0:
-            memory = getattr(self, "markdown_memory", None)
-            if memory is not None:
-                path = memory.root / ".last_interaction"
-                try:
-                    last = float(path.read_text(encoding="utf-8").strip())
-                except (FileNotFoundError, ValueError):
-                    last = time.time()
-                elapsed = time.time() - last
-                if elapsed >= idle_timeout:
-                    force = True
-                    trigger = "idle"
-                    idle_seconds = elapsed
-
-        await self.memory_handler.run_maintenance(
-            force=force, trigger=trigger, idle_seconds=idle_seconds
-        )
-        observability_flusher = getattr(self._observability_runtime(), "flush", None)
-        if observability_flusher is not None:
-            try:
-                await observability_flusher()
-            except Exception as exc:
-                logger.warning("Failed to flush observability events: %s", exc)
-
     async def __call__(
         self,
         user_message: str,
@@ -664,7 +622,6 @@ class Agent:
                 ``chat_events(stream=True)``.
             room_name: Optional room/group name for multi-participant conversations.
         """
-        self._record_last_interaction()
         if stream:
             async def text_stream():
                 streamed_message_ids: set[str] = set()
@@ -744,7 +701,6 @@ class Agent:
         ``type: steered`` and the reply continues on the running turn.
         Anything that cannot be steered takes the normal queue.
         """
-        self._record_last_interaction()
         from .runtime import current_delivery_context
 
         delivery_context = current_delivery_context()
@@ -1493,7 +1449,7 @@ class Agent:
             logger.warning("Participation decision returned non-text result: %s", reply_type)
         except Exception as exc:
             logger.warning("Participation decision failed: %s", exc, exc_info=True)
-        return ParticipationDecision(should_reply=False, reason="participation decision failed")
+        return ParticipationDecision(should_reply=False)
 
     @staticmethod
     def _build_participation_decision_prompt(
@@ -1510,7 +1466,7 @@ class Agent:
             f"{context.strip()}\n\n"
             "Decide whether to reply now to this unattended interval. Prefer joining when you have something to add. "
             "Return JSON only:\n"
-            '{"should_reply": true|false, "reason": "brief reason", "addressing": ["optional message refs"]}\n'
+            '{"should_reply": true|false, "reason": "brief reason"}\n'
             "</participation_decision>"
         )
 
@@ -1525,29 +1481,7 @@ class Agent:
                 lines = lines[:-1]
             text = "\n".join(lines).strip()
 
-        try:
-            data = json.loads(text)
-        except json.JSONDecodeError:
-            start = text.find("{")
-            end = text.rfind("}")
-            if start >= 0 and end > start:
-                try:
-                    data = json.loads(text[start : end + 1])
-                except json.JSONDecodeError:
-                    data = {}
-            else:
-                data = {}
-
-        if not isinstance(data, dict):
-            data = {}
-        addressing = data.get("addressing") or []
-        if not isinstance(addressing, list):
-            addressing = [addressing]
-        return ParticipationDecision(
-            should_reply=bool(data.get("should_reply")),
-            reason=str(data.get("reason") or "").strip() or None,
-            addressing=[str(item).strip() for item in addressing if str(item).strip()],
-        )
+        return ParticipationDecision.model_validate_json(text)
 
     def _observability_runtime(self) -> ObservabilityRuntime:
         observability = getattr(self, "observability", None)
@@ -1555,17 +1489,6 @@ class Agent:
             observability = NoopObservabilityRuntime()
             self.observability = observability
         return observability
-
-    def _record_last_interaction(self) -> None:
-        """Write the current timestamp to the shared idle-tracking file."""
-        memory = getattr(self, "markdown_memory", None)
-        if memory is None:
-            return
-        path = memory.root / ".last_interaction"
-        try:
-            path.write_text(str(time.time()), encoding="utf-8")
-        except OSError:
-            pass
 
     def _schedule_experience_write(
         self,

@@ -700,6 +700,8 @@ class VoiceRuntime:
         metrics: VoiceTurnMetrics | None = None,
         spoken_ledger: SpokenLedger | None = None,
         interrupted_flag: dict[str, bool] | None = None,
+        proactive: bool = False,
+        require_recent_speech: bool | None = None,
     ) -> None:
         """Speak one stream while capture remains paused, then apply echo cooldown."""
         if speak_language is None:
@@ -707,6 +709,10 @@ class VoiceRuntime:
                 "value": language or self._language_tracker.language_before_turn(),
             }
         async with self._playback_lock:
+            if proactive:
+                reason = self._proactive_speech_block_reason(require_recent_speech=require_recent_speech)
+                if reason:
+                    raise ValueError(f"Proactive voice output blocked: {reason}")
             if not self._duplex_capture_enabled:
                 self.pause_event.set()
             text_queue = _TextChunkQueue()
@@ -991,14 +997,9 @@ class VoiceRuntime:
                 reason="participation decision failed",
             )
             return False
-        should_reply = bool(getattr(decision, "should_reply", False))
-        if isinstance(decision, dict):
-            should_reply = bool(decision.get("should_reply"))
-        if should_reply:
+        if decision.should_reply:
             return True
-        reason = str(getattr(decision, "reason", "") or "").strip()
-        if isinstance(decision, dict):
-            reason = str(decision.get("reason") or "").strip()
+        reason = decision.reason
         await self._observe_ignored_speech(
             transcript,
             utterance,
@@ -1045,18 +1046,23 @@ class VoiceRuntime:
         except Exception:
             self.logger.debug("Failed to record ignored room speech", exc_info=True)
 
-    def _proactive_speech_allowed(self, *, require_recent_speech: bool | None = None) -> bool:
+    def _proactive_speech_block_reason(self, *, require_recent_speech: bool | None = None) -> str | None:
         if not self._allow_proactive_output:
-            return False
-        if self._floor.state not in {FloorState.IDLE}:
-            return False
+            return "disabled"
+        if self.stop_event.is_set():
+            return "stopping"
+        if self._floor.state != FloorState.IDLE:
+            return "conversation active"
         proactive = self.config.proactive
         check_recent = proactive.require_recent_speech if require_recent_speech is None else require_recent_speech
-        if check_recent:
-            lifecycle = self._stt_lifecycle
-            if lifecycle is not None and not lifecycle.heard_recently():
-                return False
-        return self._proactive_limiter.allow()
+        if check_recent and self._stt_lifecycle is not None and not self._stt_lifecycle.heard_recently():
+            return "no recent speech"
+        if not self._proactive_limiter.allow():
+            return "hourly limit reached"
+        return None
+
+    def _proactive_speech_allowed(self, *, require_recent_speech: bool | None = None) -> bool:
+        return self._proactive_speech_block_reason(require_recent_speech=require_recent_speech) is None
 
     def _delivery_target(self, user_id: str | None = None) -> dict[str, Any]:
         resolved_user = user_id or self.options.user_id
@@ -1192,65 +1198,54 @@ class VoiceRuntime:
             raise ValueError("scheduled voice task produced no content")
         return {"content": text, "attachments": []}
 
-    async def deliver_scheduled_task(self, task: ScheduledTaskRecord, result: dict[str, Any], run_id: str) -> dict[str, Any]:
-        if self._playback_lock.locked():
-            async with self._playback_lock:
-                pass
-        if not self._proactive_speech_allowed(require_recent_speech=False):
-            raise ValueError("proactive voice output blocked by floor or rate cap")
-        text = str(result.get("content") or "")
-        if not text:
-            raise ValueError("scheduled voice task produced no content")
-        self.output(f"\nScheduled task: {task.title or task.task_type or 'Reminder'}")
-        spoken = sanitize_spoken_text(text)
+    async def _deliver_proactive_speech(
+        self, text: str, *, label: str, require_recent_speech: bool | None = None,
+    ) -> dict[str, Any]:
+        """Use one preflight, playback and confirmation path for all proactive speech."""
+        spoken = sanitize_spoken_text(text.strip())
+        if not spoken:
+            raise ValueError("proactive voice output produced no spoken content")
+        self.output(f"\n{label}")
+        metrics = VoiceTurnMetrics(transcript=label, reply_char_count=len(spoken))
+        from xagent.core.runtime.task_receipts import DeliveryUncertainError
+        try:
+            await self._speak(
+                _single_text_stream(spoken), language=self._language_tracker.language_before_turn(),
+                reply_buffer=[spoken], metrics=metrics, proactive=True,
+                require_recent_speech=require_recent_speech,
+            )
+        except Exception as exc:
+            if metrics.playback_audio_bytes > 0:
+                raise DeliveryUncertainError("Proactive voice playback may be partial") from exc
+            raise
+        if metrics.playback_audio_bytes <= 0 or metrics.interrupted or self.stop_event.is_set():
+            raise DeliveryUncertainError("Proactive voice playback was not confirmed")
         self._language_tracker.observe_reply(spoken)
-        metrics = VoiceTurnMetrics(transcript="scheduled task", reply_char_count=len(spoken))
-        await self._speak(
-            _single_text_stream(spoken),
-            language=self._language_tracker.language_before_turn(),
-            reply_buffer=[spoken], metrics=metrics,
-        )
-        if metrics.playback_audio_bytes <= 0 or self.stop_event.is_set():
-            from xagent.core.runtime.task_receipts import DeliveryUncertainError
-            raise DeliveryUncertainError("scheduled voice playback was not confirmed")
         self._proactive_limiter.record()
         return {"accepted": True, "transport": "voice", "playback_completed": True,
-                "audio_bytes": metrics.playback_audio_bytes, "run_id": run_id}
+                "audio_bytes": metrics.playback_audio_bytes}
+
+    async def deliver_scheduled_task(self, task: ScheduledTaskRecord, result: dict[str, Any], run_id: str) -> dict[str, Any]:
+        receipt = await self._deliver_proactive_speech(
+            str(result.get("content") or ""),
+            label=f"Scheduled task: {task.title or task.task_type or 'Reminder'}",
+            require_recent_speech=False,
+        )
+        return {**receipt, "run_id": run_id}
 
     async def deliver_subconscious_message(self, delivery: SubconsciousDelivery) -> None:
         if delivery.recipient.channel != "voice":
             raise ValueError(f"Voice runtime cannot deliver subconscious channel {delivery.recipient.channel!r}")
-        if self._playback_lock.locked():
-            async with self._playback_lock:
-                pass
-        if not self._proactive_speech_allowed():
-            raise ValueError("proactive voice output blocked by floor or rate cap")
-        text = str(delivery.content or "").strip()
-        if not text:
-            raise ValueError("subconscious voice delivery produced no content")
-        self.output("\nSubconscious message")
-        spoken = sanitize_spoken_text(text)
-        self._language_tracker.observe_reply(spoken)
-        await self._speak(
-            _single_text_stream(spoken),
-            language=self._language_tracker.language_before_turn(),
-        )
-        self._proactive_limiter.record()
+        await self._deliver_proactive_speech(delivery.content, label="Subconscious message")
         try:
-            recipient_id = str(
-                delivery.recipient.target.get("user_id")
-                or delivery.recipient.user_id
-                or self.options.user_id
-            )
+            recipient_id = str(delivery.recipient.target.get("user_id")
+                               or delivery.recipient.user_id or self.options.user_id)
             await persist_subconscious_delivery(
-                self.agent,
-                delivery,
-                channel="voice",
-                recipient_id=recipient_id,
-                content=text,
+                self.agent, delivery, channel="voice", recipient_id=recipient_id,
+                content=delivery.content.strip(),
             )
         except Exception:
-            self.logger.debug("Failed to persist voice subconscious delivery", exc_info=True)
+            self.logger.warning("Failed to persist confirmed voice delivery", exc_info=True)
 
     async def _speak_notice(self, category: str) -> None:
         if self.stop_event.is_set():

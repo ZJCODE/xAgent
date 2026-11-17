@@ -24,3 +24,7 @@ The Web UI was inspected in light and dark themes, at desktop and 390-pixel mobi
 The suite exits successfully but still emits an unclosed-event-loop `ResourceWarning` in the SDK test process. The accelerated run uses deterministic model/channel doubles and virtual scheduler time; it does not establish real 24-hour uptime or exercise production devices and external bot services.
 
 Reproduce with the commands in [runtime-core.md](runtime-core.md). The scenario is implemented in [runtime_soak.py](../scripts/runtime_soak.py).
+
+## Background maintenance simplification — 2026-11-17
+
+Full offline regression: `.venv/bin/python -m unittest discover -s tests -q` — 1350 tests passed, including local socket, device voice and stop/restart integration tests. New behavior coverage includes coalesced maintenance wakeups, age-based small diary batches after restart, draining committed backlog, periodic requests across midnight, independent reflection/observability, strict participation JSON, a single context snapshot interface, proactive playback preflight under the playback lock, and uncertain delivery without automatic retries. Real provider/model behavior was not evaluated in this run.

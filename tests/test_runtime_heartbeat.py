@@ -8,48 +8,8 @@ from xagent.core.config import AgentConfig
 from xagent.core.runtime import RuntimeHeartbeat, RuntimeHeartbeatConfig, create_runtime_heartbeat
 
 
-class _FakeMemoryHandler:
-    def __init__(self):
-        self.weekly_calls = []
-        self.monthly_calls = []
-        self.yearly_calls = []
-        self.weekly_event = asyncio.Event()
-        self.raise_on_weekly = False
-        self.raise_on_monthly = False
-        self.raise_on_yearly = False
-
-    async def generate_previous_weekly_summary_if_missing(self, today=None):
-        if self.raise_on_weekly:
-            raise RuntimeError("weekly failed")
-        self.weekly_calls.append(today)
-        self.weekly_event.set()
-        return True
-
-    async def generate_previous_monthly_summary_if_missing(self, today=None):
-        if self.raise_on_monthly:
-            raise RuntimeError("monthly failed")
-        self.monthly_calls.append(today)
-        return True
-
-    async def generate_previous_yearly_summary_if_missing(self, today=None):
-        if self.raise_on_yearly:
-            raise RuntimeError("yearly failed")
-        self.yearly_calls.append(today)
-        return True
-
-
-class _FakeAgent:
-    def __init__(self):
-        self.maintenance_count = 0
-        self.maintenance_event = asyncio.Event()
-        self.raise_on_maintenance = False
-        self.memory_handler = _FakeMemoryHandler()
-
-    async def run_memory_maintenance(self, trigger: str = "unknown"):
-        if self.raise_on_maintenance:
-            raise RuntimeError("maintenance failed")
-        self.maintenance_count += 1
-        self.maintenance_event.set()
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 
 
 class RuntimeHeartbeatConfigTests(unittest.TestCase):
@@ -135,91 +95,71 @@ class RuntimeHeartbeatConfigTests(unittest.TestCase):
 
 
 class RuntimeHeartbeatTests(unittest.IsolatedAsyncioTestCase):
-    async def test_run_once_runs_memory_maintenance_without_weekly_on_non_monday(self):
-        agent = _FakeAgent()
-        heartbeat = RuntimeHeartbeat(agent, today_provider=lambda: date(2026, 5, 14))
-
-        await heartbeat.run_once()
-
-        self.assertEqual(agent.maintenance_count, 1)
-        self.assertEqual(agent.memory_handler.weekly_calls, [])
-
-    async def test_run_once_generates_previous_weekly_summary_on_monday(self):
-        agent = _FakeAgent()
-        today = date(2026, 5, 18)
-        heartbeat = RuntimeHeartbeat(agent, today_provider=lambda: today)
-
-        await heartbeat.run_once()
-
-        self.assertEqual(agent.maintenance_count, 1)
-        self.assertEqual(agent.memory_handler.weekly_calls, [today])
-
-    async def test_run_once_generates_previous_monthly_summary_on_first_of_month(self):
-        agent = _FakeAgent()
-        today = date(2026, 7, 1)
-        heartbeat = RuntimeHeartbeat(agent, today_provider=lambda: today)
-
-        await heartbeat.run_once()
-
-        self.assertEqual(agent.memory_handler.weekly_calls, [])
-        self.assertEqual(agent.memory_handler.monthly_calls, [today])
-        self.assertEqual(agent.memory_handler.yearly_calls, [])
-
-    async def test_run_once_generates_previous_yearly_summary_on_new_years_day(self):
-        agent = _FakeAgent()
+    async def test_tick_only_wakes_workers_without_waiting_for_models(self):
+        blocked = asyncio.Event()
+        handler = SimpleNamespace(request_maintenance=Mock())
+        reflection = SimpleNamespace(maybe_think=AsyncMock(side_effect=blocked.wait))
         today = date(2026, 1, 1)
-        heartbeat = RuntimeHeartbeat(agent, today_provider=lambda: today)
-
+        heartbeat = RuntimeHeartbeat(SimpleNamespace(memory_handler=handler),
+            today_provider=lambda: today, subconscious_loop=reflection)
+        await asyncio.wait_for(heartbeat.run_once(), 1)
+        await asyncio.sleep(0)
         await heartbeat.run_once()
+        self.assertEqual(handler.request_maintenance.call_count, 2)
+        handler.request_maintenance.assert_called_with(today=today)
+        reflection.maybe_think.assert_awaited_once()
+        await heartbeat.stop()
+        self.assertIsNone(heartbeat._reflection_task)
 
-        self.assertEqual(agent.memory_handler.monthly_calls, [today])
-        self.assertEqual(agent.memory_handler.yearly_calls, [today])
+    async def test_slow_memory_does_not_delay_reflection(self):
+        from xagent.core.agent import Agent
+        with tempfile.TemporaryDirectory() as root:
+            agent = Agent(client=object(), workspace=root)
+            started, release = asyncio.Event(), asyncio.Event()
+            async def maintain():
+                started.set()
+                await release.wait()
+                return False
+            agent.memory_handler.run_maintenance = maintain
+            reflection = SimpleNamespace(maybe_think=AsyncMock())
+            heartbeat = RuntimeHeartbeat(agent, subconscious_loop=reflection)
+            await heartbeat.run_once()
+            await asyncio.wait_for(started.wait(), 1)
+            await asyncio.sleep(0)
+            reflection.maybe_think.assert_awaited_once()
+            await heartbeat.stop()
+            await agent.memory_handler.cancel_maintenance()
 
-    async def test_run_once_isolates_maintenance_errors(self):
-        agent = _FakeAgent()
-        agent.raise_on_maintenance = True
-        agent.memory_handler.raise_on_weekly = True
-        heartbeat = RuntimeHeartbeat(agent, today_provider=lambda: date(2026, 5, 18))
-
+    async def test_memory_wakeup_error_does_not_suppress_reflection(self):
+        handler = SimpleNamespace(request_maintenance=Mock(side_effect=RuntimeError("wakeup failed")))
+        reflection = SimpleNamespace(maybe_think=AsyncMock())
+        heartbeat = RuntimeHeartbeat(SimpleNamespace(memory_handler=handler), subconscious_loop=reflection)
         await heartbeat.run_once()
-
-        self.assertEqual(agent.maintenance_count, 0)
-        self.assertEqual(agent.memory_handler.weekly_calls, [])
-
-    async def test_start_runs_immediate_tick_and_stop_is_idempotent(self):
-        agent = _FakeAgent()
-        heartbeat = RuntimeHeartbeat(
-            agent,
-            interval_seconds=60,
-            today_provider=lambda: date(2026, 5, 14),
-        )
-
-        await heartbeat.start()
-        await asyncio.wait_for(agent.maintenance_event.wait(), timeout=1)
-        self.assertTrue(heartbeat.is_running)
-
+        await heartbeat._reflection_task
+        reflection.maybe_think.assert_awaited_once()
         await heartbeat.stop()
+
+    async def test_reflection_failure_still_flushes_observability(self):
+        observability = SimpleNamespace(flush=AsyncMock())
+        heartbeat = RuntimeHeartbeat(SimpleNamespace(observability=observability),
+            subconscious_loop=SimpleNamespace(maybe_think=AsyncMock(side_effect=RuntimeError('model failed'))))
+        await heartbeat.run_once()
+        await heartbeat._reflection_task
+        observability.flush.assert_awaited_once()
         await heartbeat.stop()
-        self.assertFalse(heartbeat.is_running)
 
-    async def test_loop_runs_on_interval(self):
-        agent = _FakeAgent()
-        heartbeat = RuntimeHeartbeat(
-            agent,
-            interval_seconds=0.01,
-            today_provider=lambda: date(2026, 5, 14),
-        )
-
+    async def test_interval_and_idempotent_stop(self):
+        handler = SimpleNamespace(request_maintenance=Mock())
+        heartbeat = RuntimeHeartbeat(SimpleNamespace(memory_handler=handler), interval_seconds=0.01)
         await heartbeat.start()
         try:
             for _ in range(50):
-                if agent.maintenance_count >= 2:
+                if handler.request_maintenance.call_count >= 2:
                     break
                 await asyncio.sleep(0.01)
-            self.assertGreaterEqual(agent.maintenance_count, 2)
+            self.assertGreaterEqual(handler.request_maintenance.call_count, 2)
+            self.assertTrue(heartbeat.is_running)
         finally:
             await heartbeat.stop()
-
-
-if __name__ == "__main__":
-    unittest.main()
+            await heartbeat.stop()
+        self.assertFalse(heartbeat.is_running)

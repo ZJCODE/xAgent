@@ -443,7 +443,11 @@ audio tags, not client-side chunking.
   the proactive rate cap, and the floor; scheduled delivery bypasses only the
   recent-speech requirement. These channel guards and playback coordination
   remain in place when the shared timing and unanswered-message limits are
-  removed. See `subconscious-design.md` for the current decision contract.
+  removed. Both proactive delivery sources use one playback/confirmation path.
+  Guards run after acquiring the playback lock, with a specific rejection reason.
+  Only confirmed playback updates the rate limiter and subconscious history;
+  partial or unconfirmed playback is reported as uncertain and is not retried
+  automatically. See `subconscious-design.md` for the current decision contract.
 
 ## 9. Failure — silence is the worst error message
 

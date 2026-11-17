@@ -929,6 +929,7 @@ class RuntimeHost:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
         if self.agent is not None:
+            await self.agent.memory_handler.cancel_maintenance()
             if not self._restarting:
                 try:
                     await asyncio.wait_for(self.agent.memory_handler.run_maintenance(force=True, trigger="shutdown"), timeout=10.0)

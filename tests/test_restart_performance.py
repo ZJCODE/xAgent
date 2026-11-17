@@ -108,13 +108,14 @@ class RestartDrainTests(unittest.IsolatedAsyncioTestCase):
                 host = RuntimeHost(tmp)
                 host.ownership.acquire()
                 host._restarting = restart
-                memory = SimpleNamespace(run_maintenance=AsyncMock())
+                memory = SimpleNamespace(run_maintenance=AsyncMock(), cancel_maintenance=AsyncMock())
                 turns = SimpleNamespace(recover=AsyncMock(return_value=0))
                 host.agent = SimpleNamespace(inbox=SimpleNamespace(busy=False, pending_count=0,
                     stop_accepting=Mock(), cancel_pending=Mock()), abort=Mock(),
                     memory_handler=memory, turn_store=turns)
                 try:
                     await host._shutdown()
+                    memory.cancel_maintenance.assert_awaited_once()
                     if restart:
                         memory.run_maintenance.assert_not_awaited()
                     else:

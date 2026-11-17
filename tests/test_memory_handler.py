@@ -4,7 +4,7 @@ import asyncio
 import tempfile
 import threading
 import unittest
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -289,7 +289,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             role=RoleType.USER,
             sender_id="alice",
             content="recent note",
-            timestamp=1710000000.0,
+            timestamp=datetime.now().timestamp(),
         ))
         handler = MemoryHandler(
             memory=self.memory,
@@ -297,7 +297,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             message_storage=self.storage,
             diary_write_batch=_TEST_DIARY_WRITE_BATCH,
         )
-        # Cursor gap is 0 (last_processed=0, latest=1), below threshold of 14 → no write
+        # Cursor gap is 1 (last_processed=0, latest=1), below threshold of 14 → no write
         wrote = await handler.run_maintenance(force=False)
 
         self.assertFalse(wrote)
@@ -597,12 +597,10 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
         first_wrote = await handler.run_maintenance(
             force=True,
             trigger="idle",
-            idle_seconds=1800,
         )
         second_wrote = await handler.run_maintenance(
             force=True,
             trigger="idle",
-            idle_seconds=2100,
         )
 
         self.assertTrue(first_wrote)
@@ -1111,6 +1109,86 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
         daily_text = await self.memory.read_file(self.memory.daily_path(date.today()))
         self.assertIn("recovery experience", daily_text)
         self.assertIn("Subconscious internal thought", daily_text)
+
+    async def test_small_tail_flushes_after_message_wait_even_after_restart(self):
+        self.storage.append(Message(role=RoleType.USER, sender_id="alice", content="old pending thought",
+            timestamp=datetime.now().timestamp() - AgentConfig.DIARY_MAX_WAIT_SECONDS - 1))
+        restarted = MemoryHandler(self.memory, self.llm, self.storage, diary_write_batch=20)
+        self.assertTrue(await restarted.run_maintenance())
+        self.assertEqual(restarted._last_processed_message_id, 1)
+        self.assertFalse((self.memory.root / ".last_interaction").exists())
+
+    async def test_zero_max_wait_preserves_batch_threshold(self):
+        self.storage.append(Message(role=RoleType.USER, content="old pending", timestamp=1))
+        with patch.object(AgentConfig, "DIARY_MAX_WAIT_SECONDS", 0):
+            self.assertFalse(await self.handler.run_maintenance())
+        self.assertEqual(self.llm.diary_calls, [])
+
+    async def test_worker_coalesces_wakeups_and_keeps_requests_received_during_work(self):
+        entered, release = asyncio.Event(), asyncio.Event()
+        calls = []
+        async def maintain():
+            calls.append(1)
+            if len(calls) == 1:
+                entered.set()
+                await release.wait()
+            return False
+        self.handler.run_maintenance = maintain
+        worker = self.handler.request_maintenance()
+        for _ in range(10):
+            self.assertIs(self.handler.request_maintenance(), worker)
+        await entered.wait()
+        self.assertIs(self.handler.request_maintenance(), worker)
+        release.set()
+        await worker
+        self.assertEqual(len(calls), 2)
+
+    async def test_worker_drains_committed_backlog_in_batches(self):
+        for index in range(45):
+            self.storage.append(Message(role=RoleType.USER, content=f"thought {index}", timestamp=1))
+        await self.handler.request_maintenance()
+        self.assertEqual(self.handler._last_processed_message_id, 45)
+        self.assertGreater(len(self.llm.diary_calls), 1)
+
+    async def test_periodic_summaries_share_worker_and_isolate_errors(self):
+        self.handler.run_maintenance = AsyncMock(return_value=False)
+        for today, expected in ((date(2026, 5, 14), (0, 0, 0)),
+                                (date(2026, 5, 18), (1, 0, 0)),
+                                (date(2026, 7, 1), (0, 1, 0)),
+                                (date(2026, 1, 1), (0, 1, 1))):
+            with self.subTest(today=today):
+                self.handler.generate_previous_weekly_summary_if_missing = AsyncMock()
+                self.handler.generate_previous_monthly_summary_if_missing = AsyncMock(side_effect=RuntimeError("summary failed"))
+                self.handler.generate_previous_yearly_summary_if_missing = AsyncMock()
+                await self.handler.request_maintenance(today=today)
+                generators = (self.handler.generate_previous_weekly_summary_if_missing,
+                              self.handler.generate_previous_monthly_summary_if_missing,
+                              self.handler.generate_previous_yearly_summary_if_missing)
+                self.assertEqual(tuple(g.await_count for g in generators), expected)
+
+    async def test_pending_periodic_summary_survives_date_change_before_worker_runs(self):
+        self.handler.run_maintenance = AsyncMock(return_value=False)
+        self.handler.generate_previous_monthly_summary_if_missing = AsyncMock()
+        self.handler.generate_previous_yearly_summary_if_missing = AsyncMock()
+        worker = self.handler.request_maintenance(today=date(2026, 1, 1))
+        self.assertIs(self.handler.request_maintenance(today=date(2026, 1, 2)), worker)
+        await worker
+        self.handler.generate_previous_monthly_summary_if_missing.assert_awaited_once_with(today=date(2026, 1, 1))
+        self.handler.generate_previous_yearly_summary_if_missing.assert_awaited_once_with(today=date(2026, 1, 1))
+
+    async def test_cancel_worker_allows_clean_restart(self):
+        entered = asyncio.Event()
+        async def maintain():
+            entered.set()
+            await asyncio.Event().wait()
+        self.handler.run_maintenance = maintain
+        worker = self.handler.request_maintenance()
+        await entered.wait()
+        await self.handler.cancel_maintenance()
+        self.assertTrue(worker.cancelled())
+        self.handler.run_maintenance = AsyncMock(return_value=False)
+        await self.handler.request_maintenance()
+        self.handler.run_maintenance.assert_awaited_once()
 
 
 if __name__ == "__main__":

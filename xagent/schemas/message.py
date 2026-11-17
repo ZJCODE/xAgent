@@ -2,7 +2,7 @@ import time
 from enum import Enum
 from typing import Any, Dict, List, Optional, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ..utils.image_utils import (
     MAX_IMAGES_PER_MESSAGE,
@@ -46,12 +46,10 @@ class AgentTurnResult(BaseModel):
 class ParticipationDecision(BaseModel):
     """Model decision for whether an observed event warrants a reply."""
 
-    should_reply: bool = Field(False, description="Whether the agent should speak now")
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    should_reply: bool = Field(description="Whether the agent should speak now")
     reason: Optional[str] = Field(None, description="Brief internal reason for the decision")
-    addressing: List[str] = Field(
-        default_factory=list,
-        description="Interval message refs the agent intends to address",
-    )
 
 
 class Message(BaseModel):

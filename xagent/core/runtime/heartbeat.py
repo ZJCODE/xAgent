@@ -58,6 +58,7 @@ class RuntimeHeartbeat:
         self._logger = logger_ or logger
         self._task: Optional[asyncio.Task[None]] = None
         self._subconscious_loop = subconscious_loop
+        self._reflection_task: Optional[asyncio.Task] = None
 
     @property
     def subconscious_loop(self):
@@ -73,25 +74,36 @@ class RuntimeHeartbeat:
         self._task = asyncio.create_task(self._run_loop(), name="xagent-runtime-heartbeat")
 
     async def stop(self) -> None:
-        task = self._task
-        self._task = None
-        if task is None:
-            return
-        if not task.done():
+        tasks = [task for task in (self._task, self._reflection_task) if task is not None]
+        self._task = self._reflection_task = None
+        for task in tasks:
             task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            return
-        except Exception as exc:
-            self._logger.warning("Runtime heartbeat stopped after failure: %s", exc)
+        await asyncio.gather(*tasks, return_exceptions=True)
 
     async def run_once(self) -> None:
-        await self._run_memory_maintenance()
-        today = self._today_provider()
-        await self._run_periodic_summaries(today)
-        if self._subconscious_loop is not None:
-            await self._subconscious_loop.maybe_think()
+        handler = getattr(self.agent, "memory_handler", None)
+        if handler is not None:
+            try:
+                handler.request_maintenance(today=self._today_provider())
+            except Exception:
+                self._logger.warning("Could not wake memory maintenance", exc_info=True)
+        if self._reflection_task is None or self._reflection_task.done():
+            self._reflection_task = asyncio.create_task(
+                self._reflect_and_flush(), name="xagent-reflection")
+
+    async def _reflect_and_flush(self) -> None:
+        try:
+            if self._subconscious_loop is not None:
+                await self._subconscious_loop.maybe_think()
+        except Exception:
+            self._logger.warning("Subconscious cycle failed", exc_info=True)
+        finally:
+            observability = getattr(self.agent, "observability", None)
+            if observability is not None:
+                try:
+                    await observability.flush()
+                except Exception:
+                    self._logger.warning("Observability flush failed", exc_info=True)
 
     async def _run_loop(self) -> None:
         while True:
@@ -102,56 +114,6 @@ class RuntimeHeartbeat:
             except Exception as exc:
                 self._logger.warning("Runtime heartbeat tick failed: %s", exc)
             await asyncio.sleep(self.interval_seconds)
-
-    async def _run_periodic_summaries(self, today: date) -> None:
-        memory_handler = getattr(self.agent, "memory_handler", None)
-        if memory_handler is None:
-            return
-
-        if today.weekday() == 0:
-            await self._invoke_summary_generator(
-                memory_handler,
-                "generate_previous_weekly_summary_if_missing",
-                today=today,
-            )
-
-        if today.day == 1:
-            await self._invoke_summary_generator(
-                memory_handler,
-                "generate_previous_monthly_summary_if_missing",
-                today=today,
-            )
-
-        if today.month == 1 and today.day == 1:
-            await self._invoke_summary_generator(
-                memory_handler,
-                "generate_previous_yearly_summary_if_missing",
-                today=today,
-            )
-
-    async def _invoke_summary_generator(
-        self,
-        memory_handler: Any,
-        method_name: str,
-        *,
-        today: date,
-    ) -> None:
-        generator = getattr(memory_handler, method_name, None)
-        if generator is None:
-            return
-        try:
-            await generator(today=today)
-        except Exception as exc:
-            self._logger.warning("Runtime heartbeat %s failed: %s", method_name, exc)
-
-    async def _run_memory_maintenance(self) -> None:
-        flusher = getattr(self.agent, "run_memory_maintenance", None)
-        if flusher is None:
-            return
-        try:
-            await flusher(trigger="count")
-        except Exception as exc:
-            self._logger.warning("Runtime heartbeat memory maintenance failed: %s", exc)
 
 
 def create_runtime_heartbeat(

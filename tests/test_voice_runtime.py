@@ -1095,7 +1095,7 @@ class VoiceRuntimeTests(unittest.TestCase):
                     target={"user_id": "alice"},
                 )
                 runtime = self.make_runtime(tasks_dir=tmpdir, allow_proactive_output=True)
-                runtime._speak = AsyncMock()
+                runtime._speak = AsyncMock(wraps=runtime._speak)
                 from xagent.core.runtime import AsyncTaskScheduler
                 scheduler = AsyncTaskScheduler(tmpdir,
                     can_handle=runtime._can_handle_scheduled_task,
@@ -1111,7 +1111,7 @@ class VoiceRuntimeTests(unittest.TestCase):
             agent = FakeAgent()
             agent.message_handler = SimpleNamespace(store_model_reply=AsyncMock())
             runtime = self.make_runtime(agent=agent, allow_proactive_output=True)
-            runtime._speak = AsyncMock()
+            runtime._speak = AsyncMock(wraps=runtime._speak)
             delivery = SubconsciousDelivery(
                 content="background thought",
                 recipient=ContactEntry(
@@ -1127,3 +1127,60 @@ class VoiceRuntimeTests(unittest.TestCase):
             runtime._speak.assert_awaited_once()
 
         asyncio.run(run_delivery())
+
+    def test_unconfirmed_or_partial_proactive_output_is_not_recorded(self):
+        from xagent.core.runtime.task_receipts import DeliveryUncertainError
+        async def run():
+            for mode in ('empty', 'interrupted', 'partial_failure'):
+                with self.subTest(mode=mode):
+                    runtime = self.make_runtime(allow_proactive_output=True)
+                    async def speak(*args, metrics, **kwargs):
+                        if mode != 'empty':
+                            metrics.playback_audio_bytes = 100
+                        metrics.interrupted = mode == 'interrupted'
+                        if mode == 'partial_failure':
+                            raise ConnectionError('playback lost')
+                    runtime._speak = speak
+                    with self.assertRaises(DeliveryUncertainError):
+                        await runtime._deliver_proactive_speech('hello', label='test')
+                    self.assertEqual(runtime._proactive_limiter._timestamps, [])
+        asyncio.run(run())
+
+    def test_unconfirmed_subconscious_output_does_not_persist_history(self):
+        from xagent.core.runtime.task_receipts import DeliveryUncertainError
+        async def run():
+            runtime = self.make_runtime(allow_proactive_output=True)
+            runtime._speak = AsyncMock()
+            delivery = SubconsciousDelivery('hello', ContactEntry('voice', 'alice', {}, ''), '', datetime.now())
+            with patch('xagent.interfaces.voice.runtime.persist_subconscious_delivery', new_callable=AsyncMock) as persist:
+                with self.assertRaises(DeliveryUncertainError):
+                    await runtime.deliver_subconscious_message(delivery)
+                persist.assert_not_called()
+        asyncio.run(run())
+
+    def test_proactive_preflight_checks_floor_after_waiting_for_playback_lock(self):
+        from xagent.interfaces.voice.floor import FloorState
+        async def run():
+            runtime = self.make_runtime(allow_proactive_output=True)
+            await runtime._playback_lock.acquire()
+            task = asyncio.create_task(runtime._deliver_proactive_speech('hello', label='test'))
+            await asyncio.sleep(0)
+            runtime._floor.state = FloorState.USER_SPEAKING
+            runtime._playback_lock.release()
+            with self.assertRaisesRegex(ValueError, 'conversation active'):
+                await task
+            self.assertEqual(runtime.synthesizer.calls, [])
+            self.assertEqual(runtime._proactive_limiter._timestamps, [])
+        asyncio.run(run())
+
+    def test_proactive_limit_is_recorded_only_after_confirmed_playback(self):
+        async def run():
+            runtime = self.make_runtime(allow_proactive_output=True)
+            runtime._proactive_limiter.max_per_hour = 1
+            receipt = await runtime._deliver_proactive_speech('hello', label='test')
+            self.assertTrue(receipt['accepted'])
+            self.assertGreater(receipt['audio_bytes'], 0)
+            with self.assertRaisesRegex(ValueError, 'hourly limit reached'):
+                await runtime._deliver_proactive_speech('again', label='test')
+            self.assertEqual(len(runtime._proactive_limiter._timestamps), 1)
+        asyncio.run(run())

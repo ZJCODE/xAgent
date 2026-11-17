@@ -310,9 +310,6 @@ class WorkingContextCompactor:
             covers_through_cursor=max(0, int(state.covers_through_cursor)),
         )
 
-    async def current_summary(self) -> str:
-        return (await self.current_view()).summary
-
     async def _ensure_fresh_locked(self) -> WorkingContextView:
         state = await asyncio.to_thread(self.store.read)
         try:

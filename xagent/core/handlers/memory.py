@@ -1,4 +1,4 @@
-"""Memory handler: recent context injection and count-based diary writing."""
+"""Memory context and a single worker for batch/age-based diary maintenance."""
 
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 
 
 class MemoryHandler:
-    """Manages recent diary context and count-based journal maintenance."""
+    """Manage diary context, durable commits and coalesced background maintenance."""
 
     RECENT_DAYS = AgentConfig.DIARY_CONTEXT_DAYS
     RECENT_MAX_CHARS = AgentConfig.MEMORY_RECENT_MAX_CHARS
@@ -90,7 +90,9 @@ class MemoryHandler:
             self.llm_service, source_chars=self.max_journal_source_chars,
         )
         self._maintenance_lock = asyncio.Lock()
-        self._maintenance_task: Optional[asyncio.Task[bool]] = None
+        self._maintenance_task: Optional[asyncio.Task[None]] = None
+        self._maintenance_requested = False
+        self._pending_summaries: dict = {}
         self._journal_commits = JournalCommitStore(self.memory.root)
         self._last_maintenance: dict = {}
         self._receipt_error: Optional[str] = None
@@ -300,31 +302,18 @@ class MemoryHandler:
         if not messages:
             return
         if any(self._is_memory_worthy_experience(message) for message in messages):
-            self._schedule_maintenance()
+            self.request_maintenance()
 
     async def run_maintenance(
-        self, force: bool = False, trigger: str = "count", idle_seconds: float = 0
+        self, force: bool = False, trigger: str = "count"
     ) -> bool:
         """Run journal maintenance using persisted message history only.
 
         Args:
             force: When True, skip the unprocessed-message gate.
             trigger: ``"count"`` when triggered by accumulating enough messages;
-                     ``"idle"`` when triggered by idle timeout.
-            idle_seconds: Seconds since last interaction (only meaningful when
-                          *trigger* is ``"idle"``).
+                     or an explicit caller such as shutdown.
         """
-        current_task = asyncio.current_task()
-        maintenance_task = self._maintenance_task
-        if maintenance_task is not None and maintenance_task is not current_task and not maintenance_task.done():
-            try:
-                existing_result = await maintenance_task
-            except Exception as exc:
-                logger.error("Background memory maintenance failed: %s", exc)
-                existing_result = False
-            if not force:
-                return bool(existing_result)
-
         async with self._maintenance_guard(refresh_state=True):
             self._last_maintenance = {
                 "status": "running", "trigger": trigger,
@@ -332,7 +321,7 @@ class MemoryHandler:
             }
             try:
                 result = await self._run_maintenance_locked(
-                    force=force, trigger=trigger, idle_seconds=idle_seconds
+                    force=force, trigger=trigger
                 )
                 # Catch up even when no new message window is due. Projection
                 # failures never roll back diary commits or stop later ones.
@@ -358,7 +347,7 @@ class MemoryHandler:
                 self._last_maintenance["finished_at"] = datetime.now().astimezone().isoformat()
 
     async def _run_maintenance_locked(
-        self, force: bool = False, trigger: str = "count", idle_seconds: float = 0
+        self, force: bool = False, trigger: str = "count"
     ) -> bool:
         healthy, recovered = await self._recover_pending_commit_locked()
         if not healthy:
@@ -368,14 +357,6 @@ class MemoryHandler:
             return recovered
         if latest_message_id <= self._last_processed_message_id:
             return recovered
-
-        # Gate on unprocessed message count: only run when enough new
-        # messages have accumulated since the last checkpoint.  Based on
-        # the persisted cursor so it is safe across multiple processes.
-        if not force:
-            unprocessed_count = latest_message_id - self._last_processed_message_id
-            if unprocessed_count < self.diary_write_batch - self.window_overlap:
-                return False
 
         # Build a cursor-bounded window that starts window_overlap entries
         # before the last checkpoint (for diary continuity between adjacent
@@ -392,6 +373,15 @@ class MemoryHandler:
             start_exclusive=start_exclusive,
             end_inclusive=end_inclusive,
         )
+        # Flush a full batch or a small tail that has waited long enough.
+        new_messages = [m for m in recent_messages
+                        if (self._storage_cursor_from_metadata(m.metadata) or 0)
+                        > self._last_processed_message_id]
+        if new_messages and not force and latest_message_id - self._last_processed_message_id < self.diary_write_batch - self.window_overlap:
+            oldest = min(m.timestamp for m in new_messages)
+            max_wait = AgentConfig.DIARY_MAX_WAIT_SECONDS
+            if max_wait <= 0 or datetime.now().timestamp() - oldest < max_wait:
+                return recovered
         try:
             await self.projector.remember_people(self._extract_participants(recent_messages))
         except Exception as exc:
@@ -447,9 +437,9 @@ class MemoryHandler:
             return False
 
         logger.info(
-            "Diary commit [trigger=%s] cursor %d→%d, %d msgs, %d slices → %d chars, idle=%.0fs",
+            "Diary commit [trigger=%s] cursor %d→%d, %d msgs, %d slices → %d chars",
             trigger, start_exclusive, end_inclusive, len(new_records), len(batches),
-            len(staged_content), idle_seconds,
+            len(staged_content),
         )
 
         return True
@@ -846,24 +836,48 @@ class MemoryHandler:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _on_maintenance_done(self, task: asyncio.Task[bool]) -> None:
-        if self._maintenance_task is task:
-            self._maintenance_task = None
-        try:
-            task.result()
-        except asyncio.CancelledError:
-            return
-        except Exception as exc:
-            logger.error("Background memory maintenance failed: %s", exc)
+    def request_maintenance(self, *, today: Optional[date] = None) -> asyncio.Task:
+        """Coalesce message and heartbeat wakeups into one finite worker."""
+        self._maintenance_requested = True
+        if today is not None:
+            for due, generate in (
+                (today.weekday() == 0, self.generate_previous_weekly_summary_if_missing),
+                (today.day == 1, self.generate_previous_monthly_summary_if_missing),
+                (today.month == 1 and today.day == 1, self.generate_previous_yearly_summary_if_missing),
+            ):
+                if due:
+                    self._pending_summaries[generate] = today
+        if self._maintenance_task is None or self._maintenance_task.done():
+            self._maintenance_task = asyncio.create_task(
+                self._maintenance_worker(), name="xagent-memory-maintenance")
+        return self._maintenance_task
 
-    def _schedule_maintenance(self) -> None:
+    async def _maintenance_worker(self) -> None:
+        try:
+            while self._maintenance_requested:
+                self._maintenance_requested = False
+                summaries, self._pending_summaries = self._pending_summaries, {}
+                if await self.run_maintenance():
+                    self._maintenance_requested = True
+                for generate, today in summaries.items():
+                    try:
+                        await generate(today=today)
+                    except Exception:
+                        logger.warning("Periodic memory summary failed", exc_info=True)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning("Background memory maintenance failed", exc_info=True)
+
+    async def cancel_maintenance(self) -> None:
+        """Stop background work before final shutdown/restart maintenance."""
+        self._maintenance_requested = False
+        self._pending_summaries.clear()
         task = self._maintenance_task
         if task is not None and not task.done():
-            return
-
-        maintenance_task = asyncio.create_task(self.run_maintenance())
-        self._maintenance_task = maintenance_task
-        maintenance_task.add_done_callback(self._on_maintenance_done)
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        self._maintenance_task = None
 
     async def recover_pending_commit(self) -> bool:
         """Recover operational diary state after the host acquires ownership.

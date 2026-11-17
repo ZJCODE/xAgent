@@ -80,7 +80,7 @@ class FakeMemoryHandler:
     def schedule_experience_write(self, messages):
         self.experience_messages = messages
 
-    async def run_maintenance(self, force=False, trigger="count", idle_seconds=0):
+    async def run_maintenance(self, force=False, trigger="count"):
         self.maintenance_calls += 1
         self.maintenance_force = force
         return False
@@ -1401,6 +1401,31 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(compactor.view_calls, 1)
         self.assertEqual(compactor.ensure_calls, 0)
 
+    async def test_working_context_failure_returns_empty_view_without_legacy_fallbacks(self):
+        compactor = SimpleNamespace(view_for_turn=AsyncMock(side_effect=OSError("unreadable")),
+                                   current_view=AsyncMock(), current_summary=AsyncMock(), ensure_fresh=AsyncMock())
+        agent = Agent.__new__(Agent)
+        agent.working_context_compactor = compactor
+        self.assertEqual(await Agent._working_context_for_turn(agent), WorkingContextView())
+        compactor.current_view.assert_not_called()
+        compactor.current_summary.assert_not_called()
+        compactor.ensure_fresh.assert_not_called()
+
+    async def test_participation_rejects_coerced_types_and_unrecognized_fields(self):
+        for payload in ('{"should_reply": "false"}', '{"should_reply": "true"}',
+                        '{"should_reply": 1}', '{"should_reply": null}', '{}',
+                        '{"should_reply": true, "reason": 123}',
+                        '{"should_reply": true, "addressing": ["1"]}',
+                        'Some prose {"should_reply": true}'):
+            with self.subTest(payload=payload):
+                client = CapturingModelClient([(ReplyType.SIMPLE_REPLY, payload)])
+                agent = self._build_agent(storage=InMemoryMessageStorage(), model_client=client)
+                result = await Agent.decide_participation(agent, context="room")
+                self.assertFalse(result.should_reply)
+        decision = Agent._parse_participation_decision('```json\n{"should_reply": false, "reason": "between others"}\n```')
+        self.assertFalse(decision.should_reply)
+        self.assertEqual(decision.reason, "between others")
+
     async def test_decide_participation_returns_structured_decision_without_storing_event(self):
         storage = InMemoryMessageStorage([
             Message(
@@ -1812,18 +1837,6 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(observability.turn_kwargs["channel"], "weixin")
         self.assertEqual(observability.turn_kwargs["session_id"], "weixin:group-1")
 
-    async def test_run_memory_maintenance_flushes_observability(self):
-        storage = InMemoryMessageStorage()
-        observability = FakeObservabilityRuntime()
-        agent = self._build_agent(
-            storage=storage,
-            model_client=CapturingModelClient([]),
-            observability=observability,
-        )
-
-        await Agent.run_memory_maintenance(agent)
-
-        self.assertTrue(observability.flushed)
 
     async def test_chat_events_inherits_channel_and_source_from_delivery_context(self):
         storage = InMemoryMessageStorage()
@@ -1891,17 +1904,15 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertNotIn("sender_name", storage.messages[0].metadata)
 
-    async def test_chat_updates_last_interaction_file(self):
+    async def test_chat_does_not_create_idle_tracking_file(self):
         storage = InMemoryMessageStorage()
         model_client = CapturingModelClient([(ReplyType.SIMPLE_REPLY, "ok")])
         agent = self._build_agent(storage=storage, model_client=model_client)
         with tempfile.TemporaryDirectory() as tmpdir:
             agent.markdown_memory = SimpleNamespace(root=Path(tmpdir))
             idle_file = Path(tmpdir) / ".last_interaction"
-            idle_file.write_text(str(time.time() - 100), encoding="utf-8")
             await Agent.chat(agent, user_message="hello", user_id="bob")
-            updated = float(idle_file.read_text(encoding="utf-8").strip())
-            self.assertGreater(updated, time.time() - 100)
+            self.assertFalse(idle_file.exists())
 
     async def test_observe_does_not_update_last_interaction_file(self):
         storage = InMemoryMessageStorage()
@@ -1921,40 +1932,7 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
             after = float(idle_file.read_text(encoding="utf-8").strip())
             self.assertEqual(after, before)
 
-    async def test_run_memory_maintenance_passes_force_when_idle(self):
-        storage = InMemoryMessageStorage()
-        memory_handler = FakeMemoryHandler()
-        model_client = CapturingModelClient([])
-        agent = self._build_agent(
-            storage=storage,
-            model_client=model_client,
-            memory_handler=memory_handler,
-        )
-        with tempfile.TemporaryDirectory() as tmpdir:
-            agent.markdown_memory = SimpleNamespace(root=Path(tmpdir))
-            idle_file = Path(tmpdir) / ".last_interaction"
-            idle_file.write_text(
-                str(time.time() - AgentConfig.IDLE_DIARY_TIMEOUT_SECONDS - 60),
-                encoding="utf-8",
-            )
-            await Agent.run_memory_maintenance(agent)
-            self.assertTrue(memory_handler.maintenance_force)
 
-    async def test_run_memory_maintenance_does_not_force_when_active(self):
-        storage = InMemoryMessageStorage()
-        memory_handler = FakeMemoryHandler()
-        model_client = CapturingModelClient([])
-        agent = self._build_agent(
-            storage=storage,
-            model_client=model_client,
-            memory_handler=memory_handler,
-        )
-        with tempfile.TemporaryDirectory() as tmpdir:
-            agent.markdown_memory = SimpleNamespace(root=Path(tmpdir))
-            idle_file = Path(tmpdir) / ".last_interaction"
-            idle_file.write_text(str(time.time()), encoding="utf-8")
-            await Agent.run_memory_maintenance(agent)
-            self.assertFalse(memory_handler.maintenance_force)
 
     async def test_chat_caps_history_before_loading_messages(self):
         storage = InMemoryMessageStorage([

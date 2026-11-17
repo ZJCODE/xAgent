@@ -548,6 +548,12 @@ class FixedIntervalTests(unittest.IsolatedAsyncioTestCase):
         await self.due()
         self.sink.assert_awaited_once()
 
+    async def test_uncertain_delivery_is_not_retried(self):
+        from xagent.core.runtime.task_receipts import DeliveryUncertainError
+        self.sink.side_effect = DeliveryUncertainError("may have partially played")
+        await self.due()
+        self.sink.assert_awaited_once()
+
     async def test_interruption_during_retry_stops_resending(self):
         async def sink(delivery):
             ticket = self.agent.inbox.reserve_turn()

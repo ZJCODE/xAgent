@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+from xagent.schemas import ParticipationDecision
 from xagent.interfaces.voice.attention import VoiceAttentionConfig, VoiceAttentionGate
 from xagent.interfaces.voice.presence import SttLifecycleController, VoicePresenceConfig, pcm16_rms
 from xagent.interfaces.voice.proactive import ProactiveSpeechLimiter
@@ -171,7 +172,7 @@ class VoiceAttentionRuntimeTests(unittest.TestCase):
         class DecidingAgent(ObservingAgent):
             async def decide_participation(self, context, source, event_type):
                 self.decision_context = context
-                return {"should_reply": True}
+                return ParticipationDecision(should_reply=True)
 
         agent = DecidingAgent()
         runtime = VoiceRuntime(

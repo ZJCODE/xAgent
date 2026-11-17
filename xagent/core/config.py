@@ -230,12 +230,9 @@ class AgentConfig:
     RUNTIME_HEARTBEAT_ENABLED = True
     RUNTIME_HEARTBEAT_INTERVAL_SECONDS = 300
 
-    # Idle diary timeout is checked by the heartbeat loop, so the practical
-    # trigger granularity is bounded by RUNTIME_HEARTBEAT_INTERVAL_SECONDS.
-    # Keep this at or above the heartbeat interval unless you explicitly want
-    # coarse polling. Set to 0 to disable. 21600 means 6 hours, which is a 
-    # reasonable default for capturing idle time without being too noisy.
-    IDLE_DIARY_TIMEOUT_SECONDS = 21600  # 6 hours
+    # Flush even a small pending diary batch once its oldest message has waited
+    # this long. Heartbeat checks bound the polling granularity. 0 disables.
+    DIARY_MAX_WAIT_SECONDS = 21600  # 6 hours
 
     # ============================================================
     # 10b. Subconscious (潜意识)
@@ -480,7 +477,7 @@ class AgentConfig:
         "- Another reply from you would only repeat what was just said or spam the room\n\n"
         "When unsure, prefer speaking briefly over staying silent.\n\n"
         "Return JSON only:\n"
-        '{"should_reply": true|false, "reason": "brief reason", "addressing": ["optional message refs"]}'
+        '{"should_reply": true|false, "reason": "brief reason"}'
     )
 
     # ============================================================

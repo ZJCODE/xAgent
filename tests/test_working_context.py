@@ -140,7 +140,7 @@ class WorkingContextCompactorTests(unittest.IsolatedAsyncioTestCase):
                 summarizer=_FakeSummarizer(),
                 hot_window=12,
             )
-            self.assertEqual(await restarted.current_summary(), view.summary)
+            self.assertEqual((await restarted.current_view()).summary, view.summary)
 
     async def test_summarizer_failure_falls_back_to_existing_summary(self):
         messages = [

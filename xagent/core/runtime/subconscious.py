@@ -26,7 +26,7 @@ except ImportError:  # pragma: no cover - POSIX platforms
 
 from ..config import AgentConfig
 from ..providers import maintenance_reasoning_config
-from .task_receipts import sync_task_directory as _fsync_directory
+from .task_receipts import DeliveryUncertainError, sync_task_directory as _fsync_directory
 
 logger = logging.getLogger(__name__)
 
@@ -646,7 +646,7 @@ class SubconsciousLoop:
                 if inspect.isawaitable(result):
                     await result
                 return
-            except ValueError:
+            except (ValueError, DeliveryUncertainError):
                 raise
             except Exception as exc:
                 last_error = exc
