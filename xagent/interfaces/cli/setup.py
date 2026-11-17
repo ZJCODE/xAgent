@@ -552,6 +552,7 @@ def _config_yaml(selection: InitSelection, port: int) -> str:
             "diary_write_batch": AgentConfig.DIARY_WRITE_BATCH,
             "diary_context_days": AgentConfig.DIARY_CONTEXT_DAYS,
             "subconscious_interval_seconds": AgentConfig.SUBCONSCIOUS_INTERVAL_SECONDS,
+            "subconscious_mode": "act",
         },
         "channels": {
             "api": {

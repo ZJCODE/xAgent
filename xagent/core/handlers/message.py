@@ -529,7 +529,9 @@ class MessageHandler:
     @staticmethod
     def _format_transcript_message_header(message: Message) -> str:
         timestamp = MessageHandler._format_transcript_timestamp(message)
-        if is_scheduled_work(message.metadata):
+        if (message.metadata or {}).get(INBOX_KIND_METADATA_KEY) == "autonomous_turn":
+            header = f"[autonomous wake; not a human instruction][timestamp={timestamp}]"
+        elif is_scheduled_work(message.metadata):
             header = f"[scheduled task][timestamp={timestamp}]"
             target = MessageHandler._sanitize_marker_field(message.sender_id)
             if target:

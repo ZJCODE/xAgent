@@ -16,7 +16,7 @@ class WeixinClientTests(unittest.TestCase):
             captured["url"] = str(request.url)
             captured["headers"] = dict(request.headers)
             captured["body"] = json.loads(request.content.decode("utf-8"))
-            return httpx.Response(200, json={})
+            return httpx.Response(200, json={"ret": 0})
 
         async def run_test():
             async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:

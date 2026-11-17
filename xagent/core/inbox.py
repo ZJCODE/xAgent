@@ -26,6 +26,7 @@ SCHEDULED_AGENT_PROMPT_PREFIX = (
 class InboxKind(str, Enum):
     """How an inbound item should be treated by the agent loop."""
 
+    AUTONOMOUS_TURN = "autonomous_turn"
     USER_TURN = "user_turn"
     SCHEDULED_TURN = "scheduled_turn"
     OBSERVATION = "observation"
@@ -187,7 +188,18 @@ class AgentInbox:
         channel: str | None = None,
         user_id: str | None = None,
         room_name: str | None = None,
+        background: bool = False,
     ) -> "TurnTicket":
+        if background and (self.busy or self._pending):
+            raise InboxCapacityError("Autonomous wake deferred for foreground work")
+        if not background:
+            for pending in self._pending.values():
+                if pending.background:
+                    pending.cancelled.set()
+            if self._current is not None and self._current.background:
+                self._abort.set()
+                if self._current.owner_task is not None:
+                    self._current.owner_task.cancel()
         if not self.accepting:
             raise InboxCapacityError("Agent runtime is stopping")
         if len(self._pending) >= self.max_pending:
@@ -197,10 +209,13 @@ class AgentInbox:
             channel=channel,
             user_id=user_id,
             room_name=room_name,
+            background=background,
+            owner_task=asyncio.current_task() if background else None,
         )
         if ticket.turn_id in self._pending or ticket.turn_id == self.current_turn_id:
             ticket.turn_id = uuid.uuid4().hex
-        self.request_version += 1
+        if not background:
+            self.request_version += 1
         self._pending[ticket.turn_id] = ticket
         return ticket
 
@@ -320,5 +335,7 @@ class TurnTicket:
     channel: str | None = None
     user_id: str | None = None
     room_name: str | None = None
+    background: bool = False
+    owner_task: asyncio.Task | None = None
     created_at: float = field(default_factory=time.monotonic)
     cancelled: asyncio.Event = field(default_factory=asyncio.Event)

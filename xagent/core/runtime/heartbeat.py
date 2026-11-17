@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -113,7 +114,12 @@ class RuntimeHeartbeat:
                 raise
             except Exception as exc:
                 self._logger.warning("Runtime heartbeat tick failed: %s", exc)
-            await asyncio.sleep(self.interval_seconds)
+            delay = self.interval_seconds
+            autonomous = getattr(self._subconscious_loop, "_autonomous", None)
+            if (autonomous is not None and getattr(self._subconscious_loop._agent, "subconscious_mode", "reflect") == "act"
+                    and not self._subconscious_loop._is_agent_busy()):
+                delay = min(delay, max(1.0, autonomous.state["next_run_at"] - time.time()))
+            await asyncio.sleep(delay)
 
 
 def create_runtime_heartbeat(

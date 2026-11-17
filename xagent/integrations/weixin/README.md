@@ -13,7 +13,7 @@ import third-party Weixin bot packages.
 - Full media support: inbound image/file/video/voice download from the iLink
   CDN, outbound image/video/file upload, and audio as file fallback unless a
   native voice format is proven safe.
-- Scheduled delivery is supported only for users with a cached `context_token`.
+- Scheduled and proactive delivery waits for inbound context when none is cached.
 
 ## Setup
 
@@ -46,7 +46,14 @@ permissions when the platform allows it. Do not commit the runtime directory.
 ## Runtime Notes
 
 The iLink receive side is long polling via `/ilink/bot/getupdates`. The adapter
-persists the opaque `get_updates_buf` cursor after each successful response.
+atomically persists received messages and the opaque `get_updates_buf` cursor
+in `weixin/inbox.sqlite3` before dispatching messages. Existing cursor files are
+read as a migration fallback. Queued messages resume after restart; turns that
+were already processing are retained as `needs_review` because external tools
+may have run. Cancellation while waiting for the per-user lock leaves the
+message queued. Runtime detailed status exposes per-account inbound counts;
+failed/interrupted records remain in the inbox for inspection. Successfully
+processed messages retain their deduplication IDs but discard their raw payload.
 Replies require the latest inbound `context_token` for the user, so proactive
 or scheduled sends can only target users who have already messaged the bot.
 
@@ -73,3 +80,15 @@ Scheduled delivery recovery:
 - Lost acknowledgements and ambiguous transport errors still require review.
   Historical review records are not automatically replayed. Runtime task status
   includes a `waiting_context` count, and run details expose the waiting stage.
+
+Weixin subconscious messages enter the same durable delivery queue with an
+idempotency key based on bot account, recipient and generation timestamp. A queue
+acknowledgement is logged as `queued`, not `sent`. Delivery uses strict single
+attempts and per-part receipts, so a lost acknowledgement is never blindly
+retried and fresh inbound context can resume explicitly rejected parts. Confirmed
+delivery is then recorded in conversation history. Outbound records are bound to
+the originating bot account and expire under the existing task deadline.
+
+Successful `sendmessage` responses must contain an explicit zero `ret` or
+`errcode`. Empty bodies, non-object JSON and missing/invalid acknowledgement
+fields are treated as unconfirmed, even when the HTTP status is 200.

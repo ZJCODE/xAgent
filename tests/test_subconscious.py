@@ -117,6 +117,81 @@ class AgentSubconsciousThoughtTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(entries), 1)
             self.assertIn("raw inner thought", entries[0][1])
 
+    async def test_reflection_can_decline_repeated_notes_using_existing_diary_context(self):
+        """Exercise context and write routing; model decisions are scripted, not a semantic benchmark."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            agent = Agent(client=object(), workspace=tmpdir)
+            pending = "The morning tasks have not been merged yet."
+            await agent.record_subconscious_thought(pending)
+            before = await agent.markdown_memory.read_recent_dailies(days=1)
+            calls = []
+
+            class Client:
+                async def model_turn_events(inner, **kwargs):
+                    calls.append(kwargs)
+                    yield ModelStreamEvent(type="text", delta='{"note": null, "message": null}')
+
+            agent.model_client = Client()
+            loop = SubconsciousLoop(agent, workspace=Path(tmpdir), interval_seconds=60)
+            for _ in range(8):
+                loop._next_think_at = 0
+                await loop.maybe_think()
+            self.assertEqual(await agent.markdown_memory.read_recent_dailies(days=1), before)
+            self.assertEqual(len(calls), 8)  # No second judge call.
+            for call in calls:
+                memory = next(m for m in call["messages"] if m.get("name") == AgentConfig.RECENT_MEMORY_NAME)
+                self.assertIn(pending, memory["content"])
+                task = next(m for m in call["messages"] if m.get("name") == AgentConfig.CURRENT_TASK_NAME)
+                self.assertIn("Compare the meaning", task["content"])
+                self.assertIn("elapsed time", task["content"])
+                self.assertIn("return note null", task["content"])
+                self.assertEqual(call["tool_specs"], [])
+            self.assertFalse((Path(tmpdir) / ".runtime" / "reflection.json").exists())
+
+    async def test_reflection_keeps_a_new_insight_on_an_existing_topic(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            agent = Agent(client=object(), workspace=tmpdir)
+            pending = "The morning tasks have not been merged yet."
+            insight = "Collect air data separately to preserve freshness, then combine the delivery."
+            await agent.record_subconscious_thought(pending)
+            calls = []
+
+            class Client:
+                async def model_turn_events(inner, **kwargs):
+                    calls.append(kwargs)
+                    yield ModelStreamEvent(type="text", delta=json.dumps({"note": insight, "message": None}))
+
+            agent.model_client = Client()
+            loop = SubconsciousLoop(agent, workspace=Path(tmpdir))
+            loop._next_think_at = 0
+            await loop.maybe_think()
+            diary = "\n".join(text for _, text in await agent.markdown_memory.read_recent_dailies(days=1))
+            self.assertIn(pending, diary)
+            self.assertEqual(diary.count(insight), 1)
+            self.assertEqual(len(calls), 1)
+
+    async def test_restart_uses_diary_for_comparison_without_a_separate_note_store(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            original = Agent(client=object(), workspace=tmpdir)
+            note = "Air readings need a separate collection step before the combined morning delivery."
+            await original.record_subconscious_thought(note)
+            before = await original.markdown_memory.read_recent_dailies(days=1)
+            restarted = Agent(client=object(), workspace=tmpdir)
+            captured = []
+
+            class Client:
+                async def model_turn_events(inner, **kwargs):
+                    captured.append(kwargs)
+                    yield ModelStreamEvent(type="text", delta='{"note": null, "message": null}')
+
+            restarted.model_client = Client()
+            loop = SubconsciousLoop(restarted, workspace=Path(tmpdir))
+            loop._next_think_at = 0
+            await loop.maybe_think()
+            memory = next(m for m in captured[0]["messages"] if m.get("name") == AgentConfig.RECENT_MEMORY_NAME)
+            self.assertIn(note, memory["content"])
+            self.assertEqual(await restarted.markdown_memory.read_recent_dailies(days=1), before)
+
     async def test_record_subconscious_thought_skips_json_payload(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             agent = Agent(client=object(), workspace=tmpdir)

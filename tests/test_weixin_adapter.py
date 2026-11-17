@@ -57,18 +57,18 @@ class _FakeWeixinClient:
 
     async def send_text_message(self, **kwargs):
         self.sent_text.append(kwargs)
-        return {}
+        return {"ret": 0}
 
     async def send_message_item(self, **kwargs):
         self.sent_items.append(kwargs)
-        return {}
+        return {"ret": 0}
 
     async def get_config(self, **kwargs):
         return {"typing_ticket": "ticket"}
 
     async def send_typing(self, **kwargs):
         self.typing.append(kwargs)
-        return {}
+        return {"ret": 0}
 
 
 class WeixinAdapterTests(unittest.TestCase):
@@ -126,7 +126,6 @@ class WeixinAdapterTests(unittest.TestCase):
         adapter._context_tokens = state.load_context_tokens(credentials.account_id)
         return adapter, agent, client, state
 
-
     def test_scheduled_rejection_waits_for_new_inbound_context(self):
         from xagent.core.runtime.tasks import AsyncTaskScheduler
         from xagent.integrations.weixin.client import WeixinApiError
@@ -144,7 +143,7 @@ class WeixinAdapterTests(unittest.TestCase):
                     calls.append((kwargs["text"], kwargs["context_token"]))
                     if kwargs["text"] == "second line" and kwargs["context_token"] == "old":
                         raise WeixinApiError("prepare failed", code=-99, payload={"ret": -99})
-                    return {}
+                    return {"ret": 0}
                 client.send_text_message = send
                 scheduler = AsyncTaskScheduler(root, can_handle=lambda task: True,
                     execute=adapter.execute_scheduled_task, deliver=adapter.deliver_scheduled_task,
@@ -175,7 +174,7 @@ class WeixinAdapterTests(unittest.TestCase):
                     if kwargs["context_token"] == "old":
                         adapter._remember_context("owner@im.wechat", "new")
                         raise WeixinApiError("prepare failed", code=-99)
-                    return {}
+                    return {"ret": 0}
                 client.send_text_message = send
                 scheduler = AsyncTaskScheduler(root, can_handle=lambda task: True,
                     execute=adapter.execute_scheduled_task, deliver=adapter.deliver_scheduled_task,
@@ -209,10 +208,6 @@ class WeixinAdapterTests(unittest.TestCase):
                                 (TimeoutError("lost acknowledgement"), "needs_review")]:
             with self.subTest(expected=expected):
                 asyncio.run(run_case(error, expected))
-
-
-def _process_until_idle(adapter, message):
-    asyncio.run(adapter._process_message(message))
 
     def test_owner_direct_message_routes_to_agent_and_replies(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -334,7 +329,16 @@ def _process_until_idle(adapter, message):
                     created_at=datetime(2026, 6, 25, 9, 0, 0),
                 )
 
-                await adapter.deliver_subconscious_message(delivery)
+                from xagent.core.runtime.tasks import AsyncTaskScheduler
+                from datetime import timezone
+                scheduler = AsyncTaskScheduler(tmpdir, can_handle=adapter._can_handle_scheduled_task,
+                    execute=adapter.execute_scheduled_task, deliver=adapter.deliver_scheduled_task,
+                    now_provider=lambda: datetime(2026, 6, 25, 9, tzinfo=timezone.utc))
+                adapter.enqueue_outbound = scheduler.enqueue_outbound_message
+                result = await adapter.deliver_subconscious_message(delivery)
+                self.assertTrue(result["queued"])
+                self.assertEqual(client.sent_text, [])
+                await scheduler.tick()
                 return _agent, client.sent_text
 
         agent, sent_text = asyncio.run(run_test())
@@ -395,6 +399,11 @@ def _process_until_idle(adapter, message):
         self.assertEqual(started, [201, 202, 203])
         self.assertEqual(finished, [201, 202, 203])
         self.assertEqual(chat_calls, [])
+
+
+
+def _process_until_idle(adapter, message):
+    asyncio.run(adapter._process_message(message))
 
 
 if __name__ == "__main__":

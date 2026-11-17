@@ -170,6 +170,23 @@ class TaskStore:
             c.execute("INSERT INTO tasks(id,payload,next_due,status) VALUES(?,?,?,?)",
                       (payload["id"], encode(payload), stamp(due), payload.get("status", "active")))
 
+    def insert_prepared_task(self, payload, result, now):
+        """Atomically enqueue generated outbound content with an idempotent identity."""
+        due = aware(payload["run_at"])
+        with self.transaction() as c:
+            existing = c.execute("SELECT payload FROM tasks WHERE id=?", (payload["id"],)).fetchone()
+            if existing:
+                if json.loads(existing[0])["task"] != payload["task"]:
+                    raise ValueError("Outbound idempotency key reused for different content")
+                return
+            c.execute("INSERT INTO tasks(id,payload,next_due,status) VALUES(?,?,NULL,'active')",
+                      (payload["id"], encode(payload)))
+            self._insert_run(c, payload, due, "result_ready", now, result=result)
+            row = c.execute("SELECT data FROM runs WHERE task_id=?", (payload["id"],)).fetchone()
+            run = json.loads(row[0])
+            run["phase"] = "deliver"
+            self.put_run(c, run)
+
     def tasks(self, include_completed=False):
         with self.connect() as c:
             rows = c.execute("SELECT * FROM tasks ORDER BY next_due,id").fetchall()

@@ -145,6 +145,12 @@ class RuntimeHost:
         get_tasks = getattr(self.scheduler, "get_status", None)
         if callable(get_tasks):
             result["tasks"] = await get_tasks()
+        reflection = getattr(self.heartbeat, "subconscious_loop", None)
+        if reflection is not None and callable(getattr(reflection, "status_snapshot", None)):
+            result["autonomous"] = reflection.status_snapshot()
+        get_inbound = getattr(self.adapters.get("weixin"), "get_inbound_status", None)
+        if callable(get_inbound):
+            result["channels"].setdefault("weixin", {})["inbound"] = get_inbound()
         return result
 
     def _publish_status(self) -> None:
@@ -591,6 +597,7 @@ class RuntimeHost:
 
             adapter = WeixinAdapter(agent=self.agent, config=WeixinAdapterConfig.from_dict(weixin_config(config)), runtime_dir=self.config_dir)
             adapter.delivery_context_updated = self.scheduler.notify_delivery_context
+            adapter.enqueue_outbound = self.scheduler.enqueue_outbound_message
             self.adapters[channel] = adapter
             run = adapter.run()
         else:
@@ -679,7 +686,7 @@ class RuntimeHost:
             raise RuntimeError("Subconscious delivery channel is disconnected")
         task = self._channel_activity[channel].create_task(adapter.deliver_subconscious_message(delivery))
         try:
-            await task
+            return await task
         except asyncio.CancelledError:
             if asyncio.current_task().cancelling():
                 raise

@@ -115,6 +115,7 @@ class Agent:
         diary_write_batch: int = AgentConfig.DIARY_WRITE_BATCH,
         diary_context_days: int = AgentConfig.DIARY_CONTEXT_DAYS,
         subconscious_interval_seconds: float = AgentConfig.SUBCONSCIOUS_INTERVAL_SECONDS,
+        subconscious_mode: str = "reflect",
         voice: str = AgentConfig.DEFAULT_VOICE,
         provider_name: str = PROVIDER_OPENAI,
         reasoning: Optional[ReasoningConfig] = None,
@@ -131,6 +132,9 @@ class Agent:
         self.max_concurrent_tools = max_concurrent_tools
         self.diary_write_batch = diary_write_batch
         self.diary_context_days = diary_context_days
+        if subconscious_mode not in {"reflect", "act", "off"}:
+            raise ValueError("subconscious_mode must be reflect, act or off")
+        self.subconscious_mode = subconscious_mode
         self.subconscious_interval_seconds = subconscious_interval_seconds
         self.voice = str(voice or AgentConfig.DEFAULT_VOICE).strip() or AgentConfig.DEFAULT_VOICE
         self.observability = observability or NoopObservabilityRuntime()
@@ -754,6 +758,7 @@ class Agent:
                 channel=item.channel,
                 user_id=item.user_id,
                 room_name=item.room_name,
+                background=item.kind is InboxKind.AUTONOMOUS_TURN,
             )
         except InboxCapacityError as exc:
             yield build_public_error(code="capacity", cause=exc)
@@ -770,7 +775,7 @@ class Agent:
             record, fresh = await self.turn_store.begin(
                 event_key=event_key, turn_id=ticket.turn_id, event_id=event_id,
                 channel=item.channel, user_id=item.user_id, room_name=item.room_name,
-                request_id=request_id,
+                request_id=request_id, source=metadata.get("source"), inbox_kind=item.kind.value,
             )
             if not fresh:
                 self.inbox.discard(ticket)
@@ -791,7 +796,7 @@ class Agent:
             yield {"type": "accepted", "turn_id": ticket.turn_id, "event_id": event_id, "request_id": request_id}
             await self.inbox.acquire_turn(ticket)
             claimed = True
-            deadline = time.monotonic() + self.inbox.run_timeout
+            deadline = time.monotonic() + (min(180, self.inbox.run_timeout) if item.kind is InboxKind.AUTONOMOUS_TURN else self.inbox.run_timeout)
             iterator = self._drive_claimed_turn(
                 inbox_item=item, user_metadata=metadata, stream=stream,
                 max_agent_loops=max_agent_loops, existing_user_msg=existing_user_msg,
@@ -861,7 +866,7 @@ class Agent:
                 if claimed:
                     self.inbox.release_turn()
                 if record is not None and not finished:
-                    await asyncio.shield(self.turn_store.update(ticket.turn_id, state="interrupted", needs_review=True))
+                    await asyncio.shield(self.turn_store.update(ticket.turn_id, state="interrupted", needs_review=side_effect_started if item.kind is InboxKind.AUTONOMOUS_TURN else True))
 
     async def _drive_claimed_turn(
         self,
@@ -951,6 +956,7 @@ class Agent:
                     messages.append(assistant)
                 return messages
 
+            autonomous_calls = {}
             iteration_index = 0
             allow_extra = False
             extra_rounds = 0
@@ -1115,6 +1121,8 @@ class Agent:
                     for tool_call in tool_calls:
                         tool_event = self._tool_event("tool_call", tool_call)
                         tool_event["retry_safety"] = getattr(self.tool_manager.get_tool(tool_event["name"]), "retry_safety", "external")
+                        if inbox_item.kind is InboxKind.AUTONOMOUS_TURN:
+                            tool_event["arguments"] = tool_call.get("arguments", (tool_call.get("function") or {}).get("arguments")) if isinstance(tool_call, dict) else getattr(tool_call, "arguments", "")
                         yield tool_event
 
                     tool_result = await self.tool_executor.handle_tool_calls(
@@ -1126,6 +1134,20 @@ class Agent:
                         room_name=room_name,
                         inbox_kind=inbox_item.kind.value,
                     )
+                    if inbox_item.kind is InboxKind.AUTONOMOUS_TURN:
+                        calls = []
+                        for call in tool_calls:
+                            shape = self._tool_event("tool_call", call)
+                            args = call.get("arguments", (call.get("function") or {}).get("arguments")) if isinstance(call, dict) else getattr(call, "arguments", "")
+                            calls.append([shape["name"], args])
+                        outputs = [m.get("content") for m in iteration_messages if m.get("role") == "tool"][-len(tool_calls):]
+                        signature = json.dumps([calls, outputs], sort_keys=True, default=str)
+                        autonomous_calls[signature] = autonomous_calls.get(signature, 0) + 1
+                        if autonomous_calls[signature] >= 3:
+                            async for event in end_turn(build_public_error(code=ERROR_TURN_EXHAUSTED,
+                                    cause="Autonomous turn repeated identical tool calls and results")):
+                                yield event
+                            return
                     pending_see_image_paths = getattr(
                         self.tool_executor, "pending_see_image_paths", None
                     )
@@ -1495,7 +1517,7 @@ class Agent:
         self,
         messages: List[Message],
     ) -> None:
-        if not messages:
+        if not messages or (messages[0].metadata or {}).get("inbox_kind") == InboxKind.AUTONOMOUS_TURN.value:
             return
         self.memory_handler.schedule_experience_write(messages)
 

@@ -153,6 +153,9 @@ class WeixinClient:
         }
         response = await self._post("ilink/bot/sendmessage", payload, timeout_ms=timeout_ms)
         raise_for_api_error(response, "sendmessage")
+        if not any(type(response.get(field)) in (int, str) and response[field] in (0, "0")
+                   for field in ("ret", "errcode")):
+            raise WeixinApiError("sendmessage returned no explicit acknowledgement", status_code=200)
         return response
 
     async def get_config(self, *, user_id: str, context_token: str, timeout_ms: int = 10_000) -> dict[str, Any]:

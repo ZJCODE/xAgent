@@ -3,12 +3,12 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import hashlib
 import logging
 import mimetypes
 import re
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import unquote, urlparse
@@ -21,6 +21,7 @@ from ...core.runtime import (
     collect_scheduled_turn_events,
     current_delivery_context,
     SubconsciousDelivery,
+    ContactEntry,
     persist_subconscious_delivery,
     resolve_contacts_path,
     scheduled_delivery_context,
@@ -153,6 +154,8 @@ class WeixinAdapter:
         self._poll_task: asyncio.Task | None = None
         self.runtime_activity = None
         self.delivery_context_updated = None
+        self.enqueue_outbound = None
+        self._inbound_scheduled: set[str] = set()
 
     async def run(self) -> None:
         credentials = self.state_store.load_credentials(self.config.account_id)
@@ -173,6 +176,10 @@ class WeixinAdapter:
             self.client.with_credentials(credentials)
 
         try:
+            interrupted = self.state_store.recover_inbound(credentials.account_id)
+            if interrupted:
+                self.logger.warning("Retained %s interrupted Weixin messages for review; external tool outcomes may be unknown", interrupted)
+            await self._dispatch_inbound()
             self._poll_task = asyncio.create_task(self._poll_loop())
             if not self._accepting:
                 self._poll_task.cancel()
@@ -195,6 +202,9 @@ class WeixinAdapter:
         self._accepting = False
         if self._poll_task is not None:
             self._poll_task.cancel()
+
+    def get_inbound_status(self):
+        return self.state_store.inbound_status(self._credentials.account_id if self._credentials else self.config.account_id)
 
     @property
     def resources_closed(self) -> bool:
@@ -249,13 +259,10 @@ class WeixinAdapter:
                 callback = getattr(self, "runtime_status", None)
                 if callback:
                     callback("connected")
+                self.state_store.commit_poll(self._credentials.account_id, new_sync_buf, response.get("msgs") or [])
                 if new_sync_buf:
                     sync_buf = new_sync_buf
-                    self.state_store.save_sync_buf(self._credentials.account_id, sync_buf)
-
-                for message in response.get("msgs") or []:
-                    if isinstance(message, dict):
-                        await self._create_processing_task(message)
+                await self._dispatch_inbound()
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -282,11 +289,47 @@ class WeixinAdapter:
         except asyncio.TimeoutError:
             pass
 
-    async def _create_processing_task(self, message: dict[str, Any]) -> None:
-        if not self._accepting:
+    async def _dispatch_inbound(self) -> None:
+        if not self._accepting or self._credentials is None:
             return
-        task = (self.runtime_activity.create_task(self._process_message_safe(message)) if self.runtime_activity is not None
-                else asyncio.create_task(self._process_message_safe(message)))
+        capacity = max(0, 32 - sum(not task.done() for task in self._processing_tasks))
+        for key, message in self.state_store.pending_inbound(self._credentials.account_id, 32):
+            if capacity <= 0:
+                break
+            if key in self._inbound_scheduled:
+                continue
+            self._inbound_scheduled.add(key)
+            await self._create_processing_task(message, inbound_key=key)
+            capacity -= 1
+
+    async def _process_inbound(self, message, key):
+        account = self._credentials.account_id
+        try:
+            try:
+                await self._process_message(message, inbound_key=key)
+            except asyncio.CancelledError:
+                self.state_store.finish_inbound(account, key, "CancelledError", only_processing=True)
+                raise
+            except BaseException as exc:
+                self.state_store.finish_inbound(account, key, type(exc).__name__)
+                raise
+            else:
+                self.state_store.finish_inbound(account, key)
+        finally:
+            self._inbound_scheduled.discard(key)
+
+    async def _create_processing_task(self, message: dict[str, Any], *, inbound_key=None) -> None:
+        if not self._accepting:
+            self._inbound_scheduled.discard(inbound_key)
+            return
+        operation = self._process_inbound(message, inbound_key) if inbound_key is not None else self._process_message_safe(message)
+        try:
+            task = (self.runtime_activity.create_task(operation) if self.runtime_activity is not None
+                    else asyncio.create_task(operation))
+        except BaseException:
+            operation.close()
+            self._inbound_scheduled.discard(inbound_key)
+            raise
         async with self._processing_tasks_lock:
             self._processing_tasks.add(task)
         task.add_done_callback(self._on_processing_task_done)
@@ -306,6 +349,7 @@ class WeixinAdapter:
             return
         except Exception:
             self.logger.exception("Unhandled Weixin message processing error")
+        await self._dispatch_inbound()
 
     async def _cancel_processing_tasks(self) -> None:
         async with self._processing_tasks_lock:
@@ -322,12 +366,17 @@ class WeixinAdapter:
         except Exception:
             self.logger.exception("Weixin inbound processing failed from=%s", _safe_id(message.get("from_user_id")))
 
-    async def _process_message(self, message: dict[str, Any]) -> None:
+    async def _handle_inbound_dm(self, message, user_id, inbound_key):
+        if inbound_key is not None and not self.state_store.claim_inbound(self._credentials.account_id, inbound_key):
+            return
+        await self._handle_dm(message, user_id=user_id)
+
+    async def _process_message(self, message: dict[str, Any], *, inbound_key=None) -> None:
         if not self._should_route_message(message):
             return
         user_id = str(message.get("from_user_id") or "").strip()
         if self._should_join_running_turn(user_id, message):
-            await self._handle_dm(message, user_id=user_id)
+            await self._handle_inbound_dm(message, user_id, inbound_key)
             return
         entry = self._chat_locks.get(user_id)
         if entry is None:
@@ -336,7 +385,7 @@ class WeixinAdapter:
         entry.waiters += 1
         try:
             async with entry.lock:
-                await self._handle_dm(message, user_id=user_id)
+                await self._handle_inbound_dm(message, user_id, inbound_key)
         finally:
             entry.waiters -= 1
             if entry.waiters <= 0 and self._chat_locks.get(user_id) is entry:
@@ -752,7 +801,9 @@ class WeixinAdapter:
         await self.client.send_typing(user_id=user_id, typing_ticket=ticket, status=status, timeout_ms=self.config.api_timeout_ms)
 
     def _can_handle_scheduled_task(self, task) -> bool:
-        return task.kind == "task" and task.delivery_channel == "weixin" and self.client is not None
+        account = task.payload.get("source", {}).get("account_id")
+        return (task.kind == "task" and task.delivery_channel == "weixin" and self.client is not None
+                and (not account or self._credentials is not None and self._credentials.account_id == account))
 
     async def execute_scheduled_task(self, task) -> dict[str, Any]:
         user_id = str(task.target.get("user_id") or task.delivery_user_id or "").strip()
@@ -799,33 +850,30 @@ class WeixinAdapter:
             asyncio.get_running_loop().call_soon(
                 self._notify_delivery_context, user_id, self._context_tokens.get(user_id, ""))
             raise waiting(str(exc)) from exc
+        source = task.payload.get("source", {})
+        if source.get("type") == "subconscious":
+            delivery = SubconsciousDelivery(
+                content=result.content, internal_content="", created_at=datetime.fromisoformat(source["created_at"]),
+                recipient=ContactEntry(channel="weixin", user_id=user_id, target={"user_id": user_id}, last_seen=""))
+            try:
+                await journal_delivery(f"scheduled:{run_id}:history", lambda: persist_subconscious_delivery(
+                    self.agent, delivery, channel="weixin", recipient_id=user_id),
+                    uncertain_on_error=False, payload=result.content)
+            except Exception:
+                self.logger.warning("Failed to persist confirmed proactive delivery history", exc_info=True)
         return {"accepted": True, "transport": "weixin", "request_id": run_id}
 
-    async def deliver_subconscious_message(self, delivery: SubconsciousDelivery) -> None:
+    async def deliver_subconscious_message(self, delivery: SubconsciousDelivery) -> dict[str, Any]:
         if delivery.recipient.channel != "weixin":
             raise ValueError(f"Weixin runtime cannot deliver subconscious channel {delivery.recipient.channel!r}")
         user_id = str(delivery.recipient.target.get("user_id") or delivery.recipient.user_id or "").strip()
         if not user_id:
             raise ValueError("subconscious Weixin delivery is missing user_id")
-        context_token = self._context_tokens.get(user_id)
-        if not context_token:
-            raise ValueError(f"subconscious Weixin delivery cannot send to {user_id}: no cached context_token")
-        await self._send_text_and_attachments(
-            user_id=user_id,
-            context_token=context_token,
-            content=delivery.content,
-            attachments=[],
-            stable_key=f"subconscious:{delivery.created_at.isoformat(sep=' ')}:{user_id}",
-        )
-        try:
-            await persist_subconscious_delivery(
-                self.agent,
-                delivery,
-                channel="weixin",
-                recipient_id=user_id,
-            )
-        except Exception:
-            self.logger.debug("Failed to persist Weixin subconscious delivery", exc_info=True)
+        if self.enqueue_outbound is None or self._credentials is None:
+            raise ValueError("Weixin proactive delivery requires the durable runtime scheduler")
+        return self.enqueue_outbound(content=delivery.content, channel="weixin", user_id=user_id,
+                                     account_id=self._credentials.account_id,
+                                     created_at=delivery.created_at.isoformat())
 
     async def _scheduled_task_result(self, task, *, user_id: str) -> _WeixinScheduledTaskResult:
         if task.task_type == "message":

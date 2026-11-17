@@ -262,6 +262,7 @@ class SubconsciousLoop:
         self._delivery_retries = SUBCONSCIOUS_DELIVERY_RETRIES
         self._delivery_retry_delay_seconds = SUBCONSCIOUS_DELIVERY_RETRY_DELAY_SECONDS
         self._last_diary_note = ""
+        self._autonomous = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -270,6 +271,13 @@ class SubconsciousLoop:
     @property
     def contacts_file(self) -> Path:
         return self._contacts_file
+
+    def status_snapshot(self):
+        state = self._autonomous.state if self._autonomous is not None else {}
+        return {"mode": getattr(self._agent, "subconscious_mode", "reflect"), "running": self._thinking,
+                "next_run_at": state.get("next_run_at"), "last_exit": state.get("last_exit"),
+                "quiet_count": state.get("quiet_count", 0), "active_wake": state.get("active_wake"),
+                "pending_notification": (state.get("pending_notification") or {}).get("status")}
 
     def set_deliverable_channels(self, channels: Iterable[str]) -> None:
         self._deliverable_channels = self._normalize_deliverable_channels(channels)
@@ -304,6 +312,15 @@ class SubconsciousLoop:
 
     async def maybe_think(self) -> None:
         """Reflect at a fixed interval; foreground requests always take priority."""
+        mode = getattr(self._agent, "subconscious_mode", "reflect")
+        if mode == "off" or not self._enabled or self._interval <= 0:
+            return
+        if mode == "act":
+            if self._autonomous is None:
+                from .autonomous import AutonomousWake
+                self._autonomous = AutonomousWake(self)
+            await self._autonomous.tick()
+            return
         if (not self._enabled or self._interval <= 0 or self._thinking
                 or time.monotonic() < self._next_think_at or self._is_agent_busy()):
             return
@@ -330,11 +347,11 @@ class SubconsciousLoop:
                     delivery_status = "unavailable"
                 else:
                     try:
-                        await self._deliver_with_retries(SubconsciousDelivery(
+                        receipt = await self._deliver_with_retries(SubconsciousDelivery(
                             content=message["text"], recipient=recipient,
                             internal_content=note or "", created_at=datetime.now(),
                         ), expected_version=version)
-                        delivery_status = "sent"
+                        delivery_status = "queued" if isinstance(receipt, dict) and receipt.get("queued") else "sent"
                     except InterruptedError:
                         delivery_status = "interrupted"
                         return
@@ -639,7 +656,7 @@ class SubconsciousLoop:
     def _contact_key(channel: str, user_id: str) -> str:
         return f"{channel.strip().lower()}:{user_id.strip()}"
 
-    async def _deliver_with_retries(self, delivery: SubconsciousDelivery, *, expected_version: int) -> None:
+    async def _deliver_with_retries(self, delivery: SubconsciousDelivery, *, expected_version: int) -> Any:
         """Deliver a subconscious thought, retrying transient sink failures."""
         if self._delivery_sink is None:
             raise RuntimeError("Subconscious delivery sink is not configured")
@@ -652,8 +669,8 @@ class SubconsciousLoop:
             try:
                 result = self._delivery_sink(delivery)
                 if inspect.isawaitable(result):
-                    await result
-                return
+                    result = await result
+                return result
             except (ValueError, DeliveryUncertainError):
                 raise
             except Exception as exc:

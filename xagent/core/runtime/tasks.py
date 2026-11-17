@@ -689,6 +689,21 @@ class AsyncTaskScheduler:
         self.store.resume_context(channel, account_id, user_id, context_key)
         self.wake()
 
+    def enqueue_outbound_message(self, *, content, channel, user_id, account_id, created_at):
+        import hashlib
+        identity = f"{channel}:{account_id}:{user_id}:{created_at}"
+        task_id = "outbound-" + hashlib.sha256(identity.encode()).hexdigest()[:32]
+        now = self._now()
+        payload = dict(id=task_id, kind="task", timezone="UTC", title="Proactive message",
+                       status="active", task={"type": "message", "content": content},
+                       delivery={"channel": channel, "user_id": user_id, "target": {"user_id": user_id}},
+                       execution={}, source={"type": "subconscious", "account_id": account_id,
+                                             "created_at": created_at},
+                       created_at=stamp(now), updated_at=stamp(now), run_at=stamp(now))
+        self.store.insert_prepared_task(payload, {"content": content, "attachments": []}, now)
+        self.wake()
+        return {"queued": True, "task_id": task_id}
+
     def channel_tasks(self, channel):
         return {t for t, (r, _) in self._inflight_records.items() if r.delivery_channel == channel and not t.done()}
 

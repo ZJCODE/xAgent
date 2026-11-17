@@ -250,6 +250,7 @@ class BaseAgentRunner:
                 "max_concurrent_tools",
                 "subconscious_activity",
                 "subconscious_interval_seconds",
+                "subconscious_mode",
                 "diary_context_days",
             }
             unsupported_agent_keys = sorted(set(agent_cfg) - allowed_agent_keys)
@@ -265,6 +266,8 @@ class BaseAgentRunner:
                     raise ValueError(
                         f"agent.subconscious_activity must be a number between 0 and 1, got {val!r}"
                     )
+            if agent_cfg.get("subconscious_mode", "reflect") not in {"reflect", "act", "off"}:
+                raise ValueError("agent.subconscious_mode must be reflect, act or off")
             if "subconscious_interval_seconds" in agent_cfg:
                 self._validate_non_negative_int(agent_cfg["subconscious_interval_seconds"], "agent.subconscious_interval_seconds")
             elif "subconscious_activity" in agent_cfg:
@@ -590,6 +593,7 @@ class BaseAgentRunner:
             max_concurrent_tools=agent_section.get("max_concurrent_tools", AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS),
             diary_write_batch=agent_section.get("diary_write_batch", AgentConfig.DIARY_WRITE_BATCH),
             diary_context_days=agent_section.get("diary_context_days", AgentConfig.DIARY_CONTEXT_DAYS),
+            subconscious_mode=agent_section.get("subconscious_mode", "reflect"),
             subconscious_interval_seconds=agent_section.get("subconscious_interval_seconds", AgentConfig.SUBCONSCIOUS_INTERVAL_SECONDS),
             voice=voice_name,
         )

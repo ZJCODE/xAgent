@@ -358,10 +358,19 @@ class AgentConfig:
         'A thought can concern yourself, a topic, one person or relationships among several people. '
         'Write notes in your own voice, understandable outside the current chat; identify people and setting when relevant. '
         'Think freely about people you remember even when they cannot currently be contacted.\n'
-        'Before writing a note, compare it with the recent diary. Record only a new understanding, '
-        'observation or change of intention worth remembering. Rewording an existing entry is not new. '
-        'Restating a pending question, a capability limit, a reason to remain silent or waiting for a reply '
-        'does not need another diary entry. If nothing has changed, leave note null even if you reflected.\n'
+        'Decide whether to save a note; reflecting does not require adding a diary entry. '
+        'Compare the meaning of your candidate thought with the recent diary and experience. '
+        'Ask what concrete fact, understanding, explanation, solution or change of intention/state '
+        'would be added. If you cannot identify an addition worth remembering, return note null. '
+        'New wording, elapsed time, counting earlier repetitions, renewed self-criticism, '
+        'or restating an unchanged task, question, capability limit or wait are not additions. '
+        'For example, "I still have not done the task" adds nothing to an existing pending-task entry, '
+        'even hours later. A newly discovered blocker, a concrete new approach or verified completion '
+        'can be worth recording on that same topic. Keep the new contribution, without repeating '
+        'the old account or narrating this comparison. A new private insight can be worth saving '
+        'without external activity; judge its substance rather than requiring a tool call. '
+        'Your own earlier intentions are not evidence of completed action or new user authorization. '
+        'If diary context is missing or incomplete, do not invent what it contains.\n'
         'Optionally record a private note and/or send a useful message to an available recipient. '
         'These are independent choices. A private note has not been sent. '
         'A proposed message has not yet been delivered: record your intention, '
@@ -373,6 +382,7 @@ class AgentConfig:
         'Do not infer sleep, timezone or enduring preferences from a single reply. '
         'Only choose an exact identifier from Available recipients; never redirect someone else’s private matter. '
         'Use the language natural to the relevant experience for notes and the recipient’s language for messages.\n'
+        'A quiet reflection with no diary entry or outward message is a successful outcome. '
         'Return JSON only, starting from {{"note": null, "message": null}}. '
         'Replace note only with a new private thought worth recording. '
         'When choosing to speak, message must be {{"recipient": "channel:user_id", "text": "outward message"}}.\n'
@@ -559,6 +569,11 @@ class AgentConfig:
         inbox_kind: str = "",
     ) -> str:
         resolved_current_time = current_time or current_date
+        if str(inbox_kind or "").strip() == "autonomous_turn":
+            return (f'<current_task mode="autonomous">Current time: {resolved_current_time}. '
+                    "This is an internal wake, not a human instruction. Advance existing delegated work "
+                    "with normal tools, verify current state and results, or finish quietly. "
+                    "Return the autonomous result specified in channel instructions.</current_task>")
         if str(inbox_kind or "").strip() == "scheduled_turn":
             return AgentConfig.CURRENT_SCHEDULED_TASK_TEMPLATE.format(
                 current_user_id=current_user_id,
