@@ -111,13 +111,18 @@ limit) and 180 seconds (or the agent's lower turn timeout), plus cleanup time.
 Three identical tool batches and results stop the wake instead of looping.
 
 A wake may finish quietly. Routine wake transcripts bypass automatic diary
-writing; only a new explicit note is appended. Unchanged idle/blocked outcomes
+writing. Meaningful completed or partial work is written to the existing diary,
+including verification and remaining steps; a new blocker is recorded once.
+Unchanged blockers and idle wakes do not append entries. There is no
+`previous_wake` model input or separate work-memory snapshot: subsequent wakes
+read progress from the normal diary context. Unchanged idle/blocked outcomes
 back off up to two hours; user requests reset the backoff. Progress with a next
 step can continue after 60 seconds, for at most three wakes before returning to
-the normal interval. Wake results and recent tool events persist under
-`.runtime/autonomous.json` in the agent workspace root; normal turn receipts
-retain execution/interruption state. An interrupted operation is checked against
-current state on the next wake rather than replayed automatically.
+the normal interval. `.runtime/autonomous.json` retains only scheduling,
+notification and operational status. Wake results and tool events remain in the
+existing turn receipts for diagnostics and interruption recovery, not in normal
+conversation history or recurring prompt snapshots. Read current state before
+repeating a potentially interrupted operation.
 
 Notifications use explicit recipients and the existing delivery sink. Weixin
 notifications enter its durable queue with a stable identity so recovery does

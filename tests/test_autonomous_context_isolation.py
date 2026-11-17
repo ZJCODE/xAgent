@@ -68,6 +68,8 @@ class AutonomousContextIsolationTests(unittest.IsolatedAsyncioTestCase):
         executor = FakeToolExecutor()
         agent = agent_fixtures.AgentInboxTests()._build_agent(self.storage, model, tool_executor=executor)
         agent.subconscious_mode = 'act'
+        from unittest.mock import AsyncMock
+        agent.record_subconscious_thought = AsyncMock()
         loop = SubconsciousLoop(agent, workspace=self.root, interval_seconds=60)
         wake = AutonomousWake(loop)
         wake.state['last_result'] = {'summary': 'INTERNAL_SENTINEL prior state'}
@@ -75,12 +77,12 @@ class AutonomousContextIsolationTests(unittest.IsolatedAsyncioTestCase):
         loop._autonomous = wake
         await loop.maybe_think()
         self.assertEqual(len(executor.seen_input_messages), 1)
-        self.assertIn('INTERNAL_SENTINEL prior state', str(model.calls[0]))
+        self.assertNotIn('INTERNAL_SENTINEL prior state', str(model.calls[0]))
         self.assertEqual(await self.storage.get_message_count(), 0)
         with self.storage._connect() as connection:
             self.assertEqual(connection.execute('SELECT count(*) FROM messages').fetchone()[0], 0)
         receipt = (await agent.turn_store.list_records())[0]
-        self.assertIn('INTERNAL_SENTINEL prior state', receipt['internal_input'])
+        self.assertNotIn('INTERNAL_SENTINEL prior state', receipt['internal_input'])
         self.assertEqual(receipt['autonomous_result']['outcome'], 'completed')
         async for _ in agent.chat_events('hello', user_id='alice', channel='api'):
             pass

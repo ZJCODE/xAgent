@@ -30,6 +30,8 @@ class AutonomousTests(unittest.IsolatedAsyncioTestCase):
         storage = InMemoryMessageStorage()
         agent = fixtures.AgentInboxTests()._build_agent(storage, model, tool_executor=executor)
         agent.subconscious_mode = "act"
+        from unittest.mock import AsyncMock
+        agent.record_subconscious_thought = AsyncMock()
         loop = SubconsciousLoop(agent, workspace=self.root, interval_seconds=1)
         wake = AutonomousWake(loop)
         wake.state["next_run_at"] = 0
@@ -43,13 +45,13 @@ class AutonomousTests(unittest.IsolatedAsyncioTestCase):
             (ReplyType.SIMPLE_REPLY, result("completed", summary="verified task"))], executor)
         await loop.maybe_think()
         self.assertEqual(len(executor.seen_input_messages), 1)
-        self.assertEqual(wake.state["last_result"]["outcome"], "completed")
+        self.assertEqual(wake.state["last_exit"], "completed")
         record = (await agent.turn_store.list_records())[0]
         self.assertEqual(record["source"], "autonomous")
         self.assertEqual(record["autonomous_tool_results"], 1)
         self.assertEqual(storage.messages, [])
         self.assertIn("available_recipients", record["internal_input"])
-        self.assertIn("previous_wake", str(model.calls[0]))
+        self.assertNotIn("previous_wake", str(model.calls[0]))
         self.assertIsNone(agent.memory_handler.experience_messages)
         self.assertNotIn("No tools", str(model.instructions_calls))
 
@@ -78,7 +80,9 @@ class AutonomousTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(executor.seen_input_messages), 1)
         restored = AutonomousWake(loop)
         self.assertEqual(restored.state["last_exit"], "failed")
-        self.assertTrue(restored.state["tool_events"])
+        receipt = (await agent.turn_store.list_records())[0]
+        self.assertTrue(receipt["internal_tool_events"])
+        self.assertNotIn("tool_events", restored.state)
         self.assertIn("active_wake", restored.state)
 
     async def test_user_preempts_and_waits_for_tool_cleanup(self):
@@ -151,7 +155,59 @@ class AutonomousTests(unittest.IsolatedAsyncioTestCase):
             (ReplyType.SIMPLE_REPLY, result("completed", summary="checked pages"))], executor)
         await loop.maybe_think()
         self.assertEqual(len(executor.seen_input_messages), 3)
-        self.assertEqual(wake.state["last_result"]["outcome"], "completed")
+        self.assertEqual(wake.state["last_exit"], "completed")
+
+    async def test_progress_continues_through_real_diary_without_previous_wake(self):
+        from xagent.core.agent import Agent
+        agent = Agent(client=object(), workspace=str(self.root), subconscious_mode="act")
+        model = CapturingModelClient([
+            (ReplyType.TOOL_CALL, [FakeToolCall()]),
+            (ReplyType.SIMPLE_REPLY, result("progressed", summary="Morning delivery configuration has been merged and read back.",
+                next_step="Verify the old schedules are paused.")),
+            (ReplyType.SIMPLE_REPLY, result("idle"))])
+        agent.model_client = model
+        agent.tool_executor = FakeToolExecutor()
+        loop = SubconsciousLoop(agent, workspace=self.root, interval_seconds=60)
+        wake = AutonomousWake(loop)
+        loop._autonomous = wake
+        wake.state["next_run_at"] = 0
+        await loop.maybe_think()
+        first_diary = await agent.markdown_memory.read_recent_dailies(days=1)
+        self.assertIn("configuration has been merged", str(first_diary))
+        self.assertIn("Verify the old schedules", str(first_diary))
+        # Rebuild the controller to ensure continuity comes from persisted diary.
+        restored = AutonomousWake(loop)
+        loop._autonomous = restored
+        restored.state["next_run_at"] = 0
+        await loop.maybe_think()
+        memory = next(m for m in model.calls[-1] if m.get("name") == "recent_memory")
+        self.assertIn("configuration has been merged", memory["content"])
+        self.assertIn("Verify the old schedules", memory["content"])
+        self.assertNotIn("previous_wake", str(model.calls[-1]))
+        self.assertNotIn("quiet_count", str(model.calls[-1]))
+        self.assertEqual(await agent.markdown_memory.read_recent_dailies(days=1), first_diary)
+        self.assertEqual(await agent.message_storage.get_message_count(), 0)
+
+    async def test_new_blocker_is_recorded_once_without_repetition(self):
+        agent, loop, wake, _, _ = self.build([
+            (ReplyType.SIMPLE_REPLY, result("blocked", summary="The server rejected the request.", blocked_on="Needs a fresh context.")),
+            (ReplyType.SIMPLE_REPLY, result("blocked", summary="Still waiting for the server.", blocked_on="Needs a fresh context."))])
+        for _ in range(2):
+            wake.state["next_run_at"] = 0
+            await loop.maybe_think()
+        agent.record_subconscious_thought.assert_awaited_once_with("The server rejected the request.\nNeeds a fresh context.")
+
+    async def test_legacy_work_snapshot_is_discarded_from_scheduler_state(self):
+        _, loop, wake, _, _ = self.build([])
+        wake.state.update(last_result={"summary": "stale work snapshot"},
+                          tool_events=[{"name": "old_tool"}], recent_notes=["old note"])
+        wake.save()
+        restored = AutonomousWake(loop)
+        self.assertNotIn("last_result", restored.state)
+        self.assertNotIn("tool_events", restored.state)
+        self.assertNotIn("recent_notes", restored.state)
+        restored.save()
+        self.assertNotIn("stale work snapshot", restored.path.read_text())
 
     async def test_background_never_queues_behind_foreground(self):
         inbox = AgentInbox()
