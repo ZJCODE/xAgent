@@ -239,20 +239,12 @@ class AgentConfig:
 
     # ============================================================
     # 10b. Subconscious (潜意识)
-    # Low-probability autonomous thought generation. The heartbeat
-    # rolls the dice each tick; when subconscious fires the agent
-    # generates an internal thought and decides whether to share it.
+    # Fixed-interval reflection while the foreground is idle.
+    # The model independently chooses optional notes and outbound messages.
     # ============================================================
     SUBCONSCIOUS_ENABLED = True
-    # Probability of spontaneous thought per heartbeat tick.
-    # 0=off, 1=very active. Suggested: 0.01~0.1
-    # Primary intensity knob — habituation only softens it when experience is stale.
-    SUBCONSCIOUS_ACTIVITY = 0.02
+    SUBCONSCIOUS_INTERVAL_SECONDS = 1800
     SUBCONSCIOUS_MAX_CONTACTS = 10
-    # Solitude recovery: each this many seconds without new messages reduces
-    # stale_streak by 1, so alone time can restore inner life. 0 disables.
-    SUBCONSCIOUS_HABITUATION_RECOVERY_SECONDS = 3600
-    SUBCONSCIOUS_STATE_FILENAME = "subconscious_state.json"
 
     # ============================================================
     # 11. Tool Policy Baseline
@@ -363,50 +355,20 @@ class AgentConfig:
     )
 
     SUBCONSCIOUS_CURRENT_TASK_TEMPLATE = (
-        "<current_task mode=\"subconscious_json\">\n"
-        "Current time: {current_time}\n"
-        "No tools. Output JSON only.\n"
-        "Form one private thought from recent experience and memory; "
-        "empty internal_content is fine if nothing surfaces. "
-        "Do not invent a new inner monologue just to fill the turn.\n"
-        "If recent diary already holds this observation and nothing in life has "
-        "moved — no new messages, no new angle from memory — return empty "
-        "internal_content — silence is better than restating the same private note.\n"
-        "The diary is only yours. Writing a thought down did not send it.\n"
-        "Decide whether to contact this particular person from their expressed "
-        "preferences, current situation, your relationship, the value of the "
-        "message, and what you have already sent. Time is context, not a "
-        "preset permission or prohibition. The current time is in the runtime's "
-        "timezone; do not assume the person's timezone when it is unknown. "
-        "Recent explicit statements can revise older impressions. A single "
-        "late reply is only an observation, not a lasting preference. "
-        "Keep temporary situations within their stated scope.\n"
-        "Unanswered proactive-message counts are delivery observations, not "
-        "sending restrictions. No reply does not establish rejection, absence, "
-        "or sleep. Judge whether new information warrants another message; "
-        "do not repeat something already delivered without a new reason. "
-        "If there is no reason to speak now, silence is fine.\n"
-        "Set worthy=true only when you would speak now; the outward message "
-        "will be sent. If you want to speak but now is a bad time, keep it in "
-        "internal_content, set worthy=false, and leave external_content null. "
-        "internal_content is the thought, not a delivery receipt; do not write "
-        "as if it already went out. A thought already in the diary can still be "
-        "worthy if you would speak it now and it has not gone out.\n"
-        "If addressed to someone, recipient_hint must be their exact user_id "
-        "from a relationship card that includes [user_id: ...] (no extra text), "
-        "else null. Those cards are people on this channel only. You may think "
-        "about anyone in recent experience; you may only speak to a person "
-        "listed with a user_id. If the thought is for someone you cannot name "
-        "that way, keep it internal — do not send their thread to someone else.\n"
-        "Write internal_content and external_content in the recent conversation "
-        "language; if outward to someone, use that person's language.\n"
-        "\n"
-        "Return JSON only:\n"
-        '{{"internal_content": "raw inner thought, or \\"\\" if nothing surfaces", '
-        '"worthy": true|false, '
-        '"recipient_hint": "exact user_id or null", '
-        '"external_content": "outward message if worthy, else null"}}\n'
-        "</current_task>"
+        '<current_task mode="subconscious_json">\n'
+        'Current time: {current_time}\n'
+        'No tools. Reflect once on recent experience and memory. Silence is fine.\n'
+        'Optionally record a private note and/or send a useful message to an available recipient. '
+        'These are independent choices. A private note has not been sent. '
+        'Respect explicit contact preferences and avoid repeating delivered messages without a new reason. '
+        'Unanswered messages alone do not prohibit a useful follow-up. '
+        'Do not infer sleep, timezone or enduring preferences from a single reply. '
+        'Only choose an exact identifier from Available recipients; never redirect someone else’s private matter. '
+        'Use the recent conversation language for notes and the recipient’s language for messages.\n'
+        'Return JSON only: {{"note": "private thought", '
+        '"message": {{"recipient": "channel:user_id", "text": "outward message"}}}}. '
+        'Use JSON null for either absent choice.\n'
+        '</current_task>'
     )
 
     SUBCONSCIOUS_RELATIONSHIPS_TEMPLATE = (
@@ -439,7 +401,7 @@ class AgentConfig:
         "- Your only output is the JSON specified in the current task. "
         "The runtime handles delivery of the outward message selected there.\n"
         "- Do not try to call functions or act directly. If a thought inclines toward "
-        "doing something, note the impulse in internal_content; the reflection itself "
+        "doing something, note the impulse in note; the reflection itself "
         "may later lead to action through the normal agent loop.\n"
         "</current_mode>"
     )

@@ -249,6 +249,7 @@ class BaseAgentRunner:
                 "max_agent_loops",
                 "max_concurrent_tools",
                 "subconscious_activity",
+                "subconscious_interval_seconds",
                 "diary_context_days",
             }
             unsupported_agent_keys = sorted(set(agent_cfg) - allowed_agent_keys)
@@ -260,10 +261,17 @@ class BaseAgentRunner:
                     self._validate_positive_int(agent_cfg[key], f"agent.{key}")
             if "subconscious_activity" in agent_cfg:
                 val = agent_cfg["subconscious_activity"]
-                if not isinstance(val, (int, float)) or not (0 <= val <= 1):
+                if isinstance(val, bool) or not isinstance(val, (int, float)) or not (0 <= val <= 1):
                     raise ValueError(
                         f"agent.subconscious_activity must be a number between 0 and 1, got {val!r}"
                     )
+            if "subconscious_interval_seconds" in agent_cfg:
+                self._validate_non_negative_int(agent_cfg["subconscious_interval_seconds"], "agent.subconscious_interval_seconds")
+            elif "subconscious_activity" in agent_cfg:
+                activity = agent_cfg["subconscious_activity"]
+                heartbeat = (config.get("runtime") or {}).get("heartbeat_interval_seconds", AgentConfig.RUNTIME_HEARTBEAT_INTERVAL_SECONDS)
+                agent_cfg["subconscious_interval_seconds"] = max(1, round(float(heartbeat) / activity)) if activity else 0
+            agent_cfg.pop("subconscious_activity", None)
             if "diary_context_days" in agent_cfg:
                 self._validate_non_negative_int(agent_cfg["diary_context_days"], "agent.diary_context_days")
         self._validate_observability_config(config.get("observability"))
@@ -581,7 +589,7 @@ class BaseAgentRunner:
             max_concurrent_tools=agent_section.get("max_concurrent_tools", AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS),
             diary_write_batch=agent_section.get("diary_write_batch", AgentConfig.DIARY_WRITE_BATCH),
             diary_context_days=agent_section.get("diary_context_days", AgentConfig.DIARY_CONTEXT_DAYS),
-            subconscious_activity=agent_section.get("subconscious_activity", AgentConfig.SUBCONSCIOUS_ACTIVITY),
+            subconscious_interval_seconds=agent_section.get("subconscious_interval_seconds", AgentConfig.SUBCONSCIOUS_INTERVAL_SECONDS),
             voice=voice_name,
         )
         return agent

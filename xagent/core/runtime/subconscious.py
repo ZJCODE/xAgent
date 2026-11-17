@@ -1,4 +1,4 @@
-"""Subconscious subconscious loop for autonomous agent thought generation."""
+"""Periodic loop for autonomous agent thought generation."""
 
 from __future__ import annotations
 
@@ -7,7 +7,6 @@ import inspect
 import json
 import logging
 import os
-import random
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -31,16 +30,14 @@ from .task_receipts import sync_task_directory as _fsync_directory
 
 logger = logging.getLogger(__name__)
 
+
+class SubconsciousOutputError(ValueError):
+    """The model did not return the reflection protocol."""
+
+
 CONTACTS_FILENAME = "contacts.json"
 SUBCONSCIOUS_DELIVERY_RETRIES = 2
 SUBCONSCIOUS_DELIVERY_RETRY_DELAY_SECONDS = 0.5
-_JSON_QUOTE_TRANSLATION = str.maketrans({
-    "\u201c": '"',
-    "\u201d": '"',
-    "\u2018": "'",
-    "\u2019": "'",
-    "\uff02": '"',
-})
 
 
 @dataclass(frozen=True)
@@ -198,11 +195,6 @@ def resolve_contacts_path(workspace: Path) -> Path:
     return workspace / CONTACTS_FILENAME
 
 
-def resolve_subconscious_state_path(workspace: Path) -> Path:
-    """Resolve the persistent subconscious state file path inside the workspace."""
-    return workspace / ".runtime" / AgentConfig.SUBCONSCIOUS_STATE_FILENAME
-
-
 async def persist_subconscious_delivery(
     agent: Any,
     delivery: SubconsciousDelivery,
@@ -238,11 +230,9 @@ async def persist_subconscious_delivery(
 class SubconsciousLoop:
     """Periodic subconscious thought loop for the agent.
 
-    Each heartbeat tick has a small probability of triggering an
-    subconscious event.  The agent generates a spontaneous thought and
-    decides whether it is worth sharing. Raw inner thoughts are written
-    directly to the diary, and thoughts worth sharing are handed to the
-    runtime's direct delivery sink.
+    At a fixed interval, reflect once while the foreground is idle.
+    Optional notes go to the diary; optional messages go to the existing
+    delivery sink. No persistent psychological or delivery-count state.
     """
 
     def __init__(
@@ -250,7 +240,7 @@ class SubconsciousLoop:
         agent: Any,
         *,
         workspace: Path,
-        probability: Optional[float] = None,
+        interval_seconds: Optional[float] = None,
         delivery_sink: Optional[Callable[[SubconsciousDelivery], Awaitable[None] | None]] = None,
         deliverable_channels: Optional[Iterable[str]] = None,
         contact_deliverable: Optional[Callable[[ContactEntry], bool]] = None,
@@ -259,29 +249,19 @@ class SubconsciousLoop:
         self._agent = agent
         self._workspace = Path(workspace).expanduser().resolve()
         self._contacts_file = resolve_contacts_path(self._workspace)
-        self._state_file = resolve_subconscious_state_path(self._workspace)
         self._delivery_sink = delivery_sink
         self._deliverable_channels = self._normalize_deliverable_channels(deliverable_channels)
         self._contact_deliverable = contact_deliverable
         self._logger = logger_ or logger
         self._enabled = AgentConfig.SUBCONSCIOUS_ENABLED
-        self._probability = (
-            float(probability)
-            if probability is not None
-            else float(AgentConfig.SUBCONSCIOUS_ACTIVITY)
+        self._interval = float(
+            AgentConfig.SUBCONSCIOUS_INTERVAL_SECONDS if interval_seconds is None else interval_seconds
         )
+        self._next_think_at = time.monotonic() + self._interval
+        self._thinking = False
         self._delivery_retries = SUBCONSCIOUS_DELIVERY_RETRIES
         self._delivery_retry_delay_seconds = SUBCONSCIOUS_DELIVERY_RETRY_DELAY_SECONDS
-        self._last_experience_cursor: Optional[int] = None
-        self._stale_streak = 0
-        self._habituation_anchor_mono: Optional[float] = None
-        self._recovery_seconds = max(
-            0.0, float(AgentConfig.SUBCONSCIOUS_HABITUATION_RECOVERY_SECONDS)
-        )
-        # Delivery observations inform the model; they never block a recipient.
-        self._unanswered_outbound: dict[str, int] = {}
-        self._last_diary_note: str = ""
-        self._load_state()
+        self._last_diary_note = ""
 
     # ------------------------------------------------------------------
     # Public API
@@ -311,8 +291,6 @@ class SubconsciousLoop:
                 user_id=user_id,
                 target=target,
             )
-            if self._clear_unanswered_outbound(channel, user_id):
-                self._save_state()
         except Exception:
             self._logger.warning(
                 "Failed to record interaction for subconscious: channel=%s user_id=%s",
@@ -321,117 +299,59 @@ class SubconsciousLoop:
                 exc_info=True,
             )
 
-    def should_trigger(self) -> bool:
-        """Return True if subconscious thought should fire this tick."""
-        if not self._enabled:
-            return False
-        return random.random() < self._effective_probability()
-
-    def _effective_probability(self) -> float:
-        """``activity × 0.5^stale_streak`` — no floor; life can reset or recover streak."""
-        probability = max(0.0, min(1.0, float(self._probability)))
-        if self._stale_streak <= 0 or probability <= 0.0:
-            return probability
-        return probability * (0.5 ** int(self._stale_streak))
+    def _request_version(self) -> int:
+        return getattr(getattr(self._agent, "inbox", None), "request_version", 0)
 
     async def maybe_think(self) -> None:
-        """Run one subconscious cycle if the dice roll passes.
-
-        Intensity is ``subconscious_activity``. Habituation halves the rate
-        after empty/unworthy reflections; new messages clear the streak;
-        solitude slowly recovers it so alone time still counts as life.
-        """
-        if not self._enabled:
+        """Reflect at a fixed interval; foreground requests always take priority."""
+        if (not self._enabled or self._interval <= 0 or self._thinking
+                or time.monotonic() < self._next_think_at or self._is_agent_busy()):
             return
-        if self._is_agent_busy():
-            self._logger.debug("Skipping subconscious tick: foreground turn is active or queued")
-            return
-        reflection_cursor = await self._current_experience_cursor()
-        experience_cursor, experience_moved = self._experience_state(reflection_cursor)
-        if experience_moved:
-            self._clear_habituation()
-        else:
-            self._recover_habituation_from_solitude()
-
-        if not self.should_trigger():
-            return
-
-        self._logger.info("Subconscious thought triggered – generating thought")
+        self._thinking = True
+        self._next_think_at = time.monotonic() + self._interval
+        version = self._request_version()
+        generation, note_status, delivery_status = "failed", "none", "none"
         try:
-            result = await self._generate_subconscious_thought()
+            contacts = self._filter_deliverable_contacts(load_contacts(self._contacts_file))
+            result = await self._generate_subconscious_thought(contacts)
+            generation = "ok"
+            if self._is_agent_busy() or self._request_version() != version:
+                generation = "interrupted"
+                return
+            note = result["note"]
+            message = result["message"]
+            # Send before diary I/O so a slow diary writer cannot stale the message.
+            if message is not None:
+                recipient = next((c for c in contacts if self._contact_key(c.channel, c.user_id)
+                                  == message["recipient"]), None)
+                if recipient is None:
+                    delivery_status = "invalid_recipient"
+                elif not self._filter_deliverable_contacts([recipient]):
+                    delivery_status = "unavailable"
+                else:
+                    try:
+                        await self._deliver_with_retries(SubconsciousDelivery(
+                            content=message["text"], recipient=recipient,
+                            internal_content=note or "", created_at=datetime.now(),
+                        ), expected_version=version)
+                        delivery_status = "sent"
+                    except InterruptedError:
+                        delivery_status = "interrupted"
+                        return
+                    except Exception:
+                        delivery_status = "failed"
+                        self._logger.warning("Subconscious delivery failed", exc_info=True)
+            if note:
+                note_status = await self._write_subconscious_thought(note)
+        except SubconsciousOutputError:
+            generation = "invalid_output"
+            self._logger.warning("Invalid subconscious output", exc_info=True)
         except Exception:
-            self._logger.exception("Subconscious thought generation failed")
-            return
-
-        internal_content = str(result.get("internal_content") or "").strip()
-        external_content = str(result.get("external_content") or "").strip()
-        worthy = bool(result.get("worthy"))
-        recipient_hint = result.get("recipient_hint")
-
-        self._logger.info(
-            "Subconscious result: worthy=%s internal=%.80s... external=%.80s...",
-            worthy,
-            internal_content,
-            external_content,
-        )
-
-        if not internal_content and not external_content:
-            self._habituate(experience_cursor)
-            return
-
-        diary_note = internal_content
-        delivered = False
-        if worthy and external_content:
-            delivered = await self._route_subconscious_thought(
-                external_content,
-                internal_content,
-                recipient_hint,
-                expected_cursor=reflection_cursor,
-            )
-            if not delivered:
-                diary_note = self._held_back_diary_note(internal_content)
-
-        if diary_note and not self._looks_like_subconscious_payload(diary_note):
-            await self._write_subconscious_thought(diary_note)
-
-        effective_cursor = experience_cursor
-        if delivered:
-            post_cursor = await self._current_experience_cursor()
-            if post_cursor is not None:
-                effective_cursor = int(post_cursor)
-
-        if worthy and delivered:
-            self._clear_habituation()
-            self._last_experience_cursor = effective_cursor
-            self._save_state()
-        else:
-            self._habituate(effective_cursor)
-
-    def _clear_habituation(self) -> None:
-        self._stale_streak = 0
-        self._habituation_anchor_mono = time.monotonic()
-
-    def _habituate(self, experience_cursor: int) -> None:
-        """One more private reflection without movement — quiet down next time."""
-        self._stale_streak += 1
-        self._last_experience_cursor = experience_cursor
-        self._habituation_anchor_mono = time.monotonic()
-        self._save_state()
-
-    def _recover_habituation_from_solitude(self) -> None:
-        """Let alone time reduce streak so life is not message-gated."""
-        if self._stale_streak <= 0 or self._recovery_seconds <= 0:
-            return
-        if self._habituation_anchor_mono is None:
-            self._habituation_anchor_mono = time.monotonic()
-            return
-        elapsed = time.monotonic() - self._habituation_anchor_mono
-        steps = int(elapsed // self._recovery_seconds)
-        if steps <= 0:
-            return
-        self._stale_streak = max(0, self._stale_streak - steps)
-        self._habituation_anchor_mono += steps * self._recovery_seconds
-        self._save_state()
+            self._logger.warning("Subconscious generation failed", exc_info=True)
+        finally:
+            self._thinking = False
+            self._logger.info("Subconscious cycle: generation=%s note=%s delivery=%s",
+                              generation, note_status, delivery_status)
 
     def _is_agent_busy(self) -> bool:
         """Return True if a foreground turn is currently running or queued."""
@@ -446,97 +366,9 @@ class SubconsciousLoop:
             return True
         return False
 
-    def _load_state(self) -> None:
-        """Restore persisted habituation and unanswered-outbound state if present."""
-        if not self._state_file.is_file():
-            return
-        try:
-            raw = json.loads(self._state_file.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return
-        if not isinstance(raw, dict):
-            return
-        cursor = raw.get("last_experience_cursor")
-        if isinstance(cursor, int) and not isinstance(cursor, bool):
-            self._last_experience_cursor = cursor
-        streak = raw.get("stale_streak")
-        if isinstance(streak, int) and not isinstance(streak, bool) and streak >= 0:
-            self._stale_streak = streak
-        updated_at = raw.get("updated_at_epoch")
-        if isinstance(updated_at, (int, float)) and not isinstance(updated_at, bool):
-            elapsed = max(0.0, time.time() - float(updated_at))
-            self._habituation_anchor_mono = time.monotonic() - elapsed
-        unanswered = raw.get("unanswered_outbound")
-        if isinstance(unanswered, dict):
-            cleaned: dict[str, int] = {}
-            for key, count in unanswered.items():
-                if isinstance(key, str) and isinstance(count, int) and not isinstance(count, bool) and count > 0:
-                    channel, separator, user_id = key.partition(":")
-                    if separator and channel.strip() and user_id.strip():
-                        cleaned[self._contact_key(channel, user_id)] = count
-            self._unanswered_outbound = cleaned
-
-    def _save_state(self) -> None:
-        """Persist habituation and unanswered-outbound state atomically."""
-        try:
-            payload = {
-                "last_experience_cursor": self._last_experience_cursor,
-                "stale_streak": int(self._stale_streak),
-                "updated_at_epoch": time.time(),
-                "unanswered_outbound": dict(self._unanswered_outbound),
-            }
-            _atomic_write_json(self._state_file, payload)
-        except Exception:
-            self._logger.debug("Failed to persist subconscious state", exc_info=True)
-
-    def _experience_state(self, raw_cursor: Optional[int]) -> tuple[int, bool]:
-        """Return ``(cursor, moved)`` for whether external experience changed.
-
-        Without a message cursor, the first in-process cycle counts as movement
-        so later idle ticks can accumulate habituation.
-        """
-        if raw_cursor is None:
-            moved = self._last_experience_cursor is None
-            cursor = 0 if self._last_experience_cursor is None else int(self._last_experience_cursor)
-            return cursor, moved
-        moved = (
-            self._last_experience_cursor is None
-            or int(raw_cursor) != int(self._last_experience_cursor)
-        )
-        return int(raw_cursor), moved
-
-    async def _current_experience_cursor(self) -> Optional[int]:
-        """Best-effort message cursor used to detect whether life moved on."""
-        for owner_name in ("message_storage", "message_handler"):
-            owner = getattr(self._agent, owner_name, None)
-            if owner is None:
-                continue
-            getter = getattr(owner, "get_latest_message_cursor", None)
-            if not callable(getter):
-                storage = getattr(owner, "message_storage", None)
-                getter = getattr(storage, "get_latest_message_cursor", None) if storage else None
-            if not callable(getter):
-                continue
-            try:
-                cursor = getter()
-                if inspect.isawaitable(cursor):
-                    cursor = await cursor
-                return int(cursor)
-            except Exception:
-                self._logger.debug(
-                    "Failed to read experience cursor from %s",
-                    owner_name,
-                    exc_info=True,
-                )
-        return None
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
-    async def _generate_subconscious_thought(self) -> Dict[str, Any]:
+    async def _generate_subconscious_thought(self, contacts: List[ContactEntry]) -> Dict[str, Any]:
         """Run a subconscious agent turn and parse the final JSON result."""
-        instructions, input_messages = await self._build_subconscious_turn_context()
+        instructions, input_messages = await self._build_subconscious_turn_context(contacts)
 
         model_client = getattr(self._agent, "model_client", None)
         if model_client is None:
@@ -580,7 +412,7 @@ class SubconsciousLoop:
 
         raise RuntimeError("Subconscious model turn ended without text or tool calls")
 
-    async def _build_subconscious_turn_context(self) -> tuple[list[dict], list[dict]]:
+    async def _build_subconscious_turn_context(self, contacts: List[ContactEntry]) -> tuple[list[dict], list[dict]]:
         """Build model input using the same layers as a normal agent turn."""
         message_handler = getattr(self._agent, "message_handler", None)
         if message_handler is None:
@@ -591,9 +423,8 @@ class SubconsciousLoop:
         recent_messages = await message_handler.get_recent_messages(
             limit=AgentConfig.history_fetch_depth(hot_window)
         )
-        self._sync_unanswered_from_recent_messages(recent_messages)
         memory_context = await self._collect_memory_context()
-        relationship_context = await self._collect_relationship_context()
+        relationship_context = await self._collect_relationship_context(contacts)
         notebook_query = self._extract_notebook_recall_query(memory_context, recent_messages)
         notebook_context = await self._collect_notebook_context(notebook_query)
 
@@ -619,6 +450,12 @@ class SubconsciousLoop:
             covers_through_cursor=working_context.covers_through_cursor,
             prompt_registry=getattr(message_handler, "prompt_registry", None),
         )
+        recipients = [{"recipient": self._contact_key(c.channel, c.user_id),
+                       "name": c.target.get("sender_name") or c.target.get("display_name") or c.user_id}
+                      for c in contacts]
+        iteration_messages.append({"role": "user", "content":
+            "Available recipients (select the exact recipient identifier):\n" +
+            json.dumps(recipients, ensure_ascii=False)})
         input_messages = message_handler.sanitize_input_messages(list(iteration_messages))
         return instructions, input_messages
 
@@ -685,88 +522,30 @@ class SubconsciousLoop:
                     break
             if end is not None:
                 cleaned = "\n".join(lines[1:end]).strip()
-        parsed = SubconsciousLoop._load_json_object(cleaned)
-        if parsed is None:
-            if SubconsciousLoop._looks_like_subconscious_payload(text):
-                # Broken JSON must not be dumped into the diary as a thought.
-                return SubconsciousLoop._empty_subconscious_result()
-            return {
-                "internal_content": text[:500],
-                "worthy": False,
-                "recipient_hint": None,
-                "external_content": None,
-            }
-        if not isinstance(parsed, dict):
-            return SubconsciousLoop._empty_subconscious_result()
-        return SubconsciousLoop._normalize_subconscious_result(parsed)
-
-    @staticmethod
-    def _empty_subconscious_result() -> Dict[str, Any]:
-        return {
-            "internal_content": "",
-            "worthy": False,
-            "recipient_hint": None,
-            "external_content": None,
-        }
+        try:
+            parsed = json.loads(cleaned)
+        except json.JSONDecodeError as exc:
+            raise SubconsciousOutputError("Invalid subconscious JSON") from exc
+        if not isinstance(parsed, dict) or set(parsed) != {"note", "message"}:
+            raise SubconsciousOutputError("Expected note and message fields")
+        note, message = parsed["note"], parsed["message"]
+        if note is not None and not isinstance(note, str):
+            raise SubconsciousOutputError("note must be text or null")
+        if message is not None:
+            if (not isinstance(message, dict) or set(message) != {"recipient", "text"}
+                    or any(not isinstance(message[k], str) or not message[k].strip()
+                           for k in ("recipient", "text"))):
+                raise SubconsciousOutputError("message must contain recipient and text")
+            message = {k: v.strip() for k, v in message.items()}
+        return {"note": (note.strip() or None) if note else None, "message": message}
 
     @staticmethod
     def _looks_like_subconscious_payload(text: str) -> bool:
-        """True when text is the JSON envelope, not a private thought."""
+        """Keep both old and current protocol envelopes out of the diary."""
         lowered = str(text or "").lower()
-        if "internal_content" not in lowered:
-            return False
-        return "external_content" in lowered or "worthy" in lowered
-
-    @staticmethod
-    def _load_json_object(text: str) -> Any:
-        """Load a JSON value, or the first embedded object if the model added prose."""
-        for candidate in (text, text.translate(_JSON_QUOTE_TRANSLATION)):
-            try:
-                return json.loads(candidate)
-            except json.JSONDecodeError:
-                pass
-            decoder = json.JSONDecoder()
-            for index, char in enumerate(candidate):
-                if char != "{":
-                    continue
-                try:
-                    obj, _end = decoder.raw_decode(candidate[index:])
-                except json.JSONDecodeError:
-                    continue
-                if isinstance(obj, dict):
-                    return obj
-        return None
-
-    @staticmethod
-    def _normalize_subconscious_result(result: Dict[str, Any]) -> Dict[str, Any]:
-        """Accept common field aliases and string booleans from model output."""
-        worthy_raw = result.get("worthy")
-        if isinstance(worthy_raw, str):
-            worthy = worthy_raw.strip().lower() in {"true", "1", "yes"}
-        else:
-            worthy = bool(worthy_raw)
-        hint = result.get("recipient_hint")
-        if hint is None:
-            hint = result.get("recipient")
-        external = result.get("external_content")
-        if external is None:
-            external = result.get("outward_content")
-        internal = result.get("internal_content")
-        if internal is None:
-            internal = result.get("thought")
-        if not isinstance(internal, str):
-            internal = "" if internal is None else str(internal)
-        internal = internal.strip()
-        if SubconsciousLoop._looks_like_subconscious_payload(internal):
-            internal = ""
-        if not isinstance(external, str) and external is not None:
-            external = str(external)
-        return {
-            "internal_content": internal,
-            "worthy": worthy,
-            "recipient_hint": hint,
-            "external_content": external,
-        }
+        return (("internal_content" in lowered and
+                 ("external_content" in lowered or "worthy" in lowered))
+                or ('"note"' in lowered and '"message"' in lowered))
 
     async def _collect_memory_context(self) -> str:
         """Collect recent memory for subconscious context."""
@@ -805,92 +584,31 @@ class SubconsciousLoop:
         # into the prompt.
         return ctx.strip() if isinstance(ctx, str) else ""
 
-    async def _collect_relationship_context(self) -> str:
-        """Collect relationship cards for people this runtime can actually reach.
-
-        Each channel process has its own heartbeat. Mixing in other-channel
-        cards (with ``[user_id: ...]``) makes the model address people it
-        cannot send to, and also collapses two strangers into one story.
-        """
-        memory_handler = getattr(self._agent, "memory_handler", None)
-        if memory_handler is None or not callable(
-            getattr(memory_handler, "get_relationship_context", None)
-        ):
-            return ""
-        contacts = self._filter_deliverable_contacts(load_contacts(self._contacts_file))
-        from ...components.memory import RelationshipStore
-
-        keys: list[str] = []
-        for contact in contacts:
-            self._append_unique_key(
-                keys, RelationshipStore.make_key(contact.channel, contact.user_id)
-            )
-
-        relationship_store = getattr(memory_handler, "relationship_store", None)
-        list_keys = getattr(relationship_store, "list_keys", None)
-        if callable(list_keys):
-            try:
-                stored_keys = list_keys()
-                if inspect.isawaitable(stored_keys):
-                    stored_keys = await stored_keys
-                if isinstance(stored_keys, list):
-                    for key in stored_keys:
-                        if self._is_deliverable_relationship_key(str(key)):
-                            self._append_unique_key(keys, str(key))
-            except Exception:
-                self._logger.warning("Failed to list relationship cards for subconscious", exc_info=True)
-
-        if not keys:
+    async def _collect_relationship_context(self, contacts: List[ContactEntry]) -> str:
+        handler = getattr(self._agent, "memory_handler", None)
+        if not contacts or not callable(getattr(handler, "get_relationship_context", None)):
             return ""
         try:
-            return await memory_handler.get_relationship_context(
-                speaker_keys=keys,
+            return await handler.get_relationship_context(
+                speaker_keys=[self._contact_key(c.channel, c.user_id) for c in contacts],
                 max_cards=AgentConfig.RELATIONSHIP_SUBCONSCIOUS_MAX_CARDS,
                 include_routing_id=True,
-                unanswered_outbound=dict(self._unanswered_outbound),
             )
         except Exception:
             self._logger.warning("Failed to collect relationship context", exc_info=True)
             return ""
 
-    def _is_deliverable_relationship_key(self, key: str) -> bool:
-        from ...components.memory import RelationshipStore
-
-        channel, user_id = RelationshipStore.split_key(key)
-        norm_channel = str(channel or "").strip().lower()
-        norm_user = str(user_id or "").strip()
-        if norm_channel not in self._deliverable_channels:
-            return False
-        if self._contact_deliverable is not None:
-            try:
-                probe = ContactEntry(
-                    channel=norm_channel,
-                    user_id=norm_user,
-                    target={"user_id": norm_user},
-                    last_seen="",
-                )
-                return bool(self._contact_deliverable(probe))
-            except Exception:
-                return False
-        return True
-
-    @staticmethod
-    def _append_unique_key(keys: list[str], key: str) -> None:
-        normalized = (key or "").strip()
-        if normalized and normalized not in keys:
-            keys.append(normalized)
-
-    async def _write_subconscious_thought(self, content: str) -> None:
+    async def _write_subconscious_thought(self, content: str) -> str:
         """Record the raw inner thought directly in the diary, skipping verbatim repeats."""
         note = str(content or "").strip()
         if not note or self._looks_like_subconscious_payload(note):
             if note:
                 self._logger.warning("Refusing to write subconscious JSON payload to diary")
-            return
+            return "skipped"
         normalized_note = " ".join(note.split())
         if normalized_note and normalized_note == self._last_diary_note:
             self._logger.debug("Skipping duplicate subconscious diary note")
-            return
+            return "skipped"
 
         writer = (
             getattr(self._agent, "record_subconscious_thought", None)
@@ -898,117 +616,22 @@ class SubconsciousLoop:
             or getattr(getattr(self._agent, "markdown_memory", None), "append_daily", None)
         )
         if not callable(writer):
-            return
+            return "skipped"
         try:
             res = writer(note)
             if inspect.isawaitable(res):
                 await res
             self._last_diary_note = normalized_note
-            self._logger.info("Subconscious thought recorded in diary")
+            return "written"
         except Exception:
             self._logger.warning("Failed to record subconscious thought in diary", exc_info=True)
-
-    async def _route_subconscious_thought(
-        self,
-        external_content: str,
-        internal_content: str,
-        recipient_hint: Any,
-        *,
-        expected_cursor: Optional[int],
-    ) -> bool:
-        """Deliver a worthy thought. Return True only when the sink accepted it."""
-        contacts = self._filter_deliverable_contacts(load_contacts(self._contacts_file))
-        contacts = await self._alias_contacts_for_routing(contacts)
-        recipient = self._pick_recipient(contacts, recipient_hint)
-
-        if recipient is None:
-            self._logger.info("No suitable recipient for subconscious thought")
-            return False
-
-        if self._delivery_sink is None:
-            self._logger.info("No subconscious delivery sink configured")
-            return False
-
-        # Recheck after recipient lookup, which can itself yield to a live turn.
-        current_cursor = (
-            await self._current_experience_cursor() if expected_cursor is not None else None
-        )
-        if self._is_agent_busy() or (
-            expected_cursor is not None
-            and current_cursor is not None
-            and current_cursor != expected_cursor
-        ):
-            self._logger.info("Holding back subconscious thought: conversation changed during reflection")
-            return False
-
-        now = datetime.now()
-        delivery = SubconsciousDelivery(
-            content=external_content,
-            recipient=recipient,
-            internal_content=internal_content,
-            created_at=now,
-        )
-        try:
-            await self._deliver_with_retries(delivery)
-            self._record_unanswered_outbound(recipient.channel, recipient.user_id)
-            self._logger.info(
-                "Subconscious thought delivered: channel=%s user_id=%s created_at=%s",
-                recipient.channel,
-                recipient.user_id,
-                now.isoformat(sep=" "),
-            )
-            return True
-        except Exception:
-            self._logger.warning("Subconscious delivery failed", exc_info=True)
-            return False
+            return "failed"
 
     @staticmethod
     def _contact_key(channel: str, user_id: str) -> str:
-        return f"{str(channel or '').strip().lower()}:{str(user_id or '').strip()}"
+        return f"{channel.strip().lower()}:{user_id.strip()}"
 
-    def _record_unanswered_outbound(self, channel: str, user_id: str) -> None:
-        key = self._contact_key(channel, user_id)
-        if not key or key == ":":
-            return
-        self._unanswered_outbound[key] = self._unanswered_outbound.get(key, 0) + 1
-
-    def _clear_unanswered_outbound(self, channel: str, user_id: str) -> bool:
-        key = self._contact_key(channel, user_id)
-        return self._unanswered_outbound.pop(key, None) is not None
-
-    def _sync_unanswered_from_recent_messages(self, recent_messages: Optional[List[Any]]) -> None:
-        """Refresh delivery observations when a later human message is visible."""
-        if not self._unanswered_outbound or not isinstance(recent_messages, list) or not recent_messages:
-            return
-        from ...schemas import MessageType, RoleType
-        from ..inbox import is_scheduled_work
-
-        replied_keys: set[str] = set()
-        for msg in recent_messages:
-            if getattr(msg, "type", None) != MessageType.MESSAGE:
-                continue
-            role = getattr(msg, "role", None)
-            if role == RoleType.USER:
-                if is_scheduled_work(getattr(msg, "metadata", None)):
-                    continue
-                ch = str(getattr(msg, "channel", "") or "").strip().lower()
-                uid = str(getattr(msg, "sender_id", "") or "").strip()
-                if ch and uid:
-                    replied_keys.add(self._contact_key(ch, uid))
-            elif role == RoleType.ASSISTANT:
-                meta = getattr(msg, "metadata", None)
-                sub = meta.get("subconscious") if isinstance(meta, dict) else None
-                if isinstance(sub, dict) and sub.get("source") == "subconscious":
-                    recip = sub.get("recipient") if isinstance(sub.get("recipient"), dict) else {}
-                    ch = str(recip.get("channel") or getattr(msg, "channel", "") or "").strip().lower()
-                    uid = str(recip.get("user_id") or getattr(msg, "recipient_id", "") or "").strip()
-                    if ch and uid:
-                        replied_keys.discard(self._contact_key(ch, uid))
-
-        for key in replied_keys:
-            self._unanswered_outbound.pop(key, None)
-
-    async def _deliver_with_retries(self, delivery: SubconsciousDelivery) -> None:
+    async def _deliver_with_retries(self, delivery: SubconsciousDelivery, *, expected_version: int) -> None:
         """Deliver a subconscious thought, retrying transient sink failures."""
         if self._delivery_sink is None:
             raise RuntimeError("Subconscious delivery sink is not configured")
@@ -1016,6 +639,8 @@ class SubconsciousLoop:
         attempts = max(1, int(self._delivery_retries) + 1)
         last_error: Exception | None = None
         for attempt in range(1, attempts + 1):
+            if self._is_agent_busy() or self._request_version() != expected_version:
+                raise InterruptedError("Foreground request interrupted subconscious delivery")
             try:
                 result = self._delivery_sink(delivery)
                 if inspect.isawaitable(result):
@@ -1039,106 +664,6 @@ class SubconsciousLoop:
 
         if last_error is not None:
             raise last_error
-
-    async def _alias_contacts_for_routing(self, contacts: List[ContactEntry]) -> List[ContactEntry]:
-        """Copy relationship display names onto contacts that lack sender_name.
-
-        API / Weixin / voice contacts often store only a raw user_id. The model
-        is shown ``## Alice [user_id: web_user]`` and commonly emits ``Alice``
-        as ``recipient_hint``, which would otherwise miss the contact.
-        """
-        if not contacts:
-            return contacts
-        memory_handler = getattr(self._agent, "memory_handler", None)
-        relationship_store = getattr(memory_handler, "relationship_store", None)
-        read_cards = getattr(relationship_store, "read_cards", None)
-        if not callable(read_cards):
-            return contacts
-        from ...components.memory import RelationshipStore, human_display_name
-
-        keys = [RelationshipStore.make_key(contact.channel, contact.user_id) for contact in contacts]
-        try:
-            cards = read_cards(keys)
-            if inspect.isawaitable(cards):
-                cards = await cards
-        except Exception:
-            self._logger.warning("Failed to enrich subconscious contacts from relationship cards", exc_info=True)
-            return contacts
-        if not isinstance(cards, list) or not cards:
-            return contacts
-        by_key = {card.key: card for card in cards if getattr(card, "key", None)}
-        enriched: List[ContactEntry] = []
-        for contact in contacts:
-            key = RelationshipStore.make_key(contact.channel, contact.user_id)
-            card = by_key.get(key)
-            display_name = human_display_name(
-                getattr(card, "display_name", ""),
-                user_id=contact.user_id,
-                key=key,
-            )
-            if not display_name:
-                enriched.append(contact)
-                continue
-            target = dict(contact.target)
-            if not str(target.get("sender_name") or "").strip():
-                target["sender_name"] = display_name
-            if not str(target.get("display_name") or "").strip():
-                target["display_name"] = display_name
-            enriched.append(
-                ContactEntry(
-                    channel=contact.channel,
-                    user_id=contact.user_id,
-                    target=target,
-                    last_seen=contact.last_seen,
-                    interaction_count=contact.interaction_count,
-                )
-            )
-        return enriched
-
-    @staticmethod
-    def _contact_match_tokens(contact: ContactEntry) -> tuple[list[str], list[str]]:
-        """Return (exact_tokens, partial_tokens) used to match a recipient hint."""
-        exact = [
-            contact.user_id,
-            str(contact.target.get("sender_name") or ""),
-            str(contact.target.get("display_name") or ""),
-            str(contact.target.get("room_name") or ""),
-            f"{contact.channel}:{contact.user_id}",
-        ]
-        exact_tokens = [token.strip().lower() for token in exact if str(token).strip()]
-        # Composite keys such as ``api:web_user`` are exact-only so a bare
-        # channel name cannot absorb every contact on that channel.
-        partial_tokens = [token for token in exact_tokens if ":" not in token]
-        return exact_tokens, partial_tokens
-
-    @staticmethod
-    def _pick_recipient(
-        contacts: List[ContactEntry],
-        recipient_hint: Any,
-    ) -> Optional[ContactEntry]:
-        """Pick the named contact. No hint means no send — never guess another person."""
-        if not contacts:
-            return None
-        # If hint matches a contact, prefer that
-        hint = str(recipient_hint or "").strip().lower()
-        if not hint:
-            return None
-        token_map = {
-            id(contact): SubconsciousLoop._contact_match_tokens(contact)
-            for contact in contacts
-        }
-        # -- pass 1: exact match on name, user_id, or channel:user_id --
-        for contact in contacts:
-            exact_tokens, _partial = token_map[id(contact)]
-            if hint in exact_tokens:
-                return contact
-        # -- pass 2: the hint may wrap an exact token ("Telos (weixin)").
-        # A short hint must not match a longer name ("李" must not hit "李明").
-        for contact in contacts:
-            _exact, partial_tokens = token_map[id(contact)]
-            if any(token and token in hint for token in partial_tokens):
-                return contact
-        return None
 
     @staticmethod
     def _normalize_deliverable_channels(channels: Optional[Iterable[str]]) -> set[str]:
@@ -1165,18 +690,3 @@ class SubconsciousLoop:
                     continue
             filtered.append(contact)
         return filtered
-
-    @staticmethod
-    def _held_back_diary_note(internal_content: str) -> str:
-        """Record that a worthy thought stayed inside, in the thought's language."""
-        thought = (internal_content or "").strip()
-        coda = "我没有发出去。" if SubconsciousLoop._looks_cjk(thought) else "I didn't send this."
-        if not thought:
-            return coda
-        if coda in thought:
-            return thought
-        return f"{thought}\n{coda}"
-
-    @staticmethod
-    def _looks_cjk(text: str) -> bool:
-        return any("\u4e00" <= char <= "\u9fff" for char in text)

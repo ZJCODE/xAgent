@@ -78,7 +78,7 @@ class RuntimeHeartbeatConfigTests(unittest.TestCase):
 
     def test_factory_passes_subconscious_delivery_sink(self):
         class _Agent:
-            subconscious_activity = 0.02
+            subconscious_interval_seconds = 1800
 
             def __init__(self, workspace):
                 self.workspace_dir = Path(workspace) / "workspace"
@@ -98,7 +98,7 @@ class RuntimeHeartbeatConfigTests(unittest.TestCase):
 
     def test_factory_passes_subconscious_deliverable_channels(self):
         class _Agent:
-            subconscious_activity = 0.02
+            subconscious_interval_seconds = 1800
 
             def __init__(self, workspace):
                 self.workspace_dir = Path(workspace) / "workspace"
@@ -115,7 +115,7 @@ class RuntimeHeartbeatConfigTests(unittest.TestCase):
 
     def test_factory_resolves_contacts_to_agent_root_not_files_workspace(self):
         class _Agent:
-            subconscious_activity = 0.02
+            subconscious_interval_seconds = 1800
 
             def __init__(self, workspace):
                 self.workspace = Path(workspace)

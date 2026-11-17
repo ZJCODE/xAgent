@@ -530,17 +530,14 @@ class MemoryHandler:
         participant_keys: Optional[List[str]] = None,
         max_cards: Optional[int] = None,
         include_routing_id: bool = False,
-        unanswered_outbound: Optional[dict[str, int]] = None,
     ) -> str:
         """Return rendered relationship cards for the given people.
 
         ``speaker_keys`` (the current speaker) are always included first;
         ``participant_keys`` (other people in the room) fill remaining budget.
         ``include_routing_id`` appends each person's ``user_id`` to the header
-        so the subconscious can emit a deterministic ``recipient_hint``; reply
+        for callers that need an explicit identity; reply
         turns leave it off so the identifier is never exposed to users.
-        ``unanswered_outbound`` adds transient delivery observations to that
-        view only; these are not persisted relationship claims or send limits.
         """
         ordered_keys: list[str] = []
         seen: set[str] = set()
@@ -576,17 +573,9 @@ class MemoryHandler:
             ) or anonymous_contact_label(card.channel)
             body = card.body.strip()
             if include_routing_id and card.user_id:
-                header = f"## {name} [user_id: {card.user_id}]"
+                header = f"## {name} [user_id: {card.user_id}] [recipient: {card.key}]"
             else:
                 header = f"## {name}"
-            if include_routing_id and unanswered_outbound:
-                observation_key = f"{card.channel.strip().lower()}:{card.user_id.strip()}"
-                count = unanswered_outbound.get(observation_key)
-                if count is not None:
-                    body += (
-                        f"\nDelivery observation: {count} proactive message(s) sent since "
-                        "their last message. This is not a sending restriction."
-                    )
             blocks.append(f"{header}\n{body}")
         return "\n\n".join(blocks)
 

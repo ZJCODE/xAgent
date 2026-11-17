@@ -551,7 +551,7 @@ def _config_yaml(selection: InitSelection, port: int) -> str:
             "max_concurrent_tools": AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS,
             "diary_write_batch": AgentConfig.DIARY_WRITE_BATCH,
             "diary_context_days": AgentConfig.DIARY_CONTEXT_DAYS,
-            "subconscious_activity": AgentConfig.SUBCONSCIOUS_ACTIVITY,
+            "subconscious_interval_seconds": AgentConfig.SUBCONSCIOUS_INTERVAL_SECONDS,
         },
         "channels": {
             "api": {
@@ -584,10 +584,10 @@ def _config_yaml(selection: InitSelection, port: int) -> str:
         f"diary_write_batch: {AgentConfig.DIARY_WRITE_BATCH}\n",
         f"diary_write_batch: {AgentConfig.DIARY_WRITE_BATCH}  # Messages per diary maintenance write; independent of recent_messages.\n",
     )
-    # Inline comment for subconscious_activity
+    # Inline comment for reflection interval
     yaml_str = yaml_str.replace(
-        "subconscious_activity: 0.02\n",
-        "subconscious_activity: 0.02  # 0=off, 1=very active. Suggested: 0.01~0.1\n",
+        "subconscious_interval_seconds: 1800\n",
+        "subconscious_interval_seconds: 1800  # Seconds between reflections; 0=off\n",
     )
     yaml_str = yaml_str.replace(
         "diary_context_days: 2\n",

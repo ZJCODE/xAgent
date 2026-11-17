@@ -114,7 +114,7 @@ class Agent:
         max_concurrent_tools: int = AgentConfig.DEFAULT_MAX_CONCURRENT_TOOLS,
         diary_write_batch: int = AgentConfig.DIARY_WRITE_BATCH,
         diary_context_days: int = AgentConfig.DIARY_CONTEXT_DAYS,
-        subconscious_activity: float = AgentConfig.SUBCONSCIOUS_ACTIVITY,
+        subconscious_interval_seconds: float = AgentConfig.SUBCONSCIOUS_INTERVAL_SECONDS,
         voice: str = AgentConfig.DEFAULT_VOICE,
         provider_name: str = PROVIDER_OPENAI,
         reasoning: Optional[ReasoningConfig] = None,
@@ -131,7 +131,7 @@ class Agent:
         self.max_concurrent_tools = max_concurrent_tools
         self.diary_write_batch = diary_write_batch
         self.diary_context_days = diary_context_days
-        self.subconscious_activity = subconscious_activity
+        self.subconscious_interval_seconds = subconscious_interval_seconds
         self.voice = str(voice or AgentConfig.DEFAULT_VOICE).strip() or AgentConfig.DEFAULT_VOICE
         self.observability = observability or NoopObservabilityRuntime()
         self.client = client

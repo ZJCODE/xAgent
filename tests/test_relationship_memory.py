@@ -466,10 +466,9 @@ class MemoryHandlerRelationshipTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bob_card.source.get("diary", []), [first_date.isoformat()])
         context = await handler.get_relationship_context(
             speaker_keys=["api:Alice", "api:Bob"], include_routing_id=True,
-            unanswered_outbound={"api:Alice": 2},
         )
         alice_context, bob_context = context.split("## API contact", 2)[1:]
-        self.assertIn("2 proactive message(s)", alice_context)
+        self.assertIn("old daytime preference changed", alice_context)
         self.assertNotIn("Delivery observation", bob_context)
 
     async def test_empty_diary_slice_does_not_update_cards(self):

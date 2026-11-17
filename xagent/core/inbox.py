@@ -125,6 +125,7 @@ class AgentInbox:
         self._steering: list[str] = []
         self._steering_open = False
         self.accepting = True
+        self.request_version = 0
 
     @property
     def busy(self) -> bool:
@@ -199,6 +200,7 @@ class AgentInbox:
         )
         if ticket.turn_id in self._pending or ticket.turn_id == self.current_turn_id:
             ticket.turn_id = uuid.uuid4().hex
+        self.request_version += 1
         self._pending[ticket.turn_id] = ticket
         return ticket
 
@@ -241,6 +243,7 @@ class AgentInbox:
             return False
         if _scope_text(room_name) != _scope_text(current.room_name):
             return False
+        self.request_version += 1
         self._steering.append(text)
         return True
 

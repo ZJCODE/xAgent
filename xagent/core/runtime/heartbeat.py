@@ -176,7 +176,7 @@ def create_runtime_heartbeat(
         subconscious_loop = SubconsciousLoop(
             agent,
             workspace=workspace,
-            probability=getattr(agent, "subconscious_activity", None),
+            interval_seconds=getattr(agent, "subconscious_interval_seconds", None),
             delivery_sink=subconscious_delivery_sink,
             deliverable_channels=subconscious_deliverable_channels,
             contact_deliverable=subconscious_contact_deliverable,

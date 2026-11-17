@@ -111,7 +111,7 @@ async def soak(args):
     (root / "config.yaml").write_text(yaml.safe_dump({
         "provider": {"name": "openai", "model": "soak-model", "api_key": "test-key"},
         "channels": {"api": {"enabled": False}},
-        "agent": {"subconscious_activity": 0, "diary_write_batch": 16},
+        "agent": {"subconscious_interval_seconds": 0, "diary_write_batch": 16},
         "runtime": {"heartbeat_enabled": True, "heartbeat_interval_seconds": 5},
     }), encoding="utf-8")
     (root / "identity.md").write_text("I am the deterministic soak agent.", encoding="utf-8")

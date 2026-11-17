@@ -126,7 +126,7 @@ async def review_scenario(client, provider: dict, scenario: Scenario) -> dict:
             await persist_subconscious_delivery(agent, delivery, channel="api", recipient_id=delivery.recipient.user_id)
 
         loop = SubconsciousLoop(
-            agent, workspace=Path(workspace), probability=1,
+            agent, workspace=Path(workspace), interval_seconds=1,
             delivery_sink=local_delivery, deliverable_channels={"api"},
         )
         loop.record_interaction("api", recipient, {"user_id": recipient, "sender_name": name})
@@ -137,7 +137,6 @@ async def review_scenario(client, provider: dict, scenario: Scenario) -> dict:
                     "source": "subconscious", "recipient": {"channel": "api", "user_id": recipient},
                 }},
             ))
-            loop._record_unanswered_outbound("api", recipient)
 
         # Fix only the scenario's clock; the production context assembler,
         # provider generation, route preflight and local delivery all run.
@@ -151,12 +150,13 @@ async def review_scenario(client, provider: dict, scenario: Scenario) -> dict:
         generate = loop._generate_subconscious_thought
         results = []
 
-        async def capture_result():
-            result = await generate()
+        async def capture_result(contacts):
+            result = await generate(contacts)
             results.append(result)
             return result
 
         loop._generate_subconscious_thought = capture_result
+        loop._next_think_at = 0
         await asyncio.wait_for(loop.maybe_think(), timeout=180)
         checks = {
             "model_returned_result": len(results) == 1,

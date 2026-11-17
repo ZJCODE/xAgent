@@ -6,7 +6,6 @@ from .subconscious import (
     load_contacts,
     persist_subconscious_delivery,
     resolve_contacts_path,
-    resolve_subconscious_state_path,
     save_contacts,
     upsert_contact,
 )
@@ -47,7 +46,6 @@ __all__ = [
     "load_contacts",
     "persist_subconscious_delivery",
     "resolve_contacts_path",
-    "resolve_subconscious_state_path",
     "save_contacts",
     "upsert_contact",
     "parse_run_at",

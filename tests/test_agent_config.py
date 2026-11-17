@@ -676,7 +676,7 @@ provider:
             config_text = result.config_path.read_text(encoding="utf-8")
             identity_text = result.identity_path.read_text(encoding="utf-8")
             config = yaml.safe_load(config_text)
-            self.assertEqual(config["agent"], {"recent_messages": 12, "max_agent_loops": 50, "max_concurrent_tools": 4, "diary_write_batch": 32, "diary_context_days": 2, "subconscious_activity": 0.02})
+            self.assertEqual(config["agent"], {"recent_messages": 12, "max_agent_loops": 50, "max_concurrent_tools": 4, "diary_write_batch": 32, "diary_context_days": 2, "subconscious_interval_seconds": 1800})
             self.assertEqual(config["provider"]["base_url"], "https://api.openai.com/v1")
             self.assertEqual(config["provider"]["api_key"], "your_api_key_here")
             self.assertEqual(config["provider"]["model"], "gpt-5.6-terra")
@@ -726,7 +726,7 @@ provider:
 
             self.assertTrue(forced.wrote_files)
             config = yaml.safe_load(forced.config_path.read_text(encoding="utf-8"))
-            self.assertEqual(config["agent"], {"recent_messages": 12, "max_agent_loops": 50, "max_concurrent_tools": 4, "diary_write_batch": 32, "diary_context_days": 2, "subconscious_activity": 0.02})
+            self.assertEqual(config["agent"], {"recent_messages": 12, "max_agent_loops": 50, "max_concurrent_tools": 4, "diary_write_batch": 32, "diary_context_days": 2, "subconscious_interval_seconds": 1800})
             identity_text = forced.identity_path.read_text(encoding="utf-8")
             self.assertIn("practical collaborator", identity_text)
             self.assertIn("own continuing identity", identity_text)
@@ -788,7 +788,7 @@ provider:
             result = init_agent_directory(tmpdir, selection=selection)
             config = yaml.safe_load(result.config_path.read_text(encoding="utf-8"))
 
-            self.assertEqual(config["agent"], {"recent_messages": 12, "max_agent_loops": 50, "max_concurrent_tools": 4, "diary_write_batch": 32, "diary_context_days": 2, "subconscious_activity": 0.02})
+            self.assertEqual(config["agent"], {"recent_messages": 12, "max_agent_loops": 50, "max_concurrent_tools": 4, "diary_write_batch": 32, "diary_context_days": 2, "subconscious_interval_seconds": 1800})
             self.assertEqual(config["provider"]["base_url"], "https://api.deepseek.com")
             self.assertEqual(config["provider"]["api_key"], "secret-key")
             self.assertEqual(config["provider"]["model"], "deepseek-v4-pro")
@@ -1932,3 +1932,27 @@ runtime:
 
 if __name__ == "__main__":
     unittest.main()
+
+class SubconsciousIntervalConfigTests(unittest.TestCase):
+    def validate_agent(self, agent):
+        runner = object.__new__(BaseAgentRunner)
+        config = {'agent': agent, 'provider': {'model': 'test-model', 'api_key': 'test-key'},
+                  'runtime': {'heartbeat_interval_seconds': 300}}
+        runner._validate_config(config)
+        return config['agent']
+
+    def test_legacy_activity_converts_once(self):
+        self.assertEqual(self.validate_agent({'subconscious_activity': 0.02}),
+                         {'subconscious_interval_seconds': 15000})
+        self.assertEqual(self.validate_agent({'subconscious_activity': 0}),
+                         {'subconscious_interval_seconds': 0})
+
+    def test_explicit_interval_takes_precedence(self):
+        self.assertEqual(self.validate_agent({'subconscious_activity': 0.02,
+                                             'subconscious_interval_seconds': 60}),
+                         {'subconscious_interval_seconds': 60})
+
+    def test_invalid_interval_is_rejected(self):
+        for value in (-1, True, '30', float('nan'), 1.5):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                self.validate_agent({'subconscious_interval_seconds': value})

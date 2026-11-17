@@ -122,8 +122,7 @@ class ModelLimitsTests(unittest.IsolatedAsyncioTestCase):
                             self.assertEqual(client.max_retries, 2)
 
     async def test_agent_roles_use_independent_budgets_on_all_apis(self):
-        thought = json.dumps({"internal_content": "A quiet thought.", "worthy": False,
-                              "external_content": None, "recipient_hint": None})
+        thought = json.dumps({"note": "A quiet thought.", "message": None})
         for api in APIS:
             for configured, expected in ((None, (8192, 4096, 2048)), (16000, (16000, 4096, 2048)), (1024, (1024, 1024, 1024))):
                 with self.subTest(api=api, configured=configured), tempfile.TemporaryDirectory() as root:
@@ -141,7 +140,7 @@ class ModelLimitsTests(unittest.IsolatedAsyncioTestCase):
                             self.assertEqual(result, ReplyType.SIMPLE_REPLY)
                             await agent.llm_service._call_text("Diary", "Source")
                             loop = SubconsciousLoop(agent, workspace=Path(root))
-                            self.assertEqual((await loop._generate_subconscious_thought())["internal_content"], "A quiet thought.")
+                            self.assertEqual((await loop._generate_subconscious_thought([]))["note"], "A quiet thought.")
                             key = {MODEL_API_OPENAI_RESPONSES: "max_output_tokens",
                                    MODEL_API_OPENAI_CHAT_COMPLETIONS: "max_completion_tokens",
                                    MODEL_API_ANTHROPIC_MESSAGES: "max_tokens"}[api]
@@ -175,8 +174,7 @@ class ModelLimitsTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_deepseek_background_explicitly_disables_default_thinking(self):
         requests = []
-        thought = json.dumps({"internal_content": "A thought.", "worthy": False,
-                              "external_content": None, "recipient_hint": None})
+        thought = json.dumps({"note": "A thought.", "message": None})
 
         def handle(request):
             requests.append(json.loads(request.content))
@@ -188,7 +186,7 @@ class ModelLimitsTests(unittest.IsolatedAsyncioTestCase):
                               model_api=MODEL_API_OPENAI_CHAT_COMPLETIONS)
                 try:
                     loop = SubconsciousLoop(agent, workspace=Path(root))
-                    await loop._generate_subconscious_thought()
+                    await loop._generate_subconscious_thought([])
                     await agent.model_client.call([{"role": "user", "content": "hello"}], None)
                     self.assertEqual(requests[0]["max_tokens"], 2048)
                     self.assertEqual(requests[0]["thinking"], {"type": "disabled"})
