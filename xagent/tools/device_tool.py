@@ -11,7 +11,7 @@ from ..integrations.devices.service import CallRequest, DeviceService
 from ..utils.tool_decorator import function_tool
 
 
-def create_device_tool(service: DeviceService):
+def create_device_tool(service: DeviceService, *, before_send=None):
     @function_tool(
         name="device",
         description=(
@@ -65,6 +65,8 @@ def create_device_tool(service: DeviceService):
             request = CallRequest(device_id=device_id, capability=capability, params=params or {}, timeout_seconds=timeout_seconds)
         except ValidationError:
             return failure("invalid_arguments", "Invalid device_id, capability or params")
+        if before_send is not None:
+            return await service.call(request, before_send=before_send)
         return await service.call(request)
 
     return device

@@ -20,6 +20,7 @@ from .config import ChatLimits
 from .constants import CHANNEL_API
 from .delivery import DeliveryBus
 from .task_dispatch import TaskDispatchService
+from .device_observations import DeviceObservationWorker
 
 
 class ApiChannelAdapter:
@@ -46,6 +47,9 @@ class ApiChannelAdapter:
         self.tasks_dir = tasks_dir
         self.limits = limits or ChatLimits()
         self.logger = logger or logging.getLogger(self.__class__.__name__)
+        self.device_observations = (
+            DeviceObservationWorker(agent, device_service, self.logger) if device_service is not None else None
+        )
         self.delivery = DeliveryBus(logger=self.logger)
         self.chat = ChatService(
             agent,
@@ -65,6 +69,8 @@ class ApiChannelAdapter:
 
     async def stop(self) -> None:
         """Transport teardown only; the RuntimeHost owns scheduled work."""
+        if self.device_observations is not None:
+            await self.device_observations.stop()
 
     async def deliver_subconscious_message(self, delivery: SubconsciousDelivery) -> None:
         await self.delivery.deliver_subconscious(delivery, agent=self.agent)
@@ -97,6 +103,7 @@ class ApiChannelAdapter:
             channel="devices",
             room_name=room_name,
             event_id=json.dumps([device_id, event.event_id], ensure_ascii=False, separators=(",", ":")),
+            _on_recorded=self.device_observations.submit if self.device_observations is not None else None,
         )
 
     def register_routes(self, app: FastAPI) -> None:

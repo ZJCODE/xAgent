@@ -598,8 +598,20 @@ includes the device ID and event type alongside the observation, without claimin
 who caused a touch. Duplicate IDs on the same device are stored once, including
 after reconnect or Agent restart; different devices have separate event identities.
 
-No chat client needs to be connected. Recording an event does not start a chat
-turn, subscribe users, broadcast notifications, or alter an in-flight model request.
+No chat client needs to be connected. Each newly recorded device observation
+schedules a silent background action decision using the Agent's current goals,
+recent history, memory, and available device capabilities. The decision can keep
+the observation as background or issue one existing Device command. Its result
+is stored as a `device_action_result` observation for subsequent decisions.
+Unknown outcomes are recorded without automatic retries.
+
+One worker serializes decisions and batches observations arriving while it is
+busy. Repeated samples during a decision share that decision; event transitions
+remain in the stored history. User turns have priority. New input or changed
+observations invalidate unsent decisions, including commands waiting for the
+device connection lock. The socket continues receiving execution results while
+the worker runs. Non-device `observe` calls retain their record-only behavior.
+Pending decisions are ephemeral and are not replayed after a runtime restart.
 Subsequent context assembly uses the existing recent-event budget, working summary,
 and memory maintenance. The normal background memory policy still applies.
 This protocol sends no event acknowledgement or automatic reply, and does not

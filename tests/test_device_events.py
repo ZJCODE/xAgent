@@ -44,6 +44,8 @@ class DeviceEventProtocolTests(unittest.TestCase):
             (ReplyType.SIMPLE_REPLY, "I still have that observation."),
         ])
         self.agent = chat_test.AgentChatFlowTests()._build_agent(self.storage, self.model)
+        # Protocol tests isolate transport/storage from model action policy.
+        self.agent.decide_device_action = AsyncMock(return_value=None)
         self.service = device_test.device_service()
         self.service.start()
         self.adapter = ApiChannelAdapter(
@@ -56,6 +58,7 @@ class DeviceEventProtocolTests(unittest.TestCase):
         self.client.__enter__()
         self.addCleanup(self.client.__exit__, None, None, None)
         self.addCleanup(lambda: self.client.portal.call(self.service.stop))
+        self.addCleanup(lambda: self.client.portal.call(self.adapter.stop))
 
     def connect(self, device_id="desk"):
         return self.client.websocket_connect(
@@ -191,6 +194,29 @@ class DeviceEventProtocolTests(unittest.TestCase):
             self.assertEqual(len(self.await_events(2)), 2)
             self.assertFalse(self.service.pending)
             self.assertEqual(self.model.calls, [])
+
+    def test_observation_can_command_same_socket_and_receive_result(self):
+        from xagent.core.agent import Agent
+        from xagent.core.handlers.model import ChatToolCall
+
+        self.agent.decide_device_action = Agent.decide_device_action.__get__(self.agent)
+        self.model.responses = [(ReplyType.TOOL_CALL, [ChatToolCall(
+            call_id="applause-action", name="device", arguments=json.dumps({
+                "action": "call", "device_id": "desk", "capability": "custom.execute", "params": {"value": 1},
+            }),
+        )])]
+        with self.connect() as device:
+            self.register(device)
+            device.send_json(device_event())
+            command = device.receive_json()
+            self.assertEqual(command["type"], "command")
+            device.send_json({"type": "result", "command_id": command["command_id"], "ok": True})
+            self.client.portal.call(lambda: self.adapter.device_observations.task)
+            messages = self.await_events(2)
+            result = json.loads(messages[-1].content)["result"]
+            self.assertEqual(result["status"], "success")
+            self.assertEqual(result["command_id"], command["command_id"])
+            self.assertFalse(self.service.pending)
 
     def test_invalid_events_and_oversized_frames_fail_closed(self):
         invalid = [

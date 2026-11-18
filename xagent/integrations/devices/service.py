@@ -594,7 +594,7 @@ class DeviceService:
             response["attachment_error"] = {"code": "invalid_attachment", "message": "Attachments require asynchronous resolution"}
         pending.future.set_result(response)
 
-    async def call(self, request: CallRequest) -> dict:
+    async def call(self, request: CallRequest, *, before_send=None) -> dict:
         connection = self.devices.get(request.device_id)
         if not self.accepting or connection is None:
             return outcome("error", "device_unavailable", "Device API is unavailable or device is offline", device_id=request.device_id)
@@ -616,6 +616,9 @@ class DeviceService:
             try:
                 async with connection.lock:
                     if pending.future.done():
+                        return
+                    if before_send is not None and not before_send():
+                        pending.future.set_result(outcome("error", "action_context_changed", "Context changed before sending; command was not sent", device_id=request.device_id))
                         return
                     if self.devices.get(request.device_id) is not connection:
                         pending.future.set_result(outcome("error", "device_disconnected", "Device connection changed before sending", command_id=command_id, device_id=request.device_id))

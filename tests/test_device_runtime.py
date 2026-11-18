@@ -220,7 +220,7 @@ class DeviceRuntimeTests(unittest.IsolatedAsyncioTestCase):
             "type": "event", "event_id": "touch-1", "event_type": "touch",
             "context": "The head sensor detected a tap.", "data": {"area": "head"},
         }
-        first, task, root, url = await self.start_host([])
+        first, task, root, url = await self.start_host([(ReplyType.SIMPLE_REPLY, "Background.")])
         async with self.device_socket(url) as device:
             await self.register(device, first)
             await device.send(json.dumps(event))
@@ -228,12 +228,17 @@ class DeviceRuntimeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(message.role, RoleType.ENVIRONMENT)
             self.assertIsNone(message.sender_id)
             self.assertIsNone(message.recipient_id)
-            self.assertEqual(first.agent.model_client.calls, [])
+            await self.wait_for(lambda: first.api.device_observations.task is not None
+                                and first.api.device_observations.task.done())
+            self.assertEqual(len(first.agent.model_client.calls), 1)
         await first.stop()
         await asyncio.wait_for(task, timeout=20)
         self.hosts.pop()
 
-        model = chat_test.CapturingModelClient([(ReplyType.SIMPLE_REPLY, "I noticed the tap.")])
+        model = chat_test.CapturingModelClient([
+            (ReplyType.SIMPLE_REPLY, "Background."),
+            (ReplyType.SIMPLE_REPLY, "I noticed the tap."),
+        ])
         second, task = await runtime_test.RuntimeTransportTests._start_host(self, root, model)
         self.hosts.append((second, task))
         await self.wait_for(lambda: second.channel_status["api"]["state"] == "connected")
@@ -248,10 +253,12 @@ class DeviceRuntimeTests(unittest.IsolatedAsyncioTestCase):
             ]
             self.assertEqual(len(observations), 2)
             self.assertEqual(observations[0].content, event["context"])
-            self.assertEqual(model.calls, [])
+            await self.wait_for(lambda: second.api.device_observations.task is not None
+                                and second.api.device_observations.task.done())
+            self.assertEqual(len(model.calls), 1)
             events = [item async for item in RuntimeClient(root).chat_events(user_id="alice", user_message="What happened?")]
             self.assertTrue(any(item.get("content") == "I noticed the tap." for item in events))
-            transcript = next(item["content"] for item in model.calls[0] if item.get("name") == AgentConfig.RECENT_EXPERIENCE_NAME)
+            transcript = next(item["content"] for item in model.calls[-1] if item.get("name") == AgentConfig.RECENT_EXPERIENCE_NAME)
             self.assertIn(event["context"], transcript)
             self.assertIn("[device_id=desk][event_type=touch]", transcript)
 
