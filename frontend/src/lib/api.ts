@@ -93,6 +93,14 @@ export function cancelDevicePairing(): Promise<{ status: string }> {
   return requestJson("/api/devices/pairing", { method: "DELETE" });
 }
 
+export function createReusableDevicePairing(): Promise<{ pairing_code: string }> {
+  return requestJson("/api/devices/pairing/reusable", { method: "POST" });
+}
+
+export function disableReusableDevicePairing(): Promise<{ status: string }> {
+  return requestJson("/api/devices/pairing/reusable", { method: "DELETE" });
+}
+
 export function removeDevice(deviceId: string): Promise<{ status: string }> {
   return requestJson(`/api/devices/${encodeURIComponent(deviceId)}`, { method: "DELETE" });
 }

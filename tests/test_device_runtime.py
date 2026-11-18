@@ -342,6 +342,33 @@ class DeviceRuntimeTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(host_task, timeout=5)
         self.assertTrue(host.device_service.resources_closed)
 
+    async def test_reusable_pairing_admin_survives_runtime_restart(self):
+        first, task, root, url = await self.start_host([], seed_credentials=False)
+        client = RuntimeClient(root)
+        response = await client.request("POST", "/api/devices/pairing/reusable")
+        self.assertEqual(response.status_code, 200)
+        code = response.json()["pairing_code"]
+        await first.stop()
+        await asyncio.wait_for(task, timeout=20)
+        self.hosts.pop()
+
+        second, task = await runtime_test.RuntimeTransportTests._start_host(self, root, chat_test.CapturingModelClient([]))
+        self.hosts.append((second, task))
+        await self.wait_for(lambda: second.channel_status["api"]["state"] == "connected")
+        state = (await client.request("GET", "/api/devices")).json()
+        self.assertTrue(state["reusable_pairing_enabled"])
+        self.assertNotIn(code, json.dumps(state))
+        async with websockets.connect(url + "/ws/devices/desk", additional_headers={"Authorization": "Bearer " + code}, **self.connection_options) as device:
+            await device.send(json.dumps(device_test.manifest().model_dump()))
+            paired = json.loads(await asyncio.wait_for(device.recv(), timeout=3))
+            self.assertEqual(paired["type"], "paired")
+            await self.wait_for(lambda: "desk" in second.device_service.devices)
+            response = await client.request("DELETE", "/api/devices/pairing/reusable")
+            self.assertEqual(response.status_code, 200)
+            self.assertFalse(second.device_service.authenticate("other", "Bearer " + code))
+            self.assertTrue(second.device_service.authenticate("desk", "Bearer " + paired["credential"]))
+            self.assertIn("desk", second.device_service.devices)
+
     async def test_runnable_software_executor_handles_calls_and_reconnects(self):
         host, host_task, root, url = await self.start_host([], seed_credentials=False)
         async with httpx.AsyncClient(base_url=url.replace("ws://", "http://"), trust_env=False) as client:

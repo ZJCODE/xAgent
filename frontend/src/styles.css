@@ -3411,6 +3411,19 @@ body { -webkit-font-smoothing: antialiased; }
 .device-connection-help .modal-footer .ui-button { flex-shrink: 0; }
 .device-add-row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
 .device-pairing { display: grid; gap: 12px; padding: 16px; border: 1px solid var(--border); border-radius: 10px; }
+.device-reusable-pairing { padding-top: 20px; margin-top: 4px; border-top: 1px solid var(--border); }
+.device-reusable-header { display: flex; align-items: center; justify-content: space-between; gap: 20px; flex-wrap: wrap; }
+.device-reusable-copy { flex: 1; min-width: 220px; }
+.device-reusable-title { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.device-reusable-title h3 { margin: 0; font-size: 13px; font-weight: 620; }
+.device-reusable-copy p { margin: 6px 0 0; color: var(--text-muted); font-size: 12px; line-height: 1.5; }
+.device-reusable-credentials { display: grid; grid-template-columns: minmax(0, .85fr) minmax(0, 1.15fr); gap: 14px 18px; margin-top: 16px; padding: 16px; border-radius: 8px; background: var(--bg-surface-subtle); }
+.device-reusable-credentials .wizard-field { min-width: 0; }
+.device-reusable-credentials .wizard-field > label { font-size: 12px; font-weight: 560; }
+.device-code-input { display: flex; align-items: center; gap: 6px; }
+.device-code-input input { flex: 1; min-width: 0; font-family: ui-monospace, monospace; font-size: 12px; }
+.device-reusable-credentials > p { grid-column: 1 / -1; margin: 0; color: var(--text-muted); font-size: 12px; line-height: 1.5; }
+@media (max-width: 600px) { .device-reusable-credentials { grid-template-columns: minmax(0, 1fr); } }
 .device-list { display: grid; gap: 12px; }
 .device-list-row { display: flex; gap: 12px; align-items: center; padding-top: 12px; border-top: 1px solid var(--border); }
 .device-list-row > div { flex: 1; min-width: 0; overflow-wrap: anywhere; }

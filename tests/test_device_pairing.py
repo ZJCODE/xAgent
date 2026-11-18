@@ -64,6 +64,91 @@ class PairingCredentialsTests(unittest.TestCase):
         self.assertTrue(self.service.authenticate("desk", "Bearer original-secret"))
         self.assertTrue(self.service.authenticate("other", "Bearer " + code))
 
+    def test_legacy_store_loads_with_reusable_pairing_disabled(self):
+        self.path.write_text(json.dumps({"version": 1, "devices": {
+            "desk": DeviceCredentials._digest("desk", "saved-secret"),
+        }}))
+        credentials = DeviceCredentials(self.path)
+        self.assertIsNone(credentials.reusable_pairing_digest)
+        self.assertTrue(credentials.authenticate("desk", "saved-secret"))
+        self.assertFalse(credentials.authenticate_reusable_pairing("saved-secret"))
+
+    def test_reusable_code_enrolls_multiple_devices_and_survives_restart(self):
+        self.assertIsNone(self.service.credentials.reusable_pairing_digest)
+        code = self.service.create_reusable_pairing()["pairing_code"]
+        tokens = [self.service.complete_pairing(device_test.manifest(identity), "Bearer " + code)
+                  for identity in ("desk", "robot")]
+        self.assertNotEqual(*tokens)
+        self.service.quiesce()
+        self.assertFalse(self.service.authenticate("new", "Bearer " + code))
+        replacement = DeviceService(self.service.config, self.path)
+        replacement.start()
+        with patch("xagent.integrations.devices.service.time.monotonic", return_value=time.monotonic() + 86400):
+            self.assertTrue(replacement.authenticate("new", "Bearer " + code))
+        for identity, token in zip(("desk", "robot"), tokens):
+            self.assertTrue(replacement.authenticate(identity, "Bearer " + token))
+            self.assertFalse(replacement.authenticate(identity, "Bearer " + code))
+        stored = self.path.read_text()
+        for secret in [code, *tokens]:
+            self.assertNotIn(secret, stored)
+        self.assertEqual(stat.S_IMODE(self.path.stat().st_mode), 0o600)
+
+    def test_reusable_reset_disable_and_device_changes_preserve_other_credentials(self):
+        old = self.service.create_reusable_pairing()["pairing_code"]
+        token = self.service.complete_pairing(device_test.manifest(), "Bearer " + old)
+        new = self.service.create_reusable_pairing()["pairing_code"]
+        self.assertFalse(self.service.authenticate("other", "Bearer " + old))
+        self.assertTrue(self.service.authenticate("other", "Bearer " + new))
+        self.assertTrue(self.service.authenticate("desk", "Bearer " + token))
+        with self.assertRaises(ValueError):
+            self.service.complete_pairing(device_test.manifest(), "Bearer " + new)
+        self.service.credentials.add("other", "other-secret")
+        self.service.credentials.revoke("other")
+        self.assertTrue(DeviceCredentials(self.path).authenticate_reusable_pairing(new))
+        self.service.disable_reusable_pairing()
+        self.assertFalse(self.service.authenticate("other", "Bearer " + new))
+        self.assertTrue(self.service.authenticate("desk", "Bearer " + token))
+        self.assertIsNone(DeviceCredentials(self.path).reusable_pairing_digest)
+
+    def test_reusable_and_single_use_codes_are_independent(self):
+        temporary = self.service.create_pairing()["pairing_code"]
+        reusable = self.service.create_reusable_pairing()["pairing_code"]
+        self.service.complete_pairing(device_test.manifest(), "Bearer " + reusable)
+        self.assertTrue(self.service.authenticate("robot", "Bearer " + temporary))
+        self.service.complete_pairing(device_test.manifest("robot"), "Bearer " + temporary)
+        self.assertFalse(self.service.authenticate("third", "Bearer " + temporary))
+        self.service.create_pairing()
+        self.service.cancel_pairing()
+        self.assertTrue(self.service.authenticate("third", "Bearer " + reusable))
+        temporary = self.service.create_pairing()["pairing_code"]
+        self.service.disable_reusable_pairing()
+        self.assertTrue(self.service.authenticate("third", "Bearer " + temporary))
+
+    def test_reusable_code_supports_voice_pairing_but_not_media_or_other_agents(self):
+        code = self.service.create_reusable_pairing()["pairing_code"]
+        token = self.service.complete_pairing_for_voice("speaker", "Bearer " + code, name="Speaker")
+        self.assertTrue(self.service.authenticate("speaker", "Bearer " + token))
+        self.assertFalse(self.service.authenticate_media("speaker", "Bearer " + code))
+        self.assertTrue(self.service.authenticate_media("speaker", "Bearer " + token))
+        self.assertTrue(self.service.authenticate("robot", "Bearer " + code))
+        with self.assertRaises(ValueError):
+            self.service.complete_pairing_for_voice("speaker", "Bearer " + code)
+        other = DeviceService(self.service.config)
+        other.start()
+        self.assertFalse(other.authenticate("robot", "Bearer " + code))
+
+    def test_reusable_write_failure_preserves_previous_code_in_memory_and_on_disk(self):
+        code = self.service.create_reusable_pairing()["pairing_code"]
+        before = self.path.read_bytes()
+        with patch("xagent.integrations.devices.credentials.os.replace", side_effect=OSError("disk full")):
+            with self.assertRaises(OSError):
+                self.service.create_reusable_pairing()
+            with self.assertRaises(OSError):
+                self.service.disable_reusable_pairing()
+        self.assertTrue(self.service.authenticate("desk", "Bearer " + code))
+        self.assertEqual(self.path.read_bytes(), before)
+        self.assertEqual(list(self.path.parent.iterdir()), [self.path])
+
     def test_invalid_manifest_and_failed_persistence_do_not_consume_pairing(self):
         code = self.service.create_pairing()["pairing_code"]
         invalid = device_test.manifest(capabilities=[{"name": "duplicate"}, {"name": "duplicate"}])
@@ -178,6 +263,45 @@ class PairingProtocolTests(unittest.TestCase):
             self.assertNotIn(paired["credential"], json.dumps(state))
             self.assertNotIn(code, json.dumps(state))
 
+    def test_reusable_admin_and_multiple_device_handshakes(self):
+        self.assertFalse(self.client.get("/api/devices").json()["reusable_pairing_enabled"])
+        response = self.client.post("/api/devices/pairing/reusable")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["cache-control"], "no-store")
+        code = response.json()["pairing_code"]
+        with self.socket("desk", code) as first, self.client.websocket_connect("/ws/devices/robot?token=" + code) as second:
+            first.send_json(device_test.manifest().model_dump())
+            first_token = first.receive_json()["credential"]
+            second.send_json(device_test.manifest("robot").model_dump())
+            second_token = second.receive_json()["credential"]
+            self.assertNotEqual(first_token, second_token)
+            state = self.client.get("/api/devices").json()
+            self.assertTrue(state["reusable_pairing_enabled"])
+            for secret in (code, first_token, second_token):
+                self.assertNotIn(secret, json.dumps(state))
+            new = self.client.post("/api/devices/pairing/reusable").json()["pairing_code"]
+            self.assertFalse(self.service.authenticate("third", "Bearer " + code))
+            self.assertTrue(self.service.authenticate("third", "Bearer " + new))
+            self.assertEqual(self.client.delete("/api/devices/pairing/reusable").status_code, 200)
+            self.assertFalse(self.client.get("/api/devices").json()["reusable_pairing_enabled"])
+            self.assertTrue(self.service.authenticate("desk", "Bearer " + first_token))
+            self.assertTrue(self.service.authenticate("robot", "Bearer " + second_token))
+            self.assertFalse(self.service.authenticate("third", "Bearer " + new))
+
+    def test_reusable_management_requires_trusted_origin_and_reports_save_failure(self):
+        for method in (self.client.post, self.client.delete):
+            self.assertEqual(method("/api/devices/pairing/reusable", headers={"Origin": "https://untrusted.example"}).status_code, 403)
+        with patch("xagent.integrations.devices.credentials.os.replace", side_effect=OSError("disk full")):
+            self.assertEqual(self.client.post("/api/devices/pairing/reusable").status_code, 500)
+        self.assertFalse(self.client.get("/api/devices").json()["reusable_pairing_enabled"])
+        self.client.post("/api/devices/pairing/reusable")
+        with patch("xagent.integrations.devices.credentials.os.replace", side_effect=OSError("disk full")):
+            self.assertEqual(self.client.delete("/api/devices/pairing/reusable").status_code, 500)
+        self.assertTrue(self.client.get("/api/devices").json()["reusable_pairing_enabled"])
+        self.service.quiesce()
+        self.assertEqual(self.client.post("/api/devices/pairing/reusable").status_code, 409)
+        self.assertEqual(self.client.delete("/api/devices/pairing/reusable").status_code, 200)
+
     def test_two_connections_cannot_both_consume_one_pairing_code(self):
         code = self.pairing_code()
         with self.socket("desk", code) as first, self.socket("robot", code) as second:
@@ -230,6 +354,7 @@ class PairingProtocolTests(unittest.TestCase):
 
     def test_offline_admin_only_reads_configuration_and_paired_ids(self):
         self.service.credentials.add("desk", "secret")
+        self.service.create_reusable_pairing()
         with patch("xagent.interfaces.base.DeviceService", side_effect=AssertionError("Offline service created")):
             admin = AdminService(config_dir=str(self.root))
             app = FastAPI()
@@ -237,6 +362,9 @@ class PairingProtocolTests(unittest.TestCase):
             with TestClient(app) as client:
                 state = client.get("/api/devices").json()
                 self.assertFalse(state["runtime_available"])
+                self.assertTrue(state["reusable_pairing_enabled"])
                 self.assertEqual(state["devices"], [{"device_id": "desk", "online": False}])
                 self.assertNotIn("secret", json.dumps(state))
                 self.assertEqual(client.post("/api/devices/pairing").status_code, 503)
+                self.assertEqual(client.post("/api/devices/pairing/reusable").status_code, 503)
+                self.assertEqual(client.delete("/api/devices/pairing/reusable").status_code, 503)

@@ -217,9 +217,21 @@ class DeviceService:
         }
 
     def _valid_pairing(self, token: str) -> bool:
-        return bool(self._pairing_code) and time.monotonic() < self._pairing_deadline and secrets.compare_digest(
-            token.encode("utf-8"), self._pairing_code.encode("utf-8"),
+        temporary_valid = (
+            bool(self._pairing_code) and time.monotonic() < self._pairing_deadline
+            and secrets.compare_digest(token.encode("utf-8"), self._pairing_code.encode("utf-8"))
         )
+        return self.accepting and (temporary_valid or self.credentials.authenticate_reusable_pairing(token))
+
+    def create_reusable_pairing(self) -> dict:
+        if not self.accepting:
+            raise RuntimeError("Connect the Agent API before adding a device")
+        code = "pair_" + secrets.token_urlsafe(32)
+        self.credentials.set_reusable_pairing(code)
+        return {"pairing_code": code}
+
+    def disable_reusable_pairing(self) -> None:
+        self.credentials.set_reusable_pairing(None)
 
     def complete_pairing(self, registration: Registration, credential: str) -> str | None:
         """Validate the manifest before consuming a code; bind a new ID atomically."""
@@ -234,7 +246,8 @@ class DeviceService:
             raise ValueError("Invalid pairing code or device ID is already paired")
         issued = "dvc_" + secrets.token_urlsafe(32)
         self.credentials.add(device_id, issued)
-        self.cancel_pairing()
+        if secrets.compare_digest(token.encode("utf-8"), self._pairing_code.encode("utf-8")):
+            self.cancel_pairing()
         logger.info("Device paired id=%s", device_id)
         return issued
 
@@ -263,7 +276,8 @@ class DeviceService:
             raise ValueError("Invalid pairing code or device ID is already paired")
         issued = "dvc_" + secrets.token_urlsafe(32)
         self.credentials.add(device_id, issued)
-        self.cancel_pairing()
+        if secrets.compare_digest(token.encode("utf-8"), self._pairing_code.encode("utf-8")):
+            self.cancel_pairing()
         if name or location:
             self.profiles.reported(
                 device_id,

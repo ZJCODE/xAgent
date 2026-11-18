@@ -1,10 +1,12 @@
 import { BookOpen, Copy, Mic, Play, Plus, Plug, RefreshCw } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { useAgentSession } from "../context/AgentSessionContext";
 import {
   cancelDevicePairing,
   connectChannel,
   createDevicePairing,
+  createReusableDevicePairing,
+  disableReusableDevicePairing,
   getDevices,
   removeDevice,
   startRuntime,
@@ -32,15 +34,19 @@ export function DevicePanel({
   const [helpOpen, setHelpOpen] = useState(false);
   const [status, setStatus] = useState<DeviceStatus | null>(null);
   const [pairing, setPairing] = useState<DevicePairing | null>(null);
+  const [reusableCode, setReusableCode] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const previousIds = useRef<string[]>([]);
+  const reusableTitleId = useId();
+  const reusableCodeId = useId();
 
   const load = useCallback(async () => {
     const data = await getDevices();
     setStatus(data);
+    if (!data.reusable_pairing_enabled) setReusableCode(null);
     if (data.api_url && onApiUrlChange) {
       onApiUrlChange(data.api_url);
     }
@@ -72,6 +78,7 @@ export function DevicePanel({
   useEffect(() => {
     setStatus(null);
     setPairing(null);
+    setReusableCode(null);
     setError("");
     setNotice("");
     setHelpOpen(false);
@@ -308,6 +315,82 @@ export function DevicePanel({
                 </div>
               ))}
             </div>
+            <section className="device-reusable-pairing" aria-labelledby={reusableTitleId}>
+              <div className="device-reusable-header">
+                <div className="device-reusable-copy">
+                  <div className="device-reusable-title">
+                    <h3 id={reusableTitleId}>Reusable pairing code</h3>
+                    <StatusBadge tone={status.reusable_pairing_enabled ? "good" : "muted"}>
+                      {status.reusable_pairing_enabled ? "Enabled" : "Disabled"}
+                    </StatusBadge>
+                  </div>
+                  <p>
+                    {typeof status.reusable_pairing_enabled === "boolean"
+                      ? "Anyone with the code can add devices. Valid until reset or disabled."
+                      : "Restart the Agent runtime to use reusable pairing."}
+                  </p>
+                </div>
+                <div className="toolbar-actions">
+                  <Button
+                    disabled={busy || !status.api_available || typeof status.reusable_pairing_enabled !== "boolean"}
+                    onClick={() =>
+                      void act(async () => {
+                        const result = await createReusableDevicePairing();
+                        setReusableCode(result.pairing_code);
+                        setStatus((current) => current ? { ...current, reusable_pairing_enabled: true } : current);
+                      })
+                    }
+                  >
+                    {status.reusable_pairing_enabled ? <RefreshCw size={14} /> : <Plus size={14} />}
+                    {status.reusable_pairing_enabled ? "Reset code" : "Enable"}
+                  </Button>
+                  {status.reusable_pairing_enabled && (
+                    <Button
+                      variant="ghost"
+                      disabled={busy || !status.runtime_available}
+                      onClick={() =>
+                        void act(async () => {
+                          await disableReusableDevicePairing();
+                          setReusableCode(null);
+                          setStatus((current) => current ? { ...current, reusable_pairing_enabled: false } : current);
+                          setNotice("Reusable pairing code disabled.");
+                        })
+                      }
+                    >
+                      Disable
+                    </Button>
+                  )}
+                </div>
+              </div>
+              {reusableCode && (
+                <div className="device-reusable-credentials">
+                  <label className="wizard-field">
+                    <span>Agent address</span>
+                    <input readOnly value={status.api_url} />
+                  </label>
+                  <div className="wizard-field">
+                    <label htmlFor={reusableCodeId}>Pairing code</label>
+                    <div className="device-code-input">
+                      <input id={reusableCodeId} readOnly value={reusableCode} spellCheck={false} />
+                      <IconButton
+                        title="Copy reusable pairing code"
+                        disabled={busy}
+                        onClick={() =>
+                          void act(async () => {
+                            if (!(await copyText(reusableCode)))
+                              throw new Error("Copy failed. Select the pairing code and copy it manually.");
+                            setNotice("Reusable pairing code copied.");
+                          })
+                        }
+                      >
+                        <Copy size={15} />
+                      </IconButton>
+                    </div>
+                  </div>
+                  <p>Save this code now. It is only shown when generated.</p>
+                </div>
+              )}
+            </section>
           </>
         )}
       </div>

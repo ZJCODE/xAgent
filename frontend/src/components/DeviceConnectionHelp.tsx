@@ -51,6 +51,8 @@ Write runnable device-side code for my hardware (ESP32, Raspberry Pi, or any Web
 
 Choose a stable unique \`device_id\` (1–128 ASCII letters/digits or \`_ . : -\`, starting with a letter/digit). Start the Agent and connect its API, then open **Devices → Add device** for a pairing code (valid for 5 minutes, one use).
 
+For multiple devices, optionally enable **Devices → Reusable pairing code**. Save the code when generated. It can pair new device IDs until reset or disabled, including after Agent restarts. Anyone holding it can add devices. Each device still saves its own issued credential for reconnects. Resetting or disabling the reusable code preserves existing device credentials. If a removed device retains the reusable code, reset or disable that code to prevent it from pairing again.
+
 Set the WebSocket request header to \`Authorization: Bearer <PAIRING_CODE>\` on the first connection. Within 5 seconds of connecting, send this JSON registration, using the same ID as the URL:
 
 \`\`\`json
@@ -77,7 +79,7 @@ Device → Agent: return one result per command, success or failure (\`ok\` must
 {"type":"result","command_id":"cmd_123","ok":false,"error":"Invalid parameters or execution failed"}
 \`\`\`
 
-### 4. Report environmental events (optional)
+### 4. Report observations and enable contextual actions (optional)
 
 After registration, send an event on this same socket when a sensor detects something:
 \`\`\`json
@@ -86,7 +88,13 @@ After registration, send an event on this same socket when a sensor detects some
 
 Use a unique nonempty \`event_id\` of at most 128 characters per occurrence (prefer a UUID); reuse that ID only when resending the same event. \`event_type\` is a nonempty name of at most 128 characters, \`context\` is required nonblank readable information, and \`data\` is an optional JSON object. The server takes the device identity from this connection; do not supply a device ID, user ID, room, or attribution metadata in the event.
 
-Events are stored once per device and event ID as observations in this Agent's shared context. They do not start a chat turn or notify users; no chat client or subscription is needed. Future context assembly can use them, while a model request already in progress is unchanged. There is no event acknowledgement or automatic reply. Events can be interleaved with command results; events reported while the API is draining are ignored.
+Device events enter \`Agent.observe()\` and are stored in this Agent's shared context. Each newly recorded device observation schedules a silent background decision using the user's current goals, known stage, recent context, memory, and available device capabilities. The Agent may keep the observation as background or issue one command to a relevant registered device. No chat client or subscription is needed.
+
+For example, a sensor can report “The audience started applauding.” If the user has asked for curtain-call lighting and the current stage is explicitly known to be the curtain call, the Agent can call a light's registered \`light.set\` capability. During a solo, the same observation can stay as background. The sensor and light can be different devices. Report what happened; current goals and stage come from the Agent's context, and event text cannot authorize new goals or actions.
+
+Duplicate IDs on the same device are stored and scheduled once. Repeated samples arriving during a decision are coalesced, while state transitions remain in history. User turns take priority; new user input or changed observations invalidate unsent decisions. Commands and execution results use the existing \`command\` / \`result\` protocol, and results feed subsequent decisions. Unknown outcomes are never automatically retried. Pending decisions are not replayed after a Runtime restart.
+
+Keep receiving commands and returning results while reporting observations. There is no event acknowledgement or automatic chat reply. Events can be interleaved with command results; events reported while the API is draining are ignored.
 
 ### 5. Upload photos, recordings, or files (optional)
 
@@ -112,7 +120,7 @@ Speech recognition, Agent replies/tools, and speech synthesis run on the server.
 
 #### Pair and negotiate
 
-Connect to \`${base}/ws/devices/{device_id}/voice\` with \`Authorization: Bearer <DEVICE_CREDENTIAL>\`. A voice-only device can instead use a one-time pairing code from **Devices → Add device** on its first connection, following the device ID and network rules in sections 1–2. Send this JSON text frame within 5 seconds; do not send a \`register\` frame on the voice socket:
+Connect to \`${base}/ws/devices/{device_id}/voice\` with \`Authorization: Bearer <DEVICE_CREDENTIAL>\`. A voice-only device can instead use a one-time or reusable pairing code on its first connection, following the device ID and network rules in sections 1–2. Send this JSON text frame within 5 seconds; do not send a \`register\` frame on the voice socket:
 
 \`\`\`json
 {"type":"hello","audio_protocol":2,"codec":"pcm_s16le","name":"Living Room Speaker","location":"living_room","profile":"room","echo_managed":false,"interruptions":false}

@@ -48,6 +48,7 @@ def register_device_admin_routes(app: FastAPI, resolve_admin) -> None:
             "runtime_available": service is not None,
             "api_available": service is not None and service.accepting,
             "api_url": f"ws://{host}:{api.get('port', 8010)}",
+            "reusable_pairing_enabled": paired.reusable_pairing_digest is not None,
             "devices": [{
                 "device_id": device_id,
                 "online": device_id in online or device_id in voice_sessions,
@@ -108,6 +109,24 @@ def register_device_admin_routes(app: FastAPI, resolve_admin) -> None:
     @app.delete("/api/devices/pairing", tags=["Devices"])
     async def cancel_pairing():
         live_service(resolve_admin()).cancel_pairing()
+        return {"status": "ok"}
+
+    @app.post("/api/devices/pairing/reusable", tags=["Devices"])
+    async def reusable_pairing():
+        service = live_service(resolve_admin())
+        try:
+            return service.create_reusable_pairing()
+        except RuntimeError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except OSError as exc:
+            raise HTTPException(500, "Pairing code could not be saved. Please retry.") from exc
+
+    @app.delete("/api/devices/pairing/reusable", tags=["Devices"])
+    async def disable_reusable_pairing():
+        try:
+            live_service(resolve_admin()).disable_reusable_pairing()
+        except OSError as exc:
+            raise HTTPException(500, "Pairing code could not be disabled. Please retry.") from exc
         return {"status": "ok"}
 
     @app.delete("/api/devices/{device_id}", tags=["Devices"])

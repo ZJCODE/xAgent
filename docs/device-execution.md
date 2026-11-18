@@ -55,6 +55,23 @@ remain placeholders; supply the real code directly on the device when pairing.
 4. Save the `paired` response's credential on the device. Future connections use
    that credential; they require no further pairing or configuration edits.
 
+For repeated or bulk enrollment, use **Devices → Reusable pairing code**
+and enable it. This optional mode is disabled by default. A reusable code can
+pair multiple new device IDs and remains valid across Runtime restarts until
+reset or disabled. It uses the same device control and voice handshakes. Every
+device receives its own credential for reconnects.
+
+Save the code when generated; it is shown only in that response. The Agent
+stores only its hash in `.devices.json`, and status responses expose only whether
+the mode is enabled. Resetting or disabling it preserves issued device
+credentials. Anyone holding the code can enroll new devices. If a removed device
+retains it, reset or disable the code to prevent re-enrollment.
+
+`POST /api/devices/pairing/reusable` generates or resets the reusable code;
+`DELETE /api/devices/pairing/reusable` disables it. Both use the existing trusted
+management boundary. Generation requires a connected API; disabling requires
+the Runtime. Single-use pairing remains available independently.
+
 The `device` tool is always present. With no paired online devices, discovery
 returns an empty list and execution returns an unavailable result. After
 pairing, CLI, Web chat, and other channels use the same discovery and execution

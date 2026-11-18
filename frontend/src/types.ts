@@ -16,6 +16,7 @@ export interface DeviceStatus {
   runtime_available: boolean;
   api_available: boolean;
   api_url: string;
+  reusable_pairing_enabled: boolean;
   devices: DeviceInfo[];
 }
 export interface DevicePairing { pairing_code: string; expires_in: number; expires_at: string }
