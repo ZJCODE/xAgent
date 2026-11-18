@@ -1064,6 +1064,7 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
         events = [
             SimpleNamespace(type="response.output_text.delta", delta="Hel"),
             SimpleNamespace(type="response.output_text.delta", delta="lo"),
+            SimpleNamespace(type="response.completed", response=_responses_response(output_text="Hello")),
         ]
         client = FakeOpenAIClient(response_api_responses=[AsyncChunkStream(events)])
         model = ModelClient(
@@ -1145,7 +1146,7 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events[1].tool_calls[0].call_id, "call-1")
         self.assertEqual(events[1].tool_calls[0].assistant_content, "I will check.")
 
-    async def test_responses_stream_tool_calls_accumulates_split_arguments(self):
+    async def test_responses_stream_tool_calls_use_completed_arguments(self):
         events = [
             SimpleNamespace(
                 type="response.output_item.added",
@@ -1170,6 +1171,10 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
                 item_id="fc_1",
                 delta=': "ok"}',
             ),
+            SimpleNamespace(type="response.completed", response=_responses_response(output=[{
+                "type": "function_call", "id": "fc_1", "call_id": "call-1",
+                "name": "lookup", "arguments": '{"value": "ok"}',
+            }])),
         ]
         client = FakeOpenAIClient(response_api_responses=[AsyncChunkStream(events)])
         model = ModelClient(
@@ -1217,6 +1222,12 @@ class ModelClientResponseTests(unittest.IsolatedAsyncioTestCase):
                     arguments="{}",
                 ),
             ),
+            SimpleNamespace(type="response.completed", response=_responses_response(output=[
+                {"type": "message", "role": "assistant",
+                 "content": [{"type": "output_text", "text": "I will check."}]},
+                {"type": "function_call", "id": "fc_1", "call_id": "call-1",
+                 "name": "lookup", "arguments": "{}"},
+            ])),
         ]
         client = FakeOpenAIClient(response_api_responses=[AsyncChunkStream(events)])
         model = ModelClient(
@@ -1626,6 +1637,79 @@ class AgentChatFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(storage.messages[2].metadata["turn_phase"], "final")
         self.assertEqual(memory_handler.experience_messages, [storage.messages[0], storage.messages[2]])
         self.assertEqual(model_client.stream_calls, [True, True])
+
+    async def test_responses_silent_completion_finishes_without_an_empty_bubble(self):
+        for stream in (False, True):
+            for use_tool in (False, True):
+                with self.subTest(stream=stream, use_tool=use_tool):
+                    storage = InMemoryMessageStorage()
+                    observation = FakeObservabilityRuntime()
+                    silent = {"status": "completed", "output": [{
+                        "type": "message", "role": "assistant", "status": "completed",
+                        "content": [{"type": "output_text", "text": ""}],
+                    }]}
+                    calls = {"status": "completed", "output": [{
+                        "type": "function_call", "id": "fc_1", "call_id": "call-1",
+                        "name": "lookup", "arguments": "{}",
+                    }]}
+                    payloads = ([calls] if use_tool else []) + [silent]
+                    replies = [AsyncChunkStream([{"type": "response.completed", "response": payload}])
+                               if stream else payload for payload in payloads]
+                    client = FakeOpenAIClient(response_api_responses=replies)
+                    agent = self._build_agent(
+                        storage, ModelClient(client, model="test", model_api=MODEL_API_OPENAI_RESPONSES),
+                        observability=observation,
+                    )
+                    events = [event async for event in agent.chat_events(
+                        "稍后分析北京温度，现在先不要回我", user_id="alice", stream=stream,
+                    )]
+                    expected = ["accepted"] + (["tool_call", "tool_result"] if use_tool else []) + ["done"]
+                    self.assertEqual([event["type"] for event in events], expected)
+                    self.assertEqual([message.role for message in storage.messages], [RoleType.USER])
+                    self.assertEqual(observation.turn_obs.output, "")
+                    self.assertIsNone(observation.turn_obs.error)
+                    self.assertEqual(len(client.responses_api.calls), len(payloads))
+                    self.assertEqual(len(agent.tool_executor.seen_input_messages), int(use_tool))
+                    record = (await agent.turn_store.list_records())[0]
+                    self.assertEqual(record["state"], "completed")
+
+    async def test_silent_completion_does_not_drop_a_pending_steer(self):
+        storage = InMemoryMessageStorage()
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        class SilentThenReplyModel(CapturingModelClient):
+            async def model_turn_events(self, messages, tool_specs, instructions=None, stream=False):
+                self.calls.append(copy.deepcopy(messages))
+                if len(self.calls) == 1:
+                    started.set()
+                    await release.wait()
+                    yield ModelStreamEvent(type="completed")
+                else:
+                    yield ModelStreamEvent(type="text", delta="收到，现在回复。")
+
+        model = SilentThenReplyModel([])
+        agent = self._build_agent(storage, model)
+
+        async def collect():
+            return [event async for event in agent.chat_events("先别回复", user_id="alice", channel="api")]
+
+        running = asyncio.create_task(collect())
+        try:
+            await asyncio.wait_for(started.wait(), timeout=1)
+            accepted = await agent.steer(agent.inbox.current_turn_id, "现在可以回复了", channel="api", user_id="alice")
+            self.assertTrue(accepted)
+            release.set()
+            events = await asyncio.wait_for(running, timeout=1)
+        finally:
+            release.set()
+            if not running.done():
+                running.cancel()
+                await asyncio.gather(running, return_exceptions=True)
+        self.assertEqual(len(model.calls), 2)
+        self.assertIn("现在可以回复了", repr(model.calls[1]))
+        self.assertEqual([event["content"] for event in events if event["type"] == "message_done"], ["收到，现在回复。"])
+        self.assertFalse(agent.inbox.has_pending_steer())
 
     async def test_chat_events_emits_delta_before_model_turn_finishes(self):
         storage = InMemoryMessageStorage()

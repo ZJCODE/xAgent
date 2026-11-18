@@ -1037,6 +1037,7 @@ class Agent:
                 text_parts: list[str] = []
                 tool_calls = []
                 message_started = False
+                completed_silently = False
 
                 def ensure_live_message_started() -> dict:
                     nonlocal message_started
@@ -1054,6 +1055,9 @@ class Agent:
                     instructions=instructions,
                     stream=stream,
                 ):
+                    if model_event.type == "completed":
+                        completed_silently = True
+                        continue
                     if model_event.type in {"delta", "text"} and model_event.delta:
                         text_parts.append(model_event.delta)
                         if stream:
@@ -1276,10 +1280,21 @@ class Agent:
                             yield event
                     return
 
+                if completed_silently:
+                    self.inbox.close_steering()
                 if self.inbox.has_pending_steer() and can_drain():
                     self.inbox.close_steering()
                     iteration_index += 1
                     continue
+
+                if completed_silently:
+                    self._schedule_experience_write(messages=turn_experience())
+                    turn_obs.set_output("")
+                    logger.info("Turn completed without a reply turn_id=%s", trace_metadata.get("turn_id"))
+                    completion_events = (self._aborted_event(),) if self.inbox.abort_requested() else ()
+                    async for event in end_turn(*completion_events):
+                        yield event
+                    return
 
                 payload = build_public_error(
                     code=ERROR_EMPTY_RESPONSE,

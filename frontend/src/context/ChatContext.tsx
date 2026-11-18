@@ -401,6 +401,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             messages: messages.flatMap((message) => {
               if (!localMessageIds.has(message.id) || !message.pending) return [message];
               if ((aborted || steeredStream) && !message.content) return [];
+              if (!error && !message.content && !message.attachments?.length && !message.images?.length) return [];
               return [{
                 ...message,
                 pending: false,

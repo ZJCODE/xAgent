@@ -42,6 +42,8 @@ class PublicErrorSurfaceTests(unittest.TestCase):
         self.assertEqual(map_model_error_code("model_call_failed"), ERROR_MODEL_UNAVAILABLE)
         self.assertEqual(map_model_error_code("model_stream_failed"), ERROR_MODEL_UNAVAILABLE)
         self.assertEqual(map_model_error_code("model_stream_error"), ERROR_MODEL_UNAVAILABLE)
+        self.assertEqual(map_model_error_code("model_response_incomplete"), ERROR_MODEL_UNAVAILABLE)
+        self.assertEqual(map_model_error_code("model_response_failed"), ERROR_MODEL_UNAVAILABLE)
         self.assertEqual(map_model_error_code("model_auth_failed"), ERROR_AUTH_FAILED)
         self.assertEqual(map_model_error_code("model_quota_exceeded"), ERROR_QUOTA_EXCEEDED)
         self.assertEqual(map_model_error_code("model_not_found"), ERROR_MODEL_NOT_FOUND)

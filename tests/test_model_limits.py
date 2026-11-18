@@ -73,6 +73,7 @@ class LocalStream:
         self.api, self.text, self.error = api, text, error
         self.delay, self.count = delay, count
         self.closed = False
+        self.completed = False
 
     def __aiter__(self):
         return self
@@ -84,6 +85,11 @@ class LocalStream:
             return delta_chunk(self.api, self.text)
         if self.error:
             raise self.error
+        if self.api == MODEL_API_OPENAI_RESPONSES and not self.completed:
+            self.completed = True
+            return {"type": "response.completed", "response": {
+                "id": "resp_test", "status": "completed", "output_text": self.text, "output": [],
+            }}
         raise StopAsyncIteration
 
     async def close(self):

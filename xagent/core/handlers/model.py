@@ -103,7 +103,18 @@ class ModelErrorEvent:
     details: Optional[str] = None
 
 
+class _ResponsesError(Exception):
+    """Keep Responses lifecycle failures inside the existing retry boundary."""
+
+    def __init__(self, error: ModelErrorEvent, *, retryable: bool = False):
+        self.error = error
+        self.retryable = retryable
+        super().__init__(error.details or error.message)
+
+
 def _model_error_event(exc: BaseException, *, stream: bool = False) -> ModelErrorEvent:
+    if isinstance(exc, _ResponsesError):
+        return exc.error
     code = model_error_code_from_exception(exc)
     if stream and code == "model_call_failed":
         code = "model_stream_failed"
@@ -116,7 +127,7 @@ def _model_error_event(exc: BaseException, *, stream: bool = False) -> ModelErro
 
 @dataclass
 class ModelStreamEvent:
-    """Provider-neutral streaming event emitted by a single model response."""
+    """Provider-neutral model event; ``completed`` can finish without a message."""
 
     type: str
     delta: str = ""
@@ -190,7 +201,9 @@ class ModelClient:
             wait=wait_exponential(
                 multiplier=1, min=AgentConfig.RETRY_MIN_WAIT, max=AgentConfig.RETRY_MAX_WAIT,
             ),
-            retry=retry_if_exception(lambda exc: can_retry() and is_retryable_model_exception(exc)),
+            retry=retry_if_exception(lambda exc: can_retry() and (
+                exc.retryable if isinstance(exc, _ResponsesError) else is_retryable_model_exception(exc)
+            )),
             reraise=True,
         )
 
@@ -216,10 +229,16 @@ class ModelClient:
     ):
         async for attempt in self._retries():
             with attempt:
-                return await asyncio.wait_for(
+                response = await asyncio.wait_for(
                     self._create_response(messages, tool_specs, instructions, stream=False),
                     timeout=self.request_timeout,
                 )
+                if self.model_api == MODEL_API_OPENAI_RESPONSES:
+                    logger.info("Responses API terminal: %s", self._responses_diagnostics(response))
+                    failure = self._responses_failure(response)
+                    if failure:
+                        raise failure
+                return response
 
     async def _stream_response_once(
         self, messages: list, tool_specs: Optional[list],
@@ -819,6 +838,9 @@ class ModelClient:
         response,
     ) -> tuple[ReplyType, object]:
         """Handle a non-streaming OpenAI Responses API response."""
+        failure = ModelClient._responses_failure(response)
+        if failure:
+            return ReplyType.ERROR, failure.error
         text = ModelClient._extract_responses_text(response)
         tool_calls = ModelClient._extract_responses_tool_calls(response)
         if tool_calls:
@@ -828,10 +850,15 @@ class ModelClient:
         if text:
             return ReplyType.SIMPLE_REPLY, text
 
-        logger.warning("Responses API response contains no valid output: %s", response)
+        if ModelClient._responses_has_completed_message(response):
+            return ReplyType.SIMPLE_REPLY, ""
+
+        diagnostics = ModelClient._responses_diagnostics(response)
+        logger.warning("Responses API response contains no valid output: %s", diagnostics)
         return ReplyType.ERROR, ModelErrorEvent(
             code="empty_model_response",
             message="No valid output from model response.",
+            details=diagnostics,
         )
 
     @staticmethod
@@ -862,9 +889,21 @@ class ModelClient:
 
     @classmethod
     def _responses_non_stream_turn_events(cls, response) -> list[ModelStreamEvent]:
+        failure = cls._responses_failure(response)
+        if failure:
+            return [ModelStreamEvent(type="error", error=failure.error)]
         text = cls._extract_responses_text(response)
         tool_calls = cls._extract_responses_tool_calls(response)
-        return cls._completed_turn_events(text, tool_calls)
+        if not text and not tool_calls and cls._responses_has_completed_message(response):
+            return [ModelStreamEvent(type="completed")]
+        events = cls._completed_turn_events(text, tool_calls)
+        if events[0].type == "error":
+            events[0].error = ModelErrorEvent(
+                code="empty_model_response",
+                message="No valid output from model response.",
+                details=cls._responses_diagnostics(response),
+            )
+        return events
 
     @classmethod
     def _anthropic_non_stream_turn_events(cls, response) -> list[ModelStreamEvent]:
@@ -933,51 +972,58 @@ class ModelClient:
 
     async def _iter_responses_turn_events(self, response) -> AsyncGenerator[ModelStreamEvent, None]:
         text_parts: list[str] = []
-        tool_call_parts: dict[int, dict] = {}
-        response_items: list[dict] = []
-        completed_response = None
+        latest_response = None
 
         async for event in response:
-            completed_response = self._merge_responses_stream_event(
-                tool_call_parts,
-                response_items,
-                event,
-            ) or completed_response
-
+            event_type = self._field(event, "type")
+            event_response = self._field(event, "response")
+            if event_response is not None:
+                latest_response = event_response
+            if event_type == "error":
+                diagnostics = self._responses_diagnostics(
+                    latest_response, error_code=self._field(event, "code"),
+                )
+                raise _ResponsesError(ModelErrorEvent(
+                    code="model_stream_error", message="Responses API stream failed.", details=diagnostics,
+                ), retryable=self._field(event, "code") in self._RESPONSES_TRANSIENT_ERRORS)
             content = self._extract_responses_stream_text_delta(event)
             if content:
                 text_parts.append(content)
                 yield ModelStreamEvent(type="delta", delta=content)
 
-        assistant_content = "".join(text_parts) or None
-        tool_calls = self._finalize_responses_stream_tool_calls(
-            tool_call_parts,
-            response_items,
-            assistant_content=assistant_content,
-        )
-        if not tool_calls and completed_response is not None:
-            tool_calls = self._extract_responses_tool_calls(completed_response)
-            if assistant_content:
-                self._set_tool_calls_assistant_content(tool_calls, assistant_content)
-
-        if tool_calls:
-            yield ModelStreamEvent(type="tool_calls", tool_calls=tool_calls)
+            if event_type not in {"response.completed", "response.incomplete", "response.failed"}:
+                continue
+            status = self._field(latest_response, "status") or event_type.removeprefix("response.")
+            diagnostics = self._responses_diagnostics(latest_response, status=status)
+            logger.info("Responses API terminal: %s", diagnostics)
+            # Preserve terminal-only text, including refusals, without replaying deltas.
+            if not text_parts:
+                text = self._extract_responses_text(latest_response)
+                if text:
+                    text_parts.append(text)
+                    yield ModelStreamEvent(type="delta", delta=text)
+            failure = self._responses_failure(latest_response, status=status)
+            if failure:
+                raise failure
+            # Only a successful terminal response can authorize tool execution.
+            tool_calls = self._extract_responses_tool_calls(latest_response)
+            if tool_calls:
+                self._set_tool_calls_assistant_content(tool_calls, "".join(text_parts) or None)
+                yield ModelStreamEvent(type="tool_calls", tool_calls=tool_calls)
+            elif not text_parts:
+                if self._responses_has_completed_message(latest_response):
+                    yield ModelStreamEvent(type="completed")
+                else:
+                    yield ModelStreamEvent(type="error", error=ModelErrorEvent(
+                        code="empty_stream_response", message="No valid output from model response.",
+                        details=diagnostics,
+                    ))
             return
 
-        if not text_parts and completed_response is not None:
-            text = self._extract_responses_text(completed_response)
-            if text:
-                yield ModelStreamEvent(type="delta", delta=text)
-                return
-
-        if not text_parts:
-            yield ModelStreamEvent(
-                type="error",
-                error=ModelErrorEvent(
-                    code="empty_stream_response",
-                    message="No valid output from model response.",
-                ),
-            )
+        raise _ResponsesError(ModelErrorEvent(
+            code="model_stream_failed", message="Responses API stream ended before a terminal event.",
+            details=self._responses_diagnostics(latest_response),
+        ), retryable=True)
 
     async def _iter_anthropic_turn_events(self, response) -> AsyncGenerator[ModelStreamEvent, None]:
         text_parts: list[str] = []
@@ -1232,7 +1278,9 @@ class ModelClient:
             if ModelClient._field(output_item, "type") != "message":
                 continue
             for content_item in ModelClient._field(output_item, "content", []) or []:
-                text = ModelClient._field(content_item, "text")
+                text = (ModelClient._field(content_item, "refusal")
+                        if ModelClient._field(content_item, "type") == "refusal"
+                        else ModelClient._field(content_item, "text"))
                 if isinstance(text, str) and text:
                     text_parts.append(text)
         return "".join(text_parts) or fallback_text
@@ -1340,142 +1388,57 @@ class ModelClient:
     @staticmethod
     def _extract_responses_stream_text_delta(event) -> str:
         event_type = ModelClient._field(event, "type")
-        if event_type not in {"response.output_text.delta", "response.text.delta"}:
+        if event_type not in {"response.output_text.delta", "response.text.delta", "response.refusal.delta"}:
             return ""
         delta = ModelClient._field(event, "delta")
         return delta if isinstance(delta, str) else ""
 
+    _RESPONSES_TRANSIENT_ERRORS = frozenset({"server_error", "rate_limit_exceeded", "vector_store_timeout"})
+
     @classmethod
-    def _merge_responses_stream_event(
-        cls,
-        tool_call_parts: dict[int, dict],
-        response_items: list[dict],
-        event,
-    ) -> Any:
-        event_type = cls._field(event, "type")
-        if event_type == "response.completed":
-            return cls._field(event, "response")
+    def _responses_has_completed_message(cls, response) -> bool:
+        # A successful assistant message may contain no text (for example, when
+        # the user requests silence). Reasoning alone is not a final message.
+        return cls._field(response, "status") == "completed" and any(
+            cls._field(item, "type") == "message"
+            and cls._field(item, "role") == "assistant"
+            and cls._field(item, "status") == "completed"
+            for item in cls._field(response, "output", []) or []
+        )
 
-        if event_type == "response.output_item.added":
-            raw_item = cls._field(event, "item") or {}
-            item = cls._to_plain_data(raw_item)
-            if item:
-                response_items.append(item)
-            if cls._field(raw_item, "type") == "function_call":
-                index = cls._field(event, "output_index")
-                if index is None:
-                    index = len(tool_call_parts)
-                part = tool_call_parts.setdefault(int(index), cls._empty_responses_tool_part())
-                cls._merge_responses_tool_item(part, raw_item)
-            return None
-
-        if event_type == "response.function_call_arguments.delta":
-            index = cls._field(event, "output_index")
-            if index is None:
-                index = len(tool_call_parts)
-            part = tool_call_parts.setdefault(int(index), cls._empty_responses_tool_part())
-            item_id = cls._field(event, "item_id")
-            if item_id:
-                part["id"] = item_id
-            delta = cls._field(event, "delta")
-            if isinstance(delta, str):
-                part["arguments"] += delta
-            return None
-
-        if event_type == "response.function_call_arguments.done":
-            index = cls._field(event, "output_index")
-            if index is None:
-                index = len(tool_call_parts)
-            part = tool_call_parts.setdefault(int(index), cls._empty_responses_tool_part())
-            raw_item = cls._field(event, "item")
-            if raw_item is not None:
-                cls._merge_responses_tool_item(part, raw_item, replace_arguments=True)
-                return None
-            arguments = cls._field(event, "arguments")
-            if isinstance(arguments, str):
-                part["arguments"] = arguments
-            return None
-
-        return None
-
-    @staticmethod
-    def _empty_responses_tool_part() -> dict:
-        return {
-            "id": "",
-            "type": "function_call",
-            "call_id": "",
-            "name": "",
-            "arguments": "",
+    @classmethod
+    def _responses_diagnostics(cls, response, **overrides) -> str:
+        """Allowlisted metadata only: never log prompts, output, or provider error messages."""
+        usage = cls._field(response, "usage")
+        metadata = {
+            "response_id": cls._field(response, "id"),
+            "request_id": cls._field(response, "_request_id"),
+            "status": cls._field(response, "status"),
+            "error_code": cls._field(cls._field(response, "error"), "code"),
+            "incomplete_reason": cls._field(cls._field(response, "incomplete_details"), "reason"),
+            "output_types": [cls._field(item, "type") for item in cls._field(response, "output", []) or []],
+            "message_content_types": [
+                [cls._field(part, "type") for part in cls._field(item, "content", []) or []]
+                for item in cls._field(response, "output", []) or [] if cls._field(item, "type") == "message"
+            ],
+            "text_chars": len(cls._extract_responses_text(response)),
+            "output_tokens": cls._field(usage, "output_tokens"),
+            "reasoning_tokens": cls._field(cls._field(usage, "output_tokens_details"), "reasoning_tokens"),
         }
+        metadata.update(overrides)
+        return json.dumps(metadata, ensure_ascii=False)
 
     @classmethod
-    def _merge_responses_tool_item(
-        cls,
-        part: dict,
-        raw_item: Any,
-        *,
-        replace_arguments: bool = False,
-    ) -> None:
-        item_id = cls._field(raw_item, "id")
-        if item_id:
-            part["id"] = item_id
-        call_id = cls._field(raw_item, "call_id")
-        if call_id:
-            part["call_id"] = call_id
-        name = cls._field(raw_item, "name")
-        if name:
-            part["name"] = name
-        arguments = cls._field(raw_item, "arguments")
-        if isinstance(arguments, str):
-            if replace_arguments:
-                part["arguments"] = arguments
-            else:
-                part["arguments"] += arguments
-
-    @classmethod
-    def _finalize_responses_stream_tool_calls(
-        cls,
-        tool_call_parts: dict[int, dict],
-        response_items: list[dict],
-        assistant_content: Optional[str] = None,
-    ) -> list[ChatToolCall]:
-        function_items = []
-        for index in sorted(tool_call_parts):
-            part = dict(tool_call_parts[index])
-            if not part.get("call_id"):
-                part["call_id"] = part.get("id") or f"call_{index}"
-            if not part.get("arguments"):
-                part["arguments"] = "{}"
-            function_items.append(part)
-
-        replay_items = [item for item in response_items if item.get("type") != "function_call"]
-        if assistant_content and not cls._response_items_have_message_text(replay_items):
-            replay_items.append({
-                "type": "message",
-                "role": "assistant",
-                "content": [{"type": "output_text", "text": assistant_content}],
-            })
-        replay_items.extend(function_items)
-        tool_calls = []
-        for item in function_items:
-            tool_call = ChatToolCall.from_responses_item(
-                item,
-                response_items=replay_items,
-                assistant_content=assistant_content,
-            )
-            if tool_call.name:
-                tool_calls.append(tool_call)
-        return tool_calls
-
-    @classmethod
-    def _response_items_have_message_text(cls, response_items: list[dict]) -> bool:
-        for item in response_items:
-            if cls._field(item, "type") != "message":
-                continue
-            for content_item in cls._field(item, "content", []) or []:
-                if cls._field(content_item, "text"):
-                    return True
-        return False
+    def _responses_failure(cls, response, *, status: Optional[str] = None) -> Optional[_ResponsesError]:
+        status = status or cls._field(response, "status")
+        if status in (None, "completed"):
+            return None
+        error_code = cls._field(cls._field(response, "error"), "code")
+        return _ResponsesError(ModelErrorEvent(
+            code="model_response_incomplete" if status == "incomplete" else "model_response_failed",
+            message="Responses API response did not complete.",
+            details=cls._responses_diagnostics(response, status=status),
+        ), retryable=status == "failed" and error_code in cls._RESPONSES_TRANSIENT_ERRORS)
 
     @staticmethod
     def _extract_anthropic_stream_text_delta(event) -> str:

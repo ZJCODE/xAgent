@@ -57,6 +57,8 @@ _MODEL_CODE_MAP: Mapping[str, str] = {
     "model_call_failed": ERROR_MODEL_UNAVAILABLE,
     "model_stream_failed": ERROR_MODEL_UNAVAILABLE,
     "model_stream_error": ERROR_MODEL_UNAVAILABLE,
+    "model_response_incomplete": ERROR_MODEL_UNAVAILABLE,
+    "model_response_failed": ERROR_MODEL_UNAVAILABLE,
     "empty_model_response": ERROR_EMPTY_RESPONSE,
     "empty_stream_response": ERROR_EMPTY_RESPONSE,
 }
