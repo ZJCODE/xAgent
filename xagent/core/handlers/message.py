@@ -964,11 +964,12 @@ class MessageHandler:
         supports_vision: bool = True,
         workspace_context: str = "",
         is_subconscious: bool = False,
+        reflection_tools_allowed: bool = False,
     ) -> list[dict]:
         """Build static named system layers for the model input.
 
         When *is_subconscious* is True a ``current_mode`` layer is injected
-        so the model knows it cannot execute tasks or use tools this turn.
+        to describe the reflection capability of this turn.
         When *supports_vision* is False a ``capability_limits`` layer is
         injected instead of appending a notice onto core rules.
         """
@@ -979,6 +980,7 @@ class MessageHandler:
             workspace_context=workspace_context,
             supports_vision=supports_vision,
             is_subconscious=is_subconscious,
+            reflection_tools_allowed=reflection_tools_allowed,
         )
         return self.prompt_registry.assemble(KIND_INSTRUCTIONS, ctx)
 

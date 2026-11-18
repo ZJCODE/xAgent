@@ -247,6 +247,7 @@ class SubconsciousLoop:
         logger_: Optional[logging.Logger] = None,
     ) -> None:
         self._agent = agent
+        agent._reflection_loop = self
         self._workspace = Path(workspace).expanduser().resolve()
         self._contacts_file = resolve_contacts_path(self._workspace)
         self._delivery_sink = delivery_sink
@@ -276,7 +277,7 @@ class SubconsciousLoop:
         state = self._autonomous.state if self._autonomous is not None else {}
         return {"mode": getattr(self._agent, "subconscious_mode", "reflect"), "running": self._thinking,
                 "next_run_at": state.get("next_run_at"), "last_exit": state.get("last_exit"),
-                "quiet_count": state.get("quiet_count", 0), "active_wake": state.get("active_wake"),
+                "active_wake": state.get("active_wake"),
                 "pending_notification": (state.get("pending_notification") or {}).get("status")}
 
     def set_deliverable_channels(self, channels: Iterable[str]) -> None:
@@ -429,8 +430,10 @@ class SubconsciousLoop:
 
         raise RuntimeError("Subconscious model turn ended without text or tool calls")
 
-    async def _build_subconscious_turn_context(self, contacts: List[ContactEntry]) -> tuple[list[dict], list[dict]]:
-        """Build model input using the same layers as a normal agent turn."""
+    async def _build_subconscious_turn_context(
+        self, contacts: List[ContactEntry], *, allow_tools: bool = False, current_message=None,
+    ) -> tuple[list[dict], list[dict]]:
+        """Shared reflection context; act adds only tool/skill/workspace capability."""
         message_handler = getattr(self._agent, "message_handler", None)
         if message_handler is None:
             raise RuntimeError("Agent has no message_handler")
@@ -445,12 +448,14 @@ class SubconsciousLoop:
         notebook_query = self._extract_notebook_recall_query(memory_context, recent_messages)
         notebook_context = await self._collect_notebook_context(notebook_query)
 
+        tool_names = list(self._agent.tool_manager._tools) if allow_tools else []
         instructions = message_handler.build_instruction_messages(
-            tool_names=[],
-            skills_catalog="",
+            tool_names=tool_names,
+            skills_catalog=self._agent._skills_catalog_context() if allow_tools else "",
             supports_vision=bool(getattr(self._agent, "supports_vision", True)),
-            workspace_context="",
+            workspace_context=self._agent._workspace_context(tool_names) if allow_tools else "",
             is_subconscious=True,
+            reflection_tools_allowed=allow_tools,
         )
         iteration_messages = message_handler.build_turn_context_messages(
             recent_messages,
@@ -462,6 +467,7 @@ class SubconsciousLoop:
             include_images=False,
             workspace_dir=getattr(self._agent, "workspace_dir", None),
             task_mode="subconscious_json",
+            current_message=current_message,
             current_time=datetime.now().astimezone().isoformat(timespec="minutes"),
             working_summary=working_context.summary,
             covers_through_cursor=working_context.covers_through_cursor,

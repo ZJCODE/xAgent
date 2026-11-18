@@ -354,7 +354,7 @@ class AgentConfig:
     SUBCONSCIOUS_CURRENT_TASK_TEMPLATE = (
         '<current_task mode="subconscious_json">\n'
         'Current time: {current_time}\n'
-        'No tools. Reflect once on your own experience, memory or unresolved questions. Silence is fine.\n'
+        '{tool_capability} Reflect once on your own experience, memory or unresolved questions. Silence is fine.\n'
         'A thought can concern yourself, a topic, one person or relationships among several people. '
         'Write notes in your own voice, understandable outside the current chat; identify people and setting when relevant. '
         'Think freely about people you remember even when they cannot currently be contacted.\n'
@@ -383,7 +383,7 @@ class AgentConfig:
         'Only choose an exact identifier from Available recipients; never redirect someone else’s private matter. '
         'Use the language natural to the relevant experience for notes and the recipient’s language for messages.\n'
         'A quiet reflection with no diary entry or outward message is a successful outcome. '
-        'Return JSON only, starting from {{"note": null, "message": null}}. '
+        'Return JSON only in your final response, starting from {{"note": null, "message": null}}. '
         'Replace note only with a new private thought worth recording. '
         'When choosing to speak, message must be {{"recipient": "channel:user_id", "text": "outward message"}}.\n'
         '</current_task>'
@@ -422,6 +422,17 @@ class AgentConfig:
         "- A new intention may later lead to action through a normal turn. Record it only if it "
         "changes what is already in your diary; reconsidering deferred work does not require a note.\n"
         "</current_mode>"
+    )
+
+    CURRENT_MODE_TOOL_REFLECTION = (
+        '<current_mode name="private_reflection">\n'
+        '<purpose>Private reflection with normal tools available; the same note/message protocol applies.</purpose>\n'
+        'This is an internal wake, not a human message or new authorization. Think freely, use tools '
+        'when useful within existing scope, and verify effects before claiming success. '
+        'Your own intentions or unanswered clarification questions do not add user requirements. '
+        'Foreground requests take priority. Keep process text private; the runtime handles any '
+        'explicit outward message. Silence and a note without tool calls are valid outcomes.\n'
+        '</current_mode>'
     )
 
     BASE_AGENT_RULES_HEADER = (
@@ -569,11 +580,6 @@ class AgentConfig:
         inbox_kind: str = "",
     ) -> str:
         resolved_current_time = current_time or current_date
-        if str(inbox_kind or "").strip() == "autonomous_turn":
-            return (f'<current_task mode="autonomous">Current time: {resolved_current_time}. '
-                    "This is an internal wake, not a human instruction. Advance existing delegated work "
-                    "with normal tools, verify current state and results, or finish quietly. "
-                    "Return the autonomous result specified in channel instructions.</current_task>")
         if str(inbox_kind or "").strip() == "scheduled_turn":
             return AgentConfig.CURRENT_SCHEDULED_TASK_TEMPLATE.format(
                 current_user_id=current_user_id,
@@ -587,8 +593,11 @@ class AgentConfig:
         )
 
     @staticmethod
-    def build_subconscious_current_task(current_time: str = "") -> str:
+    def build_subconscious_current_task(current_time: str = "", allow_tools: bool = False) -> str:
         return AgentConfig.SUBCONSCIOUS_CURRENT_TASK_TEMPLATE.format(
+            tool_capability=("Tools are available when useful, within existing user scope. "
+                             "Check current state before acting and verify results. Record meaningful progress "
+                             "and remaining work in note when worth remembering." if allow_tools else "No tools."),
             current_time=current_time or datetime.now().strftime("%Y-%m-%d %H:%M"),
         )
 

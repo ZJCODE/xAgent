@@ -61,15 +61,17 @@ class AutonomousContextIsolationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([m.content for m in messages], ['one', 'two', 'three'])
 
     async def test_autonomous_execution_is_transient_but_receipts_and_actual_reply_remain(self):
-        final = json.dumps(dict(outcome='completed', summary='INTERNAL_SENTINEL result',
-            next_step=None, blocked_on=None, note=None, message=None))
+        final = json.dumps(dict(note='PRIVATE_INSIGHT_SENTINEL', message=None))
         model = CapturingModelClient([(ReplyType.TOOL_CALL, [FakeToolCall()]),
             (ReplyType.SIMPLE_REPLY, final), (ReplyType.SIMPLE_REPLY, 'Hello Alice')])
         executor = FakeToolExecutor()
         agent = agent_fixtures.AgentInboxTests()._build_agent(self.storage, model, tool_executor=executor)
         agent.subconscious_mode = 'act'
+        agent._skills_catalog_context = lambda: ''
+        agent._workspace_context = lambda names: ''
         from unittest.mock import AsyncMock
         agent.record_subconscious_thought = AsyncMock()
+        agent.memory_handler.get_subconscious_context = AsyncMock(return_value='Recent diary.')
         loop = SubconsciousLoop(agent, workspace=self.root, interval_seconds=60)
         wake = AutonomousWake(loop)
         wake.state['last_result'] = {'summary': 'INTERNAL_SENTINEL prior state'}
@@ -83,7 +85,7 @@ class AutonomousContextIsolationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(connection.execute('SELECT count(*) FROM messages').fetchone()[0], 0)
         receipt = (await agent.turn_store.list_records())[0]
         self.assertNotIn('INTERNAL_SENTINEL prior state', receipt['internal_input'])
-        self.assertEqual(receipt['autonomous_result']['outcome'], 'completed')
+        self.assertEqual(receipt['autonomous_result']['note'], 'PRIVATE_INSIGHT_SENTINEL')
         async for _ in agent.chat_events('hello', user_id='alice', channel='api'):
             pass
         self.assertNotIn('INTERNAL_SENTINEL', str(model.calls[-1]))

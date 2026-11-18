@@ -487,6 +487,13 @@ class Agent:
         channel_instructions: str = "",
     ):
         """Build the shared turn preparation context for both chat and chat_events."""
+        if (user_msg.metadata or {}).get("inbox_kind") == InboxKind.AUTONOMOUS_TURN.value:
+            from .runtime.subconscious import load_contacts
+            reflection = self._reflection_loop
+            contacts = reflection._filter_deliverable_contacts(load_contacts(reflection.contacts_file))
+            instructions, messages = await reflection._build_subconscious_turn_context(
+                contacts, allow_tools=True, current_message=user_msg)
+            return self.tool_manager.cached_tool_specs, instructions, list(messages), list(messages)
         working_context = await self._working_context_for_turn()
         recent_messages = await msg_handler.get_recent_messages(
             limit=AgentConfig.history_fetch_depth(self.recent_messages),
@@ -523,8 +530,6 @@ class Agent:
             covers_through_cursor=working_context.covers_through_cursor,
             prompt_registry=getattr(msg_handler, "prompt_registry", None),
         )
-        if (user_msg.metadata or {}).get("inbox_kind") == InboxKind.AUTONOMOUS_TURN.value:
-            iteration_messages.append({"role": "user", "content": user_msg.content})
         input_messages = msg_handler.sanitize_input_messages(list(iteration_messages))
         return tool_specs, instructions, iteration_messages, input_messages
 

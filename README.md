@@ -87,47 +87,46 @@ reflection protocol), and `off`. An interval of `0` also disables wakes. New
 agent configurations use `act`; existing configurations without a mode keep
 `reflect`. Restart the agent after changing its mode.
 
-In `reflect`, the agent still chooses whether to write a private diary note.
-The existing recent-diary context provides the comparison material; the agent
-returns `note: null` when there is no meaningful addition. Rewording an unchanged
-task, elapsed time and repeated self-criticism are not new information. A new
-insight, blocker, approach or completion state on the same topic can be recorded.
-Notes and outward messages remain independent choices. This decision uses the
-same reflection call, with no separate novelty model or additional note database;
-the existing exact-repeat check remains a small runtime safeguard.
+Both modes share the same reflection task, recent conversation and working
+summary, recent diary and longer-range summaries, notebook recall, relationship
+context, and named available recipients. Both return the same final protocol:
 
-Autonomous turns share the normal tool catalog, workspace rules and turn lock.
-Wake inputs, process text and control JSON are transient inputs/outputs,
-like tool-process data. They are retained in turn receipts, not written as
-user/assistant conversation messages. Only actual outward notifications enter
-chat history. Legacy internal rows are hidden before history pagination and
-excluded from search, working summaries, diary consolidation and people extraction.
-Old working summaries are rebuilt with their coverage cursor reset; their original
-file is retained with a `.legacy` suffix on replacement. Existing diary prose is
-not automatically rewritten. Foreground and
-scheduled requests interrupt them and wait for tool cleanup before taking over.
-Each wake uses at most 12 model iterations (or the agent's lower configured
-limit) and 180 seconds (or the agent's lower turn timeout), plus cleanup time.
-Three identical tool batches and results stop the wake instead of looping.
+```json
+{"note": null, "message": null}
+```
 
-A wake may finish quietly. Routine wake transcripts bypass automatic diary
-writing. Meaningful completed or partial work is written to the existing diary,
-including verification and remaining steps; a new blocker is recorded once.
-Unchanged blockers and idle wakes do not append entries. There is no
-`previous_wake` model input or separate work-memory snapshot: subsequent wakes
-read progress from the normal diary context. Unchanged idle/blocked outcomes
-back off up to two hours; user requests reset the backoff. Progress with a next
-step can continue after 60 seconds, for at most three wakes before returning to
-the normal interval. `.runtime/autonomous.json` retains only scheduling,
-notification and operational status. Wake results and tool events remain in the
-existing turn receipts for diagnostics and interruption recovery, not in normal
-conversation history or recurring prompt snapshots. Read current state before
-repeating a potentially interrupted operation.
+The agent chooses independently whether to save a private note or send an
+outward message. A new insight is valid even without tool calls; silence is also
+valid. Rewording an unchanged task, elapsed time and repeated self-criticism are
+not new information. This uses one reflection decision with no separate novelty
+model or note database; the existing exact-repeat check is a small safeguard.
+Meaningful actions and remaining work can be recorded in `note` using the same
+diary path, so later reflections read progress from the diary.
 
-Notifications use explicit recipients and the existing delivery sink. Weixin
-notifications enter its durable queue with a stable identity so recovery does
-not rerun completed tools. Detailed runtime status includes an `autonomous`
-snapshot with mode, activity, backoff and pending notification state.
+`act` adds the normal tool catalog, skill/workspace instructions and execution
+loop. Its reflection purpose and note/message choices are the same as `reflect`;
+it has no separate outcome/summary/next-step protocol, automatic diary summary,
+continuation chain or idle-backoff policy. Both use the configured reflection
+interval. Tool-enabled turns share the normal turn lock: foreground and scheduled
+requests interrupt them and wait for tool cleanup before taking over. A turn has
+at most 12 model iterations (or the agent's lower limit) and 180 seconds (or the
+agent's lower timeout), plus cleanup. Repeated identical tool calls and results
+are bounded.
+
+Wake inputs, process text and control JSON are transient, like tool-process data.
+They remain in turn receipts, not user/assistant chat history. Only actual outward
+notifications enter the conversation. Legacy internal rows are excluded before
+history pagination and from search, working summaries, diary consolidation and
+people extraction. Old working summaries rebuild with coverage reset and the
+original file retained as `.legacy`; existing diary prose is not automatically
+rewritten.
+
+There is no `previous_wake` model input or separate work-memory snapshot.
+`.runtime/autonomous.json` retains only scheduling, notification and operational
+status. Execution/interruption receipts remain for diagnostics; check current
+state before repeating a potentially interrupted operation. Weixin notifications
+use its existing durable queue with stable identities. Detailed runtime status
+includes an `autonomous` snapshot.
 
 ## Uninstallation
 

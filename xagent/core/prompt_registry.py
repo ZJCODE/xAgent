@@ -27,6 +27,7 @@ class PromptAssembleContext:
     workspace_context: str = ""
     supports_vision: bool = True
     is_subconscious: bool = False
+    reflection_tools_allowed: bool = False
     relationship_context: str = ""
     memory_context: str = ""
     notebook_context: str = ""
@@ -89,7 +90,8 @@ def _render_core_interaction_rules(_ctx: PromptAssembleContext) -> str:
 def _render_current_mode(ctx: PromptAssembleContext) -> str:
     if not ctx.is_subconscious:
         return ""
-    return AgentConfig.CURRENT_MODE_PRIVATE_REFLECTION
+    return (AgentConfig.CURRENT_MODE_TOOL_REFLECTION if ctx.reflection_tools_allowed
+            else AgentConfig.CURRENT_MODE_PRIVATE_REFLECTION)
 
 
 def _render_capability_limits(ctx: PromptAssembleContext) -> str:
@@ -166,7 +168,9 @@ def _render_experience(ctx: PromptAssembleContext) -> str:
 def _render_current_task(ctx: PromptAssembleContext) -> str:
     resolved_current_time = ctx.current_time or datetime.now().strftime("%Y-%m-%d %H:%M")
     if ctx.task_mode == "subconscious_json":
-        return AgentConfig.build_subconscious_current_task(current_time=resolved_current_time)
+        return AgentConfig.build_subconscious_current_task(
+            current_time=resolved_current_time, allow_tools=ctx.inbox_kind == "autonomous_turn",
+        )
     return AgentConfig.build_current_task(
         current_user_id=ctx.current_user_id,
         current_time=resolved_current_time,

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import os
 import time
@@ -12,43 +11,22 @@ from datetime import datetime
 from ..inbox import InboxKind
 from .task_receipts import sync_task_directory
 
-AUTONOMOUS_INSTRUCTIONS = """This is an autonomous wake, not a human message or a new authorization.
-Use the normal tools to advance existing user-delegated work. Read current state before
-changing it. Your prior thoughts are not authorization or evidence that work is incomplete.
-Respect existing user scope and tool rules. Verify outcomes against actual tool results.
-Use recent conversation and diary entries to understand actual progress and remaining work.
-Do not treat an old intention or your own unanswered clarification as a new execution requirement.
-Do not repeat an unchanged check or blocked action. Stop when there is no useful next step.
-Foreground requests take priority. Do not create recurring tasks to bypass this wake's budget.
-Process text is private. Select an exact available recipient only when a useful notification
-is needed; never infer an audience from the most recent speaker. Avoid duplicate notifications.
-Tools are available throughout this turn. Your final response must be one JSON object:
-{"outcome":"completed|progressed|blocked|idle", "summary":"brief factual result",
- "next_step":null, "blocked_on":null, "note":null, "message":null}
-next_step and blocked_on are text or null. Record meaningful progress in summary: what
-actually changed and how it was checked. For partial work, specify the remaining step;
-for a new blocker, specify what changed and what is needed. These factual changes are
-written to the existing diary for continuity. note is an additional genuinely new private
-insight or null. Do not invent progress merely to produce a diary entry.
-message is null or {"recipient":"exact identifier", "text":"notification"}.
-Do not write routine wake summaries or repeated self-criticism into the diary.
-"""
-
 
 class AutonomousWake:
     def __init__(self, loop):
         self.loop = loop
         self.agent = loop._agent
         self.path = loop._workspace / ".runtime" / "autonomous.json"
-        self.version = loop._request_version()
-        self.state = {"next_run_at": time.time() + loop._interval, "quiet_count": 0, "chain": 0}
+        self.state = {"next_run_at": time.time() + loop._interval}
         if self.path.exists():
             # A corrupt operational record must not silently enable replay.
             saved = json.loads(self.path.read_text())
             # Scheduling/delivery state only. Work history belongs in diary and receipts.
-            keys = {"next_run_at", "quiet_count", "chain", "fingerprint", "last_exit", "error",
+            keys = {"next_run_at", "last_exit", "error",
                     "active_wake", "pending_notification", "tool_results"}
             self.state.update({key: value for key, value in saved.items() if key in keys})
+            # Do not inherit a longer delay from the removed idle-backoff policy.
+            self.state["next_run_at"] = min(self.state["next_run_at"], time.time() + loop._interval)
 
     def save(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -63,43 +41,6 @@ class AutonomousWake:
             sync_task_directory(self.path.parent)
         finally:
             temporary.unlink(missing_ok=True)
-
-    @staticmethod
-    def parse(text):
-        text = text.strip()
-        if text.startswith("```") and text.endswith("```"):
-            text = "\n".join(text.splitlines()[1:-1])
-        result = json.loads(text)
-        fields = {"outcome", "summary", "next_step", "blocked_on", "note", "message"}
-        if not isinstance(result, dict) or set(result) != fields:
-            raise ValueError("Invalid autonomous result fields")
-        if result["outcome"] not in {"completed", "progressed", "blocked", "idle"}:
-            raise ValueError("Invalid autonomous outcome")
-        if not isinstance(result["summary"], str):
-            raise ValueError("Invalid autonomous summary")
-        for key in ("next_step", "blocked_on", "note"):
-            if result[key] is not None and not isinstance(result[key], str):
-                raise ValueError(f"Invalid autonomous {key}")
-        message = result["message"]
-        if message is not None and (not isinstance(message, dict) or set(message) != {"recipient", "text"}
-                or any(not isinstance(value, str) or not value.strip() for value in message.values())):
-            raise ValueError("Invalid autonomous notification")
-        return result
-
-    @staticmethod
-    def diary_entry(result):
-        """Keep factual work changes in the existing diary, not a second memory slot."""
-        outcome = result["outcome"]
-        if outcome == "idle":
-            return None
-        parts = [result["summary"].strip()]
-        if outcome == "progressed" and result["next_step"]:
-            parts.append(result["next_step"].strip())
-        if outcome == "blocked" and result["blocked_on"]:
-            parts.append(result["blocked_on"].strip())
-        if result["note"]:
-            parts.append(result["note"].strip())
-        return "\n".join(dict.fromkeys(part for part in parts if part)) or None
 
     async def flush_notification(self, contacts, version):
         pending = self.state.get("pending_notification")
@@ -132,10 +73,6 @@ class AutonomousWake:
     async def tick(self):
         loop = self.loop
         version = loop._request_version()
-        if version != self.version:
-            self.version = version
-            self.state.update(quiet_count=0, chain=0, next_run_at=min(self.state["next_run_at"], time.time() + loop._interval))
-            self.save()
         if loop._thinking or loop._is_agent_busy():
             return
         from .subconscious import load_contacts
@@ -146,22 +83,20 @@ class AutonomousWake:
             return
         loop._thinking = True
         wake_id = uuid.uuid4().hex
-        previous_fingerprint = self.state.get("fingerprint")
-        quiet_count = self.state.get("quiet_count", 0)
-        previous_chain = self.state.get("chain", 0)
         self.state.update(active_wake=wake_id, next_run_at=time.time() + loop._interval)
         final = ""
         turn_id = None
         tool_count = 0
         tool_events = []
         result = None
+        note_status = "none"
         try:
             self.save()
-            prompt = json.dumps({"available_recipients": [
-                {"recipient": loop._contact_key(c.channel, c.user_id)} for c in contacts]}, ensure_ascii=False)
-            stream = self.agent.chat_events(prompt, user_id="__autonomous__", channel="autonomous",
-                inbox_kind=InboxKind.AUTONOMOUS_TURN, channel_instructions=AUTONOMOUS_INSTRUCTIONS,
-                max_agent_loops=min(12, self.agent.max_agent_loops), event_id=wake_id, extra_message_metadata={"source": "autonomous", "wake_id": wake_id})
+            stream = self.agent.chat_events("An idle reflection is due.",
+                user_id="__autonomous__", channel="autonomous",
+                inbox_kind=InboxKind.AUTONOMOUS_TURN,
+                max_agent_loops=min(12, self.agent.max_agent_loops), event_id=wake_id,
+                extra_message_metadata={"source": "autonomous", "wake_id": wake_id})
             try:
                 async for event in stream:
                     turn_id = event.get("turn_id") or turn_id
@@ -177,41 +112,34 @@ class AutonomousWake:
                         final = str(event.get("content") or "")
             finally:
                 await stream.aclose()
-            result = self.parse(final)
-            identity = [result["outcome"], result["blocked_on"]] if result["outcome"] in {"idle", "blocked"} else [result["outcome"], result["summary"], result["next_step"]]
-            digest = hashlib.sha256(json.dumps(identity, ensure_ascii=False).encode()).hexdigest()
-            repeated = digest == previous_fingerprint
-            quiet = result["outcome"] in {"idle", "blocked"} or repeated
-            count = quiet_count + 1 if quiet else 0
-            chain = previous_chain + 1 if not quiet and result["outcome"] == "progressed" and result["next_step"] else 0
-            delay = min(max(7200, loop._interval), loop._interval * (2 ** min(count, 8))) if quiet else 60 if 0 < chain < 3 else loop._interval
-            self.state.update(fingerprint=digest, quiet_count=count, chain=chain,
-                              next_run_at=time.time() + delay, tool_results=tool_count, last_exit=result["outcome"], error=None)
+            result = loop._parse_subconscious_json(final)
+            self.state.update(tool_results=tool_count, last_exit="completed", error=None)
             if turn_id:
                 await self.agent.turn_store.update(turn_id, autonomous_result=result, autonomous_tool_results=tool_count)
             # Persist execution outcome independently of diary and notification I/O.
             self.state.pop("active_wake", None)
-            if result["message"] and not repeated and not self.state.get("pending_notification"):
+            if result["message"] and not self.state.get("pending_notification"):
                 self.state["pending_notification"] = {"message": result["message"], "created_at": datetime.now().isoformat(), "status": "queued"}
             self.save()
-            if not repeated:
-                note = self.diary_entry(result)
-                if note:
-                    if await loop._write_subconscious_thought(note) == "failed":
-                        loop._logger.warning("Autonomous progress diary write failed; execution receipt retained: %s", turn_id)
             if loop._request_version() == version:
-                await self.flush_notification(contacts, version)
+                try:
+                    await self.flush_notification(contacts, version)
+                except Exception:
+                    # As in reflect, outward delivery and the private note are
+                    # independent. Keep the pending receipt for recovery.
+                    loop._logger.warning("Reflection notification failed; pending receipt retained", exc_info=True)
+            if result["note"]:
+                note_status = await loop._write_subconscious_thought(result["note"])
         except asyncio.CancelledError:
-            self.state.update(last_exit="interrupted", next_run_at=time.time() + loop._interval)
+            self.state.update(last_exit="interrupted")
             self.save()
             if loop._request_version() == version:
                 raise
         except Exception as exc:
-            count = quiet_count + 1
-            self.state.update(last_exit="failed", error=type(exc).__name__, quiet_count=count,
-                              next_run_at=time.time() + min(max(7200, loop._interval), loop._interval * 2 ** min(count, 8)))
+            self.state.update(last_exit="failed", error=type(exc).__name__)
             self.save()
             loop._logger.warning("Autonomous wake failed; recorded work will be checked before continuing", exc_info=True)
         finally:
             loop._thinking = False
-            loop._logger.info("Autonomous wake=%s turn=%s tools=%s outcome=%s", wake_id, turn_id, tool_count, result["outcome"] if result else self.state.get("last_exit"))
+            loop._logger.info("Autonomous wake=%s turn=%s tools=%s note=%s exit=%s",
+                              wake_id, turn_id, tool_count, note_status, self.state.get("last_exit"))
