@@ -454,8 +454,8 @@ class SubconsciousLoop:
                        "name": c.target.get("sender_name") or c.target.get("display_name") or c.user_id}
                       for c in contacts]
         iteration_messages.append({"role": "user", "content":
-            "Available recipients: delivery addresses only, not a list of people present or a reason to contact them. "
-            "People in your memories may be absent from this list. Select an exact recipient identifier only if sending.\n" +
+            "Available recipients are listed below. If you send a message, use the exact identifier "
+            "for the person you mean. If they are absent, leave the message field null.\n" +
             json.dumps(recipients, ensure_ascii=False)})
         input_messages = message_handler.sanitize_input_messages(list(iteration_messages))
         return instructions, input_messages

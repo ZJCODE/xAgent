@@ -29,7 +29,7 @@ class ExperiencePerspectiveTests(unittest.IsolatedAsyncioTestCase):
         task = AgentConfig.build_subconscious_current_task()
         self.assertIn('your own experience', task)
         self.assertIn('even when they cannot currently be contacted', task)
-        self.assertIn('People involved in a note', task)
+        self.assertIn('privacy of everyone involved', task)
 
     async def test_outbound_audience_survives_history_diary_and_compaction(self):
         with tempfile.TemporaryDirectory() as root:
@@ -98,7 +98,7 @@ class ExperiencePerspectiveTests(unittest.IsolatedAsyncioTestCase):
             addresses = context[-1]['content']
             targets = json.loads(addresses.split('\n', 1)[1])
             self.assertNotIn('weixin:jun', [t['recipient'] for t in targets])
-            self.assertIn('not a list of people present', addresses)
+            self.assertIn('exact identifier for the person you mean', addresses)
             self.assertIn('api:jun', [t['recipient'] for t in targets])
 
     async def test_synthetic_review_cases_build_with_the_production_context(self):

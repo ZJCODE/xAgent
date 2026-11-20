@@ -354,28 +354,27 @@ class AgentConfig:
     SUBCONSCIOUS_CURRENT_TASK_TEMPLATE = (
         '<current_task mode="subconscious_json">\n'
         'Current time: {current_time}\n'
-        'No tools. Reflect once on your own experience, memory or unresolved questions. Silence is fine.\n'
-        'A thought can concern yourself, a topic, one person or relationships among several people. '
-        'Write notes in your own voice, understandable outside the current chat; identify people and setting when relevant. '
-        'Think freely about people you remember even when they cannot currently be contacted.\n'
-        'Before writing a note, compare it with the recent diary. Record only a new understanding, '
-        'observation or change of intention worth remembering. Rewording an existing entry is not new. '
-        'Restating a pending question, a capability limit, a reason to remain silent or waiting for a reply '
-        'does not need another diary entry. If nothing has changed, leave note null even if you reflected.\n'
-        'Optionally record a private note and/or send a useful message to an available recipient. '
-        'These are independent choices. A private note has not been sent. '
-        'A proposed message has not yet been delivered: record your intention, '
-        'and claim delivery only when existing history confirms it. '
-        'People involved in a note, people mentioned in a message and its recipient may differ. '
-        'Choose the audience for what you want to express; keep private information within its appropriate scope. '
-        'Respect explicit contact preferences and avoid repeating delivered messages without a new reason. '
-        'Unanswered messages alone do not prohibit a useful follow-up. '
-        'Do not infer sleep, timezone or enduring preferences from a single reply. '
-        'Only choose an exact identifier from Available recipients; never redirect someone else’s private matter. '
-        'Use the language natural to the relevant experience for notes and the recipient’s language for messages.\n'
-        'Return JSON only, starting from {{"note": null, "message": null}}. '
-        'Replace note only with a new private thought worth recording. '
-        'When choosing to speak, message must be {{"recipient": "channel:user_id", "text": "outward message"}}.\n'
+        'What, if anything, is on your mind? Draw on your own experience. You can think about '
+        'people even when they cannot currently be contacted.\n'
+        'If someone comes to mind, what would you actually say to them now? Perhaps you have an answer '
+        'to a question you left open together, something reminded you of a shared joke, or you wonder '
+        'how something they cared about turned out. When the moment fits, say it directly in the '
+        'recipient’s language. Respect explicit contact preferences and the privacy of everyone involved. '
+        'Use conversations and delivery history to recall what they have already heard. Something you '
+        'wrote privately may still be new to them. Give an unanswered message room, and use your '
+        'judgment if something new comes up.\n'
+        'If an unfinished task comes to mind again and all you can say is that it is still unfinished, '
+        'let the thought pass. If that is all this turn brings, leave both fields null. '
+        'If you agreed to update someone at a particular time and that time has arrived, an honest '
+        'update may be worth sending even if the work is unfinished. Describe progress only as far '
+        'as the evidence supports.\n'
+        'For a private note, look at your recent diary. What do you understand, notice, or feel '
+        'differently now that you would want to remember later? Write that in your own voice, '
+        'in the language of the experience, with enough context to recognize the people and the moment.\n'
+        'Return JSON only, with exactly two fields. Decide each independently and use null for either '
+        'field you do not need.\n'
+        '"message": null or {{"recipient": "<exact available identifier>", "text": "<your words>"}}\n'
+        '"note": null or "<a private thought worth keeping>"\n'
         '</current_task>'
     )
 
@@ -403,14 +402,10 @@ class AgentConfig:
 
     CURRENT_MODE_PRIVATE_REFLECTION = (
         "<current_mode name=\"private_reflection\">\n"
-        "<purpose>Private inner reflection. No tools, no task execution, JSON-only output as specified in the current task.</purpose>\n"
-        "- This reflection turn cannot execute tasks, call tools, search the web, or take direct action. "
-        "This restriction describes this turn only; it does not establish what tools or permissions "
-        "are available in a normal conversation. Do not turn it into a general claim about your abilities.\n"
-        "- Your only output is the JSON specified in the current task. "
-        "The runtime handles delivery of the outward message selected there.\n"
-        "- A new intention may later lead to action through a normal turn. Record it only if it "
-        "changes what is already in your diary; reconsidering deferred work does not require a note.\n"
+        "<purpose>You have a quiet moment between conversations. Draw on what you remember.</purpose>\n"
+        "Tools are unavailable during this turn. You can keep a private note, send a message to "
+        "someone you can reach, do both, or let the moment pass. When you choose to speak, put "
+        "your words in the message field. The runtime handles delivery.\n"
         "</current_mode>"
     )
 
