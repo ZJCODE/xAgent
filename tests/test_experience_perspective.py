@@ -114,4 +114,8 @@ class ExperiencePerspectiveTests(unittest.IsolatedAsyncioTestCase):
             for scenario in SCENARIOS:
                 with self.subTest(scenario=scenario.name):
                     report = await review_scenario(None, {}, scenario)
-                    self.assertTrue(all(report['checks'].values()))
+                    checks = dict(report['checks'])
+                    if scenario.expect_message:
+                        # A silent fixture must fail the live model's positive behavior check.
+                        self.assertFalse(checks.pop('conversational_message_sent'))
+                    self.assertTrue(all(checks.values()))

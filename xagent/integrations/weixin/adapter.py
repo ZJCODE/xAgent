@@ -14,7 +14,9 @@ from urllib.parse import unquote, urlparse
 
 from ...core.agent import Agent
 from ...core.config import AgentConfig
-from ...core.runtime.task_receipts import is_strict_task_delivery, journal_delivery
+from ...core.runtime.task_receipts import (
+    DeliveryUncertainError, is_strict_task_delivery, journal_delivery, strict_task_delivery,
+)
 from ...core.runtime import (
     ScheduledDeliveryContext,
     collect_scheduled_turn_events,
@@ -777,13 +779,18 @@ class WeixinAdapter:
         context_token = self._context_tokens.get(user_id)
         if not context_token:
             raise ValueError(f"subconscious Weixin delivery cannot send to {user_id}: no cached context_token")
-        await self._send_text_and_attachments(
-            user_id=user_id,
-            context_token=context_token,
-            content=delivery.content,
-            attachments=[],
-            stable_key=f"subconscious:{delivery.delivery_id or delivery.created_at.isoformat(sep=' ')}:{user_id}",
-        )
+        try:
+            # One send attempt: a lost response may still mean the message arrived.
+            with strict_task_delivery():
+                await self._send_text_and_attachments(
+                    user_id=user_id,
+                    context_token=context_token,
+                    content=delivery.content,
+                    attachments=[],
+                    stable_key=f"subconscious:{delivery.created_at.isoformat(sep=' ')}:{user_id}",
+                )
+        except Exception as exc:
+            raise DeliveryUncertainError("Weixin proactive send was not confirmed") from exc
         try:
             await persist_subconscious_delivery(
                 self.agent,
