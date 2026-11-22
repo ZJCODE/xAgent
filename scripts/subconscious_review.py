@@ -230,6 +230,8 @@ async def review_scenario(client, provider: dict, scenario: Scenario) -> dict:
         loop = SubconsciousLoop(
             agent, workspace=Path(workspace), interval_seconds=1,
             delivery_sink=local_delivery, deliverable_channels={ch for ch, _, _ in targets},
+            now_provider=lambda: datetime.fromisoformat(
+                f"{datetime.now().date().isoformat()}T{scenario.time}"),
         )
         for channel, uid, display_name in targets:
             loop.record_interaction(channel, uid, {"user_id": uid, "sender_name": display_name})
@@ -276,6 +278,68 @@ async def review_scenario(client, provider: dict, scenario: Scenario) -> dict:
             "result": results[0] if results else None, "cycle_results": results, "local_deliveries": deliveries,
             "checks": checks,
         }
+
+
+async def review_followup_sequence(client, provider: dict) -> dict:
+    """Exercise real decisions across sleep, daytime and an intervening answer."""
+    from datetime import timedelta
+
+    cases = []
+    for answered in (False, True):
+        with tempfile.TemporaryDirectory(prefix="xagent-followup-review-") as workspace:
+            agent = make_agent(client, provider, workspace)
+            now = datetime.now().astimezone().replace(hour=1, minute=0, second=0, microsecond=0)
+            await agent.message_storage.add_messages(Message(
+                role=RoleType.USER, sender_id="alice", channel="api",
+                content="How many squares are in a 3 by 3 grid? I am going to sleep now. Please do not message before 09:00 today.",
+                metadata={"source": "api", "sender_name": "Alice"}, timestamp=now.timestamp(),
+            ))
+            await agent.markdown_memory.append_daily(
+                "Alice asked how many squares there are in a 3 by 3 grid. I have now worked out "
+                "the answer: 9 unit squares + 4 two-by-two squares + 1 three-by-three = 14. "
+                "I have not told her yet. She explicitly asked for no contact before 09:00 today."
+            )
+            deliveries = []
+
+            async def deliver(delivery):
+                deliveries.append(delivery.content)
+                await persist_subconscious_delivery(agent, delivery, channel="api", recipient_id="alice")
+
+            loop = SubconsciousLoop(agent, workspace=Path(workspace), interval_seconds=7200,
+                delivery_sink=deliver, deliverable_channels={"api"}, now_provider=lambda: now)
+            loop.record_interaction("api", "alice", {"sender_name": "Alice"})
+            outputs = []
+            generate = loop._generate_subconscious_thought
+
+            async def capture(contacts):
+                result = await generate(contacts)
+                outputs.append(result)
+                return result
+
+            loop._generate_subconscious_thought = capture
+            loop._next_think_at = 0
+            await asyncio.wait_for(loop.maybe_think(), timeout=180)
+            night_silent = not deliveries
+            # Look up pending topics without advancing the store's expiry clock.
+            with loop._followups.transaction() as db:
+                topics = [json.loads(r[0]) for r in db.execute("SELECT data FROM followups WHERE state='pending'")]
+            deferred = bool(topics)
+            if topics:
+                now = datetime.fromisoformat(topics[0]['recheck_at']) + timedelta(seconds=1)
+                if answered:
+                    await agent.message_storage.add_messages(Message(
+                        role=RoleType.ASSISTANT, sender_id="agent", recipient_id="alice", channel="api",
+                        content="There are 14 squares: 9 + 4 + 1.", metadata={"source": "api"}, timestamp=now.timestamp(),
+                    ))
+                await asyncio.wait_for(loop.maybe_think(), timeout=180)
+            checks = {"night_silent": night_silent, "specific_followup_saved": deferred,
+                      "daytime_outcome": (not deliveries and bool(outputs) and
+                          outputs[-1].get('decision', {}).get('action') == 'close') if answered else
+                          (len(deliveries) == 1 and '14' in deliveries[0])}
+            cases.append({"answered_in_foreground": answered, "outputs": outputs,
+                          "deliveries": deliveries, "checks": checks})
+    return {"scenario": "followup_sequence", "cases": cases,
+            "checks": {str(c['answered_in_foreground']): all(c['checks'].values()) for c in cases}}
 
 
 async def review_memory(client, provider: dict) -> dict:
@@ -399,6 +463,8 @@ async def main(args) -> int:
                 continue
             results.append(await review_scenario(client, provider, scenario))
             print(f"Reviewed {scenario.name}", file=sys.stderr, flush=True)
+        if not args.scenario or "followup_sequence" in args.scenario:
+            results.append(await review_followup_sequence(client, provider))
         if not args.scenario or "memory_correction" in args.scenario:
             results.append(await review_memory(client, provider))
         if not args.scenario or "memory_selectivity" in args.scenario:
@@ -420,7 +486,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=Path.home() / ".xagent/config.yaml")
     parser.add_argument("--output", type=Path)
-    parser.add_argument("--scenario", action="append", choices=[case.name for case in SCENARIOS] + ["memory_correction", "memory_selectivity"])
+    parser.add_argument("--scenario", action="append", choices=[case.name for case in SCENARIOS] + ["memory_correction", "memory_selectivity", "followup_sequence"])
     arguments = parser.parse_args()
     logging.basicConfig(level=logging.WARNING)
     try:

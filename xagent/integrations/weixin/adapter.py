@@ -782,7 +782,7 @@ class WeixinAdapter:
             context_token=context_token,
             content=delivery.content,
             attachments=[],
-            stable_key=f"subconscious:{delivery.created_at.isoformat(sep=' ')}:{user_id}",
+            stable_key=f"subconscious:{delivery.delivery_id or delivery.created_at.isoformat(sep=' ')}:{user_id}",
         )
         try:
             await persist_subconscious_delivery(
