@@ -420,6 +420,7 @@ class MemoryHandler:
 
         # All model slices belong to one cursor window. Stage them in memory
         # so a failure in a later slice never leaves an uncheckpointed append.
+        staged_bodies: list[str] = []
         staged_content = ""
         for batch in batches:
             body = await self._prepare_journal_entry(
@@ -429,7 +430,8 @@ class MemoryHandler:
                 self._last_maintenance["status"] = "failed"
                 return False
             if body:
-                staged_content += self.memory.daily_entry_block(body, today)
+                staged_bodies.append(body)
+                staged_content = self.memory.daily_entry_block("\n\n".join(staged_bodies), today)
 
         if not await self._prepare_and_commit_window(
             today, old_content, staged_content, start_exclusive, end_inclusive,
@@ -659,9 +661,9 @@ class MemoryHandler:
     ) -> Optional[str]:
         """Generate a slice without writing any part of its cursor window.
 
-        Empty model output means the slice is already covered: do not append,
-        but still commit its cursor. Model failure returns None, leaving both
-        diary and cursor untouched.
+        An empty slice means the service explicitly accepted a no-entry result:
+        do not append, but still commit its cursor. Model failure returns None,
+        leaving both diary and cursor untouched.
         """
         try:
             content = await self.llm_service.format_diary_entry(

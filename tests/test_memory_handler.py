@@ -9,8 +9,9 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from xagent.components.memory import MarkdownMemory
-from xagent.core.config import AgentConfig
+from xagent.core.config import AgentConfig, ReplyType
 from xagent.core.handlers.memory import MemoryHandler
+from xagent.core.journal import JournalLLMService
 from xagent.schemas import Message, MessageType, RoleType
 
 _TEST_DIARY_WRITE_BATCH = 20
@@ -489,6 +490,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
         today_text = await self.memory.read_file(self.memory.daily_path(date.today()))
         self.assertEqual(today_text.count("entry 0"), 1)
         self.assertEqual(today_text.count("entry 1"), 1)
+        self.assertEqual(today_text.count("## "), 1)
 
     async def test_run_maintenance_reads_plain_int_cursor(self):
         storage = _FakeMessageStorage([
@@ -544,6 +546,84 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             [call["messages"][0]["content"] for call in self.llm.diary_calls],
             [f"entry {index} " + ("x" * 80) for index in range(3)],
         )
+        today_text = await self.memory.read_file(self.memory.daily_path(date.today()))
+        self.assertEqual(today_text.count("## "), 1)
+        for index in range(3):
+            self.assertEqual(today_text.count(f"entry {index}"), 1)
+        self.assertIn("entry 0", self.llm.diary_calls[1]["existing_today"])
+        self.assertIn("entry 1", self.llm.diary_calls[2]["existing_today"])
+
+    async def test_explicit_skip_commits_cursor_without_replaying_after_restart(self):
+        self.storage.append(Message(
+            role=RoleType.ENVIRONMENT,
+            type=MessageType.CONTEXT_EVENT,
+            content="The same scene remains unchanged.",
+            metadata={"event_type": "scene.observation"},
+        ))
+        service = JournalLLMService(client=object())
+        service._model_client = AsyncMock()
+        service._model_client.call.return_value = (ReplyType.SIMPLE_REPLY, "<NO_ENTRY>")
+        self.handler.llm_service = service
+
+        self.assertTrue(await self.handler.run_maintenance(force=True))
+        self.assertEqual(self.handler._last_processed_message_id, 1)
+        self.assertFalse(self.memory.daily_path(date.today()).exists())
+        restarted = MemoryHandler(
+            memory=self.memory, llm_service=service, message_storage=self.storage,
+            diary_write_batch=_TEST_DIARY_WRITE_BATCH,
+        )
+        self.assertFalse(await restarted.run_maintenance(force=True))
+        self.assertEqual(service._model_client.call.await_count, 1)
+
+    async def test_skipped_slices_preserve_prior_diary_and_keep_meaningful_slice(self):
+        await self.memory.append_daily("Earlier important experience.")
+        for content in ("Routine observation.", "An important correction.", "Routine acknowledgement."):
+            self.storage.append(Message(role=RoleType.USER, sender_id="alice", content=content))
+        service = JournalLLMService(client=object())
+        service._model_client = AsyncMock()
+        service._model_client.call.side_effect = [
+            (ReplyType.SIMPLE_REPLY, "<NO_ENTRY>"),
+            (ReplyType.SIMPLE_REPLY, "Alice corrected the requirement."),
+            (ReplyType.SIMPLE_REPLY, "<NO_ENTRY>"),
+        ]
+        handler = MemoryHandler(
+            memory=self.memory, llm_service=service, message_storage=self.storage,
+            diary_write_batch=_TEST_DIARY_WRITE_BATCH, max_journal_source_chars=150,
+        )
+        handler.projector.run = AsyncMock()
+
+        self.assertTrue(await handler.run_maintenance(force=True))
+        self.assertEqual(handler._last_processed_message_id, 3)
+        today_text = await self.memory.read_file(self.memory.daily_path(date.today()))
+        self.assertEqual(today_text.count("## "), 2)
+        self.assertEqual(today_text.count("Earlier important experience."), 1)
+        self.assertEqual(today_text.count("Alice corrected the requirement."), 1)
+        self.assertNotIn("<NO_ENTRY>", today_text)
+        calls = service._model_client.call.await_args_list
+        self.assertIn("Earlier important experience.", calls[1].kwargs["messages"][0]["content"])
+        self.assertIn("Alice corrected the requirement.", calls[2].kwargs["messages"][0]["content"])
+
+    async def test_blank_model_slice_does_not_commit_staged_diary_or_cursor(self):
+        await self.memory.append_daily("Existing diary.")
+        old_text = await self.memory.read_file(self.memory.daily_path(date.today()))
+        for content in ("A meaningful event.", "Another event."):
+            self.storage.append(Message(role=RoleType.USER, sender_id="alice", content=content))
+        service = JournalLLMService(client=object())
+        service._model_client = AsyncMock()
+        service._model_client.call.side_effect = [
+            (ReplyType.SIMPLE_REPLY, "A meaningful event happened."),
+            (ReplyType.SIMPLE_REPLY, " "),
+        ]
+        handler = MemoryHandler(
+            memory=self.memory, llm_service=service, message_storage=self.storage,
+            diary_write_batch=_TEST_DIARY_WRITE_BATCH, max_journal_source_chars=130,
+        )
+        handler.projector.run = AsyncMock()
+
+        self.assertFalse(await handler.run_maintenance(force=True))
+        self.assertEqual(handler._last_processed_message_id, 0)
+        self.assertEqual(await self.memory.read_file(self.memory.daily_path(date.today())), old_text)
+        self.assertFalse(handler._journal_commits.path.exists())
 
     async def test_run_maintenance_reloads_checkpoint_from_disk_for_stale_handler(self):
         storage = _FakeMessageStorage([

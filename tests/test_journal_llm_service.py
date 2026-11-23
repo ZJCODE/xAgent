@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from xagent.core.config import ReplyType
 from xagent.core.journal import JournalLLMService
@@ -163,6 +163,7 @@ class JournalLLMServicePromptTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Already on today's page (do not repeat; continue from here):", prompt)
         self.assertIn("Earlier slice about the fan.", prompt)
         self.assertIn("Write the next diary slice for 2026-06-09", prompt)
+        self.assertLess(prompt.index("New experience:"), prompt.index("Already on today's page"))
 
     def test_format_transcript_splits_already_journaled_and_new(self):
         transcript = JournalLLMService._format_transcript([
@@ -270,6 +271,30 @@ class JournalLLMServicePromptTests(unittest.IsolatedAsyncioTestCase):
                     ],
                     journal_date="2026-05-17",
                 )
+
+    async def test_only_explicit_no_entry_marker_skips_diary(self):
+        service = JournalLLMService(client=object())
+        messages = [{"role": "environment", "content": "No meaningful change."}]
+        for output, expected in (
+            ("<NO_ENTRY>", ""),
+            ("  <NO_ENTRY>\n", ""),
+            ("Alice asked what <NO_ENTRY> means.", "Alice asked what <NO_ENTRY> means."),
+        ):
+            with self.subTest(output=output):
+                with patch.object(service, "_call_text", AsyncMock(return_value=output)):
+                    result = await service.format_diary_entry(messages, "2026-05-17")
+                self.assertEqual(result, expected)
+
+    async def test_blank_diary_response_is_failure_not_no_entry(self):
+        service = JournalLLMService(client=object())
+        for output in ("", " \n\t "):
+            with self.subTest(output=output):
+                with patch.object(service, "_call_text", AsyncMock(return_value=output)):
+                    with self.assertRaisesRegex(ValueError, "empty content"):
+                        await service.format_diary_entry(
+                            [{"role": "user", "content": "An important correction."}],
+                            "2026-05-17",
+                        )
 
     async def test_generate_summary_uses_plain_text_output(self):
         class FakeModelClient:
