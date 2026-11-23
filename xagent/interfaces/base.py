@@ -10,6 +10,7 @@ from ..core.agent import Agent
 from ..core.config import AgentConfig
 from ..core.providers import (
     ReasoningConfig,
+    default_model_max_tokens,
     model_api_uses_anthropic_client,
     normalize_reasoning_config,
     normalize_provider_name,
@@ -622,7 +623,7 @@ class BaseAgentRunner:
         provider_cfg = agent_cfg.get("provider") or {}
         if isinstance(provider_cfg, dict) and provider_cfg.get("max_tokens"):
             return int(provider_cfg["max_tokens"])
-        return AgentConfig.DEFAULT_MAX_TOKENS
+        return default_model_max_tokens(self._get_provider_name(agent_cfg))
 
     def _get_provider_reasoning(self, agent_cfg: Dict[str, Any]) -> Optional[ReasoningConfig]:
         provider_cfg = agent_cfg.get("provider") or {}

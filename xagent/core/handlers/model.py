@@ -22,6 +22,7 @@ from ..providers import (
     PROVIDER_OPENAI,
     PROVIDER_QWEN,
     ReasoningConfig,
+    default_model_max_tokens,
     normalize_model_api as normalize_provider_model_api,
     normalize_provider_name,
 )
@@ -170,7 +171,7 @@ class ModelClient:
         self.model = model
         self.provider_name = normalize_provider_name(provider_name) or PROVIDER_OPENAI
         self.model_api = self._normalize_model_api(model_api)
-        self.max_tokens = AgentConfig.DEFAULT_MAX_TOKENS if max_tokens is None else max_tokens
+        self.max_tokens = default_model_max_tokens(self.provider_name) if max_tokens is None else max_tokens
         self.reasoning = reasoning
 
     async def call(

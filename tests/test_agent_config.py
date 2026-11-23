@@ -96,6 +96,16 @@ class AgentConfigPromptTests(unittest.TestCase):
         self.assertEqual(AgentConfig.MEMORY_WINDOW_OVERLAP_RATIO, 0.2)
 
 class ProviderConfigTests(unittest.TestCase):
+    def test_provider_output_budget_defaults_and_explicit_override(self):
+        runner = BaseAgentRunner.__new__(BaseAgentRunner)
+        self.assertEqual(runner._get_provider_max_tokens({"provider": {"name": "deepseek"}}), 32768)
+        for provider in ("openai", "qwen", "anthropic", "custom"):
+            self.assertEqual(runner._get_provider_max_tokens({"provider": {"name": provider}}), 8192)
+        for budget in (1024, 8192, 65536):
+            self.assertEqual(runner._get_provider_max_tokens({
+                "provider": {"name": "deepseek", "max_tokens": budget},
+            }), budget)
+
     def test_reasoning_config_normalizes_supported_provider_controls(self):
         self.assertEqual(
             normalize_reasoning_config({

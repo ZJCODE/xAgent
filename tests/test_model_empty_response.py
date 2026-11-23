@@ -44,7 +44,7 @@ class EmptyModelResponseTests(unittest.IsolatedAsyncioTestCase):
             return replies[min(len(requests) - 1, len(replies) - 1)]
 
         async with fixtures.sdk_client(API, handle) as client:
-            model = ModelClient(client=client, model='test', provider_name=PROVIDER_DEEPSEEK)
+            model = ModelClient(client=client, model='test', provider_name=PROVIDER_DEEPSEEK, max_tokens=8192)
             with self.assertLogs('xagent.core.handlers.model', level='WARNING') as logs:
                 if legacy:
                     result = await model.call([{'role': 'user', 'content': 'hello'}], None)

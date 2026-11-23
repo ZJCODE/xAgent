@@ -58,6 +58,7 @@ from .providers import (
     MODEL_API_OPENAI_RESPONSES,
     PROVIDER_OPENAI,
     ReasoningConfig,
+    default_model_max_tokens,
     maintenance_reasoning_config,
     model_api_uses_anthropic_client,
     normalize_model_api,
@@ -122,7 +123,7 @@ class Agent:
         self.model = model or AgentConfig.DEFAULT_MODEL
         self.provider_name = normalize_provider_name(provider_name) or PROVIDER_OPENAI
         self.model_api = normalize_model_api(model_api)
-        self.model_max_tokens = AgentConfig.DEFAULT_MAX_TOKENS if model_max_tokens is None else model_max_tokens
+        self.model_max_tokens = default_model_max_tokens(self.provider_name) if model_max_tokens is None else model_max_tokens
         self.reasoning = reasoning
         self.maintenance_reasoning = maintenance_reasoning_config(reasoning, provider_name=self.provider_name, model=self.model)
         self.supports_vision = bool(supports_vision)

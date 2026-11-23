@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Optional
 
+from .config import AgentConfig
+
 MODEL_API_OPENAI_RESPONSES = "openai_responses"
 MODEL_API_OPENAI_CHAT_COMPLETIONS = "openai_chat_completions"
 MODEL_API_ANTHROPIC_MESSAGES = "anthropic_messages"
@@ -150,6 +152,13 @@ class ReasoningCapability:
 
 def normalize_provider_name(provider_name: Optional[str]) -> str:
     return str(provider_name or "").strip().lower()
+
+
+def default_model_max_tokens(provider_name: Optional[str]) -> int:
+    """Allow room for DeepSeek's default thinking before its visible answer."""
+    if normalize_provider_name(provider_name) == PROVIDER_DEEPSEEK:
+        return 32768
+    return AgentConfig.DEFAULT_MAX_TOKENS
 
 
 def normalize_model_api(model_api: Optional[str]) -> str:
@@ -361,7 +370,7 @@ def normalize_reasoning_config(provider_cfg: dict[str, Any]) -> Optional[Reasoni
                 f"provider.reasoning.budget_tokens for provider {provider} must be at least {minimum}"
             )
         if provider_model_api(provider_cfg) == MODEL_API_ANTHROPIC_MESSAGES:
-            max_tokens = provider_cfg.get("max_tokens", 8192)
+            max_tokens = provider_cfg.get("max_tokens", default_model_max_tokens(provider))
             if isinstance(max_tokens, int) and not isinstance(max_tokens, bool) and budget_tokens >= max_tokens:
                 raise ValueError(
                     "provider.reasoning.budget_tokens must be less than provider.max_tokens "

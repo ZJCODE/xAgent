@@ -190,11 +190,32 @@ class ModelLimitsTests(unittest.IsolatedAsyncioTestCase):
                     await agent.model_client.call([{"role": "user", "content": "hello"}], None)
                     self.assertEqual(requests[0]["max_tokens"], 2048)
                     self.assertEqual(requests[0]["thinking"], {"type": "disabled"})
-                    self.assertEqual(requests[1]["max_tokens"], 8192)
+                    self.assertEqual(requests[1]["max_tokens"], 32768)
                     self.assertNotIn("thinking", requests[1])
                     self.assertIsNone(agent.model_client.reasoning)
+                    await agent.llm_service._call_text("Diary", "Source")
+                    self.assertEqual(requests[2]["max_tokens"], 4096)
+                    self.assertEqual(requests[2]["thinking"], {"type": "disabled"})
                 finally:
                     await agent.working_context_compactor.cancel_refresh()
+
+    async def test_direct_deepseek_client_default_budget_and_override(self):
+        for api in (MODEL_API_OPENAI_CHAT_COMPLETIONS, MODEL_API_OPENAI_RESPONSES):
+            for configured, expected in ((None, 32768), (8192, 8192)):
+                with self.subTest(api=api, configured=configured):
+                    requests = []
+
+                    def handle(request):
+                        requests.append(json.loads(request.content))
+                        return success_response(api)
+
+                    async with sdk_client(api, handle) as client:
+                        model = ModelClient(client=client, model='test', provider_name=PROVIDER_DEEPSEEK,
+                                            model_api=api, max_tokens=configured)
+                        kind, _ = await model.call([{'role': 'user', 'content': 'hello'}], None)
+                        self.assertEqual(kind, ReplyType.SIMPLE_REPLY)
+                        key = 'max_tokens' if api == MODEL_API_OPENAI_CHAT_COMPLETIONS else 'max_output_tokens'
+                        self.assertEqual(requests[0][key], expected)
 
     async def test_stream_retries_before_output_and_closes_each_attempt(self):
         for api in APIS:
