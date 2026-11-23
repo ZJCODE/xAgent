@@ -12,10 +12,12 @@ from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import unquote, urlparse
 
+import httpx
+
 from ...core.agent import Agent
 from ...core.config import AgentConfig
 from ...core.runtime.task_receipts import (
-    DeliveryUncertainError, is_strict_task_delivery, journal_delivery, strict_task_delivery,
+    DeliveryRejectedError, DeliveryUncertainError, is_strict_task_delivery, journal_delivery, strict_task_delivery,
 )
 from ...core.runtime import (
     ScheduledDeliveryContext,
@@ -41,7 +43,7 @@ from ...utils.image_utils import (
     workspace_blob_relative_path,
     workspace_blob_url,
 )
-from .client import SESSION_EXPIRED_ERRCODE, WeixinClient, _error_code, raise_for_api_error
+from .client import SESSION_EXPIRED_ERRCODE, WeixinApiError, WeixinClient, _error_code, raise_for_api_error
 from .config import WeixinAdapterConfig
 from .media import ITEM_FILE, ITEM_IMAGE, ITEM_TEXT, ITEM_VIDEO, ITEM_VOICE, InboundMedia, download_inbound_media, upload_outbound_media
 from .send import extract_text, make_client_id, split_text
@@ -699,6 +701,20 @@ class WeixinAdapter:
                 raise_for_api_error(response, label)
                 return response
             except Exception as exc:
+                if isinstance(exc, WeixinApiError) and exc.status_code == 0 and exc.code is not None:
+                    payload = exc.payload if isinstance(exc.payload, dict) else {}
+                    message = (
+                        f"Weixin {label} rejected: code={exc.code} "
+                        f"ret={payload.get('ret')} errcode={payload.get('errcode')} errmsg={exc}"
+                    )
+                    if str(exc).strip().lower() == "prepare failed":
+                        message += "; possible session window/quota limit; after a new inbound message, retry delivery only"
+                    raise DeliveryRejectedError(message) from exc
+                if is_strict_task_delivery() and isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)):
+                    raise DeliveryRejectedError(
+                        f"Weixin {label} connection was not established ({type(exc).__name__})",
+                        retryable=True,
+                    ) from exc
                 last_error = exc
                 if attempt >= attempts:
                     break
@@ -789,6 +805,8 @@ class WeixinAdapter:
                     attachments=[],
                     stable_key=f"subconscious:{delivery.created_at.isoformat(sep=' ')}:{user_id}",
                 )
+        except DeliveryRejectedError:
+            raise
         except Exception as exc:
             raise DeliveryUncertainError("Weixin proactive send was not confirmed") from exc
         try:

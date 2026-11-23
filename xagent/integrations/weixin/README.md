@@ -50,6 +50,19 @@ persists the opaque `get_updates_buf` cursor after each successful response.
 Replies require the latest inbound `context_token` for the user, so proactive
 or scheduled sends can only target users who have already messaged the bot.
 
+Scheduled delivery distinguishes an explicit iLink business rejection from an
+unknown send outcome. A rejection preserves the prepared result and enables the
+existing **Retry delivery** action; confirmed parts are skipped and agent tools
+are not rerun. `prepare failed` includes the returned `ret`/`errcode` and a possible
+session window/quota explanation. After the user sends a new message, delivery
+can be retried within the occurrence's expiry window. This requires an explicit
+retry; incoming messages do not automatically replay failed tasks.
+
+Connection establishment failures use the scheduler's existing bounded retries.
+A send timeout, invalid acknowledgement or HTTP server error remains unconfirmed
+and requires review rather than automatic replay. Historical `needs_review`
+records without definitive response details keep their original classification.
+
 If iLink returns `ret` or `errcode` `-14`, the channel stops and logs an
 instruction to rerun setup. It does not auto-login in the background.
 

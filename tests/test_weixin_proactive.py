@@ -35,6 +35,10 @@ class WeixinProactiveTests(unittest.IsolatedAsyncioTestCase):
         client = await self.run_message(responses=[TimeoutError('response lost')])
         client.send_text_message.assert_awaited_once()
 
+    async def test_business_rejection_is_not_retried_by_either_layer(self):
+        client = await self.run_message(responses=[{'ret': -2, 'errmsg': 'prepare failed'}])
+        client.send_text_message.assert_awaited_once()
+
     async def test_partial_send_does_not_repeat_confirmed_text(self):
         client = await self.run_message(responses=[{}, TimeoutError('second part lost')],
                                         text='abcdefgh', chunk_size=4)

@@ -26,7 +26,7 @@ except ImportError:  # pragma: no cover - POSIX platforms
 
 from ..config import AgentConfig
 from ..providers import maintenance_reasoning_config
-from .task_receipts import DeliveryUncertainError, sync_task_directory as _fsync_directory
+from .task_receipts import DeliveryRejectedError, DeliveryUncertainError, sync_task_directory as _fsync_directory
 
 logger = logging.getLogger(__name__)
 
@@ -678,6 +678,8 @@ class SubconsciousLoop:
             except (ValueError, DeliveryUncertainError):
                 raise
             except Exception as exc:
+                if isinstance(exc, DeliveryRejectedError) and not exc.retryable:
+                    raise
                 last_error = exc
                 if attempt >= attempts:
                     break

@@ -11,6 +11,14 @@ class DeliveryUncertainError(RuntimeError):
     """A delivery may have reached its destination and must not be replayed."""
 
 
+class DeliveryRejectedError(RuntimeError):
+    """A send is confirmed unaccepted; only explicitly transient failures retry."""
+
+    def __init__(self, message: str, *, retryable: bool = False):
+        super().__init__(message)
+        self.retryable = retryable
+
+
 _strict_delivery = contextvars.ContextVar("xagent_strict_task_delivery", default=False)
 
 
@@ -88,7 +96,9 @@ async def journal_delivery(part_id, operation, *, description="", uncertain_on_e
     try:
         result = await operation()
     except BaseException as exc:
-        part.update(status="needs_review" if uncertain_on_error else "failed", error=type(exc).__name__)
+        if isinstance(exc, DeliveryRejectedError):
+            part["uncertain_on_error"] = False
+        part.update(status="needs_review" if part["uncertain_on_error"] else "failed", error=type(exc).__name__)
         store.save_delivery(run["id"], part)
         raise
     part.update(status="accepted", receipt=result if isinstance(result, dict) else {}, finished_at=now().isoformat())

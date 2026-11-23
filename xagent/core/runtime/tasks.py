@@ -779,7 +779,7 @@ class AsyncTaskScheduler:
             self.logger.error("Task worker stopped; persisted state will be recovered", exc_info=task.exception())
 
     async def _run(self, run, record):
-        from .task_receipts import PreparationError, task_run_context
+        from .task_receipts import DeliveryRejectedError, PreparationError, task_run_context
         try:
             with task_run_context(self.store, run, self._now):
                 with scheduled_delivery_context(ScheduledDeliveryContext(
@@ -812,12 +812,14 @@ class AsyncTaskScheduler:
             uncertain = isinstance(exc, DeliveryUncertainError) or (phase == "prepare" and run.get("unsafe_tools_started"))
             if phase == "deliver":
                 uncertain = uncertain or any(p["status"] in {"sending", "needs_review"} and p.get("uncertain_on_error", True) for p in parts)
-                if not parts and not isinstance(exc, ValueError):
+                if not parts and not isinstance(exc, (ValueError, DeliveryRejectedError)):
                     uncertain = True
             transient = isinstance(exc, (ConnectionError, TimeoutError)) or isinstance(exc, PreparationError) and exc.retryable
             # A failed upload is known unsent and may be retried. A network send
             # with an unknown acknowledgement always requires review instead.
             transient = transient or phase == "deliver" and bool(parts) and not uncertain and not isinstance(exc, (ValueError, FileNotFoundError))
+            if isinstance(exc, DeliveryRejectedError):
+                transient = exc.retryable
             retry = transient and not uncertain and run["attempt_count"] < 3
             delay = (30, 120)[min(run["attempt_count"] - 1, 1)]
             retry_at = self._now() + timedelta(seconds=delay)
@@ -832,4 +834,4 @@ class AsyncTaskScheduler:
 
 def _safe_error_summary(error):
     text = " ".join(str(error).split()) or type(error).__name__
-    return re.sub(r"(?i)\b(api[_-]?key|access[_-]?token|token|secret|password)\b\s*[:=]\s*[^\s,;]+", r"\1=[redacted]", text)[:500]
+    return re.sub(r"(?i)\b(api[_-]?key|(?:access|context|bot|refresh)[_-]?token|token|secret|password)\b\s*[:=]\s*[^\s,;]+", r"\1=[redacted]", text)[:500]
