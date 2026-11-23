@@ -103,7 +103,22 @@ class ModelErrorEvent:
     details: Optional[str] = None
 
 
+class _EmptyModelResponseError(RuntimeError):
+    """A parsed response had no visible answer or supported tool call."""
+
+    def __init__(self, details: dict, *, retryable: bool):
+        super().__init__(f"No valid output from model response (finish_reason={details['finish_reason']}).")
+        self.details = details
+        self.retryable = retryable
+
+
 def _model_error_event(exc: BaseException, *, stream: bool = False) -> ModelErrorEvent:
+    if isinstance(exc, _EmptyModelResponseError):
+        return ModelErrorEvent(
+            code="empty_model_response",
+            message="No valid output from model response.",
+            details=json.dumps(exc.details, ensure_ascii=False),
+        )
     code = model_error_code_from_exception(exc)
     if stream and code == "model_call_failed":
         code = "model_stream_failed"
@@ -190,7 +205,10 @@ class ModelClient:
             wait=wait_exponential(
                 multiplier=1, min=AgentConfig.RETRY_MIN_WAIT, max=AgentConfig.RETRY_MAX_WAIT,
             ),
-            retry=retry_if_exception(lambda exc: can_retry() and is_retryable_model_exception(exc)),
+            retry=retry_if_exception(lambda exc: can_retry() and (
+                exc.retryable if isinstance(exc, _EmptyModelResponseError)
+                else is_retryable_model_exception(exc)
+            )),
             reraise=True,
         )
 
@@ -214,12 +232,55 @@ class ModelClient:
         self, messages: list, tool_specs: Optional[list],
         instructions: Optional[Union[str, list[dict]]] = None,
     ):
+        empty_retries = 0
         async for attempt in self._retries():
             with attempt:
-                return await asyncio.wait_for(
+                response = await asyncio.wait_for(
                     self._create_response(messages, tool_specs, instructions, stream=False),
                     timeout=self.request_timeout,
                 )
+                if self.model_api == MODEL_API_OPENAI_CHAT_COMPLETIONS:
+                    error = self._empty_chat_response_error(response, attempt.retry_state.attempt_number)
+                    if error is not None:
+                        if error.retryable and error.details["finish_reason"] != "insufficient_system_resource":
+                            error.retryable = empty_retries == 0
+                            empty_retries += 1
+                        raise error
+                return response
+
+    def _empty_chat_response_error(self, response, attempt: int) -> Optional[_EmptyModelResponseError]:
+        text = self._extract_response_text(response)
+        tool_calls = self._extract_tool_calls(response)
+        if text.strip() or tool_calls:
+            return None
+        choice = self._first_choice(response)
+        message = self._field(choice, "message")
+        usage = self._field(response, "usage")
+        finish_reason = self._field(choice, "finish_reason")
+        has_refusal = bool(self._field(message, "refusal"))
+        raw_tool_calls = self._field(message, "tool_calls") or []
+        details = {
+            "provider": self.provider_name,
+            "model": self.model,
+            "response_id": self._field(response, "id"),
+            "finish_reason": finish_reason,
+            "prompt_tokens": self._field(usage, "prompt_tokens"),
+            "completion_tokens": self._field(usage, "completion_tokens"),
+            "reasoning_tokens": self._field(self._field(usage, "completion_tokens_details"), "reasoning_tokens"),
+            "text_chars": len(text),
+            "reasoning_chars": len(self._field(message, "reasoning_content") or ""),
+            "tool_calls": len(tool_calls),
+            "raw_tool_calls": len(raw_tool_calls),
+            "has_refusal": has_refusal,
+            "max_tokens": self.max_tokens,
+            "attempt": attempt,
+        }
+        logger.warning("Empty model response: %s", json.dumps(details, ensure_ascii=False))
+        return _EmptyModelResponseError(
+            details,
+            retryable=(not has_refusal and not raw_tool_calls and
+                       finish_reason in {None, "stop", "insufficient_system_resource"}),
+        )
 
     async def _stream_response_once(
         self, messages: list, tool_specs: Optional[list],
@@ -328,7 +389,7 @@ class ModelClient:
                     finally:
                         await events.aclose()
         except Exception as exc:
-            logger.exception("Model stream failed: %s", exc)
+            logger.exception("Model %s failed: %s", "stream" if stream else "call", exc)
             yield ModelStreamEvent(
                 type="error",
                 error=_model_error_event(exc, stream=True),
