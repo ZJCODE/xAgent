@@ -104,7 +104,7 @@ class ContactManagementTests(unittest.TestCase):
 
 
 class AgentSubconsciousThoughtTests(unittest.IsolatedAsyncioTestCase):
-    async def test_record_subconscious_thought_appends_diary_without_message(self):
+    async def test_record_subconscious_thought_enters_journal_window(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             agent = Agent(client=object(), workspace=tmpdir)
 
@@ -113,9 +113,11 @@ class AgentSubconsciousThoughtTests(unittest.IsolatedAsyncioTestCase):
             entries = await agent.markdown_memory.read_recent_dailies(days=1)
             self.assertEqual(result.kind, "subconscious_thought")
             self.assertEqual(result.event_type, "subconscious_thought")
-            self.assertEqual(await agent.message_storage.get_latest_message_cursor(), 0)
-            self.assertEqual(len(entries), 1)
-            self.assertIn("raw inner thought", entries[0][1])
+            self.assertEqual(entries, [])
+            event, = await agent.message_storage.get_messages(1)
+            self.assertEqual(event.content, "raw inner thought")
+            self.assertEqual(event.metadata["source"], "subconscious")
+            self.assertTrue(agent.memory_handler._is_memory_worthy_experience(event))
 
     async def test_record_subconscious_thought_skips_json_payload(self):
         with tempfile.TemporaryDirectory() as tmpdir:

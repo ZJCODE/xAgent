@@ -590,7 +590,8 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory, llm_service=service, message_storage=self.storage,
             diary_write_batch=_TEST_DIARY_WRITE_BATCH, max_journal_source_chars=150,
         )
-        handler.projector.run = AsyncMock()
+        handler.projector.run = AsyncMock(return_value=False)
+        handler.projector.project_messages = AsyncMock()
 
         self.assertTrue(await handler.run_maintenance(force=True))
         self.assertEqual(handler._last_processed_message_id, 3)
@@ -618,7 +619,8 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory, llm_service=service, message_storage=self.storage,
             diary_write_batch=_TEST_DIARY_WRITE_BATCH, max_journal_source_chars=130,
         )
-        handler.projector.run = AsyncMock()
+        handler.projector.run = AsyncMock(return_value=False)
+        handler.projector.project_messages = AsyncMock()
 
         self.assertFalse(await handler.run_maintenance(force=True))
         self.assertEqual(handler._last_processed_message_id, 0)
@@ -995,7 +997,7 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_projection_failure_does_not_replay_committed_diary(self):
         handler = self._handler_with_one_message()
-        with patch.object(handler.projector, "run", AsyncMock(side_effect=RuntimeError("projection failed"))):
+        with patch.object(handler.projector, "project_messages", AsyncMock(side_effect=RuntimeError("projection failed"))):
             self.assertTrue(await handler.run_maintenance(force=True))
         self.assertEqual(handler._last_processed_message_id, 1)
         before = self.memory.daily_path(date.today()).read_bytes()

@@ -18,6 +18,7 @@ from xagent.components.memory.note_memory import (
     MAX_BODY_CHARS, MAX_KEYS, MAX_TITLE_CHARS, MIN_KEY_CHARS,
 )
 from xagent.core.config import AgentConfig
+from xagent.core.inbox import is_scheduled_work
 from xagent.core.journal_commits import atomic_write_bytes, digest, read_bytes
 
 _ENTRY = re.compile(r"(?m)^## \d{4}-\d{2}-\d{2} \d{2}:\d{2}\s*$")
@@ -144,8 +145,9 @@ class MemoryProjector:
                 selected.append(person)
         return selected
 
-    async def _context(self, state: dict, text: str):
-        people = self._participants(state["people"], text)
+    async def _context(self, state: dict, text: str, people=None):
+        if people is None:
+            people = self._participants(state["people"], text)
         cards = {}
         kept_people = []
         used = 0
@@ -162,7 +164,7 @@ class MemoryProjector:
                 cards[card.key] = card.body
             used += size
         people = kept_people
-        notes = await self.notes.recall(text, limit=AgentConfig.NOTEBOOK_RECALL_MAX)
+        notes = await self.notes.recall(text, limit=None)
         existing, related, allowed = [], [], set()
         # Whole cards only, under one fixed context budget. One-hop summaries
         # contribute ids for meaningful references without recursive expansion.
@@ -187,6 +189,65 @@ class MemoryProjector:
                     allowed.add(neighbour.id)
                     used += size
         return people, cards, existing, related, allowed
+
+    async def migrate(self, processed: int) -> None:
+        """Finish the old diary stream once, before accepting new message windows."""
+        state = await asyncio.to_thread(self._load)
+        if isinstance(state["cursor"], int):
+            return
+        while await self.run():
+            pass
+        await self._save({"cursor": processed, "pending": None, "people": {}})
+
+    async def project_messages(self, handler, processed: int) -> bool:
+        state = await asyncio.to_thread(self._load)
+        if state["pending"] is not None:
+            await _finish_write(self._apply_pending(state))
+        start = state["cursor"]
+        end = min(processed, start + handler.diary_write_batch)
+        if start >= end:
+            return False
+        messages = await handler.message_storage.get_messages_in_cursor_range(start, end)
+        records, people, size = [], {}, 0
+        for message in messages:
+            if not handler._is_memory_worthy_experience(message):
+                continue
+            record_id = message.metadata[AgentConfig.MESSAGE_STORAGE_CURSOR_KEY]
+            record = {"id": record_id, "role": message.role.value, "type": message.type.value,
+                      "source": (message.metadata or {}).get("source"), "channel": message.channel,
+                      "room": message.room_name, "timestamp": message.timestamp, "content": message.content}
+            if is_scheduled_work(message.metadata):
+                record["type"] = "scheduled_task"
+            speakers = handler._extract_participants([message])
+            if speakers:
+                speaker = speakers[0]
+                key = self.relationships.primary_key(speaker["key"])
+                record["person"] = key
+                record["sender"] = speaker["key"]
+                channel, user_id = self.relationships.split_key(key)
+                speaker = dict(speaker, key=key, channel=channel, user_id=user_id)
+            cost = len(json.dumps(record, ensure_ascii=False))
+            if records and size + cost > self.source_chars:
+                end = record_id - 1
+                break
+            if speakers:
+                people[key] = speaker
+            records.append(record)
+            size += cost
+        if not records:
+            state["cursor"] = end
+            await self._save(state)
+            return end < processed
+        text = "\n".join(r["content"] for r in records)
+        persons, cards, notes, related, allowed = await self._context(state, text, list(people.values()))
+        changes = await self.llm.update_memory_projections(messages=records, participants=persons,
+            existing_cards=cards, existing_notes=notes, related_notes=related)
+        day = datetime.fromtimestamp(records[-1]["timestamp"]).date().isoformat()
+        pending = await self._prepare(changes, persons, {n["id"] for n in notes}, allowed, day, end, records)
+        state["pending"] = pending
+        await self._save(state)
+        await _finish_write(self._apply_pending(state))
+        return end < processed
 
     async def run(self) -> bool:
         state = await asyncio.to_thread(self._load)
@@ -216,7 +277,7 @@ class MemoryProjector:
         await _finish_write(self._apply_pending(state))
         return True
 
-    async def _prepare(self, changes, people, editable, allowed, journal_date, through):
+    async def _prepare(self, changes, people, editable, allowed, journal_date, through, records=None):
         if not isinstance(changes, dict) or set(changes) - {"relationships", "notes"}:
             raise ValueError("Invalid memory projection result")
         cards = changes.get("relationships", {})
@@ -225,11 +286,27 @@ class MemoryProjector:
             raise ValueError("Invalid memory projection fields")
         people_by_key = {person["key"]: person for person in people}
         writes = {"cursor": through, "relationships": [], "notes": []}
-        for key, body in cards.items():
+        def source_for(change, existing, person=None):
+            source = dict(existing.source) if existing else {}
+            if records is None:
+                source["diary"] = sorted({*source.get("diary", []), journal_date})
+                return source
+            refs = change.get("messages")
+            valid = {r["id"] for r in records if person is None or r.get("person") == person}
+            if not isinstance(refs, list) or not refs or not all(type(i) is int and i in valid for i in refs):
+                raise ValueError("Missing or invalid supporting message IDs")
+            source["messages"] = sorted({*source.get("messages", []), *refs})
+            return source
+
+        for key, change in cards.items():
+            if records is not None and (not isinstance(change, dict) or set(change) != {"body", "messages"}):
+                raise ValueError("Invalid sourced relationship change")
+            body = change["body"] if records is not None else change
             if key not in people_by_key or (body is not None and
                     (not isinstance(body, str) or not body.strip() or len(body) > MAX_BODY_CHARS)):
                 raise ValueError("Invalid relationship change")
             existing = await self.relationships.read_card(key)
+            source = source_for(change, existing, key)
             if body is None:
                 if existing:
                     writes["relationships"].append({"key": key, "body": None})
@@ -238,23 +315,23 @@ class MemoryProjector:
             if existing and existing.body == body:
                 continue
             person = people_by_key[key]
-            sources = sorted({*(existing.source.get("diary", []) if existing else []), journal_date})
             writes["relationships"].append({
                 "key": key, "body": body, "display_name": person.get("display_name", ""),
                 "channel": person["channel"], "user_id": person["user_id"],
-                "updated": journal_date, "source": {"diary": sources},
+                "updated": journal_date, "source": source,
             })
         all_notes = {note.id: note for note in await self.notes.list_notes()}
         reserved = set(all_notes)
         seen = set()
         deleted = {p.get("id") for p in proposals if isinstance(p, dict) and p.get("body", "") is None}
         for proposal in proposals:
-            if not isinstance(proposal, dict) or set(proposal) - {"id", "title", "body", "keys", "links"}:
+            if not isinstance(proposal, dict) or set(proposal) - {"id", "title", "body", "keys", "links", "messages"}:
                 raise ValueError("Invalid note change")
             note_id = proposal.get("id")
             if note_id is not None and (not isinstance(note_id, str) or note_id not in editable or note_id in seen):
                 raise ValueError("Unknown or repeated note id")
             existing = all_notes.get(note_id)
+            source = source_for(proposal, existing)
             if note_id:
                 seen.add(note_id)
             if proposal.get("body", "") is None:
@@ -282,7 +359,7 @@ class MemoryProjector:
             candidate = NoteStore.normalize(Note(
                 id=note_id, title=title, body=body, keys=tuple(keys),
                 links=tuple(link for link in [*links, *_WIKI.findall(body)] if link in targets),
-                source={"diary": sorted({*(existing.source.get("diary", []) if existing else []), journal_date})},
+                source=source,
                 updated=journal_date,
             ))
             def content(note):
@@ -301,7 +378,8 @@ class MemoryProjector:
 
     async def _apply_pending(self, state):
         pending = state["pending"]
-        await asyncio.to_thread(self._verify_cursor, pending["cursor"])
+        if isinstance(pending["cursor"], dict):
+            await asyncio.to_thread(self._verify_cursor, pending["cursor"])
         for record in pending["relationships"]:
             if record["body"] is None:
                 await self.relationships.delete_card(record["key"])

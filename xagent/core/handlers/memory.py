@@ -320,15 +320,20 @@ class MemoryHandler:
                 "started_at": datetime.now().astimezone().isoformat(),
             }
             try:
+                healthy, recovered = await self._recover_pending_commit_locked()
+                if not healthy:
+                    return False
+                await self.projector.migrate(self._last_processed_message_id)
                 result = await self._run_maintenance_locked(
-                    force=force, trigger=trigger
+                    force=force, trigger=trigger, recovered=recovered
                 )
                 # Catch up even when no new message window is due. Projection
                 # failures never roll back diary commits or stop later ones.
                 try:
                     receipt = await asyncio.to_thread(self._journal_commits.load)
                     if not receipt or receipt["status"] == "completed":
-                        await self.projector.run()
+                        if await self.projector.project_messages(self, self._last_processed_message_id):
+                            self._maintenance_requested = True
                 except Exception as exc:
                     self._last_maintenance["projection_error"] = str(exc)
                     logger.warning("Memory projection deferred: %s", exc, exc_info=True)
@@ -347,11 +352,8 @@ class MemoryHandler:
                 self._last_maintenance["finished_at"] = datetime.now().astimezone().isoformat()
 
     async def _run_maintenance_locked(
-        self, force: bool = False, trigger: str = "count"
+        self, force: bool = False, trigger: str = "count", recovered: bool = False
     ) -> bool:
-        healthy, recovered = await self._recover_pending_commit_locked()
-        if not healthy:
-            return False
         latest_message_id = await self.message_storage.get_latest_message_cursor()
         if latest_message_id <= 0:
             return recovered
@@ -382,10 +384,6 @@ class MemoryHandler:
             max_wait = AgentConfig.DIARY_MAX_WAIT_SECONDS
             if max_wait <= 0 or datetime.now().timestamp() - oldest < max_wait:
                 return recovered
-        try:
-            await self.projector.remember_people(self._extract_participants(recent_messages))
-        except Exception as exc:
-            logger.warning("Could not persist projection identities: %s", exc, exc_info=True)
         today = date.today()
         old_content = await asyncio.to_thread(read_bytes, self.memory.daily_path(today))
         if not recent_messages:
@@ -408,7 +406,7 @@ class MemoryHandler:
             if cursor is not None and cursor <= checkpoint:
                 record["already_journaled"] = True
             new_records.append(record)
-        if not new_records:
+        if not any(not record.get("already_journaled") for record in new_records):
             await self._prepare_and_commit_window(
                 today, old_content, "", start_exclusive, end_inclusive,
             )
@@ -666,16 +664,37 @@ class MemoryHandler:
         leaving both diary and cursor untouched.
         """
         try:
+            earlier = await self._earlier_diary_entry(messages, target_date)
             content = await self.llm_service.format_diary_entry(
                 messages=messages,
                 journal_date=target_date.isoformat(),
                 existing_today=self._existing_diary_context(existing_content),
+                **({"earlier_entry": earlier} if earlier else {}),
             )
             return content.strip()
         except Exception as exc:
             self._last_maintenance["error"] = str(exc)
             logger.error("Diary slice generation failed: %s", exc)
         return None
+
+    async def _earlier_diary_entry(self, messages: List[dict], target_date: date) -> str:
+        """Recall one recent incident by a quoted phrase or distinctive technical name."""
+        text = " ".join(str(m.get("content") or "") for m in messages if not m.get("already_journaled"))
+        quotes = re.findall(r'[「“"]([^「」“”"\n]{4,80})[」”"]', text)
+        names = re.findall(r"\b[a-zA-Z][a-zA-Z0-9]*(?:[-_.][a-zA-Z0-9]+)+\b", text)
+        terms = {term.casefold() for term in (*quotes, *names)}
+        if not terms:
+            return ""
+        best, best_score = "", 0
+        for days_back in range(1, 8):
+            path = self.memory.daily_path(target_date - timedelta(days=days_back))
+            for entry in reversed(self._split_diary_entries(await self.memory.read_file(path))):
+                excerpt = entry[:1200]
+                folded = excerpt.casefold()
+                score = sum(len(term) for term in terms if term in folded)
+                if score > best_score:
+                    best, best_score = excerpt, score
+        return best
 
     def _existing_diary_context(self, text: str) -> str:
         """Trim original and staged slices with the same prompt budget."""

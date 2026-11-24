@@ -213,7 +213,7 @@ class NoteStore:
     # Retrieval
     # ------------------------------------------------------------------
 
-    async def recall(self, text: str, limit: int = 4) -> List[Note]:
+    async def recall(self, text: str, limit: Optional[int] = 4) -> List[Note]:
         """Recall notes whose declared keys appear in *text*.
 
         The match runs in reverse — each note's own trigger keys are searched
@@ -234,7 +234,9 @@ class NoteStore:
                 continue
             scored.append((hits, note.updated or note.id, note.id, note))
         scored.sort(key=lambda item: item[:3], reverse=True)
-        return [item[3] for item in scored[: max(0, int(limit))]]
+        if limit is not None:
+            scored = scored[:max(0, int(limit))]
+        return [item[3] for item in scored]
 
     async def search(
         self,
@@ -366,8 +368,6 @@ class NoteStore:
         if not isinstance(source, Mapping):
             return {}
         value = source.get("diary")
-        if value is None:
-            return {}
         dates = (
             [cls._clean_line(item) for item in (value or [])]
             if not isinstance(value, str)
@@ -380,7 +380,10 @@ class NoteStore:
             except ValueError:
                 continue
         dates = sorted(valid_dates)
-        return {"diary": dates} if dates else {}
+        result = {"diary": dates} if dates else {}
+        if source.get("messages"):
+            result["messages"] = sorted({i for i in source["messages"] if type(i) is int and i > 0})
+        return result
 
     # ------------------------------------------------------------------
     # Render / parse

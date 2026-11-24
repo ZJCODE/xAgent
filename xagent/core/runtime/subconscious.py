@@ -231,7 +231,7 @@ class SubconsciousLoop:
     """Periodic subconscious thought loop for the agent.
 
     At a fixed interval, reflect once while the foreground is idle.
-    Optional notes go to the diary; optional messages go to the existing
+    Optional notes enter the journal window; optional messages go to the existing
     delivery sink. No persistent psychological or delivery-count state.
     """
 
@@ -261,7 +261,7 @@ class SubconsciousLoop:
         self._thinking = False
         self._delivery_retries = SUBCONSCIOUS_DELIVERY_RETRIES
         self._delivery_retry_delay_seconds = SUBCONSCIOUS_DELIVERY_RETRY_DELAY_SECONDS
-        self._last_diary_note = ""
+        self._last_private_note = ""
 
     # ------------------------------------------------------------------
     # Public API
@@ -628,29 +628,25 @@ class SubconsciousLoop:
             return ""
 
     async def _write_subconscious_thought(self, content: str) -> str:
-        """Record the raw inner thought directly in the diary, skipping verbatim repeats."""
+        """Record an inner experience, skipping verbatim repeats."""
         note = str(content or "").strip()
         if not note or self._looks_like_subconscious_payload(note):
             if note:
                 self._logger.warning("Refusing to write subconscious JSON payload to diary")
             return "skipped"
         normalized_note = " ".join(note.split())
-        if normalized_note and normalized_note == self._last_diary_note:
+        if normalized_note and normalized_note == self._last_private_note:
             self._logger.debug("Skipping duplicate subconscious diary note")
             return "skipped"
 
-        writer = (
-            getattr(self._agent, "record_subconscious_thought", None)
-            or getattr(getattr(self._agent, "memory_handler", None), "append_daily_entry", None)
-            or getattr(getattr(self._agent, "markdown_memory", None), "append_daily", None)
-        )
+        writer = getattr(self._agent, "record_subconscious_thought", None)
         if not callable(writer):
             return "skipped"
         try:
             res = writer(note)
             if inspect.isawaitable(res):
                 await res
-            self._last_diary_note = normalized_note
+            self._last_private_note = normalized_note
             return "written"
         except Exception:
             self._logger.warning("Failed to record subconscious thought in diary", exc_info=True)

@@ -117,6 +117,14 @@ class RelationshipStore:
 
     def __init__(self, relationships_dir: str) -> None:
         self.root = Path(relationships_dir).expanduser()
+        binding_file = self.root / "bindings.yaml"
+        self.bindings = yaml.safe_load(binding_file.read_text(encoding="utf-8")) if binding_file.exists() else {}
+        if not isinstance(self.bindings, dict) or any(
+            not isinstance(key, str) or not isinstance(target, str)
+            or not all(self.split_key(key)) or not all(self.split_key(target))
+            or target in self.bindings for key, target in self.bindings.items()
+        ):
+            raise ValueError("Relationship bindings must map channel:user_id directly to a primary channel:user_id")
         self._write_lock = asyncio.Lock()
         self.root.mkdir(parents=True, exist_ok=True)
 
@@ -142,8 +150,11 @@ class RelationshipStore:
         sanitized = _SLUG_UNSAFE.sub("_", value.strip()).strip("_") or "unknown"
         return sanitized[:64]
 
+    def primary_key(self, key: str) -> str:
+        return self.bindings.get(key, key)
+
     def card_path(self, key: str) -> Path:
-        channel, user_id = self.split_key(key)
+        channel, user_id = self.split_key(self.primary_key(key))
         return self.root / self._safe_segment(channel) / f"{self._safe_segment(user_id)}.md"
 
     # ------------------------------------------------------------------
@@ -154,13 +165,14 @@ class RelationshipStore:
         text = await asyncio.to_thread(self._read_text_sync, self.card_path(key))
         if not text.strip():
             return None
-        return self._parse(key, text)
+        return self._parse(self.primary_key(key), text)
 
     async def read_cards(self, keys: List[str]) -> List[RelationshipCard]:
         """Read multiple cards, preserving order and skipping missing ones."""
         cards: List[RelationshipCard] = []
         seen: set[str] = set()
         for key in keys:
+            key = self.primary_key(key)
             if not key or key in seen:
                 continue
             seen.add(key)
@@ -188,6 +200,11 @@ class RelationshipStore:
     async def write_card(self, card: RelationshipCard) -> Path:
         """Write (overwrite) a person's relationship card atomically."""
         path = self.card_path(card.key)
+        if self.primary_key(card.key) != card.key:
+            from dataclasses import replace
+            key = self.primary_key(card.key)
+            channel, user_id = self.split_key(key)
+            card = replace(card, key=key, channel=channel, user_id=user_id)
         rendered = self._render(card)
         async with self._write_lock:
             await asyncio.to_thread(self._write_atomic_sync, path, rendered)
@@ -212,6 +229,8 @@ class RelationshipStore:
         source_dates = self.normalize_diary_dates(card.source.get("diary"))
         if source_dates:
             frontmatter["source"] = {"diary": source_dates}
+        if card.source.get("messages"):
+            frontmatter.setdefault("source", {})["messages"] = card.source["messages"]
         header = yaml.safe_dump(
             frontmatter,
             sort_keys=False,
@@ -235,7 +254,7 @@ class RelationshipStore:
             channel=channel,
             user_id=user_id,
             updated=str(meta.get("updated") or "").strip(),
-            source={"diary": self.normalize_diary_dates(
+            source={**({"messages": meta["source"]["messages"]} if isinstance(meta.get("source"), dict) and meta["source"].get("messages") else {}), "diary": self.normalize_diary_dates(
                 (meta.get("source") or {}).get("diary")
                 if isinstance(meta.get("source"), dict) else None
             )},

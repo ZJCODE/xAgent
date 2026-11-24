@@ -1440,7 +1440,7 @@ class Agent:
         self,
         content: str,
     ) -> AgentTurnResult:
-        """Record a raw subconscious thought directly in the diary."""
+        """Record an inner experience for the ordinary journal window."""
         from .runtime.subconscious import SubconsciousLoop
 
         note = str(content or "").strip()
@@ -1448,17 +1448,16 @@ class Agent:
             logger.warning("Refusing to write subconscious JSON payload to diary")
             note = ""
         if note:
-            memory_handler = getattr(self, "memory_handler", None)
-            append_entry = getattr(memory_handler, "append_daily_entry", None)
-            if callable(append_entry):
-                await append_entry(note)
-            else:
-                await self.markdown_memory.append_daily(note)
+            event = await self.message_handler.store_context_event(
+                context=note, source="subconscious", event_type="subconscious_thought",
+                role=RoleType.ASSISTANT,
+            )
+            self._schedule_experience_write(messages=[event])
         return AgentTurnResult(
             kind="subconscious_thought",
             replied=False,
             reply=None,
-            event_id=time.time(),
+            event_id=event.timestamp if note else time.time(),
             event_type="subconscious_thought",
             source="subconscious",
         )
