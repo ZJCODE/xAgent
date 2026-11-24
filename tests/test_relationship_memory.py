@@ -74,6 +74,20 @@ class RelationshipStoreTests(unittest.IsolatedAsyncioTestCase):
             for part in rel.parts:
                 self.assertNotIn(":", part)
 
+    async def test_colliding_legacy_ids_are_isolated_on_read_write_and_delete(self):
+        legacy = self.store.root / "api" / "unknown.md"
+        legacy.parent.mkdir()
+        legacy.write_text("---\nkey: api:阿禾\n---\nA legacy preference.")
+        self.assertIsNone(await self.store.read_card("api:小满"))
+        self.assertIsNone(await self.store.read_card("api:路人"))
+        await self.store.write_card(RelationshipCard(key="api:小满", body="Short steps."))
+        await self.store.delete_card("api:小满")
+        self.assertEqual((await self.store.read_card("api:阿禾")).body, "A legacy preference.")
+        await self.store.write_card(RelationshipCard(key="api:阿禾", body="Explain why."))
+        self.assertEqual(await self.store.list_keys(), ["api:阿禾"])
+        await self.store.delete_card("api:阿禾")
+        self.assertIsNone(await self.store.read_card("api:阿禾"))
+
     async def test_read_missing_card_returns_none(self):
         self.assertIsNone(await self.store.read_card("weixin:nobody"))
 
@@ -98,7 +112,7 @@ class RelationshipStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(loaded.updated, "2026-06-27")
         self.assertEqual(loaded.source.get("diary", []), ["2026-06-26", "2026-06-27"])
         self.assertIn("we trust each other", loaded.body)
-        rendered = (self.store.root / "weixin" / "wx_1.md").read_text(encoding="utf-8")
+        rendered = self.store.card_path("weixin:wx_1").read_text(encoding="utf-8")
         self.assertTrue(rendered.startswith("---\n"))
         self.assertIn("key: weixin:wx_1", rendered)
         self.assertIn("name: Alice", rendered)
@@ -131,7 +145,7 @@ class RelationshipStoreTests(unittest.IsolatedAsyncioTestCase):
             )
         )
         rendered = (
-            self.store.root / "weixin" / "wx_d988df0a30ef9202a01bd962d8c07c21.md"
+            self.store.card_path("weixin:wx_d988df0a30ef9202a01bd962d8c07c21")
         ).read_text(encoding="utf-8")
         header = rendered.split("---", 2)[1]
         self.assertIn("key: weixin:wx_d988df0a30ef9202a01bd962d8c07c21", header)

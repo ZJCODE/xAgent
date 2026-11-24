@@ -424,6 +424,7 @@ class AgentConfig:
 
     # One perspective shared by conversation, reflection and memory processing.
     EXPERIENCE_PERSPECTIVE_RULES = (
+        "Keep unnamed third parties anonymous even when other known people are present. Only the speaker can identify which friend they mean.\n"
         "You are the same continuing individual in direct conversations, group exchanges and observations. "
         "One person is a case of interacting with people, not the owner of a separate self or memory.\n"
         "Preserve who said or did what, to whom, and in which private or shared setting. "

@@ -16,6 +16,7 @@ policy.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import re
 from dataclasses import dataclass, field
@@ -154,18 +155,38 @@ class RelationshipStore:
         return self.bindings.get(key, key)
 
     def card_path(self, key: str) -> Path:
-        channel, user_id = self.split_key(self.primary_key(key))
-        return self.root / self._safe_segment(channel) / f"{self._safe_segment(user_id)}.md"
+        primary = self.primary_key(key)
+        channel, _ = self.split_key(primary)
+        folder = self._safe_segment(channel).strip(".") or "unknown"
+        digest = hashlib.sha256(primary.encode("utf-8")).hexdigest()
+        return self.root / folder / f"~{digest}.md"
 
-    # ------------------------------------------------------------------
-    # Read
-    # ------------------------------------------------------------------
+    def _candidate_paths(self, primary: str) -> list[Path]:
+        channel, user_id = self.split_key(primary)
+        paths = [self.card_path(primary)]
+        legacy_channel = self._safe_segment(channel)
+        if legacy_channel not in {".", ".."}:
+            paths.append(self.root / legacy_channel / f"{self._safe_segment(user_id)}.md")
+        return paths
+
+    def _owned_text(self, path: Path, primary: str) -> str:
+        text = self._read_text_sync(path)
+        if not text:
+            return ""
+        meta, _ = self._split_frontmatter(text)
+        owner = meta.get("key")
+        if not owner:
+            legacy = re.match(r'^<!-- rel key="([^"]+)"', text.lstrip())
+            owner = legacy.group(1) if legacy else None
+        return text if owner == primary else ""
 
     async def read_card(self, key: str) -> Optional[RelationshipCard]:
-        text = await asyncio.to_thread(self._read_text_sync, self.card_path(key))
-        if not text.strip():
-            return None
-        return self._parse(self.primary_key(key), text)
+        primary = self.primary_key(key)
+        for path in self._candidate_paths(primary):
+            text = await asyncio.to_thread(self._owned_text, path, primary)
+            if text:
+                return self._parse(primary, text)
+        return None
 
     async def read_cards(self, keys: List[str]) -> List[RelationshipCard]:
         """Read multiple cards, preserving order and skipping missing ones."""
@@ -191,7 +212,7 @@ class RelationshipStore:
             key = str(meta.get("key") or "").strip()
             if key:
                 keys.append(key)
-        return keys
+        return list(dict.fromkeys(keys))
 
     # ------------------------------------------------------------------
     # Write
@@ -213,7 +234,10 @@ class RelationshipStore:
 
     async def delete_card(self, key: str) -> None:
         async with self._write_lock:
-            await asyncio.to_thread(self._delete_sync, self.card_path(key))
+            primary = self.primary_key(key)
+            for path in reversed(self._candidate_paths(primary)):
+                if await asyncio.to_thread(self._owned_text, path, primary):
+                    await asyncio.to_thread(self._delete_sync, path)
 
     # ------------------------------------------------------------------
     # Render / parse
