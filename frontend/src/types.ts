@@ -246,9 +246,10 @@ export interface AgentRuntimeStatus {
 }
 
 export interface JournalRuntimeStatus {
+  projection?: { cursor?: number; backlog?: number; pending_write?: boolean; migration_pending?: boolean; error?: string };
   backlog: number;
   needs_review?: Array<{ reason?: string }>;
-  last_maintenance?: { status?: string; finished_at?: string | null; error?: string };
+  last_maintenance?: { projection_error?: string; status?: string; finished_at?: string | null; error?: string };
 }
 
 export interface ChannelStatus {

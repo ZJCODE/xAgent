@@ -41,6 +41,10 @@ async def _finish_write(operation):
         raise
 
 
+class InvalidEvidence(ValueError):
+    """A proposal cites messages outside its allowed evidence."""
+
+
 class MemoryProjector:
     def __init__(self, root: Path, notes: NoteStore, relationships: RelationshipStore, llm,
                  source_chars: int = 24000):
@@ -240,10 +244,19 @@ class MemoryProjector:
             return end < processed
         text = "\n".join(r["content"] for r in records)
         persons, cards, notes, related, allowed = await self._context(state, text, list(people.values()))
-        changes = await self.llm.update_memory_projections(messages=records, participants=persons,
-            existing_cards=cards, existing_notes=notes, related_notes=related)
+        inputs = dict(messages=records, participants=persons, existing_cards=cards,
+                      existing_notes=notes, related_notes=related)
         day = datetime.fromtimestamp(records[-1]["timestamp"]).date().isoformat()
-        pending = await self._prepare(changes, persons, {n["id"] for n in notes}, allowed, day, end, records)
+        for attempt in range(2):
+            changes = await self.llm.update_memory_projections(**inputs)
+            try:
+                pending = await self._prepare(changes, persons, {n["id"] for n in notes},
+                                              allowed, day, end, records)
+                break
+            except InvalidEvidence as exc:
+                if attempt:
+                    raise
+                inputs["correction"] = str(exc)
         state["pending"] = pending
         await self._save(state)
         await _finish_write(self._apply_pending(state))
@@ -294,7 +307,7 @@ class MemoryProjector:
             refs = change.get("messages")
             valid = {r["id"] for r in records if person is None or r.get("person") == person}
             if not isinstance(refs, list) or not refs or not all(type(i) is int and i in valid for i in refs):
-                raise ValueError("Missing or invalid supporting message IDs")
+                raise InvalidEvidence(f"Invalid evidence for {person or 'note'}. Use supporting IDs from {sorted(valid)}, or omit this change.")
             source["messages"] = sorted({*source.get("messages", []), *refs})
             return source
 

@@ -156,6 +156,8 @@ def register_runtime_routes(app: FastAPI, adapter: "ApiChannelAdapter") -> None:
         await adapter.delivery.register_subscriber(user_id, websocket)
         adapter.logger.info("Scheduled task WebSocket connected for %s", user_id)
         try:
+            if websocket.query_params.get("resume") == "1":
+                await websocket.send_json({"type": "subscribed"})
             while True:
                 await websocket.receive_text()
         except WebSocketDisconnect:

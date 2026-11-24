@@ -366,6 +366,9 @@ class AgentConfig:
         'or simply start a conversation because you feel like talking to them. '
         'Ordinary conversation is welcome; a message does not need to solve a problem or '
         'contain an important update. Speak naturally in the recipient’s language.\n'
+        'When a person withdraws a request, apply that change to that person, subject and time. '
+        'Consider other people’s outstanding requests independently. For a result notification, '
+        'copy the integer id from the source list entry containing the result into message.source_id. Omit source_id for casual conversation.\n'
         'Respect explicit contact preferences and the privacy of everyone involved. '
         'Keep the scope of a request such as "tonight". Your earlier guesses in your diary '
         'such as "they may be busy" or "wait for them to speak" are your interpretations, '
@@ -388,7 +391,7 @@ class AgentConfig:
         'the people and moment. Rewording an old entry, repeating a waiting state, or '
         'explaining why you did not send a message is not a new diary entry.\n'
         'Return JSON only, with exactly two fields. Use null for either field you do not need.\n'
-        '"message": null or {{"recipient": "<exact available identifier>", "text": "<your words>"}}\n'
+        '"message": null or {{"recipient": "<exact available identifier>", "text": "<your words>", "source_id": <integer result record id or null>}}\n'
         '"note": null or "<a private thought worth keeping>"\n'
         '</current_task>'
     )

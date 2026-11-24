@@ -220,6 +220,25 @@ class TaskApiTests(unittest.TestCase):
         import asyncio
         asyncio.run(run_test())
 
+    def test_disconnected_web_subscriber_recovers_only_its_pushes(self):
+        import asyncio
+        with tempfile.TemporaryDirectory() as tmpdir:
+            server = AgentHTTPServer(agent=_TaskAgent(Path(tmpdir)))
+            with TestClient(server.app) as client:
+                path = "/api/messages/pushes"
+                with client.websocket_connect("/ws/tasks?user_id=alice&resume=1") as socket:
+                    self.assertEqual(socket.receive_json()["type"], "subscribed")
+                    cursor = client.get(path, params={"user_id": "alice"}).json()["cursor"]
+                for user in ("alice", "bob", "alice"):
+                    delivery = SubconsciousDelivery("update", ContactEntry("api", user, {"user_id": user}, ""),
+                                                    "", datetime.now())
+                    asyncio.run(server.deliver_subconscious_message(delivery))
+                with client.websocket_connect("/ws/tasks?user_id=alice&resume=1") as socket:
+                    self.assertEqual(socket.receive_json()["type"], "subscribed")
+                    page = client.get(path, params={"user_id": "alice", "after": cursor}).json()
+                    self.assertEqual([m["recipient_id"] for m in page["messages"]], ["alice", "alice"])
+                    self.assertEqual(client.get(path, params={"user_id": "alice", "after": page["cursor"]}).json()["messages"], [])
+
     def test_deliver_subconscious_message_broadcasts_to_subscriber(self):
         async def run_test():
             class _Subscriber:

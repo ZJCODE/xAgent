@@ -375,6 +375,14 @@ export async function deleteSkillPath(path: string, recursive = false): Promise<
   });
 }
 
+export function getPushHistory(userId: string, after?: number) {
+  const params = new URLSearchParams({ user_id: userId });
+  if (after !== undefined) params.set("after", String(after));
+  return requestJson<{ messages: MessagesResponse["messages"]; cursor: number; has_more: boolean }>(
+    `/api/messages/pushes?${params}`
+  );
+}
+
 export async function getMessages(count: number, offset: number): Promise<MessagesResponse> {
   return requestJson(`/api/messages?count=${count}&offset=${offset}`);
 }

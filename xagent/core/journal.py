@@ -210,6 +210,7 @@ Period focus:
         self,
         *,
         committed_diary: str = "",
+        correction: str = "",
         messages: Optional[List[dict]] = None,
         participants: List[dict],
         existing_cards: dict[str, str],
@@ -227,6 +228,7 @@ Period focus:
             system_prompt=(self.build_message_projection_prompt() if messages else self.build_projection_system_prompt()),
             user_prompt=json.dumps({
                 **({"messages": messages} if messages else {"committed_diary": committed_diary}),
+                **({"validation_error": correction} if correction else {}),
                 "people": participants,
                 "existing_relationships": existing_cards,
                 "existing_notes": existing_notes,

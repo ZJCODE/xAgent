@@ -977,6 +977,19 @@ def register_admin_routes(
             "has_more": offset + count < total,
         }
 
+    @app.get("/api/messages/pushes", tags=["Monitoring"])
+    async def get_pushes(user_id: str, after: Optional[int] = Query(None, ge=0)):
+        storage = resolve_admin().message_storage
+        latest = await storage.get_latest_message_cursor()
+        if after is None or after >= latest:
+            return {"messages": [], "cursor": latest, "has_more": False}
+        end = min(after + 500, latest)
+        rows = await storage.get_messages_in_cursor_range(after, end)
+        items = [message_item(m) for m in rows if m.channel == "api" and m.recipient_id == user_id
+                 and m.role.value == "assistant" and m.type.value == "message"
+                 and ((m.metadata or {}).get("subconscious") or (m.metadata or {}).get("scheduled_run_id"))]
+        return {"messages": items, "cursor": end, "has_more": end < latest}
+
     @app.get("/api/messages/search", tags=["Monitoring"])
     async def search_messages(
         query: str = Query(..., min_length=1, description="Search text for message content and metadata"),

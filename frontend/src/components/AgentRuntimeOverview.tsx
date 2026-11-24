@@ -96,6 +96,9 @@ export function AgentRuntimeOverview({ restartRequired, settingsNotice, onSettin
   const state = runtime?.status;
   const busy = Boolean(pending) || state === "starting" || state === "stopping";
   const ready = running && runtime?.runtime_ready;
+  const journal = runtime?.journal ?? runtime?.memory;
+  const projection = journal?.projection;
+  const projectionError = projection?.error || journal?.last_maintenance?.projection_error;
   const review = runtime?.tasks?.needs_review;
   const reviewCount = Array.isArray(review) ? review.length : review || 0;
   const status = !runtime ? error ? "Unavailable" : "Loading…" : state === "degraded" ? "Needs attention" : state === "starting" ? "Starting"
@@ -117,6 +120,8 @@ export function AgentRuntimeOverview({ restartRequired, settingsNotice, onSettin
       {notice || settingsNotice ? <div className="success-strip" role="status">{[notice, settingsNotice].filter(Boolean).join(" ")}</div> : null}
       {runtime?.needs_restart || restartRequired ? <div className="warning-strip">{running ? "Settings saved. Restart the Agent to apply them." : "Settings saved. They will apply when the Agent starts."}</div> : null}
       {runtime?.error ? <p className="task-error-copy" role="alert">{runtime.error}</p> : null}
+      {projection && <p>Diary backlog: {journal?.backlog ?? 0}. Relationship and note backlog: {projection.backlog ?? "unknown"}.</p>}
+      {projectionError && <p role="alert">Memory update deferred: {projectionError}</p>}
       {reviewCount ? <div className="warning-strip"><a href="/tasks">{reviewCount} task{reviewCount === 1 ? "" : "s"} need checking.</a> Review the result before retrying.</div> : null}
       {logsOpen ? <div className="channel-log-panel">
         <div className="channel-log-header"><span>Agent logs · Auto refresh</span><IconButton title="Close logs" onClick={() => { logsSequence.current += 1; setLogs(null); }}><X size={15} /></IconButton></div>

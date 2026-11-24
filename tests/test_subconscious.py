@@ -596,6 +596,27 @@ class FixedIntervalTests(unittest.IsolatedAsyncioTestCase):
         result = SubconsciousLoop._parse_subconscious_json('```json\n{"note": null, "message": null}\n```')
         self.assertEqual(result, {'note': None, 'message': None})
 
+    async def test_result_receipt_survives_restart_and_allows_definite_rejection_retry(self):
+        from xagent.core.runtime.subconscious import SubconsciousDelivery
+        from xagent.core.runtime.task_receipts import DeliveryUncertainError, DeliveryRejectedError
+
+        contact = ContactEntry("api", "alice", {"user_id": "alice"}, "")
+        delivery = SubconsciousDelivery("result", contact, "", datetime.now())
+        for source, outcome in [(7, DeliveryUncertainError("ack lost")), (8, DeliveryRejectedError("offline"))]:
+            sink = AsyncMock(side_effect=outcome)
+            agent = Agent(client=object(), workspace=self.tmp.name)
+            loop = SubconsciousLoop(agent, workspace=Path(self.tmp.name), delivery_sink=sink)
+            loop._source_ids.add(source)
+            with self.assertRaises(type(outcome)):
+                await loop._deliver_once(delivery, loop._request_version(), source)
+            sink.side_effect = None
+            restarted = SubconsciousLoop(Agent(client=object(), workspace=self.tmp.name),
+                                         workspace=Path(self.tmp.name), delivery_sink=sink)
+            restarted._source_ids.add(source)
+            status = await restarted._deliver_once(delivery, restarted._request_version(), source)
+            self.assertEqual(status, "already_attempted" if source == 7 else "sent")
+            self.assertEqual(sink.await_count, 1 if source == 7 else 2)
+
     async def test_real_context_and_history_survive_restart(self):
         agent = Agent(client=object(), workspace=self.tmp.name)
         calls = []

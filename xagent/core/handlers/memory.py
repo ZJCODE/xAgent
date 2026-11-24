@@ -939,8 +939,20 @@ class MemoryHandler:
                 "status": receipt["status"], "commit_id": receipt["commit_id"],
                 "finished_at": receipt.get("completed_at"),
             }
+        projection = {}
+        try:
+            state = await asyncio.to_thread(self.projector._load)
+            cursor = state["cursor"]
+            if type(cursor) is int:
+                projection = {"cursor": cursor, "backlog": max(0, self._last_processed_message_id - cursor),
+                              "pending_write": state["pending"] is not None}
+            else:
+                projection["migration_pending"] = True
+        except (ValueError, OSError) as exc:
+            projection["error"] = str(exc)
         return {
             "cursor": self._last_processed_message_id,
+            "projection": projection,
             "latest_cursor": latest_cursor,
             "backlog": max(0, latest_cursor - self._last_processed_message_id),
             "pending_commit": bool(receipt and receipt["status"] == "prepared"),
