@@ -36,7 +36,7 @@ class JournalLLMServicePromptTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("do not include `#` or `##` headings", prompt)
         self.assertNotIn("Tell today's story", prompt)
         self.assertNotIn("diary must remain sufficient", prompt)
-        self.assertIn("decisions and their reasons", prompt)
+        self.assertIn("single moment I would still want to recall tomorrow", prompt)
         self.assertIn("Use names or pronouns naturally", prompt)
         self.assertNotIn("Preserve durable details and uncertainty", prompt)
         self.assertIn("Keep uncertainty visible", prompt)

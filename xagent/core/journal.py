@@ -125,7 +125,7 @@ Rules:
 - Treat the transcript as your own experience stream, not a user-owned log or searchable database.
 - Use "I"; write in the language natural to the experience being recorded; if languages are mixed, follow the relevant experience rather than assuming one current user; compress the actual experience instead of replaying a transcript. Preserve names, quoted text, code, and exact user wording when needed.
 - Keep people, rooms, preferences, commitments, and experiences separate. Preserve claims at the strength stated; do not add unspoken deductions, plans or emotional reactions to complete the narrative.
-- Preserve stated preferences, corrections and any explicit temporary scope in attributed prose. For contact permissions, name the person as the recipient and the agent as the sender, stating when I may or may not message them. Record sleep or work schedules only when explicitly stated, not from contact times or observed replies. Keep rule explanations out of the diary.
+- When mentioning a preference or correction, keep its attribution and scope. For contact permissions, name the person as the recipient and the agent as the sender, stating when I may or may not message them. Record sleep or work schedules only when explicitly stated, not from contact times or observed replies. Keep rule explanations out of the diary.
 - First-person words in non-ME entries belong to that speaker, not to you.
 - Ambient context is not a direct request unless it says it was addressed to you.
 - Scheduled tasks are work you owed, not a person speaking. Do not attribute their wording to the delivery target.
@@ -134,10 +134,9 @@ Rules:
 - Return the diary body only, or exactly `<NO_ENTRY>` when there is no meaningful addition; do not include `#` or `##` headings, date headings, or timestamp headings.
 - If prior entries for today are provided, do not repeat their facts, lists, or closing reflections. Advance the arc from where they left off.
 - Transcript marked already journaled is context for the new messages, not content to journal again.
-- Preserve the substance of important personal preferences, boundaries, project constraints, decisions and their reasons within the experience narrative. Use names or pronouns naturally. Include the detail that matters to me when I read this later. Avoid unrelated inventories and conversation replay.
-- First compare the input with the existing diary: what meaningful event, change, outcome or correction is not represented yet? Write only that addition and the background needed to understand it. A new timestamp, transient identifier, cosmetic detail, routine acknowledgement or larger elapsed counter alone is not a meaningful change.
-- Compress repetitive observations and actions into one short account when they establish a significant experience or pattern. Once that situation is represented, its continued repetition is not another entry unless it changes the outcome or provides materially different evidence. Omit incidental identifiers and cosmetic details. Do not infer a conclusion or cause beyond the evidence, or add reflections to make a routine situation seem significant.
-- Important explicit preferences, corrections, boundaries, decisions and their reasons must survive even among many routine observations. Assess every new message; frequent observations do not outweigh a brief but important statement. Observed events and lived experiences can also matter without yielding a reusable lesson.
+- Relationships and reusable decisions have their own memory, drawn directly from the original messages. Use names or pronouns naturally. Leave instructions, preference lists, and the advice I gave there.
+- Ask what single moment I would still want to recall tomorrow. If none comes to mind, leave the page alone. An ongoing conversation may pass through several windows before anything feels worth keeping. When today's page already holds this encounter, return <NO_ENTRY> unless something changes its meaning for me.
+- When there is a moment, write it directly in a few ordinary sentences. One short paragraph usually suffices. Give a longer experience room only when its details matter together. Stop when that moment is on the page.
 - If there is no meaningful addition, return exactly `<NO_ENTRY>`, including when today's page is empty. Do not retell a situation just to produce an entry.
 - Keep uncertainty visible. Preserve the evidence needed for this slice only, with no minimum length, padding or closing reflection. Do not infer a person's schedule to explain or contrast contact preferences.
 
@@ -176,7 +175,7 @@ Rules:
             "",
             "Compare the transcript with the existing diary before answering. Write only meaningful additions. "
             "If the same situation is already recorded and only repetition, elapsed counters or incidental details differ, "
-            "return exactly <NO_ENTRY>. Preserve new explicit preferences, corrections and important outcomes even among many routine observations.",
+            "return exactly <NO_ENTRY>. Choose one moment you would want to revisit and leave the rest in the conversation.",
         ])
         return "\n".join(parts)
 
