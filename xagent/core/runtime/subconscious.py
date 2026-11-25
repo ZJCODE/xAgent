@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import uuid
 import json
 import logging
 import os
@@ -231,7 +232,7 @@ class SubconsciousLoop:
     """Periodic subconscious thought loop for the agent.
 
     At a fixed interval, reflect once while the foreground is idle.
-    Optional notes go to the diary; optional messages go to the existing
+    Optional notes enter the journal window; optional messages go to the existing
     delivery sink. No persistent psychological or delivery-count state.
     """
 
@@ -261,7 +262,8 @@ class SubconsciousLoop:
         self._thinking = False
         self._delivery_retries = SUBCONSCIOUS_DELIVERY_RETRIES
         self._delivery_retry_delay_seconds = SUBCONSCIOUS_DELIVERY_RETRY_DELAY_SECONDS
-        self._last_diary_note = ""
+        self._source_ids: set[int] = set()
+        self._last_private_note = ""
 
     # ------------------------------------------------------------------
     # Public API
@@ -334,11 +336,10 @@ class SubconsciousLoop:
                     delivery_status = "unavailable"
                 else:
                     try:
-                        await self._deliver_with_retries(SubconsciousDelivery(
+                        delivery_status = await self._deliver_once(SubconsciousDelivery(
                             content=message["text"], recipient=recipient,
                             internal_content=note or "", created_at=datetime.now(),
-                        ), expected_version=version)
-                        delivery_status = "sent"
+                        ), version, message.get("source_id"))
                     except InterruptedError:
                         delivery_status = "interrupted"
                         return
@@ -455,12 +456,18 @@ class SubconsciousLoop:
             prompt_registry=getattr(message_handler, "prompt_registry", None),
         )
         sources = []
+        self._source_ids.clear()
         for msg in recent_messages[-hot_window:]:
             metadata = getattr(msg, "metadata", None) or {}
             source = metadata.get("source") or (
                 "subconscious" if metadata.get("subconscious") else "unknown"
             )
+            cursor = metadata.get(AgentConfig.MESSAGE_STORAGE_CURSOR_KEY)
+            if type(cursor) is int and getattr(getattr(msg, "role", None), "value", None) in {"environment", "user"}:
+                self._source_ids.add(cursor)
             sources.append({
+                "id": cursor,
+                "excerpt": str(getattr(msg, "content", "") or "")[:120],
                 "timestamp": getattr(msg, "timestamp", None),
                 "sender": getattr(msg, "sender_id", None),
                 "channel": getattr(msg, "channel", None),
@@ -554,11 +561,18 @@ class SubconsciousLoop:
         if note is not None and not isinstance(note, str):
             raise SubconsciousOutputError("note must be text or null")
         if message is not None:
-            if (not isinstance(message, dict) or set(message) != {"recipient", "text"}
+            if (not isinstance(message, dict) or set(message) - {"recipient", "text", "source_id"} or not {"recipient", "text"} <= set(message)
                     or any(not isinstance(message[k], str) or not message[k].strip()
                            for k in ("recipient", "text"))):
                 raise SubconsciousOutputError("message must contain recipient and text")
-            message = {k: v.strip() for k, v in message.items()}
+            source_id = message.get("source_id")
+            message = {k: message[k].strip() for k in ("recipient", "text")}
+            if source_id is not None:
+                if isinstance(source_id, str) and source_id.isascii() and source_id.isdecimal():
+                    source_id = int(source_id)
+                if type(source_id) is not int or source_id <= 0:
+                    raise SubconsciousOutputError("Invalid result record ID")
+                message["source_id"] = source_id
         return {"note": (note.strip() or None) if note else None, "message": message}
 
     @staticmethod
@@ -628,29 +642,25 @@ class SubconsciousLoop:
             return ""
 
     async def _write_subconscious_thought(self, content: str) -> str:
-        """Record the raw inner thought directly in the diary, skipping verbatim repeats."""
+        """Record an inner experience, skipping verbatim repeats."""
         note = str(content or "").strip()
         if not note or self._looks_like_subconscious_payload(note):
             if note:
                 self._logger.warning("Refusing to write subconscious JSON payload to diary")
             return "skipped"
         normalized_note = " ".join(note.split())
-        if normalized_note and normalized_note == self._last_diary_note:
+        if normalized_note and normalized_note == self._last_private_note:
             self._logger.debug("Skipping duplicate subconscious diary note")
             return "skipped"
 
-        writer = (
-            getattr(self._agent, "record_subconscious_thought", None)
-            or getattr(getattr(self._agent, "memory_handler", None), "append_daily_entry", None)
-            or getattr(getattr(self._agent, "markdown_memory", None), "append_daily", None)
-        )
+        writer = getattr(self._agent, "record_subconscious_thought", None)
         if not callable(writer):
             return "skipped"
         try:
             res = writer(note)
             if inspect.isawaitable(res):
                 await res
-            self._last_diary_note = normalized_note
+            self._last_private_note = normalized_note
             return "written"
         except Exception:
             self._logger.warning("Failed to record subconscious thought in diary", exc_info=True)
@@ -659,6 +669,28 @@ class SubconsciousLoop:
     @staticmethod
     def _contact_key(channel: str, user_id: str) -> str:
         return f"{channel.strip().lower()}:{user_id.strip()}"
+
+    async def _deliver_once(self, delivery, version, source_id):
+        storage = getattr(self._agent, "message_storage", None)
+        if not hasattr(storage, "reserve_proactive_send"):
+            await self._deliver_with_retries(delivery, expected_version=version)
+            return "sent"
+        if source_id is not None and source_id not in self._source_ids:
+            raise SubconsciousOutputError("Result record is outside the current context")
+        recipient = self._contact_key(delivery.recipient.channel, delivery.recipient.user_id)
+        source = str(source_id) if source_id is not None else uuid.uuid4().hex
+        if not await asyncio.to_thread(storage.reserve_proactive_send, recipient, source):
+            return "already_attempted"
+        try:
+            await self._deliver_with_retries(delivery, expected_version=version)
+        except (ValueError, DeliveryRejectedError, InterruptedError):
+            await asyncio.to_thread(storage.finish_proactive_send, recipient, source, "rejected")
+            raise
+        except Exception:
+            await asyncio.to_thread(storage.finish_proactive_send, recipient, source, "unknown")
+            raise
+        await asyncio.to_thread(storage.finish_proactive_send, recipient, source, "accepted")
+        return "sent"
 
     async def _deliver_with_retries(self, delivery: SubconsciousDelivery, *, expected_version: int) -> None:
         """Deliver a subconscious thought, retrying transient sink failures."""

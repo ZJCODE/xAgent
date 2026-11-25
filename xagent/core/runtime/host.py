@@ -795,7 +795,7 @@ class RuntimeHost:
             return result.model_dump()
 
         @app.get("/runtime/events")
-        async def subscribe(request: Request, user_id: str):
+        async def subscribe(request: Request, user_id: str, resume: bool = False):
             queue = asyncio.Queue(maxsize=128)
             class Subscriber:
                 async def send_json(self, payload):
@@ -806,6 +806,8 @@ class RuntimeHost:
                 stopping = asyncio.create_task(self._stop_event.wait())
                 incoming = None
                 try:
+                    if resume:
+                        yield json.dumps({"type": "subscribed"}) + "\n"
                     while not self._stop_event.is_set() and not await request.is_disconnected():
                         incoming = asyncio.create_task(queue.get())
                         done, _ = await asyncio.wait({incoming, stopping}, timeout=15.0,

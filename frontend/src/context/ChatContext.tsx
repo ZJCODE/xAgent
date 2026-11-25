@@ -8,7 +8,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { getAgentInfo, stopChat, uploadWorkspaceFile, workspaceBlobUrl } from "../lib/api";
+import { getAgentInfo, getPushHistory, stopChat, uploadWorkspaceFile, workspaceBlobUrl } from "../lib/api";
 import { insertUserBeforeRunningReply, placeQueuedFollowup, placeSteeredUser } from "../lib/chatOrder";
 import type { AgentCapabilities, AttachmentAsset, ChatEvent, ChatMessage, ChatPanelState, ChatSettings } from "../types";
 import { makeId } from "../lib/format";
@@ -90,6 +90,8 @@ function imageAssetUrls(images: AttachmentAsset[] = []): string[] {
 }
 
 type ScheduledMessagePayload = {
+  metadata?: Record<string, unknown>;
+  recipient_id?: string;
   content?: unknown;
   attachments?: AttachmentAsset[];
   images?: AttachmentAsset[];
@@ -124,12 +126,14 @@ function appendPushMessage(setPanel: (updater: (panel: ChatPanelState) => ChatPa
   const imageCount = imageUrls ? imageUrls.length || undefined : scheduledMessage?.image_count;
   const attachmentCount = attachments ? attachments.length || undefined : scheduledMessage?.attachment_count;
   if (!content && !imageUrls?.length && !attachments?.length && !imageCount && !attachmentCount) return;
-  setPanel((current) => ({
+  const cursor = scheduledMessage?.metadata?.storage_cursor;
+  const id = typeof cursor === "number" ? `push:${scheduledMessage?.recipient_id}:${cursor}` : makeId("push");
+  setPanel((current) => current.messages.some(message => message.id === id) ? current : ({
     ...current,
     messages: [
       ...current.messages,
       {
-        id: makeId(event.type === "subconscious_message" ? "subconscious" : "scheduled"),
+        id,
         role: "assistant",
         content,
         images: imageUrls,
@@ -220,6 +224,22 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     let socket: WebSocket | null = null;
     let reconnectTimer: number | undefined;
     let reconnectAttempt = 0;
+    let cursor: number | undefined;
+    const catchUp = async (connection: WebSocket) => {
+      try {
+        while (!disposed && connection === socket) {
+          const page = await getPushHistory(userId, cursor);
+          if (disposed || connection !== socket) return;
+          for (const message of page.messages) {
+            appendPushMessage(setPanel, { type: message.metadata?.subconscious ? "subconscious_message" : "scheduled_message", message });
+          }
+          cursor = page.cursor;
+          if (!page.has_more) return;
+        }
+      } catch {
+        if (!disposed && connection === socket) connection.close();
+      }
+    };
 
     const scheduleReconnect = () => {
       if (disposed || reconnectTimer !== undefined) return;
@@ -233,8 +253,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
     const connect = () => {
       if (disposed) return;
-      socket = new WebSocket(webSocketUrl(`/ws/tasks?user_id=${encodeURIComponent(userId)}`));
+      socket = new WebSocket(webSocketUrl(`/ws/tasks?user_id=${encodeURIComponent(userId)}&resume=1`));
 
+      const connection = socket;
       socket.addEventListener("open", () => {
         reconnectAttempt = 0;
       });
@@ -246,7 +267,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         } catch {
           return;
         }
-        appendPushMessage(setPanel, parsed);
+        if (parsed.type === "subscribed") void catchUp(connection);
+        else appendPushMessage(setPanel, parsed);
       });
 
       socket.addEventListener("close", () => {

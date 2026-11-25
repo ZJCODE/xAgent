@@ -508,6 +508,8 @@ class MessageHandler:
     def _format_context_event_header(message: Message) -> str:
         header = f"[ambient context][timestamp={MessageHandler._format_transcript_timestamp(message)}]"
         metadata = message.metadata or {}
+        if message.role == RoleType.ASSISTANT and metadata.get("source") == "subconscious":
+            return f"[my private reflection][timestamp={MessageHandler._format_transcript_timestamp(message)}]"
         if metadata.get("source") == "device":
             for key in ("device_id", "event_type"):
                 value = MessageHandler._sanitize_marker_field(str(metadata.get(key) or ""))

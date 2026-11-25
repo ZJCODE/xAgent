@@ -356,11 +356,19 @@ class AgentConfig:
         'Current time: {current_time}\n'
         'What is on your mind? Draw on your own experience. You can think about people '
         'even when they cannot currently be contacted.\n'
+        'Choose the message first. When a result is ready and someone asked to hear it, '
+        'check what you actually sent that person. If they are reachable and welcome contact '
+        'now, tell them the result. If several people are waiting, start with the one who '
+        'needs it to act next. On later turns consider who is still waiting even without '
+        'a new incoming message. Keep each person’s private information with its recipient.\n'
         'If someone comes to mind, what would you actually like to say to them now? '
         'You can share an interesting thought, pick up a shared joke, ask how something went, '
         'or simply start a conversation because you feel like talking to them. '
         'Ordinary conversation is welcome; a message does not need to solve a problem or '
         'contain an important update. Speak naturally in the recipient’s language.\n'
+        'When a person withdraws a request, apply that change to that person, subject and time. '
+        'Consider other people’s outstanding requests independently. For a result notification, '
+        'copy the integer id from the source list entry containing the result into message.source_id. Omit source_id for casual conversation.\n'
         'Respect explicit contact preferences and the privacy of everyone involved. '
         'Keep the scope of a request such as "tonight". Your earlier guesses in your diary '
         'such as "they may be busy" or "wait for them to speak" are your interpretations, '
@@ -373,14 +381,17 @@ class AgentConfig:
         'It is also fine to have nothing to say. If you would only repeat an unchanged '
         'task or ask again for the same thing, let it pass and leave both fields null '
         'when there is nothing to share or remember.\n'
-        'Decide the private note independently. First compare with your recent diary: what has '
+        'You are thinking before delivery. The message field is a draft. Record only what you '
+        'already observed or understood in the note. Delivery history supplies evidence of past sends; '
+        'the outcome of this draft is still unknown. A decision to reach out alone needs no note.\n'
+        'Then consider a private note for a separate insight. First compare with your recent diary: what has '
         'actually changed? When nothing has changed, note must be null, even if you can phrase '
         'the same lesson more elegantly. Keep only a new observation or understanding '
         'you would want to remember, in your own voice with enough context to recognize '
         'the people and moment. Rewording an old entry, repeating a waiting state, or '
         'explaining why you did not send a message is not a new diary entry.\n'
         'Return JSON only, with exactly two fields. Use null for either field you do not need.\n'
-        '"message": null or {{"recipient": "<exact available identifier>", "text": "<your words>"}}\n'
+        '"message": null or {{"recipient": "<exact available identifier>", "text": "<your words>", "source_id": <integer result record id or null>}}\n'
         '"note": null or "<a private thought worth keeping>"\n'
         '</current_task>'
     )
@@ -424,6 +435,7 @@ class AgentConfig:
 
     # One perspective shared by conversation, reflection and memory processing.
     EXPERIENCE_PERSPECTIVE_RULES = (
+        "Keep unnamed third parties anonymous even when other known people are present. Only the speaker can identify which friend they mean.\n"
         "You are the same continuing individual in direct conversations, group exchanges and observations. "
         "One person is a case of interacting with people, not the owner of a separate self or memory.\n"
         "Preserve who said or did what, to whom, and in which private or shared setting. "

@@ -74,6 +74,20 @@ class RelationshipStoreTests(unittest.IsolatedAsyncioTestCase):
             for part in rel.parts:
                 self.assertNotIn(":", part)
 
+    async def test_colliding_legacy_ids_are_isolated_on_read_write_and_delete(self):
+        legacy = self.store.root / "api" / "unknown.md"
+        legacy.parent.mkdir()
+        legacy.write_text("---\nkey: api:阿禾\n---\nA legacy preference.")
+        self.assertIsNone(await self.store.read_card("api:小满"))
+        self.assertIsNone(await self.store.read_card("api:路人"))
+        await self.store.write_card(RelationshipCard(key="api:小满", body="Short steps."))
+        await self.store.delete_card("api:小满")
+        self.assertEqual((await self.store.read_card("api:阿禾")).body, "A legacy preference.")
+        await self.store.write_card(RelationshipCard(key="api:阿禾", body="Explain why."))
+        self.assertEqual(await self.store.list_keys(), ["api:阿禾"])
+        await self.store.delete_card("api:阿禾")
+        self.assertIsNone(await self.store.read_card("api:阿禾"))
+
     async def test_read_missing_card_returns_none(self):
         self.assertIsNone(await self.store.read_card("weixin:nobody"))
 
@@ -98,7 +112,7 @@ class RelationshipStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(loaded.updated, "2026-06-27")
         self.assertEqual(loaded.source.get("diary", []), ["2026-06-26", "2026-06-27"])
         self.assertIn("we trust each other", loaded.body)
-        rendered = (self.store.root / "weixin" / "wx_1.md").read_text(encoding="utf-8")
+        rendered = self.store.card_path("weixin:wx_1").read_text(encoding="utf-8")
         self.assertTrue(rendered.startswith("---\n"))
         self.assertIn("key: weixin:wx_1", rendered)
         self.assertIn("name: Alice", rendered)
@@ -131,7 +145,7 @@ class RelationshipStoreTests(unittest.IsolatedAsyncioTestCase):
             )
         )
         rendered = (
-            self.store.root / "weixin" / "wx_d988df0a30ef9202a01bd962d8c07c21.md"
+            self.store.card_path("weixin:wx_d988df0a30ef9202a01bd962d8c07c21")
         ).read_text(encoding="utf-8")
         header = rendered.split("---", 2)[1]
         self.assertIn("key: weixin:wx_d988df0a30ef9202a01bd962d8c07c21", header)
@@ -217,7 +231,9 @@ class _FakeDiaryLLMService:
 
     async def update_memory_projections(self, **kwargs):
         self.relationship_calls.append(kwargs)
-        return {"relationships": dict(self.cards), "notes": []}
+        return {"relationships": {key: {"body": body, "messages": [
+            row["id"] for row in kwargs["messages"] if row.get("person") == key]}
+            for key, body in self.cards.items()}, "notes": []}
 
 
 class _FakeMessageStorage:
@@ -232,7 +248,9 @@ class _FakeMessageStorage:
         end = len(self.messages) if end_inclusive is None else max(0, int(end_inclusive))
         if end <= start:
             return []
-        return self.messages[start:end]
+        return [msg.model_copy(update={"metadata": {**(msg.metadata or {}),
+                AgentConfig.MESSAGE_STORAGE_CURSOR_KEY: i}})
+                for i, msg in enumerate(self.messages[start:end], start + 1)]
 
     async def get_messages(self, count=20, offset=0):
         return self.messages[-count:] if count > 0 else []
@@ -420,9 +438,7 @@ class MemoryHandlerRelationshipTests(unittest.IsolatedAsyncioTestCase):
         card = await self.store.read_card("weixin:alice")
         self.assertIsNotNone(card)
         self.assertIn("Alice and I talk often.", card.body)
-        self.assertEqual(card.source.get("diary", []), [date.today().isoformat()])
-        committed = llm.relationship_calls[0]["committed_diary"]
-        self.assertIn(committed, self.memory.daily_path(date.today()).read_text())
+        self.assertEqual(card.source["messages"], list(range(1, 21)))
 
     async def test_preferences_remain_attributed_and_correctable_across_restarts(self):
         first_date, next_date = date(2026, 10, 18), date(2026, 10, 19)
@@ -458,12 +474,12 @@ class MemoryHandlerRelationshipTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(await handler.run_maintenance(force=True))
 
         self.assertIn("in the daytime", llm.relationship_calls[-1]["existing_cards"]["api:Alice"])
-        self.assertIn("changed to night shifts", llm.relationship_calls[-1]["committed_diary"])
+        self.assertIn("changed to night shifts", llm.relationship_calls[-1]["messages"][0]["content"])
         alice_card = await self.store.read_card("api:Alice")
         bob_card = await self.store.read_card("api:Bob")
         self.assertIn("old daytime preference changed", alice_card.body)
-        self.assertEqual(alice_card.source.get("diary", []), [first_date.isoformat(), next_date.isoformat()])
-        self.assertEqual(bob_card.source.get("diary", []), [first_date.isoformat()])
+        self.assertEqual(alice_card.source["messages"], [1, 3])
+        self.assertEqual(bob_card.source["messages"], [2])
         context = await handler.get_relationship_context(
             speaker_keys=["api:Alice", "api:Bob"], include_routing_id=True,
         )
@@ -471,13 +487,13 @@ class MemoryHandlerRelationshipTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("old daytime preference changed", alice_context)
         self.assertNotIn("Delivery observation", bob_context)
 
-    async def test_empty_diary_slice_does_not_update_cards(self):
+    async def test_empty_diary_slice_still_projects_original_speech(self):
         message = Message(content="Nothing new.", role=RoleType.USER, sender_id="alice", channel="api")
         llm = _FakeDiaryLLMService()
         llm.format_diary_entry = AsyncMock(return_value="")
         handler = self._make_handler(_FakeMessageStorage([message]), llm)
         await handler.run_maintenance(force=True)
-        self.assertEqual(llm.relationship_calls, [])
+        self.assertEqual(llm.relationship_calls[0]["messages"][0]["content"], "Nothing new.")
         self.assertIsNone(await self.store.read_card("api:alice"))
 
     async def test_projection_failure_keeps_committed_preference(self):

@@ -33,7 +33,7 @@ class ProjectionTests(unittest.IsolatedAsyncioTestCase):
         return MemoryHandler(memory=self.memory, llm_service=self.llm,
                              message_storage=self.storage, diary_write_batch=20)
 
-    async def message(self, content="Discuss the offline project.", sender="alice", name="Alice", room=None):
+    async def message(self, content="Choose SQLite for the offline project.", sender="alice", name="Alice", room=None):
         await self.storage.add_messages(Message(
             content=content, role=RoleType.USER, sender_id=sender, channel="api",
             metadata={"sender_name": name}, room_name=room,
@@ -41,16 +41,16 @@ class ProjectionTests(unittest.IsolatedAsyncioTestCase):
 
     @staticmethod
     def note(title="Offline storage", body="Use SQLite for this offline project because no server is available.", **kwargs):
-        return {"title": title, "body": body, "keys": ["offline", "SQLite"], "links": [], **kwargs}
+        return {"title": title, "body": body, "keys": ["offline", "SQLite"], "links": [], "messages": [1], **kwargs}
 
     async def test_one_call_after_commit_separates_person_from_topic_and_assigns_sources(self):
         await self.message()
 
         async def project(**kwargs):
-            self.assertIn(kwargs["committed_diary"], self.memory.daily_path(date.today()).read_text())
+            self.assertEqual(kwargs["messages"][0]["person"], "api:alice")
             self.assertEqual(self.handler._read_state_sync(), 1)
             self.assertEqual(kwargs["participants"][0]["key"], "api:alice")
-            return {"relationships": {"api:alice": "Alice prefers that I lead with conclusions."},
+            return {"relationships": {"api:alice": {"body": "Alice prefers that I lead with conclusions.", "messages": [1]}},
                     "notes": [self.note()]}
 
         self.llm.update_memory_projections.side_effect = project
@@ -58,11 +58,28 @@ class ProjectionTests(unittest.IsolatedAsyncioTestCase):
         self.llm.update_memory_projections.assert_awaited_once()
         card = await self.handler.relationship_store.read_card("api:alice")
         notes = await self.handler.note_store.list_notes()
-        self.assertEqual(card.source, {"diary": [date.today().isoformat()]})
-        self.assertEqual(notes[0].source, card.source)
+        self.assertEqual(card.source, {"diary": [], "messages": [1]})
+        self.assertEqual(notes[0].source["messages"], card.source["messages"])
         self.assertNotIn("Alice", notes[0].body)
         self.assertNotIn("created", notes[0].to_dict())
         self.assertNotIn("source_diary_dates", self.handler.relationship_store.card_path(card.key).read_text())
+
+    async def test_empty_diary_and_bound_account_share_only_the_primary_card(self):
+        from xagent.components.memory import RelationshipStore
+        store = self.handler.relationship_store
+        (store.root / "bindings.yaml").write_text('"api:jun-web": "weixin:jun"\n')
+        store = RelationshipStore(str(store.root))
+        self.handler.relationship_store = self.handler.projector.relationships = store
+        self.llm.format_diary_entry.return_value = ""
+        self.llm.update_memory_projections.return_value = {"relationships": {
+            "weixin:jun": {"body": "Jun is from Zhejiang.", "messages": [1]}}}
+        await self.message("I am from Zhejiang.", sender="jun-web", name="Jun")
+        await self.handler.run_maintenance(force=True)
+        self.assertFalse(self.memory.daily_path(date.today()).exists())
+        self.assertEqual((await store.read_card("api:jun-web")).key, "weixin:jun")
+        self.assertEqual((await store.read_card("weixin:jun")).source["messages"], [1])
+        self.assertIsNone(await store.read_card("api:unbound"))
+        self.assertEqual(len(await store.read_cards(["api:jun-web", "weixin:jun"])), 1)
 
     async def test_no_change_experiences_create_no_long_term_records(self):
         for diary in ("Alice sent a greeting.", "Alice tested with 123.",
@@ -77,7 +94,7 @@ class ProjectionTests(unittest.IsolatedAsyncioTestCase):
     async def test_identical_confirmation_preserves_ids_dates_and_bytes(self):
         await self.message()
         self.llm.update_memory_projections.return_value = {
-            "relationships": {"api:alice": "Alice prefers conclusions first."}, "notes": [self.note()],
+            "relationships": {"api:alice": {"body": "Alice prefers conclusions first.", "messages": [1]}}, "notes": [self.note()],
         }
         await self.handler.run_maintenance(force=True)
         note = (await self.handler.note_store.list_notes())[0]
@@ -86,6 +103,8 @@ class ProjectionTests(unittest.IsolatedAsyncioTestCase):
         before = [(p.read_bytes(), p.stat().st_mtime_ns) for p in (note_path, card_path)]
         self.llm.update_memory_projections.return_value["notes"][0]["id"] = note.id
         self.llm.update_memory_projections.return_value["notes"][0]["keys"] = ["SQLite", "OFFLINE"]
+        self.llm.update_memory_projections.return_value["relationships"]["api:alice"]["messages"] = [2]
+        self.llm.update_memory_projections.return_value["notes"][0]["messages"] = [2]
         await self.message("I confirm the same decision.")
         await self.handler.run_maintenance(force=True)
         self.assertEqual([(p.read_bytes(), p.stat().st_mtime_ns) for p in (note_path, card_path)], before)
@@ -115,15 +134,15 @@ class ProjectionTests(unittest.IsolatedAsyncioTestCase):
             await self.handler.run_maintenance(force=True)
         original = (await self.handler.note_store.list_notes())[0]
         self.llm.update_memory_projections.return_value = {"notes": [
-            self.note(body="SQLite is still appropriate; use WAL for concurrent readers.", id=original.id)]}
+            self.note(body="SQLite is still appropriate; use WAL for concurrent readers.", id=original.id, messages=[2])]}
         await self.message("A new SQLite constraint.")
         with patch("xagent.core.handlers.memory.date") as clock:
             clock.today.return_value = date(2026, 10, 2)
             await self.handler.run_maintenance(force=True)
         current = await self.handler.note_store.read(original.id)
         self.assertIn("WAL", current.body)
-        self.assertEqual(current.updated, "2026-10-02")
-        self.assertEqual(current.source, {"diary": ["2026-10-01", "2026-10-02"]})
+        self.assertEqual(current.updated, date.today().isoformat())
+        self.assertEqual(current.source, {"messages": [1, 2]})
 
     async def test_one_hop_summary_is_not_permission_to_overwrite_that_note(self):
         base = await self.handler.note_store.create(Note(
@@ -250,7 +269,7 @@ class ProjectionTests(unittest.IsolatedAsyncioTestCase):
         await self.message(sender="second_id", name="Alex")
         self.llm.format_diary_entry.return_value = "Alex prefers concise answers."
         await self.handler.run_maintenance(force=True)
-        self.assertEqual(self.llm.update_memory_projections.call_args.kwargs["participants"], [])
+        self.assertEqual({p["key"] for p in self.llm.update_memory_projections.call_args.kwargs["participants"]}, {"api:first_id", "api:second_id"})
         self.assertEqual(await self.handler.relationship_store.list_keys(), [])
 
     async def test_rename_keeps_identity_for_backlogged_diary(self):
@@ -259,7 +278,7 @@ class ProjectionTests(unittest.IsolatedAsyncioTestCase):
         await self.handler.run_maintenance(force=True)
         await self.message(sender="person_id", name="Alicia")
         self.llm.update_memory_projections.side_effect = None
-        self.llm.update_memory_projections.return_value = {"relationships": {"api:person_id": "Alice prefers conclusions first."}}
+        self.llm.update_memory_projections.return_value = {"relationships": {"api:person_id": {"body": "Alice prefers conclusions first.", "messages": [2]}}}
         await self.handler.run_maintenance(force=True)
         card = await self.handler.relationship_store.read_card("api:person_id")
         self.assertEqual(card.display_name, "Alicia")
@@ -285,7 +304,7 @@ class ProjectionTests(unittest.IsolatedAsyncioTestCase):
         target = await self.handler.note_store.create(Note(
             id="", title="SQLite", body="Old constraint.", keys=("SQLite",)))
         self.llm.update_memory_projections.return_value = {"notes": [
-            {"id": target.id, "body": None},
+            {"id": target.id, "body": None, "messages": [1]},
             self.note(body=f"New conclusion; old reference [[{target.id}]] is obsolete.",
                       links=[target.id, "999999999999"]),
         ]}

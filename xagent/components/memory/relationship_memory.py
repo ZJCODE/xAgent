@@ -16,6 +16,7 @@ policy.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import re
 from dataclasses import dataclass, field
@@ -117,6 +118,14 @@ class RelationshipStore:
 
     def __init__(self, relationships_dir: str) -> None:
         self.root = Path(relationships_dir).expanduser()
+        binding_file = self.root / "bindings.yaml"
+        self.bindings = yaml.safe_load(binding_file.read_text(encoding="utf-8")) if binding_file.exists() else {}
+        if not isinstance(self.bindings, dict) or any(
+            not isinstance(key, str) or not isinstance(target, str)
+            or not all(self.split_key(key)) or not all(self.split_key(target))
+            or target in self.bindings for key, target in self.bindings.items()
+        ):
+            raise ValueError("Relationship bindings must map channel:user_id directly to a primary channel:user_id")
         self._write_lock = asyncio.Lock()
         self.root.mkdir(parents=True, exist_ok=True)
 
@@ -142,25 +151,49 @@ class RelationshipStore:
         sanitized = _SLUG_UNSAFE.sub("_", value.strip()).strip("_") or "unknown"
         return sanitized[:64]
 
-    def card_path(self, key: str) -> Path:
-        channel, user_id = self.split_key(key)
-        return self.root / self._safe_segment(channel) / f"{self._safe_segment(user_id)}.md"
+    def primary_key(self, key: str) -> str:
+        return self.bindings.get(key, key)
 
-    # ------------------------------------------------------------------
-    # Read
-    # ------------------------------------------------------------------
+    def card_path(self, key: str) -> Path:
+        primary = self.primary_key(key)
+        channel, _ = self.split_key(primary)
+        folder = self._safe_segment(channel).strip(".") or "unknown"
+        digest = hashlib.sha256(primary.encode("utf-8")).hexdigest()
+        return self.root / folder / f"~{digest}.md"
+
+    def _candidate_paths(self, primary: str) -> list[Path]:
+        channel, user_id = self.split_key(primary)
+        paths = [self.card_path(primary)]
+        legacy_channel = self._safe_segment(channel)
+        if legacy_channel not in {".", ".."}:
+            paths.append(self.root / legacy_channel / f"{self._safe_segment(user_id)}.md")
+        return paths
+
+    def _owned_text(self, path: Path, primary: str) -> str:
+        text = self._read_text_sync(path)
+        if not text:
+            return ""
+        meta, _ = self._split_frontmatter(text)
+        owner = meta.get("key")
+        if not owner:
+            legacy = re.match(r'^<!-- rel key="([^"]+)"', text.lstrip())
+            owner = legacy.group(1) if legacy else None
+        return text if owner == primary else ""
 
     async def read_card(self, key: str) -> Optional[RelationshipCard]:
-        text = await asyncio.to_thread(self._read_text_sync, self.card_path(key))
-        if not text.strip():
-            return None
-        return self._parse(key, text)
+        primary = self.primary_key(key)
+        for path in self._candidate_paths(primary):
+            text = await asyncio.to_thread(self._owned_text, path, primary)
+            if text:
+                return self._parse(primary, text)
+        return None
 
     async def read_cards(self, keys: List[str]) -> List[RelationshipCard]:
         """Read multiple cards, preserving order and skipping missing ones."""
         cards: List[RelationshipCard] = []
         seen: set[str] = set()
         for key in keys:
+            key = self.primary_key(key)
             if not key or key in seen:
                 continue
             seen.add(key)
@@ -179,7 +212,7 @@ class RelationshipStore:
             key = str(meta.get("key") or "").strip()
             if key:
                 keys.append(key)
-        return keys
+        return list(dict.fromkeys(keys))
 
     # ------------------------------------------------------------------
     # Write
@@ -188,6 +221,11 @@ class RelationshipStore:
     async def write_card(self, card: RelationshipCard) -> Path:
         """Write (overwrite) a person's relationship card atomically."""
         path = self.card_path(card.key)
+        if self.primary_key(card.key) != card.key:
+            from dataclasses import replace
+            key = self.primary_key(card.key)
+            channel, user_id = self.split_key(key)
+            card = replace(card, key=key, channel=channel, user_id=user_id)
         rendered = self._render(card)
         async with self._write_lock:
             await asyncio.to_thread(self._write_atomic_sync, path, rendered)
@@ -196,7 +234,10 @@ class RelationshipStore:
 
     async def delete_card(self, key: str) -> None:
         async with self._write_lock:
-            await asyncio.to_thread(self._delete_sync, self.card_path(key))
+            primary = self.primary_key(key)
+            for path in reversed(self._candidate_paths(primary)):
+                if await asyncio.to_thread(self._owned_text, path, primary):
+                    await asyncio.to_thread(self._delete_sync, path)
 
     # ------------------------------------------------------------------
     # Render / parse
@@ -212,6 +253,8 @@ class RelationshipStore:
         source_dates = self.normalize_diary_dates(card.source.get("diary"))
         if source_dates:
             frontmatter["source"] = {"diary": source_dates}
+        if card.source.get("messages"):
+            frontmatter.setdefault("source", {})["messages"] = card.source["messages"]
         header = yaml.safe_dump(
             frontmatter,
             sort_keys=False,
@@ -235,7 +278,7 @@ class RelationshipStore:
             channel=channel,
             user_id=user_id,
             updated=str(meta.get("updated") or "").strip(),
-            source={"diary": self.normalize_diary_dates(
+            source={**({"messages": meta["source"]["messages"]} if isinstance(meta.get("source"), dict) and meta["source"].get("messages") else {}), "diary": self.normalize_diary_dates(
                 (meta.get("source") or {}).get("diary")
                 if isinstance(meta.get("source"), dict) else None
             )},

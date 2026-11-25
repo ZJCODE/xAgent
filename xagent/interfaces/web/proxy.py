@@ -173,9 +173,12 @@ async def _local_websocket(websocket: WebSocket, path: str, root: Path, logger) 
                 return
             client = RuntimeClient(root)
             user_id = websocket.query_params.get("user_id") or "web_user"
+            params = {"user_id": user_id}
+            if websocket.query_params.get("resume") == "1":
+                params["resume"] = "1"
             async def notifications():
                 async with client._client(timeout=None) as transport:
-                    async with transport.stream("GET", "/runtime/events", params={"user_id": user_id}) as response:
+                    async with transport.stream("GET", "/runtime/events", params=params) as response:
                         response.raise_for_status()
                         async for line in response.aiter_lines():
                             if line.strip():

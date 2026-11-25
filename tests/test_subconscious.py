@@ -104,7 +104,7 @@ class ContactManagementTests(unittest.TestCase):
 
 
 class AgentSubconsciousThoughtTests(unittest.IsolatedAsyncioTestCase):
-    async def test_record_subconscious_thought_appends_diary_without_message(self):
+    async def test_record_subconscious_thought_enters_journal_window(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             agent = Agent(client=object(), workspace=tmpdir)
 
@@ -113,9 +113,11 @@ class AgentSubconsciousThoughtTests(unittest.IsolatedAsyncioTestCase):
             entries = await agent.markdown_memory.read_recent_dailies(days=1)
             self.assertEqual(result.kind, "subconscious_thought")
             self.assertEqual(result.event_type, "subconscious_thought")
-            self.assertEqual(await agent.message_storage.get_latest_message_cursor(), 0)
-            self.assertEqual(len(entries), 1)
-            self.assertIn("raw inner thought", entries[0][1])
+            self.assertEqual(entries, [])
+            event, = await agent.message_storage.get_messages(1)
+            self.assertEqual(event.content, "raw inner thought")
+            self.assertEqual(event.metadata["source"], "subconscious")
+            self.assertTrue(agent.memory_handler._is_memory_worthy_experience(event))
 
     async def test_record_subconscious_thought_skips_json_payload(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -593,6 +595,27 @@ class FixedIntervalTests(unittest.IsolatedAsyncioTestCase):
                 SubconsciousLoop._parse_subconscious_json(text)
         result = SubconsciousLoop._parse_subconscious_json('```json\n{"note": null, "message": null}\n```')
         self.assertEqual(result, {'note': None, 'message': None})
+
+    async def test_result_receipt_survives_restart_and_allows_definite_rejection_retry(self):
+        from xagent.core.runtime.subconscious import SubconsciousDelivery
+        from xagent.core.runtime.task_receipts import DeliveryUncertainError, DeliveryRejectedError
+
+        contact = ContactEntry("api", "alice", {"user_id": "alice"}, "")
+        delivery = SubconsciousDelivery("result", contact, "", datetime.now())
+        for source, outcome in [(7, DeliveryUncertainError("ack lost")), (8, DeliveryRejectedError("offline"))]:
+            sink = AsyncMock(side_effect=outcome)
+            agent = Agent(client=object(), workspace=self.tmp.name)
+            loop = SubconsciousLoop(agent, workspace=Path(self.tmp.name), delivery_sink=sink)
+            loop._source_ids.add(source)
+            with self.assertRaises(type(outcome)):
+                await loop._deliver_once(delivery, loop._request_version(), source)
+            sink.side_effect = None
+            restarted = SubconsciousLoop(Agent(client=object(), workspace=self.tmp.name),
+                                         workspace=Path(self.tmp.name), delivery_sink=sink)
+            restarted._source_ids.add(source)
+            status = await restarted._deliver_once(delivery, restarted._request_version(), source)
+            self.assertEqual(status, "already_attempted" if source == 7 else "sent")
+            self.assertEqual(sink.await_count, 1 if source == 7 else 2)
 
     async def test_real_context_and_history_survive_restart(self):
         agent = Agent(client=object(), workspace=self.tmp.name)

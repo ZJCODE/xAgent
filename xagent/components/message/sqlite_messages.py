@@ -109,6 +109,28 @@ class MessageStorage:
             """
         )
 
+        connection.execute("""CREATE INDEX IF NOT EXISTS idx_messages_event ON messages(
+            json_extract(message_json, '$.metadata.event_id'), json_extract(message_json, '$.metadata.event_scope'))""")
+        connection.execute("""CREATE INDEX IF NOT EXISTS idx_messages_delivery ON messages(
+            json_extract(message_json, '$.metadata.delivery_key'))""")
+        connection.execute("""CREATE TABLE IF NOT EXISTS proactive_receipts (
+            recipient TEXT NOT NULL, source TEXT NOT NULL, status TEXT NOT NULL,
+            PRIMARY KEY(recipient, source))""")
+
+    def reserve_proactive_send(self, recipient: str, source: str) -> bool:
+        with self._connect() as connection:
+            result = connection.execute(
+                "INSERT OR IGNORE INTO proactive_receipts VALUES (?, ?, 'sending')", (recipient, source))
+            return result.rowcount == 1
+
+    def finish_proactive_send(self, recipient: str, source: str, status: str) -> None:
+        with self._connect() as connection:
+            if status == "rejected":
+                connection.execute("DELETE FROM proactive_receipts WHERE recipient=? AND source=?", (recipient, source))
+            else:
+                connection.execute("UPDATE proactive_receipts SET status=? WHERE recipient=? AND source=?",
+                                   (status, recipient, source))
+
     async def add_messages(
         self,
         messages: MessageBatch,
@@ -273,6 +295,7 @@ class MessageStorage:
     def _clear_messages_sync(self) -> None:
         with self._connect() as connection:
             connection.execute(f"DELETE FROM {MessageStorageConfig.TABLE_NAME}")
+            connection.execute("DELETE FROM proactive_receipts")
             connection.commit()
 
     async def get_message_count(self) -> int:
