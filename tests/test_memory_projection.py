@@ -314,6 +314,36 @@ class ProjectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(current.links, ())
         self.assertNotIn("[[", current.body)
 
+    async def test_missing_projection_state_with_existing_memory_does_not_rebuild(self):
+        """Copied historical memory without operational cursors must not rebuild."""
+        from datetime import timedelta
+        historical_day = date.today() - timedelta(days=4)
+        await self.memory.append_daily(
+            "Existing diary entry that already produced notes",
+            target_date=historical_day,
+        )
+        existing = await self.handler.note_store.create(Note(
+            id="", title="Keep me", body="Already projected conclusion.", keys=("keep",)))
+        for index in range(5):
+            await self.message(content=f"historical {index}")
+        projection_path = self.handler.projector.path
+        if projection_path.exists():
+            projection_path.unlink()
+        cursor_path = self.memory.root / ".journal_cursor"
+        if cursor_path.exists():
+            cursor_path.unlink()
+        self.handler = self.make_handler()
+
+        await self.handler.run_maintenance(force=True)
+
+        self.llm.update_memory_projections.assert_not_awaited()
+        self.llm.format_diary_entry.assert_not_awaited()
+        notes = await self.handler.note_store.list_notes()
+        self.assertEqual([note.id for note in notes], [existing.id])
+        state = json.loads(projection_path.read_text(encoding="utf-8"))
+        self.assertEqual(state["cursor"], 5)
+        self.assertEqual(self.handler._read_state_sync(), 5)
+
 
 class ProjectionModelTests(unittest.IsolatedAsyncioTestCase):
     async def test_invalid_json_and_types_are_errors_not_no_change(self):

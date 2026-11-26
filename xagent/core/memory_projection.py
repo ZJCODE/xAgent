@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -20,6 +21,8 @@ from xagent.components.memory.note_memory import (
 from xagent.core.config import AgentConfig
 from xagent.core.inbox import is_scheduled_work
 from xagent.core.journal_commits import atomic_write_bytes, digest, read_bytes
+
+logger = logging.getLogger(__name__)
 
 _ENTRY = re.compile(r"(?m)^## \d{4}-\d{2}-\d{2} \d{2}:\d{2}\s*$")
 _WIKI = re.compile(r"\[\[\s*(\d{12})\s*\]\]")
@@ -194,10 +197,43 @@ class MemoryProjector:
                     used += size
         return people, cards, existing, related, allowed
 
-    async def migrate(self, processed: int) -> None:
-        """Finish the old diary stream once, before accepting new message windows."""
+    def _projection_files_exist(self) -> bool:
+        """True when notes or relationship cards already exist on disk."""
+        for dirname in (AgentConfig.NOTES_DIRNAME, AgentConfig.RELATIONSHIPS_DIRNAME):
+            directory = self.root / dirname
+            if directory.exists() and any(
+                path.is_file() and path.stat().st_size > 0
+                for path in directory.rglob("*.md")
+            ):
+                return True
+        return False
+
+    async def migrate(self, processed: int, *, adopt_without_rebuild: bool = False) -> None:
+        """Finish the old diary stream once, before accepting new message windows.
+
+        A missing projection state with ``cursor is None`` is not a license to
+        rebuild notes/relationships from the whole diary when those files already
+        exist, or when the journal cursor was just adopted for copied memory.
+        Legacy dict cursors still finish their diary-byte stream. Direct diary
+        appends on a fresh agent (no notes yet) still project through the
+        diary-byte walk.
+        """
         state = await asyncio.to_thread(self._load)
         if isinstance(state["cursor"], int):
+            return
+        if state["cursor"] is None and (
+            adopt_without_rebuild or self._projection_files_exist()
+        ):
+            logger.warning(
+                "Projection cursor missing while established memory exists; "
+                "seeding cursor to %d without rebuilding projections",
+                processed,
+            )
+            await self._save({
+                "cursor": processed,
+                "pending": None,
+                "people": state.get("people") or {},
+            })
             return
         while await self.run():
             pass

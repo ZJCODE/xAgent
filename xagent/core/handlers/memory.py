@@ -323,10 +323,21 @@ class MemoryHandler:
                 healthy, recovered = await self._recover_pending_commit_locked()
                 if not healthy:
                     return False
-                await self.projector.migrate(self._last_processed_message_id)
-                result = await self._run_maintenance_locked(
-                    force=force, trigger=trigger, recovered=recovered
+                # Missing operational cursors must not rebuild history from
+                # copied message + memory trees. Seed forward first so migrate
+                # and projection inherit the same caught-up point.
+                bootstrapped = await self._bootstrap_missing_journal_cursor_locked()
+                await self.projector.migrate(
+                    self._last_processed_message_id,
+                    adopt_without_rebuild=bootstrapped,
                 )
+                if bootstrapped:
+                    self._last_maintenance["status"] = "bootstrapped"
+                    result = recovered
+                else:
+                    result = await self._run_maintenance_locked(
+                        force=force, trigger=trigger, recovered=recovered
+                    )
                 # Catch up even when no new message window is due. Projection
                 # failures never roll back diary commits or stop later ones.
                 try:
@@ -1106,6 +1117,73 @@ class MemoryHandler:
         except (ValueError, OSError) as exc:
             logger.warning("Failed to read journal cursor: %s", exc)
             return 0
+
+    def _journal_cursor_file_exists(self) -> bool:
+        return self._state_path().is_file()
+
+    def _daily_diary_has_content(self) -> bool:
+        daily_root = self.memory.root / "daily"
+        if not daily_root.exists():
+            return False
+        return any(
+            path.is_file() and path.stat().st_size > 0
+            for path in daily_root.rglob("*.md")
+        )
+
+    def _diary_has_historical_days(self) -> bool:
+        """True when durable daily files exist for a day other than today."""
+        daily_root = self.memory.root / "daily"
+        if not daily_root.exists():
+            return False
+        today = date.today().isoformat()
+        for path in daily_root.rglob("*.md"):
+            if not path.is_file() or path.stat().st_size <= 0:
+                continue
+            if path.stem != today:
+                return True
+        return False
+
+    def _projection_files_exist(self) -> bool:
+        for dirname in (AgentConfig.NOTES_DIRNAME, AgentConfig.RELATIONSHIPS_DIRNAME):
+            directory = self.memory.root / dirname
+            if directory.exists() and any(
+                path.is_file() and path.stat().st_size > 0
+                for path in directory.rglob("*.md")
+            ):
+                return True
+        return False
+
+    async def _bootstrap_missing_journal_cursor_locked(self) -> bool:
+        """Adopt the latest message cursor when copied memory lacks journal state.
+
+        Copying ``messages/`` + ``memory/`` without ``.journal_cursor`` used to
+        look like an empty checkpoint and trigger a full message rebuild into
+        today's diary. Seed forward only when durable memory looks established:
+        historical daily files, or projection files plus a backlog large enough
+        that maintenance would otherwise auto-drain.
+        """
+        if self._journal_cursor_file_exists():
+            return False
+        if self._last_processed_message_id != 0:
+            return False
+        latest_message_id = await self.message_storage.get_latest_message_cursor()
+        if latest_message_id <= 0:
+            return False
+        historical = self._diary_has_historical_days()
+        projected = self._projection_files_exist()
+        if not historical and not (
+            projected and latest_message_id >= self.diary_write_batch
+        ):
+            return False
+        logger.warning(
+            "Journal cursor missing while established memory exists; "
+            "seeding cursor to %d without rebuilding from messages",
+            latest_message_id,
+        )
+        if not await self._commit_processed_message_id(latest_message_id):
+            return False
+        self._last_maintenance["bootstrapped_cursor"] = latest_message_id
+        return True
 
     def _write_state_sync(self, cursor: int) -> None:
         atomic_write_bytes(self._state_path(), str(int(cursor)).encode("utf-8"))
