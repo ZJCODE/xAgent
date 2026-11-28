@@ -1272,6 +1272,73 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
         await self.handler.request_maintenance()
         self.handler.run_maintenance.assert_awaited_once()
 
+    async def test_missing_cursor_with_historical_memory_does_not_rebuild_from_messages(self):
+        """Copied messages + historical memory without .journal_cursor must not rebuild."""
+        historical_day = date.today() - timedelta(days=5)
+        await self.memory.append_daily(
+            "Pre-existing diary that must stay authoritative",
+            target_date=historical_day,
+        )
+        for index in range(40):
+            self.storage.append(Message(
+                role=RoleType.USER,
+                sender_id="alice",
+                content=f"historical {index}",
+                timestamp=1715000000.0 + index,
+            ))
+        self.assertFalse(self.handler._journal_cursor_file_exists())
+        self.assertEqual(self.handler._last_processed_message_id, 0)
+
+        wrote = await self.handler.run_maintenance(force=True)
+
+        self.assertFalse(wrote)
+        self.assertEqual(self.llm.diary_calls, [])
+        self.assertEqual(self.handler._last_processed_message_id, 40)
+        self.assertEqual(self.handler._read_state_sync(), 40)
+        self.assertEqual(
+            self.handler._last_maintenance.get("status"),
+            "bootstrapped",
+        )
+        diary = await self.memory.read_file(self.memory.daily_path(historical_day))
+        self.assertIn("Pre-existing diary that must stay authoritative", diary)
+        today_path = self.memory.daily_path(date.today())
+        if today_path.exists():
+            today_text = await self.memory.read_file(today_path)
+            self.assertNotIn("historical 0", today_text)
+
+    async def test_missing_cursor_with_today_diary_only_still_journals_new_messages(self):
+        """A live subconscious today-entry must not block the first journal commit."""
+        await self.memory.append_daily("Private thought before first journal window")
+        for index in range(3):
+            self.storage.append(Message(
+                role=RoleType.USER,
+                sender_id="alice",
+                content=f"live {index}",
+                timestamp=1715000000.0 + index,
+            ))
+
+        wrote = await self.handler.run_maintenance(force=True)
+
+        self.assertTrue(wrote)
+        self.assertEqual(len(self.llm.diary_calls), 1)
+        self.assertEqual(self.handler._last_processed_message_id, 3)
+
+    async def test_missing_cursor_without_diary_still_journals_live_backlog(self):
+        """Empty memory with a message backlog keeps normal catch-up behavior."""
+        for index in range(20):
+            self.storage.append(Message(
+                role=RoleType.USER,
+                sender_id="alice",
+                content=f"live {index}",
+                timestamp=1715000000.0 + index,
+            ))
+
+        wrote = await self.handler.run_maintenance(force=False)
+
+        self.assertTrue(wrote)
+        self.assertEqual(len(self.llm.diary_calls), 1)
+        self.assertGreater(self.handler._last_processed_message_id, 0)
+
 
 if __name__ == "__main__":
     unittest.main()
