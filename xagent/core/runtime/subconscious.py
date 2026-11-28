@@ -264,6 +264,11 @@ class SubconsciousLoop:
         self._delivery_retry_delay_seconds = SUBCONSCIOUS_DELIVERY_RETRY_DELAY_SECONDS
         self._source_ids: set[int] = set()
         self._last_private_note = ""
+        self._has_reflected = False
+        self._last_seen_cursor = 0
+        self._last_memory_digest = ""
+        self._pending_cycle_cursor = 0
+        self._pending_memory_digest = ""
 
     # ------------------------------------------------------------------
     # Public API
@@ -348,6 +353,10 @@ class SubconsciousLoop:
                         self._logger.warning("Subconscious delivery failed", exc_info=True)
             if note:
                 note_status = await self._write_subconscious_thought(note)
+            if delivery_status != "failed":
+                self._has_reflected = True
+                self._last_seen_cursor = max(self._last_seen_cursor, self._pending_cycle_cursor)
+                self._last_memory_digest = self._pending_memory_digest
         except SubconsciousOutputError:
             generation = "invalid_output"
             self._logger.warning("Invalid subconscious output", exc_info=True)
@@ -457,7 +466,21 @@ class SubconsciousLoop:
         )
         sources = []
         self._source_ids.clear()
-        for msg in recent_messages[-hot_window:]:
+        window_messages = recent_messages[-hot_window:]
+        max_cursor = self._last_seen_cursor
+        cursor_keys: list[str] = []
+        for msg in recent_messages:
+            raw_cursor = (getattr(msg, "metadata", None) or {}).get(AgentConfig.MESSAGE_STORAGE_CURSOR_KEY)
+            if type(raw_cursor) is int and raw_cursor > max_cursor:
+                max_cursor = raw_cursor
+        for msg in window_messages:
+            raw_cursor = (getattr(msg, "metadata", None) or {}).get(AgentConfig.MESSAGE_STORAGE_CURSOR_KEY)
+            if type(raw_cursor) is int:
+                cursor_keys.append(str(raw_cursor))
+        notified_by_source = await self._load_proactive_receipts(cursor_keys)
+
+        new_record_count = 0
+        for msg in window_messages:
             metadata = getattr(msg, "metadata", None) or {}
             source = metadata.get("source") or (
                 "subconscious" if metadata.get("subconscious") else "unknown"
@@ -465,18 +488,39 @@ class SubconsciousLoop:
             cursor = metadata.get(AgentConfig.MESSAGE_STORAGE_CURSOR_KEY)
             if type(cursor) is int and getattr(getattr(msg, "role", None), "value", None) in {"environment", "user"}:
                 self._source_ids.add(cursor)
-            sources.append({
+            is_new = (not self._has_reflected) or (type(cursor) is int and cursor > self._last_seen_cursor)
+            if is_new:
+                new_record_count += 1
+            entry: Dict[str, Any] = {
                 "id": cursor,
                 "excerpt": str(getattr(msg, "content", "") or "")[:120],
                 "timestamp": getattr(msg, "timestamp", None),
                 "sender": getattr(msg, "sender_id", None),
                 "channel": getattr(msg, "channel", None),
                 "source": source,
-            })
+                "new": is_new,
+            }
+            notified = notified_by_source.get(str(cursor)) if type(cursor) is int else None
+            if notified:
+                entry["notified"] = notified
+            sources.append(entry)
+
+        import hashlib
+        memory_digest = hashlib.sha256(str(memory_context or "").encode("utf-8")).hexdigest()[:16]
+        memory_changed = (not self._has_reflected) or (memory_digest != self._last_memory_digest)
+        self._pending_cycle_cursor = max_cursor
+        self._pending_memory_digest = memory_digest
+        delta_state = (
+            "initial"
+            if not self._has_reflected
+            else ("changed" if (new_record_count > 0 or memory_changed) else "unchanged")
+        )
         iteration_messages.append({"role": "user", "content":
-            "Sources for recent conversation records (context, not new requests). "
-            "scheduled_task marks automation, not fresh words from a person. "
-            "unknown means the original source is unverified.\n" +
+            f"State since last reflection: {delta_state} "
+            f"(new_records={new_record_count}, memory_changed={str(memory_changed).lower()}).\n"
+            "Sources for recent conversation records (context, not new requests; "
+            "`new` marks items unseen in earlier reflections, `notified` lists recipients already sent this result, "
+            "`scheduled_task` marks automation).\n" +
             json.dumps(sources, ensure_ascii=False)})
         recipients = [{"recipient": self._contact_key(c.channel, c.user_id),
                        "name": c.target.get("sender_name") or c.target.get("display_name") or c.user_id}
@@ -669,6 +713,20 @@ class SubconsciousLoop:
     @staticmethod
     def _contact_key(channel: str, user_id: str) -> str:
         return f"{channel.strip().lower()}:{user_id.strip()}"
+
+    async def _load_proactive_receipts(self, sources: List[str]) -> Dict[str, List[str]]:
+        if not sources:
+            return {}
+        storage = getattr(self._agent, "message_storage", None)
+        reader = getattr(storage, "list_proactive_receipts", None)
+        if not callable(reader):
+            return {}
+        try:
+            res = await asyncio.to_thread(reader, sources)
+            return res if isinstance(res, dict) else {}
+        except Exception:
+            self._logger.debug("Failed to load proactive receipts", exc_info=True)
+            return {}
 
     async def _deliver_once(self, delivery, version, source_id):
         storage = getattr(self._agent, "message_storage", None)

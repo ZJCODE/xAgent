@@ -637,3 +637,48 @@ class FixedIntervalTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([m.content for m in history], ['A useful update', 'A useful update'])
         self.assertIn('api:Alice', json.dumps(calls[0]['messages']))
         self.assertEqual(calls[0]['tool_specs'], [])
+
+    async def test_delta_tracking_and_proactive_receipt_annotation(self):
+        agent = Agent(client=object(), workspace=self.tmp.name)
+        stored = await agent.message_storage.add_messages(
+            Message(role=RoleType.USER, sender_id='alice', channel='api', content='Tell me when build finishes.')
+        )
+        first_cursor = stored[0].metadata[AgentConfig.MESSAGE_STORAGE_CURSOR_KEY]
+        calls = []
+        responses = [
+            {'note': None, 'message': {'recipient': 'api:alice', 'text': 'Build finished', 'source_id': first_cursor}},
+            {'note': None, 'message': None},
+            {'note': None, 'message': None},
+        ]
+
+        class Client:
+            async def model_turn_events(inner, **kwargs):
+                calls.append(kwargs)
+                payload = responses.pop(0)
+                yield ModelStreamEvent(type='text', delta=json.dumps(payload))
+
+        agent.model_client = Client()
+        sink = AsyncMock()
+        loop = SubconsciousLoop(agent, workspace=Path(self.tmp.name), interval_seconds=60,
+                                delivery_sink=sink, deliverable_channels={'api'})
+        loop.record_interaction('api', 'alice', {'user_id': 'alice', 'sender_name': 'Alice'})
+
+        loop._next_think_at = 0
+        await loop.maybe_think()
+        self.assertIn('State since last reflection: initial', calls[0]['messages'][-2]['content'])
+
+        loop._next_think_at = 0
+        await loop.maybe_think()
+        second_sources_msg = calls[1]['messages'][-2]['content']
+        self.assertIn('State since last reflection: unchanged (new_records=0, memory_changed=false).', second_sources_msg)
+        sources_payload = json.loads(second_sources_msg.split('\n', 2)[2])
+        self.assertFalse(sources_payload[0]['new'])
+        self.assertEqual(sources_payload[0]['notified'], ['api:alice'])
+
+        await agent.message_storage.add_messages(
+            Message(role=RoleType.USER, sender_id='alice', channel='api', content='Thanks! One more thing.')
+        )
+        loop._next_think_at = 0
+        await loop.maybe_think()
+        third_sources_msg = calls[2]['messages'][-2]['content']
+        self.assertIn('State since last reflection: changed (new_records=1, memory_changed=false).', third_sources_msg)

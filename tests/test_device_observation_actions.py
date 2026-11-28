@@ -166,3 +166,50 @@ class DeviceObservationActionTests(unittest.IsolatedAsyncioTestCase):
         result = await self.agent.observe("Ignored speech.", source="device")
         self.assertFalse(result.replied)
         self.assertIsNone(self.worker.task)
+
+    async def test_out_of_order_stale_observation_is_dropped_and_last_action_is_attached(self):
+        seen_devices = []
+        original = self.agent.decide_device_action
+
+        async def capture(observation, devices, tool_spec):
+            seen_devices.append(devices)
+            return await original(observation, devices, tool_spec)
+
+        self.agent.decide_device_action = capture
+        self.model.responses = [action(), (ReplyType.SIMPLE_REPLY, "Done.")]
+
+        fresh = Message(
+            content="Curtain call.",
+            role=RoleType.ENVIRONMENT,
+            timestamp=200.0,
+            metadata={"device_id": "desk", "event_type": "audience"},
+        )
+        self.worker.submit(fresh)
+        command = await self.socket.next_command()
+        await self.service.resolve_result(self.connection, DeviceResult(
+            type="result", command_id=command["command_id"], ok=True, data={"lights": "on"},
+        ))
+        await self.finish()
+
+        stale = Message(
+            content="Earlier noise.",
+            role=RoleType.ENVIRONMENT,
+            timestamp=150.0,
+            metadata={"device_id": "desk", "event_type": "audience"},
+        )
+        self.worker.submit(stale)
+        self.assertIsNone(self.worker.pending)
+        self.assertEqual(len(self.model.calls), 1)
+
+        newer = Message(
+            content="Post-curtain applause.",
+            role=RoleType.ENVIRONMENT,
+            timestamp=210.0,
+            metadata={"device_id": "desk", "event_type": "audience"},
+        )
+        self.worker.submit(newer)
+        await self.finish()
+        self.assertEqual(len(self.model.calls), 2)
+        desk_entry = next(d for d in seen_devices[-1]["devices"] if d["device_id"] == "desk")
+        self.assertEqual(desk_entry["last_action_result"]["capability"], "light.set")
+        self.assertEqual(desk_entry["last_action_result"]["status"], "success")

@@ -131,6 +131,22 @@ class MessageStorage:
                 connection.execute("UPDATE proactive_receipts SET status=? WHERE recipient=? AND source=?",
                                    (status, recipient, source))
 
+    def list_proactive_receipts(self, sources: Sequence[str]) -> Dict[str, List[str]]:
+        keys = [str(item).strip() for item in sources if str(item).strip()]
+        if not keys:
+            return {}
+        placeholders = ",".join("?" for _ in keys)
+        query = (
+            f"SELECT source, recipient FROM proactive_receipts "
+            f"WHERE source IN ({placeholders}) AND status != 'rejected' "
+            f"ORDER BY rowid ASC"
+        )
+        grouped: Dict[str, List[str]] = {}
+        with self._connect() as connection:
+            for row in connection.execute(query, keys):
+                grouped.setdefault(str(row["source"]), []).append(str(row["recipient"]))
+        return grouped
+
     async def add_messages(
         self,
         messages: MessageBatch,

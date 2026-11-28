@@ -16,14 +16,32 @@ class DeviceObservationWorker:
         self.pending = None
         self.generation = 0
         self.last_signature = None
+        self.last_timestamps = {}
+        self.last_actions = {}
         self.closed = False
+
+    @staticmethod
+    def _extract_timestamp(message):
+        metadata = getattr(message, "metadata", None) or {}
+        for candidate in (metadata.get("observed_at"), metadata.get("device_timestamp"), getattr(message, "timestamp", None)):
+            if isinstance(candidate, (int, float)):
+                return float(candidate)
+        return None
 
     def submit(self, message):
         if self.closed:
             return
-        signature = (message.metadata.get("device_id"), message.room_name,
-                     message.metadata.get("event_type"), message.content,
-                     json.dumps(message.metadata.get("data"), sort_keys=True, ensure_ascii=False))
+        metadata = getattr(message, "metadata", None) or {}
+        device_id = metadata.get("device_id")
+        observed_ts = self._extract_timestamp(message)
+        if device_id and observed_ts is not None:
+            previous_ts = self.last_timestamps.get(device_id)
+            if previous_ts is not None and observed_ts < previous_ts:
+                return
+            self.last_timestamps[device_id] = observed_ts
+        signature = (device_id, message.room_name,
+                     metadata.get("event_type"), message.content,
+                     json.dumps(metadata.get("data"), sort_keys=True, ensure_ascii=False))
         # Repeated samples during a decision are already represented in history.
         if self.task is not None and not self.task.done() and signature == self.last_signature:
             return
@@ -53,6 +71,16 @@ class DeviceObservationWorker:
                 devices = self.service.list_devices()
                 if not any(row.get("capabilities") for row in devices["devices"]):
                     continue
+                if self.last_actions:
+                    devices = {
+                        **devices,
+                        "devices": [
+                            {**row, "last_action_result": self.last_actions[row["device_id"]]}
+                            if row.get("device_id") in self.last_actions
+                            else row
+                            for row in devices["devices"]
+                        ],
+                    }
                 arguments = await asyncio.wait_for(
                     self.agent.decide_device_action(message, devices, self.tool.tool_spec), timeout=60,
                 )
@@ -72,6 +100,19 @@ class DeviceObservationWorker:
                 result = await tool(**arguments)
                 if result.get("code") == "action_context_changed" and self.pending is None:
                     self.pending = message
+                target_device_id = arguments.get("device_id")
+                if target_device_id and result.get("code") != "action_context_changed":
+                    self.last_actions[target_device_id] = {
+                        key: val
+                        for key, val in {
+                            "capability": arguments.get("capability"),
+                            "params": arguments.get("params"),
+                            "status": result.get("status"),
+                            "command_id": result.get("command_id"),
+                            "data": result.get("data"),
+                        }.items()
+                        if val is not None
+                    }
                 await self.agent.observe(
                     context=json.dumps({"event_type": "device_action_result", "request": arguments, "result": result}, ensure_ascii=False),
                     source="device_action", event_type="device_action_result",
