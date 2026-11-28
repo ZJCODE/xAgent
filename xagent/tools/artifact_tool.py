@@ -20,9 +20,7 @@ def create_attach_artifact_tool(*, workspace_dir: str):
     @function_tool(
         name="attach_artifact",
         description=(
-            "Deliver an existing workspace file as a structured artifact when the file itself should be shown or sent. "
-            "After delivery, finish any requested explanation or analysis in your reply; "
-            "an attachment caption does not replace that answer."
+            "Deliver an existing workspace file as a structured attachment."
         ),
         param_descriptions={
             "path": (

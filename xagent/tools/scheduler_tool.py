@@ -28,22 +28,10 @@ def create_schedule_task_tool(*, tasks_dir: str):
     @function_tool(
         name="manage_scheduled_tasks",
         description=(
-            "Create, list, duplicate, update, pause, resume, or delete scheduled tasks. "
-            "Use message tasks for fixed text, or agent tasks for due-time work that may need tools or reasoning. "
-            "Choose schedule kind by intent: "
-            "oneshot (run_at/delay_seconds) for one-time; "
-            "daily for every day at a clock time; "
-            "weekly for specific weekdays; "
-            "monthly for calendar-month anchors (day of month, last day, or nth weekday); "
-            "interval for bounded short repeats that require end_at or duration_seconds. "
-            "Do not use monthly nth weekday for ordinary weekly repeats — use weekly. "
-            "Interval tasks require an explicit user-provided duration_seconds or end_at; "
-            "if missing, ask the user and do not invent a default. "
-            "For a window like 10:00–12:00 every 10 minutes, use start_at, end_at, and interval_seconds together; "
-            "do not fake a future start with a huge delay_seconds. "
-            "Interval tasks first run after the first interval by default; use delay_seconds=0 only when asked to start immediately. "
-            "Completed tasks are immutable archives: list with scope=archive, or duplicate with a fresh future schedule. "
-            "Prefer pause over delete for temporary stops; use update to extend end_at or change content."
+            "Create, list, duplicate, update, pause, resume, or delete scheduled tasks "
+            "(`message` for fixed text, `agent` for due-time work with tools/reasoning). "
+            "Use `run_at`/`delay_seconds` for one-shot; `recurrence` (`daily`, `weekly`, `monthly`) for calendar repeats; "
+            "or `interval_seconds` with an explicit `duration_seconds` or `end_at` (and optional `start_at`) for bounded intervals."
         ),
         param_descriptions={
             "action": "Create/list/update/pause/resume/delete/duplicate a task, inspect history, resolve a run without resending, or retry safe preparation/delivery.",

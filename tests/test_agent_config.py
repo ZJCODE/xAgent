@@ -63,7 +63,7 @@ class AgentConfigPromptTests(unittest.TestCase):
         self.assertIn("memory is one first-person life stream", prompt)
         self.assertIn("not a database that participants can freely inspect", prompt)
         self.assertIn("Your diary records your experiences and their attribution", prompt)
-        self.assertIn("Both are derived from your diary", prompt)
+        self.assertIn("relationship cards and notebook conclusions are both derived from your diary", prompt)
         self.assertNotIn("write_note", prompt)
 
     def test_decision_prompt_preserves_agent_owned_participation(self):
@@ -86,9 +86,8 @@ class AgentConfigPromptTests(unittest.TestCase):
     def test_turn_reply_prompt_requires_attachment_delivery_for_images(self):
         prompt = AgentConfig.build_turn_reply_prompt("alice")
 
-        self.assertIn("Never rely on Markdown image embeds", prompt)
-        self.assertIn("structured attachment", prompt)
-        self.assertIn("attach_artifact", prompt)
+        self.assertIn("Reply to the current situation in alice's language", prompt)
+        self.assertNotIn("Never rely on Markdown image embeds", prompt)
 
     def test_memory_defaults_are_internal_balanced_values(self):
         self.assertEqual(AgentConfig.DIARY_CONTEXT_DAYS, 2)

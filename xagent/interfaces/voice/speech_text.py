@@ -5,18 +5,8 @@ import re
 from dataclasses import dataclass, field
 
 VOICE_CHANNEL_INSTRUCTIONS = (
-    "You are speaking aloud on a voice channel. The listener cannot see text, scroll back, "
-    "or open attachments.\n"
-    "- One idea per turn. Two or three short sentences unless the user explicitly asks for more.\n"
-    "- No lists, headings, markup, code, tables, or emoji. If the answer is inherently a list, "
-    "give the headline and offer to go through items one at a time.\n"
-    "- Do not read URLs, file paths, or IDs aloud; offer to send them on a text channel instead.\n"
-    "- Do not use attach_artifact or structured file delivery; offer to send files elsewhere.\n"
-    "- Speak numbers, dates, times, and units the way a person says them.\n"
-    "- Do not announce structure (for example \"three things:\"); the listener cannot see numbering.\n"
-    "- End with a question only when you actually want the floor back.\n"
-    "- Never mention the channel, the microphone, or that you cannot show files.\n"
-    "- Prefer a direct conversational answer; avoid long multi-step reasoning on voice unless asked."
+    "Live voice channel — you are speaking aloud in real time and the listener cannot see text or files.\n"
+    "Speak naturally for the ear; if a link, path, or file comes up, offer to send it on a text channel."
 )
 
 _STREAM_HOLD_CHARS = 8

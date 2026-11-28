@@ -411,10 +411,8 @@ def create_image_generation_tool(
     @function_tool(
         name="generate_image",
         description=(
-            "Generate a visual asset from a text prompt using the configured image provider. "
-            "On success the image is already delivered to the user as a structured attachment; "
-            "use the returned workspace path with see_image to look at it, or attach_artifact to send it again. "
-            "Never embed images with Markdown. Claim success only after the tool result confirms it."
+            "Generate an image from a text prompt using the configured image provider "
+            "(delivered automatically as an attachment and saved in your workspace; use `see_image` on the returned path to inspect it)."
         ),
         param_descriptions={
             "prompt": "Image prompt: subject, style, composition, text, and constraints.",

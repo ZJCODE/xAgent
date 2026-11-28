@@ -54,17 +54,12 @@ def _truncate(text: str, max_size: int) -> str:
 @function_tool(
     name="run_command",
     description=(
-        "Run a scoped shell command and return stdout, stderr, and exit code. "
-        "Default cwd is the agent workspace; routine reads and edits there are fine. "
-        "Prefer read-only inspection first. Get explicit approval before destructive "
-        "operations (large deletes, irreversible overwrites), sensitive work, or any "
-        "mutation outside the workspace. Never expose secrets. Output is capped and truncated."
+        "Run a shell command in your workspace and return stdout, stderr, and exit code "
+        "(default cwd is your workspace; output is capped and truncated)."
     ),
     param_descriptions={
-        "command": (
-            "Shell command to execute. Keep it specific and bounded."
-        ),
-        "working_directory": "Optional cwd; defaults to the agent workspace in standard runtimes.",
+        "command": "Shell command to execute.",
+        "working_directory": "Optional cwd inside your workspace.",
         "timeout": "Maximum seconds, 1-300. Defaults to 30.",
     },
 )

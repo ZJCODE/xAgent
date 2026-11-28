@@ -388,7 +388,8 @@ def capture_journal_outputs(agent):
 
     async def capture(**kwargs):
         output = await generate(**kwargs)
-        outputs.append({"kind": "projection" if kwargs["system_prompt"].startswith("Maintain two") else "diary",
+        is_projection = bool(kwargs.get("response_format")) or "memory projections" in kwargs.get("system_prompt", "")
+        outputs.append({"kind": "projection" if is_projection else "diary",
                         "output": output})
         return output
 

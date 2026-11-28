@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from xagent.core.tooling.executor import ToolExecutor
-from xagent.core.tooling.guards import ToolGuardResult, WorkspaceShellGuard
+from xagent.core.tooling.guards import ChannelModalityGuard, ToolGuardResult, WorkspaceShellGuard
 from xagent.core.tooling.manager import ToolManager
 from xagent.integrations.api import ApiChannelAdapter
 from xagent.integrations.devices.config import DeviceConfig
@@ -472,8 +472,9 @@ class DeviceConfigurationTests(unittest.TestCase):
             self.assertNotIn("device_list", runner.agent.tools)
             self.assertFalse(runner.device_service.accepting)
             self.assertTrue(runner.device_service.resources_closed)
-            self.assertEqual(len(runner.agent.tool_executor.guards), 1)
+            self.assertEqual(len(runner.agent.tool_executor.guards), 2)
             self.assertIsInstance(runner.agent.tool_executor.guards[0], WorkspaceShellGuard)
+            self.assertIsInstance(runner.agent.tool_executor.guards[1], ChannelModalityGuard)
 
     def test_standalone_gateway_command_is_removed(self):
         with patch("sys.stderr"), self.assertRaises(SystemExit):

@@ -330,15 +330,15 @@ class SubconsciousLoopTests(unittest.TestCase):
 
             names = {i.get("name") for i in instructions}
             self.assertIn(AgentConfig.CORE_INTERACTION_RULES_NAME, names)
-            self.assertIn(AgentConfig.CURRENT_MODE_NAME, names)
             self.assertIn(AgentConfig.IDENTITY_CONTEXT_NAME, names)
+            self.assertNotIn(AgentConfig.CURRENT_MODE_NAME, names)
             self.assertNotIn(AgentConfig.TOOL_POLICY_NAME, names)
             self.assertNotIn(AgentConfig.WORKSPACE_CONTEXT_NAME, names)
             self.assertNotIn(AgentConfig.SKILLS_CATALOG_NAME, names)
             self.assertNotIn(AgentConfig.CAPABILITY_LIMITS_NAME, names)
 
             contents = [i["content"] for i in instructions]
-            self.assertTrue(any("Context and Attribution" in c for c in contents))
+            self.assertTrue(any("**Context:**" in c for c in contents))
             self.assertTrue(any("already know what to call them" in c for c in contents))
             self.assertFalse(any("avoid unsolicited messages" in c for c in contents))
             self.assertFalse(any("worthy=true" in c for c in contents))
@@ -352,10 +352,6 @@ class SubconsciousLoopTests(unittest.TestCase):
             self.assertEqual(len(identities), 1)
             self.assertIn("I am a test identity.", identities[0]["content"])
 
-            modes = [i for i in instructions if i.get("name") == AgentConfig.CURRENT_MODE_NAME]
-            self.assertEqual(len(modes), 1)
-            self.assertIn('<current_mode name="private_reflection">', modes[0]["content"])
-            self.assertIn("<purpose>", modes[0]["content"])
             core = next(
                 i["content"] for i in instructions
                 if i.get("name") == AgentConfig.CORE_INTERACTION_RULES_NAME
