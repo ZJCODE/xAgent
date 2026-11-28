@@ -64,7 +64,7 @@ from .providers import (
     normalize_model_api,
     normalize_provider_name,
 )
-from .tooling import ToolExecutor, ToolManager
+from .tooling import ChannelModalityGuard, ToolExecutor, ToolManager
 from .tooling.guards import WorkspaceShellGuard
 from .working_context import (
     WorkingContextCompactor,
@@ -236,7 +236,7 @@ class Agent:
             message_storage=self.message_storage,
             client=self.client,
             observability=self.observability,
-            guards=[WorkspaceShellGuard(self.workspace_dir)],
+            guards=[WorkspaceShellGuard(self.workspace_dir), ChannelModalityGuard()],
             workspace_dir=self.workspace_dir,
         )
         self._inbox = AgentInbox()
@@ -498,8 +498,19 @@ class Agent:
             recent_messages=recent_messages,
         )
         notebook_context = await self._notebook_context_for_turn(user_msg)
-        tool_names = list(self.tool_manager._tools)
-        tool_specs = self.tool_manager.cached_tool_specs
+        turn_channel = getattr(user_msg, "channel", None)
+        select_names = getattr(self.tool_manager, "select_tool_names", None)
+        select_specs = getattr(self.tool_manager, "select_tool_specs", None)
+        tool_names = (
+            select_names(channel=turn_channel)
+            if callable(select_names)
+            else list(self.tool_manager._tools)
+        )
+        tool_specs = (
+            select_specs(channel=turn_channel)
+            if callable(select_specs)
+            else self.tool_manager.cached_tool_specs
+        )
         workspace_context = self._workspace_context(tool_names)
         skills_catalog = self._skills_catalog_context()
         instructions = msg_handler.build_instruction_messages(

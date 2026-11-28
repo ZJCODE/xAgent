@@ -4,6 +4,7 @@ from pathlib import Path
 
 from xagent.core.tooling.executor import ToolExecutor
 from xagent.core.tooling.guards import (
+    ChannelModalityGuard,
     ToolCallContext,
     ToolDecision,
     ToolGuardResult,
@@ -11,6 +12,7 @@ from xagent.core.tooling.guards import (
     WorkspaceShellGuard,
     resolve_workspace_cwd,
 )
+from xagent.core.tooling.manager import ToolManager
 from xagent.tools.shell_tool import create_workspace_run_command_tool
 
 from tests.test_agent_chat_flow import FakeToolCall, FakeToolManager, InMemoryMessageStorage
@@ -187,3 +189,36 @@ class ToolExecutorGuardTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(seen["channel"], "weixin")
         self.assertEqual(seen["room_name"], "Eng")
         self.assertEqual(seen["inbox_kind"], "user_turn")
+
+    async def test_channel_modality_filters_and_guards_attach_artifact_on_voice(self):
+        async def attach_artifact(path: str):
+            return path
+
+        attach_artifact.tool_spec = {"type": "function", "function": {"name": "attach_artifact"}}
+
+        async def web_search(query: str):
+            return query
+
+        web_search.tool_spec = {"type": "function", "function": {"name": "web_search"}}
+
+        manager = ToolManager(tools=[attach_artifact, web_search])
+        self.assertEqual(manager.select_tool_names(channel="api"), ["attach_artifact", "web_search"])
+        self.assertEqual(manager.select_tool_names(channel="voice"), ["web_search"])
+        self.assertEqual(
+            [s["function"]["name"] for s in manager.select_tool_specs(channel="voice")],
+            ["web_search"],
+        )
+
+        executor = ToolExecutor(
+            tool_manager=FakeToolManager(tools={"attach_artifact": attach_artifact}),
+            message_storage=InMemoryMessageStorage(),
+            client=None,
+            guards=[ChannelModalityGuard()],
+        )
+        messages = []
+        await executor.handle_tool_calls(
+            [FakeToolCall(name="attach_artifact", arguments='{"path": "a.pdf"}')],
+            messages,
+            channel="voice",
+        )
+        self.assertIn("unavailable on channel 'voice'", messages[-1]["content"])

@@ -1,13 +1,44 @@
 import asyncio
 import functools
 import logging
-from typing import Optional
+import os
+from typing import Dict, Optional
 
 from xagent.core.config import AgentConfig
 from xagent.core.tooling.guards import WorkspaceEscapeError, resolve_workspace_cwd
 from xagent.utils.tool_decorator import function_tool
 
 logger = logging.getLogger(__name__)
+
+_SECRET_ENV_SUFFIXES = (
+    "_API_KEY",
+    "_SECRET_KEY",
+    "_ACCESS_TOKEN",
+    "_AUTH_TOKEN",
+    "_BOT_TOKEN",
+)
+_SECRET_ENV_PREFIXES = (
+    "LANGFUSE_",
+    "WEIXIN_",
+    "XAGENT_SECRET",
+    "XAGENT_TOKEN",
+    "XAGENT_API_KEY",
+)
+
+
+def _build_subprocess_env() -> Dict[str, str]:
+    """Copy process env while stripping host provider and channel credentials."""
+    sanitized: Dict[str, str] = {}
+    for key, value in os.environ.items():
+        upper = key.upper()
+        if upper.endswith(_SECRET_ENV_SUFFIXES):
+            continue
+        if upper.startswith(_SECRET_ENV_PREFIXES) and any(
+            token in upper for token in ("KEY", "SECRET", "TOKEN", "PASSWORD")
+        ):
+            continue
+        sanitized[key] = value
+    return sanitized
 
 
 def _truncate(text: str, max_size: int) -> str:
@@ -105,6 +136,7 @@ async def _run_shell_command(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=cwd,
+            env=_build_subprocess_env(),
         )
         stdout_bytes, stderr_bytes = await asyncio.wait_for(
             process.communicate(), timeout=timeout

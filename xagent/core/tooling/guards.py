@@ -88,3 +88,21 @@ class WorkspaceShellGuard:
 
     async def post_execute(self, ctx: ToolCallContext, result: Any) -> Any:
         return result
+
+
+class ChannelModalityGuard:
+    """Block tools that cannot physically operate on the current channel."""
+
+    async def pre_execute(self, ctx: ToolCallContext) -> ToolGuardResult:
+        from .manager import CHANNEL_INCOMPATIBLE_TOOLS
+
+        channel_key = (ctx.channel or "").strip().lower()
+        excluded = CHANNEL_INCOMPATIBLE_TOOLS.get(channel_key, frozenset())
+        if ctx.name in excluded:
+            return ToolGuardResult.deny(
+                f"{ctx.name} is unavailable on channel {channel_key!r}"
+            )
+        return ToolGuardResult.allow()
+
+    async def post_execute(self, ctx: ToolCallContext, result: Any) -> Any:
+        return result

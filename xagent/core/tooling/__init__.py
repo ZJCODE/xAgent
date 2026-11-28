@@ -1,6 +1,7 @@
 from .manager import ToolManager
 from .executor import ToolExecutor
 from .guards import (
+    ChannelModalityGuard,
     ToolCallContext,
     ToolDecision,
     ToolGuardResult,
@@ -12,6 +13,7 @@ from .guards import (
 __all__ = [
     "ToolManager",
     "ToolExecutor",
+    "ChannelModalityGuard",
     "ToolCallContext",
     "ToolDecision",
     "ToolGuardResult",

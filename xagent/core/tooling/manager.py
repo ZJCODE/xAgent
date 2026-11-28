@@ -1,5 +1,10 @@
 import asyncio
-from typing import List, Optional
+from typing import Dict, FrozenSet, List, Optional
+
+
+CHANNEL_INCOMPATIBLE_TOOLS: Dict[str, FrozenSet[str]] = {
+    "voice": frozenset({"attach_artifact"}),
+}
 
 
 class ToolManager:
@@ -46,6 +51,22 @@ class ToolManager:
         tools = list(self._tools.values())
         self._tool_specs_cache = [fn.tool_spec for fn in tools] if tools else None
         self._cache_dirty = False
+
+    def select_tool_names(self, *, channel: Optional[str] = None) -> List[str]:
+        excluded = CHANNEL_INCOMPATIBLE_TOOLS.get((channel or "").strip().lower(), frozenset())
+        if not excluded:
+            return list(self._tools)
+        return [name for name in self._tools if name not in excluded]
+
+    def select_tool_specs(self, *, channel: Optional[str] = None) -> Optional[list]:
+        specs = self.cached_tool_specs
+        if not specs:
+            return None
+        excluded = CHANNEL_INCOMPATIBLE_TOOLS.get((channel or "").strip().lower(), frozenset())
+        if not excluded:
+            return specs
+        filtered = [spec for spec in specs if self._tool_spec_name(spec) not in excluded]
+        return filtered or None
 
     @staticmethod
     def _tool_spec_name(tool_spec: dict) -> str:
