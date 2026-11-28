@@ -266,9 +266,11 @@ class SubconsciousLoop:
         self._last_private_note = ""
         self._has_reflected = False
         self._last_seen_cursor = 0
-        self._last_memory_digest = ""
+        self._last_reflection_at: Optional[datetime] = None
         self._pending_cycle_cursor = 0
-        self._pending_memory_digest = ""
+        self._pending_reflection_at: Optional[datetime] = None
+        self._pending_was_quiet = False
+        self._drift_offset = 0
 
     # ------------------------------------------------------------------
     # Public API
@@ -356,7 +358,10 @@ class SubconsciousLoop:
             if delivery_status != "failed":
                 self._has_reflected = True
                 self._last_seen_cursor = max(self._last_seen_cursor, self._pending_cycle_cursor)
-                self._last_memory_digest = self._pending_memory_digest
+                if self._pending_reflection_at is not None:
+                    self._last_reflection_at = self._pending_reflection_at
+                if self._pending_was_quiet:
+                    self._drift_offset += 1
         except SubconsciousOutputError:
             generation = "invalid_output"
             self._logger.warning("Invalid subconscious output", exc_info=True)
@@ -437,6 +442,7 @@ class SubconsciousLoop:
         if message_handler is None:
             raise RuntimeError("Agent has no message_handler")
 
+        now = datetime.now().astimezone()
         working_context = await self._collect_working_context()
         hot_window = getattr(self._agent, "recent_messages", AgentConfig.DEFAULT_RECENT_MESSAGES)
         recent_messages = await message_handler.get_recent_messages(
@@ -446,6 +452,69 @@ class SubconsciousLoop:
         relationship_context = await self._collect_relationship_context(contacts, recent_messages)
         notebook_query = self._extract_notebook_recall_query(memory_context, recent_messages)
         notebook_context = await self._collect_notebook_context(notebook_query)
+
+        sources = []
+        self._source_ids.clear()
+        window_messages = recent_messages[-hot_window:]
+        max_cursor = self._last_seen_cursor
+        cursor_keys: list[str] = []
+        new_external_count = 0
+        for msg in recent_messages:
+            metadata = getattr(msg, "metadata", None) or {}
+            raw_cursor = metadata.get(AgentConfig.MESSAGE_STORAGE_CURSOR_KEY)
+            if type(raw_cursor) is int and raw_cursor > max_cursor:
+                max_cursor = raw_cursor
+            source = metadata.get("source") or (
+                "subconscious" if metadata.get("subconscious") else "unknown"
+            )
+            role_value = getattr(getattr(msg, "role", None), "value", None)
+            is_external = role_value in {"user", "environment"} and source != "subconscious"
+            if is_external:
+                if not self._has_reflected:
+                    if msg in window_messages:
+                        new_external_count += 1
+                elif type(raw_cursor) is int and raw_cursor > self._last_seen_cursor:
+                    new_external_count += 1
+
+        for msg in window_messages:
+            raw_cursor = (getattr(msg, "metadata", None) or {}).get(AgentConfig.MESSAGE_STORAGE_CURSOR_KEY)
+            if type(raw_cursor) is int:
+                cursor_keys.append(str(raw_cursor))
+        notified_by_source = await self._load_proactive_receipts(cursor_keys)
+
+        for msg in window_messages:
+            metadata = getattr(msg, "metadata", None) or {}
+            source = metadata.get("source") or (
+                "subconscious" if metadata.get("subconscious") else "unknown"
+            )
+            cursor = metadata.get(AgentConfig.MESSAGE_STORAGE_CURSOR_KEY)
+            if type(cursor) is int and getattr(getattr(msg, "role", None), "value", None) in {"environment", "user"}:
+                self._source_ids.add(cursor)
+            is_new = (not self._has_reflected) or (type(cursor) is int and cursor > self._last_seen_cursor)
+            entry: Dict[str, Any] = {
+                "id": cursor,
+                "excerpt": str(getattr(msg, "content", "") or "")[:120],
+                "timestamp": getattr(msg, "timestamp", None),
+                "sender": getattr(msg, "sender_id", None),
+                "channel": getattr(msg, "channel", None),
+                "source": source,
+                "new": is_new,
+            }
+            notified = notified_by_source.get(str(cursor)) if type(cursor) is int else None
+            if notified:
+                entry["notified"] = notified
+            sources.append(entry)
+
+        is_quiet_period = self._has_reflected and new_external_count == 0
+        if is_quiet_period:
+            notebook_context, relationship_context = await self._apply_quiet_associative_drift(
+                notebook_context=notebook_context,
+                relationship_context=relationship_context,
+            )
+
+        self._pending_cycle_cursor = max_cursor
+        self._pending_reflection_at = now
+        self._pending_was_quiet = is_quiet_period
 
         instructions = message_handler.build_instruction_messages(
             tool_names=[],
@@ -464,65 +533,15 @@ class SubconsciousLoop:
             include_images=False,
             workspace_dir=getattr(self._agent, "workspace_dir", None),
             task_mode="subconscious_json",
-            current_time=datetime.now().astimezone().isoformat(timespec="minutes"),
+            current_time=now.isoformat(timespec="minutes"),
             working_summary=working_context.summary,
             covers_through_cursor=working_context.covers_through_cursor,
             prompt_registry=getattr(message_handler, "prompt_registry", None),
         )
-        sources = []
-        self._source_ids.clear()
-        window_messages = recent_messages[-hot_window:]
-        max_cursor = self._last_seen_cursor
-        cursor_keys: list[str] = []
-        for msg in recent_messages:
-            raw_cursor = (getattr(msg, "metadata", None) or {}).get(AgentConfig.MESSAGE_STORAGE_CURSOR_KEY)
-            if type(raw_cursor) is int and raw_cursor > max_cursor:
-                max_cursor = raw_cursor
-        for msg in window_messages:
-            raw_cursor = (getattr(msg, "metadata", None) or {}).get(AgentConfig.MESSAGE_STORAGE_CURSOR_KEY)
-            if type(raw_cursor) is int:
-                cursor_keys.append(str(raw_cursor))
-        notified_by_source = await self._load_proactive_receipts(cursor_keys)
 
-        new_record_count = 0
-        for msg in window_messages:
-            metadata = getattr(msg, "metadata", None) or {}
-            source = metadata.get("source") or (
-                "subconscious" if metadata.get("subconscious") else "unknown"
-            )
-            cursor = metadata.get(AgentConfig.MESSAGE_STORAGE_CURSOR_KEY)
-            if type(cursor) is int and getattr(getattr(msg, "role", None), "value", None) in {"environment", "user"}:
-                self._source_ids.add(cursor)
-            is_new = (not self._has_reflected) or (type(cursor) is int and cursor > self._last_seen_cursor)
-            if is_new:
-                new_record_count += 1
-            entry: Dict[str, Any] = {
-                "id": cursor,
-                "excerpt": str(getattr(msg, "content", "") or "")[:120],
-                "timestamp": getattr(msg, "timestamp", None),
-                "sender": getattr(msg, "sender_id", None),
-                "channel": getattr(msg, "channel", None),
-                "source": source,
-                "new": is_new,
-            }
-            notified = notified_by_source.get(str(cursor)) if type(cursor) is int else None
-            if notified:
-                entry["notified"] = notified
-            sources.append(entry)
-
-        import hashlib
-        memory_digest = hashlib.sha256(str(memory_context or "").encode("utf-8")).hexdigest()[:16]
-        memory_changed = (not self._has_reflected) or (memory_digest != self._last_memory_digest)
-        self._pending_cycle_cursor = max_cursor
-        self._pending_memory_digest = memory_digest
-        delta_state = (
-            "initial"
-            if not self._has_reflected
-            else ("changed" if (new_record_count > 0 or memory_changed) else "unchanged")
-        )
+        cadence_line = self._format_reflection_cadence(now=now, new_external_count=new_external_count)
         iteration_messages.append({"role": "user", "content":
-            f"State since last reflection: {delta_state} "
-            f"(new_records={new_record_count}, memory_changed={str(memory_changed).lower()}).\n"
+            f"{cadence_line}\n"
             "Sources for recent conversation records (context, not new requests; "
             "`new` marks items unseen in earlier reflections, `notified` lists recipients already sent this result, "
             "`scheduled_task` marks automation).\n" +
@@ -536,6 +555,99 @@ class SubconsciousLoop:
             json.dumps(recipients, ensure_ascii=False)})
         input_messages = message_handler.sanitize_input_messages(list(iteration_messages))
         return instructions, input_messages
+
+    def _format_reflection_cadence(self, *, now: datetime, new_external_count: int) -> str:
+        event_noun = "event" if new_external_count == 1 else "events"
+        if not self._has_reflected or self._last_reflection_at is None:
+            return (
+                f"Reflection cadence: first quiet moment since startup · "
+                f"External activity in view: {new_external_count} {event_noun}."
+            )
+        elapsed = self._format_elapsed((now - self._last_reflection_at).total_seconds())
+        last_ts = self._last_reflection_at.strftime("%Y-%m-%d %H:%M")
+        if new_external_count == 0:
+            return (
+                f"Last reflection: {elapsed} ago ({last_ts}) · "
+                "External environment since then: quiet (0 new external events)."
+            )
+        return (
+            f"Last reflection: {elapsed} ago ({last_ts}) · "
+            f"External environment since then: {new_external_count} new external {event_noun}."
+        )
+
+    @staticmethod
+    def _format_elapsed(seconds: float) -> str:
+        total_minutes = max(0, int(round(seconds / 60.0)))
+        if total_minutes < 1:
+            return "<1m"
+        hours, minutes = divmod(total_minutes, 60)
+        if hours == 0:
+            return f"{minutes}m"
+        if minutes == 0:
+            return f"{hours}h"
+        return f"{hours}h {minutes}m"
+
+    async def _apply_quiet_associative_drift(
+        self,
+        *,
+        notebook_context: str,
+        relationship_context: str,
+    ) -> tuple[str, str]:
+        """Surface one passing memory from older notes/relationships during quiet moments."""
+        from ..handlers.memory import MemoryHandler
+
+        memory_handler = getattr(self._agent, "memory_handler", None)
+        note_store = getattr(self._agent, "note_store", None) or getattr(memory_handler, "note_store", None)
+        list_notes = getattr(note_store, "list_notes", None)
+        if inspect.iscoroutinefunction(list_notes):
+            try:
+                all_notes = await list_notes()
+                live_notes = [n for n in (all_notes or []) if not getattr(n, "is_empty", False)]
+                shown = [n for n in live_notes if f"({n.id})" in notebook_context]
+                unseen = [n for n in live_notes if f"({n.id})" not in notebook_context]
+                if unseen:
+                    shown_ids = {n.id for n in shown}
+                    linked_ids = {link for n in shown for link in getattr(n, "links", ())}
+                    neighbours = [
+                        n for n in unseen
+                        if n.id in linked_ids or bool(set(getattr(n, "links", ())) & shown_ids)
+                    ]
+                    pool = neighbours or unseen
+                    chosen = pool[self._drift_offset % len(pool)]
+                    row = MemoryHandler._format_notebook_row(chosen)
+                    drift_block = f"[Passing association from earlier notes]\n{row}"
+                    notebook_context = f"{notebook_context}\n\n{drift_block}" if notebook_context else drift_block
+            except Exception:
+                self._logger.debug("Failed to collect associative notebook drift", exc_info=True)
+
+        rel_store = getattr(self._agent, "relationship_store", None) or getattr(memory_handler, "relationship_store", None)
+        list_keys = getattr(rel_store, "list_keys", None)
+        get_rel_ctx = getattr(memory_handler, "get_relationship_context", None)
+        if inspect.iscoroutinefunction(list_keys) and inspect.iscoroutinefunction(get_rel_ctx):
+            try:
+                all_keys = await list_keys()
+                unseen_keys = [
+                    key for key in (all_keys or [])
+                    if f"[person: {key}]" not in relationship_context
+                ]
+                if unseen_keys:
+                    chosen_key = unseen_keys[self._drift_offset % len(unseen_keys)]
+                    drifted_card = (
+                        await get_rel_ctx(
+                            speaker_keys=[chosen_key],
+                            max_cards=1,
+                            include_routing_id=True,
+                        )
+                    ).strip()
+                    if drifted_card:
+                        drift_rel = f"[Passing recollection of someone you know]\n{drifted_card}"
+                        relationship_context = (
+                            f"{relationship_context}\n\n{drift_rel}" if relationship_context else drift_rel
+                        )
+            except Exception:
+                self._logger.debug("Failed to collect associative relationship drift", exc_info=True)
+
+        return notebook_context, relationship_context
 
     async def _collect_working_context(self):
         """Collect rolling working context summary if the agent provides one."""

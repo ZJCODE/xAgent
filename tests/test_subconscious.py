@@ -223,7 +223,9 @@ class SubconsciousLoopTests(unittest.TestCase):
             current_task = next(msg for msg in messages if msg.get("name") == AgentConfig.CURRENT_TASK_NAME)
             self.assertIn('mode="subconscious_json"', current_task["content"])
             self.assertIn("Return JSON only", current_task["content"])
-            self.assertIn("leave both fields null", current_task["content"])
+            self.assertIn("even when the outside world is quiet, time is still passing", current_task["content"])
+            self.assertIn("move the thought somewhere new, or leave `note` null", current_task["content"])
+            self.assertNotIn("When nothing has changed", current_task["content"])
             self.assertIn('"note"', current_task["content"])
             self.assertIn('"message"', current_task["content"])
             self.assertIn("exact identifier", messages[-1]["content"])
@@ -642,7 +644,7 @@ class FixedIntervalTests(unittest.IsolatedAsyncioTestCase):
         first_cursor = stored[0].metadata[AgentConfig.MESSAGE_STORAGE_CURSOR_KEY]
         calls = []
         responses = [
-            {'note': None, 'message': {'recipient': 'api:alice', 'text': 'Build finished', 'source_id': first_cursor}},
+            {'note': 'I should also check why that build felt slower than usual.', 'message': {'recipient': 'api:alice', 'text': 'Build finished', 'source_id': first_cursor}},
             {'note': None, 'message': None},
             {'note': None, 'message': None},
         ]
@@ -661,12 +663,20 @@ class FixedIntervalTests(unittest.IsolatedAsyncioTestCase):
 
         loop._next_think_at = 0
         await loop.maybe_think()
-        self.assertIn('State since last reflection: initial', calls[0]['messages'][-2]['content'])
+        self.assertIn('Reflection cadence: first quiet moment since startup · External activity in view: 1 event.', calls[0]['messages'][-2]['content'])
 
+        # Wait for the background diary schedule or let private reflection sit in storage:
+        # the agent's own [my private reflection] is in <recent_experience> yet does NOT count as external noise.
         loop._next_think_at = 0
         await loop.maybe_think()
         second_sources_msg = calls[1]['messages'][-2]['content']
-        self.assertIn('State since last reflection: unchanged (new_records=0, memory_changed=false).', second_sources_msg)
+        self.assertIn('External environment since then: quiet (0 new external events).', second_sources_msg)
+        self.assertNotIn('unchanged', second_sources_msg)
+        second_experience = next(
+            m['content'] for m in calls[1]['messages'] if m.get('name') == AgentConfig.RECENT_EXPERIENCE_NAME
+        )
+        self.assertIn('[my private reflection]', second_experience)
+        self.assertIn('build felt slower than usual', second_experience)
         sources_payload = json.loads(second_sources_msg.split('\n', 2)[2])
         self.assertFalse(sources_payload[0]['new'])
         self.assertEqual(sources_payload[0]['notified'], ['api:alice'])
@@ -677,4 +687,74 @@ class FixedIntervalTests(unittest.IsolatedAsyncioTestCase):
         loop._next_think_at = 0
         await loop.maybe_think()
         third_sources_msg = calls[2]['messages'][-2]['content']
-        self.assertIn('State since last reflection: changed (new_records=1, memory_changed=false).', third_sources_msg)
+        self.assertIn('External environment since then: 1 new external event.', third_sources_msg)
+
+    async def test_quiet_period_associative_drift_surfaces_older_notes_and_people(self):
+        from xagent.components.memory import Note, RelationshipCard
+
+        agent = Agent(client=object(), workspace=self.tmp.name)
+        await agent.note_store.write(Note(
+            id='202605010900',
+            title='Raft election timeout tuning',
+            body='Jitter prevents split votes on lossy links.',
+            keys=('raft',),
+            links=('202604101200',),
+        ))
+        await agent.note_store.write(Note(
+            id='202604101200',
+            title='Clock drift on edge nodes',
+            body='Monotonic clocks still skew across suspend cycles.',
+            keys=('ntp-skew',),
+        ))
+        await agent.note_store.write(Note(
+            id='202603011800',
+            title='Rainy Sunday tea shop',
+            body='Quiet corner table near the window.',
+            keys=('oolong-tea',),
+        ))
+        await agent.relationship_store.write_card(
+            RelationshipCard(key='api:alice', display_name='Alice', body='Working together on consensus.')
+        )
+        await agent.relationship_store.write_card(
+            RelationshipCard(key='weixin:old_friend', display_name='Lin', body='Talked about photography in spring.')
+        )
+        await agent.message_storage.add_messages(
+            Message(role=RoleType.USER, sender_id='alice', channel='api', content='Let us check raft timeouts.')
+        )
+
+        calls = []
+
+        class Client:
+            async def model_turn_events(inner, **kwargs):
+                calls.append(kwargs)
+                yield ModelStreamEvent(type='text', delta=json.dumps({'note': None, 'message': None}))
+
+        agent.model_client = Client()
+        loop = SubconsciousLoop(agent, workspace=Path(self.tmp.name), interval_seconds=60, deliverable_channels={'api'})
+        loop.record_interaction('api', 'alice', {'user_id': 'alice', 'sender_name': 'Alice'})
+
+        # Initial cycle: external activity present -> focuses on active topic/person without quiet drift.
+        loop._next_think_at = 0
+        await loop.maybe_think()
+        initial_nb = next(m['content'] for m in calls[0]['messages'] if m.get('name') == AgentConfig.SUBCONSCIOUS_NOTEBOOK_NAME)
+        initial_rel = next(m['content'] for m in calls[0]['messages'] if m.get('name') == AgentConfig.SUBCONSCIOUS_RELATIONSHIPS_NAME)
+        self.assertIn('(202605010900)', initial_nb)
+        self.assertNotIn('[Passing association from earlier notes]', initial_nb)
+        self.assertNotIn('weixin:old_friend', initial_rel)
+
+        # First quiet cycle: 1-hop linked note (202604101200) and unseen acquaintance (weixin:old_friend) surface.
+        loop._next_think_at = 0
+        await loop.maybe_think()
+        quiet_nb_1 = next(m['content'] for m in calls[1]['messages'] if m.get('name') == AgentConfig.SUBCONSCIOUS_NOTEBOOK_NAME)
+        quiet_rel_1 = next(m['content'] for m in calls[1]['messages'] if m.get('name') == AgentConfig.SUBCONSCIOUS_RELATIONSHIPS_NAME)
+        self.assertIn('[Passing association from earlier notes]', quiet_nb_1)
+        self.assertIn('(202604101200) Clock drift on edge nodes', quiet_nb_1)
+        self.assertIn('[Passing recollection of someone you know]', quiet_rel_1)
+        self.assertIn('weixin:old_friend', quiet_rel_1)
+
+        # If recalled note has no links left unseen, rotation surfaces other unseen notes across quiet cycles.
+        await agent.note_store.delete('202604101200')
+        loop._next_think_at = 0
+        await loop.maybe_think()
+        quiet_nb_2 = next(m['content'] for m in calls[2]['messages'] if m.get('name') == AgentConfig.SUBCONSCIOUS_NOTEBOOK_NAME)
+        self.assertIn('(202603011800) Rainy Sunday tea shop', quiet_nb_2)
