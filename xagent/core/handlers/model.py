@@ -179,6 +179,8 @@ class ModelClient:
         messages: list,
         tool_specs: Optional[list],
         instructions: Optional[Union[str, list[dict]]] = None,
+        *,
+        response_format: Optional[dict] = None,
     ) -> tuple[ReplyType, object]:
         """
         Call the AI model with prepared messages.
@@ -187,6 +189,7 @@ class ModelClient:
             messages: Input message list (user/assistant/tool content only).
             tool_specs: Tool specifications for the model.
             instructions: Static behavioural instructions (system prompt).
+            response_format: Optional structured output schema/format specification.
         Returns:
             Tuple of (ReplyType, response_object).
         """
@@ -195,6 +198,7 @@ class ModelClient:
                 messages,
                 tool_specs,
                 instructions=instructions,
+                response_format=response_format,
             )
         except Exception as e:
             logger.exception("Model call failed: %s", e)
@@ -213,31 +217,56 @@ class ModelClient:
             reraise=True,
         )
 
+    @staticmethod
+    def _is_unsupported_response_format_error(exc: BaseException) -> bool:
+        status = getattr(exc, "status_code", None)
+        if status is not None and status != 400:
+            return False
+        detail = str(exc).lower()
+        return any(
+            token in detail
+            for token in ("response_format", "json_schema", "output_config", "text.format")
+        )
+
     async def _create_response(
         self, messages: list, tool_specs: Optional[list],
         instructions: Optional[Union[str, list[dict]]], *, stream: bool,
+        response_format: Optional[dict] = None,
     ):
-        if self.model_api == MODEL_API_ANTHROPIC_MESSAGES:
-            return await self.client.messages.create(
-                **self._build_anthropic_create_params(messages, tool_specs, instructions, stream)
+        async def _send(fmt: Optional[dict]):
+            if self.model_api == MODEL_API_ANTHROPIC_MESSAGES:
+                return await self.client.messages.create(
+                    **self._build_anthropic_create_params(messages, tool_specs, instructions, stream, response_format=fmt)
+                )
+            if self.model_api == MODEL_API_OPENAI_RESPONSES:
+                return await self.client.responses.create(
+                    **self._build_responses_create_params(messages, tool_specs, instructions, stream, response_format=fmt)
+                )
+            return await self.client.chat.completions.create(
+                **self._build_create_params(messages, tool_specs, instructions, stream, response_format=fmt)
             )
-        if self.model_api == MODEL_API_OPENAI_RESPONSES:
-            return await self.client.responses.create(
-                **self._build_responses_create_params(messages, tool_specs, instructions, stream)
-            )
-        return await self.client.chat.completions.create(
-            **self._build_create_params(messages, tool_specs, instructions, stream)
-        )
+
+        try:
+            return await _send(response_format)
+        except Exception as exc:
+            if response_format is not None and self._is_unsupported_response_format_error(exc):
+                logger.debug("Provider rejected response_format; retrying without it: %s", exc)
+                return await _send(None)
+            raise
 
     async def _create_non_stream_response(
         self, messages: list, tool_specs: Optional[list],
         instructions: Optional[Union[str, list[dict]]] = None,
+        *,
+        response_format: Optional[dict] = None,
     ):
         empty_retries = 0
         async for attempt in self._retries():
             with attempt:
                 response = await asyncio.wait_for(
-                    self._create_response(messages, tool_specs, instructions, stream=False),
+                    self._create_response(
+                        messages, tool_specs, instructions, stream=False, response_format=response_format,
+                    ),
                     timeout=self.request_timeout,
                 )
                 if self.model_api == MODEL_API_OPENAI_CHAT_COMPLETIONS:
@@ -286,13 +315,17 @@ class ModelClient:
     async def _stream_response_once(
         self, messages: list, tool_specs: Optional[list],
         instructions: Optional[Union[str, list[dict]]],
+        *,
+        response_format: Optional[dict] = None,
     ) -> AsyncGenerator[ModelStreamEvent, None]:
         response = None
         events = None
         deadline = time.monotonic() + self.request_timeout
         try:
             response = await asyncio.wait_for(
-                self._create_response(messages, tool_specs, instructions, stream=True),
+                self._create_response(
+                    messages, tool_specs, instructions, stream=True, response_format=response_format,
+                ),
                 timeout=self.request_timeout,
             )
             if self.model_api == MODEL_API_ANTHROPIC_MESSAGES:
@@ -327,11 +360,14 @@ class ModelClient:
         messages: list,
         tool_specs: Optional[list],
         instructions: Optional[Union[str, list[dict]]] = None,
+        *,
+        response_format: Optional[dict] = None,
     ) -> tuple[ReplyType, object]:
         response = await self._create_non_stream_response(
             messages=messages,
             tool_specs=tool_specs,
             instructions=instructions,
+            response_format=response_format,
         )
         if self.model_api == MODEL_API_ANTHROPIC_MESSAGES:
             return self._handle_anthropic_non_stream(response)
@@ -347,6 +383,7 @@ class ModelClient:
         stream: bool = False,
         max_tokens: Optional[int] = None,
         reasoning: Optional[ReasoningConfig] = None,
+        response_format: Optional[dict] = None,
     ) -> AsyncGenerator[ModelStreamEvent, None]:
         """Emit one model turn; retry streams only before any event is exposed.
 
@@ -363,6 +400,7 @@ class ModelClient:
                 bounded.reasoning = reasoning
             events = bounded.model_turn_events(
                 messages, tool_specs, instructions=instructions, stream=stream,
+                response_format=response_format,
             )
             try:
                 async for event in events:
@@ -376,13 +414,16 @@ class ModelClient:
             if not stream:
                 async for event in self._non_stream_turn_events(
                     messages=messages, tool_specs=tool_specs, instructions=instructions,
+                    response_format=response_format,
                 ):
                     yield event
                 return
 
             async for attempt in self._retries(lambda: not emitted):
                 with attempt:
-                    events = self._stream_response_once(messages, tool_specs, instructions)
+                    events = self._stream_response_once(
+                        messages, tool_specs, instructions, response_format=response_format,
+                    )
                     try:
                         async for event in events:
                             emitted = True
@@ -401,11 +442,14 @@ class ModelClient:
         messages: list,
         tool_specs: Optional[list],
         instructions: Optional[Union[str, list[dict]]] = None,
+        *,
+        response_format: Optional[dict] = None,
     ) -> AsyncGenerator[ModelStreamEvent, None]:
         response = await self._create_non_stream_response(
             messages=messages,
             tool_specs=tool_specs,
             instructions=instructions,
+            response_format=response_format,
         )
         if self.model_api == MODEL_API_ANTHROPIC_MESSAGES:
             events = self._anthropic_non_stream_turn_events(response)
@@ -423,6 +467,8 @@ class ModelClient:
         tool_specs: Optional[list],
         instructions: Optional[Union[str, list[dict]]],
         stream: bool,
+        *,
+        response_format: Optional[dict] = None,
     ) -> dict:
         params = {
             "model": self.model,
@@ -436,6 +482,11 @@ class ModelClient:
         if tool_specs:
             params["tools"] = tool_specs
             params["tool_choice"] = "auto"
+        elif response_format is not None:
+            if self.provider_name == PROVIDER_OPENAI:
+                params["response_format"] = response_format
+            elif self.provider_name in {PROVIDER_DEEPSEEK, PROVIDER_QWEN}:
+                params["response_format"] = {"type": "json_object"}
         if self.max_tokens is not None:
             if self.provider_name in {PROVIDER_DEEPSEEK, PROVIDER_QWEN}:
                 params["max_tokens"] = self.max_tokens
@@ -450,6 +501,8 @@ class ModelClient:
         tool_specs: Optional[list],
         instructions: Optional[Union[str, list[dict]]],
         stream: bool,
+        *,
+        response_format: Optional[dict] = None,
     ) -> dict:
         params = {
             "model": self.model,
@@ -469,6 +522,20 @@ class ModelClient:
             params["tools"] = self._to_responses_tools(tool_specs)
             params["tool_choice"] = "auto"
             params["include"] = ["reasoning.encrypted_content"]
+        elif response_format is not None:
+            fmt_type = response_format.get("type")
+            if fmt_type == "json_schema" and isinstance(response_format.get("json_schema"), dict):
+                js = response_format["json_schema"]
+                params["text"] = {
+                    "format": {
+                        "type": "json_schema",
+                        "name": js["name"],
+                        "schema": js["schema"],
+                        "strict": bool(js.get("strict", True)),
+                    }
+                }
+            elif fmt_type == "json_object":
+                params["text"] = {"format": {"type": "json_object"}}
         if self.max_tokens is not None:
             params["max_output_tokens"] = self.max_tokens
         if self.reasoning is not None:
@@ -590,6 +657,8 @@ class ModelClient:
         tool_specs: Optional[list],
         instructions: Optional[Union[str, list[dict]]],
         stream: bool,
+        *,
+        response_format: Optional[dict] = None,
     ) -> dict:
         system, anthropic_messages = self._build_anthropic_messages(
             messages=messages,
@@ -617,6 +686,17 @@ class ModelClient:
                     "type": "enabled",
                     "budget_tokens": self.reasoning.budget_tokens,
                 }
+        if (
+            not tool_specs
+            and response_format is not None
+            and response_format.get("type") == "json_schema"
+            and isinstance(response_format.get("json_schema"), dict)
+            and response_format["json_schema"].get("strict") is True
+        ):
+            params.setdefault("output_config", {})["format"] = {
+                "type": "json_schema",
+                "schema": response_format["json_schema"]["schema"],
+            }
         return params
 
     @staticmethod

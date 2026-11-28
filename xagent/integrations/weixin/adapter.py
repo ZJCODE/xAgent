@@ -16,6 +16,7 @@ import httpx
 
 from ...core.agent import Agent
 from ...core.config import AgentConfig
+from ...core.outbound import remove_text_spans, resolve_outbound_workspace_path
 from ...core.runtime.task_receipts import (
     DeliveryRejectedError, DeliveryUncertainError, is_strict_task_delivery, journal_delivery, strict_task_delivery,
 )
@@ -920,23 +921,7 @@ class WeixinAdapter:
         return deduped
 
     def _resolve_outbound_workspace_path(self, source: str) -> Optional[Path]:
-        workspace_root = self._agent_workspace_root()
-        if workspace_root is None:
-            return None
-        source = source.strip().strip("<>")
-        relative_path = workspace_blob_relative_path(source)
-        if relative_path:
-            candidate = (workspace_root / relative_path).resolve()
-        else:
-            parsed = urlparse(source)
-            if parsed.scheme and parsed.scheme != "file":
-                return None
-            raw_path = unquote(parsed.path if parsed.scheme == "file" else source)
-            path = Path(raw_path).expanduser()
-            candidate = path.resolve() if path.is_absolute() else (workspace_root / raw_path).resolve()
-        if not candidate.is_relative_to(workspace_root) or not candidate.is_file():
-            return None
-        return candidate
+        return resolve_outbound_workspace_path(source, self._agent_workspace_root())
 
     def _path_to_workspace_blob_url(self, path: Path) -> str:
         workspace_root = self._agent_workspace_root()
@@ -999,10 +984,4 @@ def _media_failure_note(item: dict[str, Any]) -> str:
 
 
 def _remove_spans(text: str, spans: list[tuple[int, int]]) -> str:
-    pieces: list[str] = []
-    last_index = 0
-    for start, end in sorted(spans):
-        pieces.append(text[last_index:start])
-        last_index = end
-    pieces.append(text[last_index:])
-    return re.sub(r"\n{3,}", "\n\n", "".join(pieces)).strip()
+    return remove_text_spans(text, spans)

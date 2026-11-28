@@ -10,6 +10,7 @@ from typing import Any, List, Optional
 from openai import AsyncOpenAI
 
 from .config import AgentConfig
+from .outbound import strip_diary_headings
 from .providers import (
     PROVIDER_OPENAI,
     ReasoningConfig,
@@ -72,6 +73,9 @@ class JournalLLMService:
                 user_prompt=user_prompt,
             )
             content = self._normalize_content(content)
+            if content == "<NO_ENTRY>":
+                return ""
+            content = self._normalize_content(strip_diary_headings(content))
             if content == "<NO_ENTRY>":
                 return ""
             if not content:
@@ -234,6 +238,7 @@ Period focus:
                 "existing_notes": existing_notes,
                 "related_notes": related_notes,
             }, ensure_ascii=False),
+            response_format=self._build_projection_response_format(from_messages=bool(messages)),
         )
         parsed = json.loads(self._strip_code_fence(content))
         if not isinstance(parsed, dict) or set(parsed) - {"relationships", "notes"}:
@@ -304,16 +309,68 @@ Return exactly ONE JSON object containing 'relationships' and 'notes', e.g. {"re
             )
         return self._model_client
 
+    @staticmethod
+    def _build_projection_response_format(*, from_messages: bool) -> dict:
+        relationship_value = (
+            {
+                "type": "object",
+                "properties": {
+                    "body": {"type": ["string", "null"]},
+                    "messages": {"type": "array", "items": {"type": "integer"}},
+                },
+                "required": ["body", "messages"],
+            }
+            if from_messages
+            else {"type": ["string", "null"]}
+        )
+        note_properties: dict[str, Any] = {
+            "id": {"type": "string"},
+            "title": {"type": "string"},
+            "body": {"type": ["string", "null"]},
+            "keys": {"type": "array", "items": {"type": "string"}},
+            "links": {"type": "array", "items": {"type": "string"}},
+        }
+        if from_messages:
+            note_properties["messages"] = {"type": "array", "items": {"type": "integer"}}
+        return {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "memory_projection",
+                "strict": False,
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "relationships": {
+                            "type": "object",
+                            "additionalProperties": relationship_value,
+                        },
+                        "notes": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": note_properties,
+                            },
+                        },
+                    },
+                    "required": ["relationships", "notes"],
+                    "additionalProperties": False,
+                },
+            },
+        }
+
     async def _call_text(
         self,
         system_prompt: str,
         user_prompt: str,
+        *,
+        response_format: Optional[dict] = None,
     ) -> str:
         model_client = self._get_model_client()
         reply_type, payload = await model_client.call(
             messages=[{"role": "user", "content": user_prompt}],
             tool_specs=None,
             instructions=system_prompt,
+            response_format=response_format,
         )
         if getattr(reply_type, "value", None) == "simple_reply":
             return str(payload)

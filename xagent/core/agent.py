@@ -54,6 +54,7 @@ from .inbox import (
 )
 from .handlers import MemoryHandler, MessageHandler, ModelClient
 from .journal import JournalLLMService
+from .outbound import accepts_kwarg, normalize_outbound_reply
 from .providers import (
     MODEL_API_OPENAI_RESPONSES,
     PROVIDER_OPENAI,
@@ -1200,31 +1201,49 @@ class Agent:
                     continue
 
                 if visible_text:
+                    cleaned_text, extracted_attachments = normalize_outbound_reply(
+                        visible_text,
+                        workspace_dir=getattr(self, "workspace_dir", None),
+                        channel=channel,
+                        delivered_paths=delivered_paths,
+                    )
+                    stored_text = cleaned_text or (
+                        f"[Delivered attachment(s): {', '.join(str(a.get('path') or a.get('file_name') or 'file') for a in extracted_attachments)}]"
+                        if extracted_attachments
+                        else visible_text
+                    )
                     # Stop accepting, then drain once. Text already queued
                     # stays in this generator. A later steer returns false
                     # and the sender's own stream carries that reply.
                     self.inbox.close_steering()
                     if self.inbox.has_pending_steer() and can_drain():
                         if message_started:
-                            yield self._message_done_event(message_id, "interim", visible_text)
+                            yield self._message_done_event(
+                                message_id,
+                                "interim",
+                                cleaned_text,
+                                attachments=extracted_attachments or None,
+                            )
                         else:
                             for event in self._message_events(
                                 message_id=message_id,
                                 phase="interim",
-                                content=visible_text,
+                                content=cleaned_text,
                                 stream=stream,
-                                deltas=text_parts,
+                                deltas=text_parts if cleaned_text == visible_text else None,
+                                attachments=extracted_attachments or None,
                             ):
                                 yield event
                         # The model list stays assistant-then-steer. The stored
                         # transcript writes the steer first, so a history reload
                         # shows that user message above this reply.
-                        iteration_messages.append({"role": "assistant", "content": visible_text})
+                        iteration_messages.append({"role": "assistant", "content": stored_text})
                         await take_steers()
                         await msg_handler.store_model_reply(
-                            visible_text,
+                            stored_text,
                             self._assistant_sender_id,
                             metadata={**trace_metadata, "turn_phase": "interim"},
+                            attachments=extracted_attachments or None,
                             room_name=room_name,
                             channel=channel,
                             recipient_id=room_name or user_id,
@@ -1234,26 +1253,33 @@ class Agent:
                         continue
 
                     if message_started:
-                        yield self._message_done_event(message_id, "final", visible_text)
+                        yield self._message_done_event(
+                            message_id,
+                            "final",
+                            cleaned_text,
+                            attachments=extracted_attachments or None,
+                        )
                     else:
                         for event in self._message_events(
                             message_id=message_id,
                             phase="final",
-                            content=visible_text,
+                            content=cleaned_text,
                             stream=stream,
-                            deltas=text_parts,
+                            deltas=text_parts if cleaned_text == visible_text else None,
+                            attachments=extracted_attachments or None,
                         ):
                             yield event
                     assistant_msg = await msg_handler.store_model_reply(
-                        visible_text,
+                        stored_text,
                         self._assistant_sender_id,
                         metadata={**trace_metadata, "turn_phase": "final"},
+                        attachments=extracted_attachments or None,
                         room_name=room_name,
                         channel=channel,
                         recipient_id=room_name or user_id,
                     )
                     self._schedule_experience_write(messages=turn_experience(assistant_msg))
-                    turn_obs.set_output(visible_text)
+                    turn_obs.set_output(stored_text)
                     if self.inbox.abort_requested():
                         async for event in end_turn(self._aborted_event()):
                             yield event
@@ -1512,11 +1538,29 @@ class Agent:
                 ),
             }]
 
-            reply_type, payload = await self.model_client.call(
-                messages=input_messages,
-                tool_specs=None,
-                instructions=instructions,
-            )
+            call_kwargs: Dict[str, Any] = {
+                "messages": input_messages,
+                "tool_specs": None,
+                "instructions": instructions,
+            }
+            if accepts_kwarg(self.model_client.call, "response_format"):
+                call_kwargs["response_format"] = {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "participation_decision",
+                        "strict": True,
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "should_reply": {"type": "boolean"},
+                                "reason": {"type": ["string", "null"]},
+                            },
+                            "required": ["should_reply", "reason"],
+                            "additionalProperties": False,
+                        },
+                    },
+                }
+            reply_type, payload = await self.model_client.call(**call_kwargs)
             if reply_type == ReplyType.SIMPLE_REPLY:
                 return self._parse_participation_decision(str(payload))
             logger.warning("Participation decision returned non-text result: %s", reply_type)

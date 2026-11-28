@@ -392,18 +392,23 @@ class SubconsciousLoop:
 
         text_parts: List[str] = []
         tool_calls = []
-        async for model_event in model_client.model_turn_events(
-            messages=input_messages,
-            tool_specs=[],
-            instructions=instructions,
-            stream=False,
-            max_tokens=AgentConfig.SUBCONSCIOUS_MAX_TOKENS,
-            reasoning=maintenance_reasoning_config(
+        turn_kwargs: Dict[str, Any] = {
+            "messages": input_messages,
+            "tool_specs": [],
+            "instructions": instructions,
+            "stream": False,
+            "max_tokens": AgentConfig.SUBCONSCIOUS_MAX_TOKENS,
+            "reasoning": maintenance_reasoning_config(
                 getattr(model_client, "reasoning", None),
                 provider_name=getattr(model_client, "provider_name", None),
                 model=getattr(model_client, "model", None),
             ),
-        ):
+        }
+        from ..outbound import accepts_kwarg
+
+        if accepts_kwarg(model_client.model_turn_events, "response_format"):
+            turn_kwargs["response_format"] = self._build_response_format(contacts)
+        async for model_event in model_client.model_turn_events(**turn_kwargs):
             if model_event.type in {"delta", "text"} and model_event.delta:
                 text_parts.append(model_event.delta)
                 continue
@@ -581,6 +586,44 @@ class SubconsciousLoop:
         if parts:
             return "\n\n".join(parts)
         return raw_memory
+
+    @classmethod
+    def _build_response_format(cls, contacts: List[ContactEntry]) -> Dict[str, Any]:
+        valid_recipients = [cls._contact_key(c.channel, c.user_id) for c in contacts]
+        if valid_recipients:
+            message_schema: Dict[str, Any] = {
+                "anyOf": [
+                    {"type": "null"},
+                    {
+                        "type": "object",
+                        "properties": {
+                            "recipient": {"type": "string", "enum": valid_recipients},
+                            "text": {"type": "string"},
+                            "source_id": {"type": ["integer", "null"]},
+                        },
+                        "required": ["recipient", "text", "source_id"],
+                        "additionalProperties": False,
+                    },
+                ]
+            }
+        else:
+            message_schema = {"type": "null"}
+        return {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "subconscious_reflection",
+                "strict": True,
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "note": {"type": ["string", "null"]},
+                        "message": message_schema,
+                    },
+                    "required": ["note", "message"],
+                    "additionalProperties": False,
+                },
+            },
+        }
 
     @staticmethod
     def _parse_subconscious_json(text: str) -> Dict[str, Any]:
