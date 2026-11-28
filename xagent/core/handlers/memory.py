@@ -327,9 +327,9 @@ class MemoryHandler:
                 # copied message + memory trees. Seed forward first so migrate
                 # and projection inherit the same caught-up point.
                 bootstrapped = await self._bootstrap_missing_journal_cursor_locked()
-                await self.projector.migrate(
+                await self.projector.ensure_initialized(
                     self._last_processed_message_id,
-                    adopt_without_rebuild=bootstrapped,
+                    adopt_existing=bootstrapped,
                 )
                 if bootstrapped:
                     self._last_maintenance["status"] = "bootstrapped"
@@ -492,24 +492,27 @@ class MemoryHandler:
 
         participants: dict[str, dict] = {}
         for message in messages:
-            if message.type != MessageType.MESSAGE:
+            metadata = message.metadata or {}
+            channel = (message.channel or "").strip()
+            if not channel or is_scheduled_work(metadata):
                 continue
-            if message.role != RoleType.USER:
+            if message.type == MessageType.MESSAGE and message.role == RoleType.USER:
+                user_id = (message.sender_id or "").strip()
+                raw_name = metadata.get("sender_name")
+            elif (
+                message.type == MessageType.CONTEXT_EVENT
+                and metadata.get("source") not in {"device", "subconscious", "scheduled_task"}
+                and str(metadata.get("speaker_id") or "").strip()
+            ):
+                user_id = str(metadata.get("speaker_id") or "").strip()
+                raw_name = metadata.get("speaker_name") or metadata.get("sender_name")
+            else:
                 continue
-            user_id = (message.sender_id or "").strip()
             if not user_id:
                 continue
-            channel = (message.channel or "").strip()
-            if not channel:
-                # Incomplete identity must not mint unknown:* parallel keys.
-                continue
-            if is_scheduled_work(message.metadata):
-                # Synthetic work-order prompts are not human speech.
-                continue
-            metadata = message.metadata or {}
             key = RelationshipStore.make_key(channel, user_id)
             display_name = human_display_name(
-                metadata.get("sender_name"),
+                raw_name,
                 user_id=user_id,
                 key=key,
             )
@@ -953,12 +956,12 @@ class MemoryHandler:
         projection = {}
         try:
             state = await asyncio.to_thread(self.projector._load)
-            cursor = state["cursor"]
-            if type(cursor) is int:
-                projection = {"cursor": cursor, "backlog": max(0, self._last_processed_message_id - cursor),
-                              "pending_write": state["pending"] is not None}
-            else:
-                projection["migration_pending"] = True
+            cursor = state["cursor"] or 0
+            projection = {
+                "cursor": cursor,
+                "backlog": max(0, self._last_processed_message_id - cursor),
+                "pending_write": state["pending"] is not None,
+            }
         except (ValueError, OSError) as exc:
             projection["error"] = str(exc)
         return {

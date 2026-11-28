@@ -337,31 +337,36 @@ async def review_memory(client, provider: dict) -> dict:
 async def review_memory_selectivity(client, provider: dict) -> dict:
     cases = [
         ("ordinary_experience",
-         "Alice 先发了 hey，又发 123 测试。我解释了 HTTP。显示屏暂时离线；Bob 只回了嗯。"
-         "我随口建议换数据库，但还没有验证或决定。没有新的偏好、约定或项目结论。", 0, 0),
+         [
+             ("alice", "Alice", "hey"),
+             ("alice", "Alice", "123 测试"),
+             ("bob", "Bob", "嗯"),
+         ], 0, 0),
         ("person_and_topic",
-         "Alice 明确告诉我，她从事后端开发，希望我今后回答先给结论。"
-         "我们确定离线项目采用 SQLite，因为部署环境没有数据库服务。Bob 只打了声招呼。", 1, 1),
+         [
+             ("alice", "Alice", "我从事后端开发，希望你今后回答先给结论。另外我们离线项目确定采用 SQLite，因为部署环境没有数据库服务。"),
+             ("bob", "Bob", "嗨，路过打个招呼。"),
+         ], 1, 1),
         ("meaningful_reference",
-         "我和 Alice 为同一个离线 SQLite 项目确定了新的备份规则：每天把数据库复制到独立存储，"
-         "因为单机 SQLite 没有服务端副本。这是已有本地存储决策的配套措施，存储决策继续有效。", 0, 2),
+         [
+             ("alice", "Alice", "为同一个离线 SQLite 项目定个配套备份规则：每天把数据库复制到独立存储，因为单机 SQLite 没有服务端副本；之前的本地存储决策继续有效。"),
+         ], 0, 2),
     ]
     results = []
-    for name, diary, card_count, note_count in cases:
+    for name, turns, card_count, note_count in cases:
         with tempfile.TemporaryDirectory(prefix="xagent-memory-selectivity-") as workspace:
             agent = make_agent(client, provider, workspace)
             raw_outputs = capture_journal_outputs(agent)
-            await agent.memory_handler.projector.remember_people([
-                {"key": f"api:{person.lower()}", "display_name": person,
-                 "channel": "api", "user_id": person.lower()}
-                for person in ("Alice", "Bob")
-            ])
             if name == "meaningful_reference":
                 await agent.note_store.create(Note(
                     id="", title="离线项目使用 SQLite", body="项目离线运行且没有数据库服务，因此使用 SQLite。",
-                    keys=("SQLite", "离线"), source={"diary": [datetime.now().date().isoformat()]},
+                    keys=("SQLite", "离线"), source={"messages": [1]},
                 ))
-            await agent.memory_handler.append_daily_entry(diary)
+            await agent.message_storage.add_messages([
+                Message(role=RoleType.USER, sender_id=sender_id, channel="api",
+                        content=text, metadata={"sender_name": sender_name})
+                for sender_id, sender_name, text in turns
+            ])
             await asyncio.wait_for(agent.memory_handler.run_maintenance(force=True), timeout=180)
             cards = await agent.relationship_store.read_cards(await agent.relationship_store.list_keys())
             notes = await agent.note_store.list_notes()
@@ -372,7 +377,7 @@ async def review_memory_selectivity(client, provider: dict) -> dict:
             }
             if name == "meaningful_reference":
                 checks["meaningful_link_present"] = any(note.links for note in notes)
-            results.append({"name": name, "diary": diary,
+            results.append({"name": name, "turns": turns,
                             "cards": [{"key": card.key, "body": card.body} for card in cards],
                             "notes": [note.to_dict() for note in notes], "checks": checks,
                             "raw_journal_outputs": raw_outputs})

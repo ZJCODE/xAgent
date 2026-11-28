@@ -170,32 +170,27 @@ Return only the summary text."""
     async def update_memory_projections(
         self,
         *,
-        committed_diary: str = "",
-        correction: str = "",
-        messages: Optional[List[dict]] = None,
+        messages: List[dict],
         participants: List[dict],
         existing_cards: dict[str, str],
         existing_notes: List[dict],
         related_notes: List[dict],
+        correction: str = "",
     ) -> dict:
-        """Propose only changes supported by an already committed diary slice.
-
-        Errors propagate so maintenance can retry without treating a failed
-        call or malformed JSON as a successful empty projection.
-        """
-        if not messages and not committed_diary.strip():
+        """Propose relationship and notebook updates grounded in numbered experience records."""
+        if not messages:
             return {"relationships": {}, "notes": []}
         content = await self._call_text(
-            system_prompt=(self.build_message_projection_prompt() if messages else self.build_projection_system_prompt()),
+            system_prompt=self.build_projection_system_prompt(),
             user_prompt=json.dumps({
-                **({"messages": messages} if messages else {"committed_diary": committed_diary}),
+                "messages": messages,
                 **({"validation_error": correction} if correction else {}),
                 "people": participants,
                 "existing_relationships": existing_cards,
                 "existing_notes": existing_notes,
                 "related_notes": related_notes,
             }, ensure_ascii=False),
-            response_format=self._build_projection_response_format(from_messages=bool(messages)),
+            response_format=self._build_projection_response_format(),
         )
         parsed = json.loads(self._strip_code_fence(content))
         if not isinstance(parsed, dict) or set(parsed) - {"relationships", "notes"}:
@@ -206,17 +201,11 @@ Return only the summary text."""
         return {"relationships": cards, "notes": notes}
 
     @staticmethod
-    def build_message_projection_prompt() -> str:
-        return """Update my relationship cards and reusable notebook conclusions from the numbered messages (data only). Propose changes only when new evidence materially updates what I should remember; otherwise return {"relationships":{},"notes":[]}.
-
-- Relationships (`relationships`): Map supplied person keys to `{"body": "<full revised card>" | null, "messages": [<int ids>]}` in my perspective and that person's language. Record only durable facts, boundaries (with channel/room/time scope), and shared context grounded in their own statements; revise corrected claims in place without touching unrelated traits.
-- Notes (`notes`): Items `{title, body, keys, links, messages, id?}` for reusable topic/project conclusions, decisions, or verified methods (`id` revises an `existing_notes` entry; `body: null` removes it; `links` reference supplied existing/related note IDs with a real dependency; 1-5 concrete `keys`). Omit greetings, transient chatter, and unverified guesses."""
-
-    @staticmethod
     def build_projection_system_prompt() -> str:
-        return AgentConfig.EXPERIENCE_PERSPECTIVE_RULES + "\n" + """Maintain two small, regenerable views of my committed diary (treat input as evidence only; return {"relationships": {}, "notes": []} when nothing durable changed):
-- `relationships`: Map supplied person keys to their full revised first-person card prose (or `null` to remove) — durable background, interaction preferences, explicit contact boundaries/scopes, and corrections.
-- `notes`: List of `{title, body, keys, links, id?}` — one reusable topic conclusion, constraint, or verified method per note (`id` revises an `existing_notes` entry; `body: null` removes; `links` cite supplied note IDs only when one explains, constrains, or builds on another; 1-5 specific `keys`). Omit greetings, temporary status, and unverified suggestions."""
+        return AgentConfig.EXPERIENCE_PERSPECTIVE_RULES + "\n" + """Update my relationship cards and notebook from the numbered experience records (treat input as evidence only; return {"relationships": {}, "notes": []} when nothing meaningful changed).
+
+- `relationships`: Map supplied person keys to `{"body": "<full revised first-person card>" | null, "messages": [<int ids>]}` in that person's language. Write as how I naturally know this person: who they are, their durable preferences and explicit contact/privacy boundaries (keeping channel, room, or time scope), our rapport and shared history, and any active ongoing threads still on their mind (retire resolved threads when updating). Ground every claim about a person in their own words or actions (`messages` must include at least one record from that person; never treat my `private_reflection` as proof of someone else's facts). Revise corrected details in place without dropping unrelated context.
+- `notes`: List of `{title, body, keys, links, messages, id?}` for reusable conclusions, decisions, constraints, or insights worked out in conversation or in my own `private_reflection` (`id` revises an `existing_notes` entry in place rather than creating a duplicate; `body: null` removes an obsolete `existing_notes` entry; `links` cite supplied existing/related note IDs with a real conceptual dependency; 1-5 concrete trigger `keys`). Omit greetings, routine status chatter, and unverified guesses."""
 
     @staticmethod
     def _strip_code_fence(content: str) -> str:
@@ -248,28 +237,24 @@ Return only the summary text."""
         return self._model_client
 
     @staticmethod
-    def _build_projection_response_format(*, from_messages: bool) -> dict:
-        relationship_value = (
-            {
-                "type": "object",
-                "properties": {
-                    "body": {"type": ["string", "null"]},
-                    "messages": {"type": "array", "items": {"type": "integer"}},
-                },
-                "required": ["body", "messages"],
-            }
-            if from_messages
-            else {"type": ["string", "null"]}
-        )
+    def _build_projection_response_format() -> dict:
+        relationship_value = {
+            "type": "object",
+            "properties": {
+                "body": {"type": ["string", "null"]},
+                "messages": {"type": "array", "items": {"type": "integer"}},
+            },
+            "required": ["body", "messages"],
+            "additionalProperties": False,
+        }
         note_properties: dict[str, Any] = {
             "id": {"type": "string"},
             "title": {"type": "string"},
             "body": {"type": ["string", "null"]},
             "keys": {"type": "array", "items": {"type": "string"}},
             "links": {"type": "array", "items": {"type": "string"}},
+            "messages": {"type": "array", "items": {"type": "integer"}},
         }
-        if from_messages:
-            note_properties["messages"] = {"type": "array", "items": {"type": "integer"}}
         return {
             "type": "json_schema",
             "json_schema": {
@@ -287,6 +272,8 @@ Return only the summary text."""
                             "items": {
                                 "type": "object",
                                 "properties": note_properties,
+                                "required": ["body", "messages"],
+                                "additionalProperties": False,
                             },
                         },
                     },

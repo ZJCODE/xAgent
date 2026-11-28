@@ -161,32 +161,17 @@ class RelationshipStore:
         digest = hashlib.sha256(primary.encode("utf-8")).hexdigest()
         return self.root / folder / f"~{digest}.md"
 
-    def _candidate_paths(self, primary: str) -> list[Path]:
-        channel, user_id = self.split_key(primary)
-        paths = [self.card_path(primary)]
-        legacy_channel = self._safe_segment(channel)
-        if legacy_channel not in {".", ".."}:
-            paths.append(self.root / legacy_channel / f"{self._safe_segment(user_id)}.md")
-        return paths
-
     def _owned_text(self, path: Path, primary: str) -> str:
         text = self._read_text_sync(path)
         if not text:
             return ""
         meta, _ = self._split_frontmatter(text)
-        owner = meta.get("key")
-        if not owner:
-            legacy = re.match(r'^<!-- rel key="([^"]+)"', text.lstrip())
-            owner = legacy.group(1) if legacy else None
-        return text if owner == primary else ""
+        return text if meta.get("key") == primary else ""
 
     async def read_card(self, key: str) -> Optional[RelationshipCard]:
         primary = self.primary_key(key)
-        for path in self._candidate_paths(primary):
-            text = await asyncio.to_thread(self._owned_text, path, primary)
-            if text:
-                return self._parse(primary, text)
-        return None
+        text = await asyncio.to_thread(self._owned_text, self.card_path(primary), primary)
+        return self._parse(primary, text) if text else None
 
     async def read_cards(self, keys: List[str]) -> List[RelationshipCard]:
         """Read multiple cards, preserving order and skipping missing ones."""
@@ -235,9 +220,9 @@ class RelationshipStore:
     async def delete_card(self, key: str) -> None:
         async with self._write_lock:
             primary = self.primary_key(key)
-            for path in reversed(self._candidate_paths(primary)):
-                if await asyncio.to_thread(self._owned_text, path, primary):
-                    await asyncio.to_thread(self._delete_sync, path)
+            path = self.card_path(primary)
+            if await asyncio.to_thread(self._owned_text, path, primary):
+                await asyncio.to_thread(self._delete_sync, path)
 
     # ------------------------------------------------------------------
     # Render / parse
@@ -250,11 +235,8 @@ class RelationshipStore:
         if name:
             frontmatter["name"] = name
         frontmatter["updated"] = updated
-        source_dates = self.normalize_diary_dates(card.source.get("diary"))
-        if source_dates:
-            frontmatter["source"] = {"diary": source_dates}
         if card.source.get("messages"):
-            frontmatter.setdefault("source", {})["messages"] = card.source["messages"]
+            frontmatter["source"] = {"messages": card.source["messages"]}
         header = yaml.safe_dump(
             frontmatter,
             sort_keys=False,
@@ -267,6 +249,9 @@ class RelationshipStore:
         meta, body = self._split_frontmatter(text)
         resolved_key = str(meta.get("key") or key).strip() or key
         channel, user_id = self.split_key(resolved_key)
+        raw_source = meta.get("source") if isinstance(meta.get("source"), dict) else {}
+        messages = raw_source.get("messages")
+        source = {"messages": messages} if isinstance(messages, list) and messages else {}
         return RelationshipCard(
             key=resolved_key,
             body=body.strip(),
@@ -278,26 +263,8 @@ class RelationshipStore:
             channel=channel,
             user_id=user_id,
             updated=str(meta.get("updated") or "").strip(),
-            source={**({"messages": meta["source"]["messages"]} if isinstance(meta.get("source"), dict) and meta["source"].get("messages") else {}), "diary": self.normalize_diary_dates(
-                (meta.get("source") or {}).get("diary")
-                if isinstance(meta.get("source"), dict) else None
-            )},
+            source=source,
         )
-
-    @staticmethod
-    def normalize_diary_dates(values: Any) -> List[str]:
-        """Keep valid diary dates, including YAML's native date values."""
-        if not isinstance(values, list):
-            return []
-        dates: set[str] = set()
-        for value in values:
-            if not isinstance(value, (str, date)):
-                continue
-            try:
-                dates.add(date.fromisoformat(str(value)).isoformat())
-            except ValueError:
-                continue
-        return sorted(dates)
 
     @staticmethod
     def _split_frontmatter(text: str) -> Tuple[Dict[str, Any], str]:

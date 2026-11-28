@@ -590,7 +590,6 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory, llm_service=service, message_storage=self.storage,
             diary_write_batch=_TEST_DIARY_WRITE_BATCH, max_journal_source_chars=150,
         )
-        handler.projector.run = AsyncMock(return_value=False)
         handler.projector.project_messages = AsyncMock()
 
         self.assertTrue(await handler.run_maintenance(force=True))
@@ -619,7 +618,6 @@ class MemoryHandlerTests(unittest.IsolatedAsyncioTestCase):
             memory=self.memory, llm_service=service, message_storage=self.storage,
             diary_write_batch=_TEST_DIARY_WRITE_BATCH, max_journal_source_chars=130,
         )
-        handler.projector.run = AsyncMock(return_value=False)
         handler.projector.project_messages = AsyncMock()
 
         self.assertFalse(await handler.run_maintenance(force=True))

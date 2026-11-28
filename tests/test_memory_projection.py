@@ -58,7 +58,7 @@ class ProjectionTests(unittest.IsolatedAsyncioTestCase):
         self.llm.update_memory_projections.assert_awaited_once()
         card = await self.handler.relationship_store.read_card("api:alice")
         notes = await self.handler.note_store.list_notes()
-        self.assertEqual(card.source, {"diary": [], "messages": [1]})
+        self.assertEqual(card.source, {"messages": [1]})
         self.assertEqual(notes[0].source["messages"], card.source["messages"])
         self.assertNotIn("Alice", notes[0].body)
         self.assertNotIn("created", notes[0].to_dict())
@@ -114,7 +114,7 @@ class ProjectionTests(unittest.IsolatedAsyncioTestCase):
         original = await self.handler.note_store.create(Note(
             id="", title="Offline storage", body="SQLite needs no server.", keys=("SQLite",)))
         application = await self.handler.note_store.create(Note(
-            id="", title="Local installation", body="Uses offline storage.", links=(original.id,)))
+            id="", title="Local installation", body="Depends on the chosen embedded engine.", links=(original.id,)))
         self.llm.update_memory_projections.return_value = {"notes": [
             self.note("Offline backups", "SQLite needs regular local backups.", links=[original.id]),
         ]}
@@ -156,20 +156,19 @@ class ProjectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("projection_error", self.handler._last_maintenance)
         self.assertEqual((await self.handler.note_store.read(neighbour.id)).body, neighbour.body)
 
-    async def test_source_budget_preserves_whole_entries_and_utf8_offsets(self):
+    async def test_source_budget_splits_large_message_batches_without_dropping_records(self):
         first, second = "第一段经历。" * 30, "第二段经历。" * 30
-        await self.handler.append_daily_entry(first)
-        await self.handler.append_daily_entry(second)
-        self.handler.projector.source_chars = 80
+        await self.message(first)
+        await self.message(second)
+        self.handler.projector.source_chars = 260
         await self.handler.run_maintenance(force=True)
         await self.handler.run_maintenance(force=True)
-        await self.handler.run_maintenance(force=True)
-        sources = [call.kwargs["committed_diary"] for call in self.llm.update_memory_projections.call_args_list]
-        self.assertEqual(len(sources), 2)
-        self.assertIn(first, sources[0])
-        self.assertNotIn(second, sources[0])
-        self.assertIn(second, sources[1])
-        self.assertNotIn(first, sources[1])
+        batches = [call.kwargs["messages"] for call in self.llm.update_memory_projections.call_args_list]
+        self.assertEqual(len(batches), 2)
+        self.assertEqual([r["id"] for r in batches[0]], [1])
+        self.assertIn(first, batches[0][0]["content"])
+        self.assertEqual([r["id"] for r in batches[1]], [2])
+        self.assertIn(second, batches[1][0]["content"])
 
     async def test_result_must_be_saved_before_any_projection_file_changes(self):
         await self.message()
@@ -283,21 +282,24 @@ class ProjectionTests(unittest.IsolatedAsyncioTestCase):
         card = await self.handler.relationship_store.read_card("api:person_id")
         self.assertEqual(card.display_name, "Alicia")
 
-    async def test_invalid_model_data_cannot_write_unknown_people_or_records(self):
-        await self.message()
-        for changes in (
-            {"relationships": {"api:other": "Invented."}},
-            {"relationships": {"api:alice": {"body": "Not a string"}}},
-            {"notes": [self.note(id="202601010001")]},
-            {"notes": [self.note(body="x" * 2001)]},
-            {"notes": [{"body": None}]},
-        ):
-            with self.subTest(changes=changes):
-                self.llm.update_memory_projections.return_value = changes
+    async def test_invalid_model_data_cannot_write_unknown_people_or_records_and_never_blocks_cursor(self):
+        invalid_payloads = (
+            lambda msg_id: {"relationships": {"api:other": {"body": "Invented.", "messages": [msg_id]}}},
+            lambda msg_id: {"relationships": {"api:alice": {"body": "Not valid without messages"}}},
+            lambda msg_id: {"notes": [self.note(id="202601010001", messages=[msg_id])]},
+            lambda msg_id: {"notes": [self.note(body="x" * 2001, messages=[msg_id])]},
+            lambda msg_id: {"notes": [{"body": None, "messages": [msg_id]}]},
+        )
+        for index, make_changes in enumerate(invalid_payloads, start=1):
+            with self.subTest(index=index):
+                await self.message(f"Message {index}")
+                self.llm.update_memory_projections.return_value = make_changes(index)
                 await self.handler.run_maintenance(force=True)
                 self.assertEqual(await self.handler.note_store.count(), 0)
                 self.assertEqual(await self.handler.relationship_store.list_keys(), [])
                 self.assertIn("projection_error", self.handler._last_maintenance)
+                state = json.loads(self.handler.projector.path.read_text(encoding="utf-8"))
+                self.assertEqual(state["cursor"], index)
 
     async def test_removals_and_invalid_references_do_not_resurrect_records(self):
         await self.message()
@@ -345,22 +347,159 @@ class ProjectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.handler._read_state_sync(), 5)
 
 
+    async def test_search_terms_surface_existing_note_without_exact_key_hit(self):
+        existing = await self.handler.note_store.create(Note(
+            id="", title="API 网关反代方案", body="早期先用 Nginx 顶着。", keys=("nginx",),
+        ))
+        await self.message("今天把网关反代正式切到 Caddy 了，自动管理证书。")
+
+        async def project(**kwargs):
+            editable_ids = [n["id"] for n in kwargs["existing_notes"]]
+            self.assertIn(existing.id, editable_ids)
+            return {
+                "notes": [{
+                    "id": existing.id,
+                    "title": "API 网关反代方案",
+                    "body": "网关反代已切换为 Caddy，由其自动管理 TLS 证书。",
+                    "keys": ["Caddy", "网关反代", "TLS", "k4", "k5", "extra_clamped_key"],
+                    "links": [],
+                    "messages": [1],
+                }]
+            }
+
+        self.llm.update_memory_projections.side_effect = project
+        await self.handler.run_maintenance(force=True)
+        notes = await self.handler.note_store.list_notes()
+        self.assertEqual(len(notes), 1)
+        self.assertEqual(notes[0].id, existing.id)
+        self.assertIn("Caddy", notes[0].body)
+        self.assertEqual(len(notes[0].keys), 5)
+
+    async def test_relationship_evidence_allows_agent_context_and_preserves_display_name(self):
+        from xagent.schemas import MessageType
+
+        await self.storage.add_messages([
+            Message(content="你平时喜欢喝冰美式还是拿铁？", role=RoleType.ASSISTANT, sender_id="agent", channel="api"),
+            Message(content="冰美式！", role=RoleType.USER, sender_id="wx_alice", channel="weixin", metadata={"sender_name": "Alice"}),
+        ])
+        self.llm.update_memory_projections.return_value = {
+            "relationships": {
+                "weixin:wx_alice": {"body": "Alice 平时偏爱冰美式。", "messages": [1, 2]},
+            }
+        }
+        await self.handler.run_maintenance(force=True)
+        card = await self.handler.relationship_store.read_card("weixin:wx_alice")
+        self.assertIsNotNone(card)
+        self.assertEqual(card.display_name, "Alice")
+        self.assertEqual(card.source["messages"], [1, 2])
+
+        # Later message omits sender_name -> existing display_name "Alice" must be preserved!
+        await self.storage.add_messages(
+            Message(content="最近在准备马拉松。", role=RoleType.USER, sender_id="wx_alice", channel="weixin", metadata={})
+        )
+        self.llm.update_memory_projections.return_value = {
+            "relationships": {
+                "weixin:wx_alice": {"body": "Alice 偏爱冰美式，最近正在准备跑马拉松。", "messages": [3]},
+            }
+        }
+        await self.handler.run_maintenance(force=True)
+        updated = await self.handler.relationship_store.read_card("weixin:wx_alice")
+        self.assertEqual(updated.display_name, "Alice")
+        self.assertIn("马拉松", updated.body)
+
+        # Private reflection can produce a note, and ambient human speaker is extracted while device is ignored.
+        await self.storage.add_messages([
+            Message(
+                content="把 SQLite WAL 和每日快照结合起来最稳妥。",
+                role=RoleType.ASSISTANT,
+                type=MessageType.CONTEXT_EVENT,
+                channel="api",
+                metadata={"source": "subconscious", "event_type": "subconscious_thought"},
+            ),
+            Message(
+                content="群里顺便提一句，我下周在东京出差。",
+                role=RoleType.ENVIRONMENT,
+                type=MessageType.CONTEXT_EVENT,
+                channel="weixin",
+                room_name="Friends",
+                metadata={"speaker_id": "wx_bob", "sender_name": "Bob"},
+            ),
+            Message(
+                content="Desk lamp turned off.",
+                role=RoleType.ENVIRONMENT,
+                type=MessageType.CONTEXT_EVENT,
+                sender_id="device",
+                channel="api",
+                metadata={"source": "device"},
+            ),
+        ])
+
+        async def project_reflection_and_ambient(**kwargs):
+            types_by_id = {r["id"]: r["type"] for r in kwargs["messages"]}
+            self.assertEqual(types_by_id[4], "private_reflection")
+            participant_keys = {p["key"] for p in kwargs["participants"]}
+            self.assertEqual(participant_keys, {"weixin:wx_bob"})
+            return {
+                "relationships": {
+                    "weixin:wx_bob": {"body": "Bob 下周在东京出差。", "messages": [5]},
+                },
+                "notes": [{
+                    "title": "SQLite 持久化组合策略",
+                    "body": "WAL 模式配合每日独立快照备份。",
+                    "keys": ["SQLite", "WAL"],
+                    "links": [],
+                    "messages": [4],
+                }],
+            }
+
+        self.llm.update_memory_projections.side_effect = project_reflection_and_ambient
+        await self.handler.run_maintenance(force=True)
+        bob_card = await self.handler.relationship_store.read_card("weixin:wx_bob")
+        self.assertEqual(bob_card.display_name, "Bob")
+        self.assertIn("东京", bob_card.body)
+        self.assertEqual(await self.handler.note_store.count(), 1)
+
+    async def test_oversized_relationship_card_self_heals_via_correction_retry(self):
+        await self.message("Alice shared her background.")
+        calls = []
+
+        async def project(**kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                return {"relationships": {"api:alice": {"body": "x" * 2005, "messages": [1]}}}
+            self.assertIn("exceeds 2000 chars", kwargs.get("correction", ""))
+            return {"relationships": {"api:alice": {"body": "Condensed impression of Alice.", "messages": [1]}}}
+
+        self.llm.update_memory_projections.side_effect = project
+        await self.handler.run_maintenance(force=True)
+        self.assertEqual(len(calls), 2)
+        card = await self.handler.relationship_store.read_card("api:alice")
+        self.assertEqual(card.body, "Condensed impression of Alice.")
+        self.assertNotIn("projection_error", self.handler._last_maintenance)
+
+
 class ProjectionModelTests(unittest.IsolatedAsyncioTestCase):
     async def test_invalid_json_and_types_are_errors_not_no_change(self):
         service = JournalLLMService(client=object())
+        sample_messages = [{"id": 1, "role": "user", "content": "A real experience."}]
         for output in ("not json", "[]", '{"notes": {}}', '{"relationships": []}', '{"unexpected": 1}'):
             with self.subTest(output=output):
                 service._call_text = AsyncMock(return_value=output)
                 with self.assertRaises((ValueError, TypeError)):
-                    await service.update_memory_projections(committed_diary="A real experience.",
-                        participants=[], existing_cards={}, existing_notes=[], related_notes=[])
+                    await service.update_memory_projections(
+                        messages=sample_messages,
+                        participants=[], existing_cards={}, existing_notes=[], related_notes=[],
+                    )
 
-    async def test_empty_diary_never_calls_model_and_empty_result_is_valid(self):
+    async def test_empty_messages_never_call_model_and_empty_result_is_valid(self):
         service = JournalLLMService(client=object())
         service._call_text = AsyncMock(return_value="{}")
-        await service.update_memory_projections(committed_diary="", participants=[],
-            existing_cards={}, existing_notes=[], related_notes=[])
+        await service.update_memory_projections(
+            messages=[], participants=[], existing_cards={}, existing_notes=[], related_notes=[],
+        )
         service._call_text.assert_not_awaited()
-        result = await service.update_memory_projections(committed_diary="I greeted Alice.",
-            participants=[], existing_cards={}, existing_notes=[], related_notes=[])
+        result = await service.update_memory_projections(
+            messages=[{"id": 1, "role": "user", "content": "I greeted Alice."}],
+            participants=[], existing_cards={}, existing_notes=[], related_notes=[],
+        )
         self.assertEqual(result, {"relationships": {}, "notes": []})

@@ -74,16 +74,13 @@ class RelationshipStoreTests(unittest.IsolatedAsyncioTestCase):
             for part in rel.parts:
                 self.assertNotIn(":", part)
 
-    async def test_colliding_legacy_ids_are_isolated_on_read_write_and_delete(self):
-        legacy = self.store.root / "api" / "unknown.md"
-        legacy.parent.mkdir()
-        legacy.write_text("---\nkey: api:阿禾\n---\nA legacy preference.")
+    async def test_distinct_hashed_paths_isolate_non_ascii_keys_on_read_write_and_delete(self):
+        await self.store.write_card(RelationshipCard(key="api:阿禾", body="Explain why."))
         self.assertIsNone(await self.store.read_card("api:小满"))
         self.assertIsNone(await self.store.read_card("api:路人"))
         await self.store.write_card(RelationshipCard(key="api:小满", body="Short steps."))
         await self.store.delete_card("api:小满")
-        self.assertEqual((await self.store.read_card("api:阿禾")).body, "A legacy preference.")
-        await self.store.write_card(RelationshipCard(key="api:阿禾", body="Explain why."))
+        self.assertEqual((await self.store.read_card("api:阿禾")).body, "Explain why.")
         self.assertEqual(await self.store.list_keys(), ["api:阿禾"])
         await self.store.delete_card("api:阿禾")
         self.assertIsNone(await self.store.read_card("api:阿禾"))
@@ -99,7 +96,7 @@ class RelationshipStoreTests(unittest.IsolatedAsyncioTestCase):
             channel="weixin",
             user_id="wx_1",
             updated="2026-06-27",
-            source={"diary": ["2026-06-26", "2026-06-27"]},
+            source={"messages": [1, 2]},
         )
         await self.store.write_card(card)
 
@@ -110,7 +107,7 @@ class RelationshipStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(loaded.channel, "weixin")
         self.assertEqual(loaded.user_id, "wx_1")
         self.assertEqual(loaded.updated, "2026-06-27")
-        self.assertEqual(loaded.source.get("diary", []), ["2026-06-26", "2026-06-27"])
+        self.assertEqual(loaded.source, {"messages": [1, 2]})
         self.assertIn("we trust each other", loaded.body)
         rendered = self.store.card_path("weixin:wx_1").read_text(encoding="utf-8")
         self.assertTrue(rendered.startswith("---\n"))
@@ -123,15 +120,8 @@ class RelationshipStoreTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_card_without_sources_does_not_invent_any(self):
         await self.store.write_card(RelationshipCard(key="api:alice", body="An older impression."))
-        self.assertEqual((await self.store.read_card("api:alice")).source.get("diary", []), [])
+        self.assertEqual((await self.store.read_card("api:alice")).source, {})
         self.assertNotIn("source_diary_dates", self.store.card_path("api:alice").read_text())
-
-    def test_source_dates_accept_yaml_dates_and_ignore_malformed_values(self):
-        card = self.store._parse(
-            "api:alice",
-            "---\nsource:\n  diary: [2026-06-27, '2026-06-26', 'invalid', false, '2026-06-27']\n---\nA card.",
-        )
-        self.assertEqual(card.source.get("diary", []), ["2026-06-26", "2026-06-27"])
 
     async def test_header_omits_name_when_only_platform_id_is_known(self):
         await self.store.write_card(
